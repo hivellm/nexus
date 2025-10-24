@@ -12,6 +12,11 @@ Cargo.lock
 *~
 .DS_Store
 
+# Node.js (for tools/scripts)
+node_modules/
+package-lock.json
+*.log
+
 # Data files
 *.db
 *.db-shm
