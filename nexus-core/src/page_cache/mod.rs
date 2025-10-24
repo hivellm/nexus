@@ -4,7 +4,7 @@
 //! Supports pin/unpin semantics for transaction safety.
 //! Pages have checksums (xxhash) for corruption detection.
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Page size in bytes (configurable: 4KB, 8KB)
 pub const PAGE_SIZE: usize = 8192;

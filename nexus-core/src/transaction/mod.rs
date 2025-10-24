@@ -8,7 +8,7 @@
 //! - Single writer per partition (queue) initially
 //! - Group commit for batching
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Transaction state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

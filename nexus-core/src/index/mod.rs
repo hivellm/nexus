@@ -6,7 +6,7 @@
 //! - Full-text index: Tantivy per label/key
 //! - KNN index: hnsw_rs per label, mapping node_id → embedding_idx
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Label bitmap index using roaring bitmaps
 pub struct LabelIndex {

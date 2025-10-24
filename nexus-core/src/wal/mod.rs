@@ -4,7 +4,7 @@
 //! Supports MVCC via epoch-based snapshots.
 //! Periodic checkpoints truncate WAL and compact pages.
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// WAL entry types
 #[derive(Debug, Clone)]

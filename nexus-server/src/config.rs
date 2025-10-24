@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 
 /// Server configuration
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Config {
     /// Server bind address
     pub addr: SocketAddr,
@@ -22,6 +23,7 @@ impl Default for Config {
 
 impl Config {
     /// Load configuration from environment variables
+    #[allow(dead_code)]
     pub fn from_env() -> Self {
         let addr = std::env::var("NEXUS_ADDR")
             .unwrap_or_else(|_| "127.0.0.1:15474".to_string())

@@ -8,7 +8,7 @@
 //!
 //! All stores use append-only architecture with periodic compaction.
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Node record in nodes.store
 #[derive(Debug, Clone)]

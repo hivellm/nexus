@@ -1,0 +1,4 @@
+[tool.codespell]
+skip = "*.lock,*.json,target,node_modules,.git,Cargo.lock"
+ignore-words-list = "crate,ser,deser,fof"
+

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Cypher query request
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct CypherRequest {
     /// Cypher query string
     pub query: String,

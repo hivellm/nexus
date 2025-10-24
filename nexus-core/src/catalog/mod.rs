@@ -7,7 +7,7 @@
 //!
 //! Uses LMDB (via heed) for durable storage of these mappings.
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Catalog for managing label/type/key mappings
 pub struct Catalog {

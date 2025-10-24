@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// KNN traversal request
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct KnnTraverseRequest {
     /// Node label to search
     pub label: String,

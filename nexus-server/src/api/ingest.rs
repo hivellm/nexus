@@ -16,6 +16,7 @@ pub struct IngestRequest {
 
 /// Node to ingest
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct NodeIngest {
     /// Node ID (optional, auto-generated if not provided)
     pub id: Option<u64>,
@@ -27,6 +28,7 @@ pub struct NodeIngest {
 
 /// Relationship to ingest
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct RelIngest {
     /// Relationship ID (optional)
     pub id: Option<u64>,

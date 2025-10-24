@@ -10,7 +10,7 @@
 //! - Statistics per label (|V|), per type (|E|), average degree
 //! - Reorder patterns for selectivity
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Cypher query
 #[derive(Debug, Clone)]
