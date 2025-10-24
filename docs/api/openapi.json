@@ -1,0 +1,1405 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Nexus Graph Database API",
+    "version": "0.1.0",
+    "description": "High-performance property graph database with native vector search.\n\nNexus provides a Cypher-compatible query interface with first-class KNN support\nfor hybrid RAG (Retrieval-Augmented Generation) applications.\n\n## Features\n- Property graph model with Cypher subset queries\n- Native KNN vector search via HNSW indexes\n- ACID transactions with MVCC\n- StreamableHTTP with SSE for large result sets\n- MCP and UMICP protocol support\n",
+    "contact": {
+      "name": "HiveLLM Team",
+      "email": "team@hivellm.org",
+      "url": "https://github.com/hivellm/nexus"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "url": "https://github.com/hivellm/nexus/blob/main/LICENSE"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:15474",
+      "description": "Local development server"
+    },
+    {
+      "url": "http://127.0.0.1:15474",
+      "description": "Localhost (no auth required)"
+    },
+    {
+      "url": "https://nexus-api.example.com",
+      "description": "Production server (authentication required)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "health",
+      "description": "Health check and status endpoints"
+    },
+    {
+      "name": "query",
+      "description": "Cypher query execution"
+    },
+    {
+      "name": "knn",
+      "description": "K-Nearest Neighbors vector search"
+    },
+    {
+      "name": "ingestion",
+      "description": "Bulk data ingestion"
+    },
+    {
+      "name": "statistics",
+      "description": "Database statistics and metadata"
+    },
+    {
+      "name": "replication",
+      "description": "Replication management (V1)"
+    },
+    {
+      "name": "authentication",
+      "description": "API key management (V1)"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health check",
+        "description": "Returns server health status and version information",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "Server is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "ok",
+                  "version": "0.1.0",
+                  "uptime_seconds": 3600
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stats": {
+      "get": {
+        "tags": [
+          "statistics"
+        ],
+        "summary": "Database statistics",
+        "description": "Returns comprehensive database statistics including node/relationship counts, index info, and storage metrics",
+        "operationId": "getStatistics",
+        "responses": {
+          "200": {
+            "description": "Database statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cypher": {
+      "post": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Execute Cypher query",
+        "description": "Execute a Cypher query against the graph database.\n\nSupports:\n- Pattern matching (MATCH)\n- Filtering (WHERE)\n- Projection (RETURN)\n- Ordering (ORDER BY)\n- Limiting (LIMIT)\n- Aggregations (COUNT, SUM, AVG, MIN, MAX)\n",
+        "operationId": "executeCypher",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CypherRequest"
+              },
+              "examples": {
+                "simple_match": {
+                  "summary": "Simple MATCH query",
+                  "value": {
+                    "query": "MATCH (n:Person) RETURN n LIMIT 10"
+                  }
+                },
+                "with_filter": {
+                  "summary": "Query with WHERE clause",
+                  "value": {
+                    "query": "MATCH (n:Person) WHERE n.age > $min_age RETURN n.name, n.age ORDER BY n.age DESC LIMIT 10",
+                    "params": {
+                      "min_age": 25
+                    }
+                  }
+                },
+                "aggregation": {
+                  "summary": "Aggregation query",
+                  "value": {
+                    "query": "MATCH (p:Person)-[:BOUGHT]->(prod:Product) RETURN prod.category, COUNT(*) AS purchases ORDER BY purchases DESC"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Query executed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CypherResponse"
+                },
+                "example": {
+                  "columns": [
+                    "n.name",
+                    "n.age"
+                  ],
+                  "rows": [
+                    [
+                      "Alice",
+                      30
+                    ],
+                    [
+                      "Bob",
+                      28
+                    ],
+                    [
+                      "Charlie",
+                      35
+                    ]
+                  ],
+                  "execution_time_ms": 12,
+                  "row_count": 3
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query syntax or parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "code": "CYPHER_SYNTAX_ERROR",
+                    "message": "Unexpected token 'WERE' at line 1, column 20",
+                    "position": {
+                      "line": 1,
+                      "column": 20
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Query timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/knn_traverse": {
+      "post": {
+        "tags": [
+          "knn"
+        ],
+        "summary": "KNN-seeded graph traversal",
+        "description": "Execute K-Nearest Neighbors vector search with optional graph traversal.\n\nThis endpoint combines:\n1. KNN vector similarity search (via HNSW index)\n2. Graph pattern expansion from KNN results\n3. Property filtering\n4. Result ranking and limiting\n\nPerfect for hybrid RAG queries combining semantic similarity and graph structure.\n",
+        "operationId": "knnTraverse",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnnTraverseRequest"
+              },
+              "examples": {
+                "simple_knn": {
+                  "summary": "Simple KNN search",
+                  "value": {
+                    "label": "Person",
+                    "vector": [
+                      0.1,
+                      0.2,
+                      0.3,
+                      0.4
+                    ],
+                    "k": 10
+                  }
+                },
+                "knn_with_expansion": {
+                  "summary": "KNN with graph traversal",
+                  "value": {
+                    "label": "Person",
+                    "vector": [
+                      0.1,
+                      0.2,
+                      0.3,
+                      0.4
+                    ],
+                    "k": 20,
+                    "expand": [
+                      "(n)-[:WORKS_AT]->(company:Company)"
+                    ],
+                    "where": "company.size > 100",
+                    "limit": 10
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "KNN search completed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnnTraverseResponse"
+                },
+                "example": {
+                  "results": [
+                    {
+                      "node": {
+                        "id": 42,
+                        "labels": [
+                          "Person"
+                        ],
+                        "properties": {
+                          "name": "Alice",
+                          "age": 30
+                        }
+                      },
+                      "score": 0.95
+                    },
+                    {
+                      "node": {
+                        "id": 99,
+                        "labels": [
+                          "Person"
+                        ],
+                        "properties": {
+                          "name": "Bob",
+                          "age": 28
+                        }
+                      },
+                      "score": 0.89
+                    }
+                  ],
+                  "execution_time_ms": 8,
+                  "knn_time_ms": 2,
+                  "expand_time_ms": 4,
+                  "filter_time_ms": 2,
+                  "result_count": 2
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters (vector dimension mismatch, k <= 0)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "KNN index not found for specified label",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {}
+        ]
+      }
+    },
+    "/ingest": {
+      "post": {
+        "tags": [
+          "ingestion"
+        ],
+        "summary": "Bulk data ingestion",
+        "description": "Ingest multiple nodes and relationships in a single request.\n\n- Auto-generates IDs if not provided\n- Creates labels and types on-the-fly\n- Returns statistics and any errors\n- Suitable for initial data loading\n",
+        "operationId": "ingestData",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              },
+              "examples": {
+                "basic_ingest": {
+                  "summary": "Ingest nodes and relationships",
+                  "value": {
+                    "nodes": [
+                      {
+                        "labels": [
+                          "Person"
+                        ],
+                        "properties": {
+                          "name": "Alice",
+                          "age": 30
+                        }
+                      },
+                      {
+                        "labels": [
+                          "Person"
+                        ],
+                        "properties": {
+                          "name": "Bob",
+                          "age": 28
+                        }
+                      }
+                    ],
+                    "relationships": [
+                      {
+                        "src": 1,
+                        "dst": 2,
+                        "type": "KNOWS",
+                        "properties": {
+                          "since": 2020
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ingestion completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                },
+                "example": {
+                  "nodes_ingested": 2,
+                  "relationships_ingested": 1,
+                  "ingestion_time_ms": 15,
+                  "throughput": {
+                    "nodes_per_sec": 133,
+                    "relationships_per_sec": 66
+                  },
+                  "errors": []
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "write"
+            ]
+          },
+          {}
+        ]
+      }
+    },
+    "/replication/status": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Get replication status",
+        "description": "Returns current replication status, lag, and health information",
+        "operationId": "getReplicationStatus",
+        "responses": {
+          "200": {
+            "description": "Replication status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplicationStatus"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/replication/promote": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Promote replica to master",
+        "description": "Promote a replica node to master (manual failover).\n\n**Warning**: This is a destructive operation. Ensure the old master is stopped\nbefore promoting a replica to avoid split-brain scenarios.\n",
+        "operationId": "promoteReplica",
+        "responses": {
+          "200": {
+            "description": "Replica promoted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "example": "Replica promoted to master successfully"
+                    },
+                    "new_role": {
+                      "type": "string",
+                      "example": "master"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Node is already a master or promotion not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Promotion failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/auth/keys": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Create API key",
+        "description": "Generate a new API key with specified permissions",
+        "operationId": "createApiKey",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "API key created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded",
+              "error"
+            ],
+            "description": "Server health status"
+          },
+          "version": {
+            "type": "string",
+            "description": "Server version",
+            "example": "0.1.0"
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "description": "Server uptime in seconds",
+            "example": 3600
+          }
+        }
+      },
+      "StatsResponse": {
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "example": 1000000
+              },
+              "by_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "example": {
+                  "Person": 800000,
+                  "Company": 200000
+                }
+              }
+            }
+          },
+          "relationships": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "example": 2000000
+              },
+              "by_type": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "example": {
+                  "KNOWS": 1500000,
+                  "WORKS_AT": 500000
+                }
+              }
+            }
+          },
+          "indexes": {
+            "type": "object",
+            "properties": {
+              "knn": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "dimension": {
+                      "type": "integer"
+                    },
+                    "node_count": {
+                      "type": "integer"
+                    },
+                    "size_mb": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "storage": {
+            "type": "object",
+            "properties": {
+              "total_size_mb": {
+                "type": "integer"
+              },
+              "wal_size_mb": {
+                "type": "integer"
+              },
+              "page_cache_size_mb": {
+                "type": "integer"
+              },
+              "page_cache_hit_rate": {
+                "type": "number",
+                "format": "float",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      },
+      "CypherRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Cypher query string",
+            "example": "MATCH (n:Person) WHERE n.age > $min_age RETURN n LIMIT 10"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Query parameters (referenced in query with $param_name)",
+            "example": {
+              "min_age": 25
+            }
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "description": "Query timeout in milliseconds",
+            "default": 30000,
+            "minimum": 100,
+            "maximum": 300000
+          }
+        }
+      },
+      "CypherResponse": {
+        "type": "object",
+        "required": [
+          "columns",
+          "rows",
+          "execution_time_ms"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Column names from RETURN clause",
+            "example": [
+              "n.name",
+              "n.age"
+            ]
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {}
+            },
+            "description": "Result rows (array of arrays)"
+          },
+          "execution_time_ms": {
+            "type": "integer",
+            "description": "Query execution time in milliseconds",
+            "example": 12
+          },
+          "row_count": {
+            "type": "integer",
+            "description": "Number of rows returned",
+            "example": 3
+          }
+        }
+      },
+      "KnnTraverseRequest": {
+        "type": "object",
+        "required": [
+          "label",
+          "vector",
+          "k"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Node label to search",
+            "example": "Person"
+          },
+          "vector": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Query embedding vector",
+            "example": [
+              0.1,
+              0.2,
+              0.3,
+              0.4
+            ]
+          },
+          "k": {
+            "type": "integer",
+            "description": "Number of nearest neighbors",
+            "minimum": 1,
+            "maximum": 10000,
+            "example": 10
+          },
+          "expand": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional graph patterns to expand from KNN results",
+            "example": [
+              "(n)-[:WORKS_AT]->(company:Company)"
+            ]
+          },
+          "where": {
+            "type": "string",
+            "description": "Optional Cypher WHERE clause for filtering",
+            "example": "n.age > 25 AND company.size > 100"
+          },
+          "return_fields": {
+            "type": "array",
+            "description": "Fields to return (default all)",
+            "items": {
+              "type": "string"
+            }
+          },
+          "order_by": {
+            "type": "string",
+            "description": "Sort order",
+            "default": "score DESC"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum results to return",
+            "default": 100,
+            "minimum": 1,
+            "maximum": 10000
+          }
+        }
+      },
+      "KnnTraverseResponse": {
+        "type": "object",
+        "required": [
+          "results",
+          "execution_time_ms"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnnResult"
+            }
+          },
+          "execution_time_ms": {
+            "type": "integer",
+            "description": "Total execution time"
+          },
+          "knn_time_ms": {
+            "type": "integer",
+            "description": "Time spent on KNN search"
+          },
+          "expand_time_ms": {
+            "type": "integer",
+            "description": "Time spent on graph expansion"
+          },
+          "filter_time_ms": {
+            "type": "integer",
+            "description": "Time spent on filtering"
+          },
+          "result_count": {
+            "type": "integer",
+            "description": "Number of results returned"
+          }
+        }
+      },
+      "KnnResult": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "$ref": "#/components/schemas/Node"
+          },
+          "score": {
+            "type": "number",
+            "format": "float",
+            "description": "Similarity score (0.0-1.0, higher = more similar)",
+            "minimum": 0,
+            "maximum": 1,
+            "example": 0.95
+          }
+        }
+      },
+      "Node": {
+        "type": "object",
+        "required": [
+          "id",
+          "labels",
+          "properties"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unique node identifier",
+            "example": 42
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Node labels",
+            "example": [
+              "Person",
+              "Employee"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Node properties (key-value pairs)",
+            "example": {
+              "name": "Alice",
+              "age": 30,
+              "city": "NYC"
+            }
+          }
+        }
+      },
+      "IngestRequest": {
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeIngest"
+            },
+            "description": "Nodes to ingest"
+          },
+          "relationships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelationshipIngest"
+            },
+            "description": "Relationships to ingest"
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "skip_duplicates": {
+                "type": "boolean",
+                "default": true
+              },
+              "batch_size": {
+                "type": "integer",
+                "default": 10000
+              }
+            }
+          }
+        }
+      },
+      "NodeIngest": {
+        "type": "object",
+        "required": [
+          "labels",
+          "properties"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optional node ID (auto-generated if not provided)"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "Node labels",
+            "example": [
+              "Person"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Node properties",
+            "example": {
+              "name": "Alice",
+              "age": 30
+            }
+          }
+        }
+      },
+      "RelationshipIngest": {
+        "type": "object",
+        "required": [
+          "src",
+          "dst",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optional relationship ID"
+          },
+          "src": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Source node ID",
+            "example": 1
+          },
+          "dst": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Destination node ID",
+            "example": 2
+          },
+          "type": {
+            "type": "string",
+            "description": "Relationship type",
+            "example": "KNOWS"
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Relationship properties",
+            "example": {
+              "since": 2020
+            }
+          }
+        }
+      },
+      "IngestResponse": {
+        "type": "object",
+        "required": [
+          "nodes_ingested",
+          "relationships_ingested",
+          "ingestion_time_ms"
+        ],
+        "properties": {
+          "nodes_ingested": {
+            "type": "integer",
+            "description": "Number of nodes successfully ingested",
+            "example": 2
+          },
+          "relationships_ingested": {
+            "type": "integer",
+            "description": "Number of relationships successfully ingested",
+            "example": 1
+          },
+          "ingestion_time_ms": {
+            "type": "integer",
+            "description": "Total ingestion time",
+            "example": 15
+          },
+          "throughput": {
+            "type": "object",
+            "properties": {
+              "nodes_per_sec": {
+                "type": "integer"
+              },
+              "relationships_per_sec": {
+                "type": "integer"
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IngestionError"
+            },
+            "description": "List of errors (if any)"
+          }
+        }
+      },
+      "IngestionError": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "node",
+              "relationship"
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "description": "Index in input array"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      },
+      "ReplicationStatus": {
+        "type": "object",
+        "required": [
+          "role",
+          "status"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "master",
+              "replica"
+            ],
+            "description": "Current node role"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "error"
+            ]
+          },
+          "master_url": {
+            "type": "string",
+            "description": "Master URL (for replicas only)",
+            "example": "http://master:15474"
+          },
+          "lag_seconds": {
+            "type": "number",
+            "format": "float",
+            "description": "Replication lag in seconds",
+            "example": 0.5
+          },
+          "last_sync": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Last sync timestamp (Unix)"
+          },
+          "connected_replicas": {
+            "type": "integer",
+            "description": "Number of connected replicas (for master only)"
+          }
+        }
+      },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "permissions"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "API key name/description",
+            "example": "Production App"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "admin",
+                "super"
+              ]
+            },
+            "description": "Permissions for this API key",
+            "example": [
+              "read",
+              "write"
+            ]
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Expiration timestamp (null = never expires)",
+            "nullable": true
+          }
+        }
+      },
+      "ApiKeyResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "permissions"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "API key ID",
+            "example": "key_abc123"
+          },
+          "key": {
+            "type": "string",
+            "description": "API key value (only shown once!)",
+            "example": "nexus_sk_abc123def456..."
+          },
+          "name": {
+            "type": "string",
+            "example": "Production App"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "read",
+              "write"
+            ]
+          },
+          "rate_limit": {
+            "type": "object",
+            "properties": {
+              "per_minute": {
+                "type": "integer",
+                "example": 1000
+              },
+              "per_hour": {
+                "type": "integer",
+                "example": 10000
+              }
+            }
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Error code",
+                "enum": [
+                  "CYPHER_SYNTAX_ERROR",
+                  "CYPHER_SEMANTIC_ERROR",
+                  "INVALID_PARAMETER",
+                  "VECTOR_DIMENSION_MISMATCH",
+                  "INDEX_NOT_FOUND",
+                  "NODE_NOT_FOUND",
+                  "QUERY_TIMEOUT",
+                  "TRANSACTION_CONFLICT",
+                  "INTERNAL_ERROR",
+                  "STORAGE_ERROR",
+                  "AUTHENTICATION_REQUIRED",
+                  "PERMISSION_DENIED",
+                  "RATE_LIMIT_EXCEEDED"
+                ],
+                "example": "CYPHER_SYNTAX_ERROR"
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable error message",
+                "example": "Unexpected token at line 1, column 20"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Additional error details"
+              },
+              "position": {
+                "type": "object",
+                "properties": {
+                  "line": {
+                    "type": "integer"
+                  },
+                  "column": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API Key",
+        "description": "API key authentication.\n\nUse format: `Authorization: Bearer nexus_sk_your_api_key_here`\n\nAPI keys can be created via POST /auth/keys (requires admin permission).\n\nAuthentication is:\n- **Optional** for localhost (127.0.0.1) binding\n- **Required** for public (0.0.0.0) binding\n"
+      }
+    },
+    "responses": {
+      "UnauthorizedError": {
+        "description": "Authentication required",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": {
+                "code": "AUTHENTICATION_REQUIRED",
+                "message": "Authentication required for this endpoint"
+              }
+            }
+          }
+        }
+      },
+      "ForbiddenError": {
+        "description": "Insufficient permissions",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": {
+                "code": "PERMISSION_DENIED",
+                "message": "Insufficient permissions for this operation"
+              }
+            }
+          }
+        }
+      },
+      "RateLimitError": {
+        "description": "Rate limit exceeded",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Rate limit (requests per minute)"
+          },
+          "X-RateLimit-Remaining": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Remaining requests in current window"
+          },
+          "X-RateLimit-Reset": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Unix timestamp when limit resets"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": {
+                "code": "RATE_LIMIT_EXCEEDED",
+                "message": "Rate limit exceeded. Try again in 42 seconds."
+              }
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "ApiKeyHeader": {
+        "name": "Authorization",
+        "in": "header",
+        "description": "API key for authentication",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "example": "Bearer nexus_sk_abc123def456..."
+        }
+      }
+    }
+  }
+}
