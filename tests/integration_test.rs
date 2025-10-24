@@ -2,28 +2,21 @@
 //!
 //! These tests verify the complete system functionality from API to storage.
 
-// Ensure nexus_core is available
-use nexus_core;
-
 #[test]
-fn test_scaffolding_ready() {
-    // Verify project structure is in place
-    // This test ensures the scaffolding phase is complete
-    assert!(true, "Project scaffolding complete");
-}
-
-#[test]
-fn test_workspace_builds() {
-    // Ensure workspace compiles successfully
-    // This is verified by the test framework running this test
-    assert!(true, "Workspace builds without errors");
+fn test_workspace_compiles() {
+    // This test passing means the workspace compiled successfully
+    // No-op test to ensure CI has at least one test to run
+    let version = env!("CARGO_PKG_NAME");
+    assert_eq!(version, "nexus");
 }
 
 #[tokio::test]
-async fn test_async_runtime() {
+async fn test_tokio_runtime() {
     // Verify Tokio runtime is configured correctly
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-    assert!(true, "Async runtime working");
+    let start = std::time::Instant::now();
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    let elapsed = start.elapsed();
+    assert!(elapsed >= std::time::Duration::from_millis(10));
 }
 
 // TODO: Add implementation tests when MVP is complete

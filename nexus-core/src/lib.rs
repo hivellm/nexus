@@ -70,15 +70,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_module_structure() {
-        // Verify core modules are accessible
-        assert!(true, "Core module structure complete");
+    fn test_error_storage() {
+        let err = Error::storage("test error");
+        assert!(matches!(err, Error::Storage(_)));
+        assert_eq!(err.to_string(), "Storage error: test error");
     }
 
     #[test]
-    fn test_error_types() {
-        // Verify error types can be created
-        let err = Error::storage("test error");
-        assert!(matches!(err, Error::Storage(_)));
+    fn test_error_page_cache() {
+        let err = Error::page_cache("cache full");
+        assert!(matches!(err, Error::PageCache(_)));
+    }
+
+    #[test]
+    fn test_error_wal() {
+        let err = Error::wal("checkpoint failed");
+        assert!(matches!(err, Error::Wal(_)));
     }
 }
