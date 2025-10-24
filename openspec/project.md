@@ -388,6 +388,6 @@ nexus/
   - `api-protocols.md` - REST, MCP, UMICP
 
 ### Support
-- **Issues**: GitHub issues for bugs/features
-- **Discussions**: GitHub discussions for questions
-- **Email**: nexus@your-org.com
+- **Issues**: https://github.com/hivellm/nexus/issues
+- **Discussions**: https://github.com/hivellm/nexus/discussions
+- **Email**: team@hivellm.org

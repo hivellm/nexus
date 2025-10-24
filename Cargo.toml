@@ -9,9 +9,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = ["HiveLLM Contributors"]
+authors = ["HiveLLM Contributors <team@hivellm.org>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hivellm/nexus"
+homepage = "https://github.com/hivellm/nexus"
 rust-version = "1.85"
 
 [workspace.dependencies]

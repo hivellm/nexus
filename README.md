@@ -25,7 +25,7 @@ Nexus is a modern graph database built for read-heavy workloads with first-class
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/nexus
+git clone https://github.com/hivellm/nexus
 cd nexus
 
 # Build (release mode)
@@ -35,14 +35,14 @@ cargo +nightly build --release
 ./target/release/nexus-server
 ```
 
-Server starts on `http://localhost:7474` by default.
+Server starts on `http://localhost:15474` by default.
 
 ### Basic Usage
 
 #### Execute Cypher Query
 
 ```bash
-curl -X POST http://localhost:7474/cypher \
+curl -X POST http://localhost:15474/cypher \
   -H "Content-Type: application/json" \
   -d '{
     "query": "MATCH (n:Person) WHERE n.age > 25 RETURN n.name, n.age LIMIT 10"
@@ -52,7 +52,7 @@ curl -X POST http://localhost:7474/cypher \
 #### KNN Vector Search
 
 ```bash
-curl -X POST http://localhost:7474/knn_traverse \
+curl -X POST http://localhost:15474/knn_traverse \
   -H "Content-Type: application/json" \
   -d '{
     "label": "Person",
@@ -64,7 +64,7 @@ curl -X POST http://localhost:7474/knn_traverse \
 #### Bulk Ingestion
 
 ```bash
-curl -X POST http://localhost:7474/ingest \
+curl -X POST http://localhost:15474/ingest \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
@@ -242,7 +242,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 ### Environment Variables
 
 ```bash
-NEXUS_ADDR=127.0.0.1:7474    # Server bind address
+NEXUS_ADDR=127.0.0.1:15474   # Server bind address
 NEXUS_DATA_DIR=./data         # Data directory
 RUST_LOG=nexus_server=debug   # Logging level
 ```
@@ -266,7 +266,7 @@ data/
 
 ### Vectorizer Integration
 
-Nexus integrates with [Vectorizer](https://github.com/your-org/vectorizer) for embedding generation:
+Nexus integrates with [Vectorizer](https://github.com/hivellm/vectorizer) for embedding generation:
 
 ```rust
 // Generate embedding via Vectorizer
@@ -362,9 +362,9 @@ See [LICENSE](LICENSE) for details.
 
 ## Contact
 
-- **Issues**: https://github.com/your-org/nexus/issues
-- **Discussions**: https://github.com/your-org/nexus/discussions
-- **Email**: nexus@your-org.com
+- **Issues**: https://github.com/hivellm/nexus/issues
+- **Discussions**: https://github.com/hivellm/nexus/discussions
+- **Email**: team@hivellm.org
 
 ---
 

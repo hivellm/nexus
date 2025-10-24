@@ -12,7 +12,7 @@ Nexus exposes a RESTful HTTP API for:
 - **Bulk data ingestion**
 - **Database statistics and health**
 
-**Base URL**: `http://localhost:7474` (configurable)
+**Base URL**: `http://localhost:15474` (configurable)
 
 ### Authentication (V1)
 
@@ -400,7 +400,7 @@ Nexus can be queried via MCP for AI/LLM integrations.
   "mcpServers": {
     "nexus": {
       "command": "nexus-mcp-server",
-      "args": ["--db-url", "http://localhost:7474"],
+      "args": ["--db-url", "http://localhost:15474"],
       "env": {
         "NEXUS_API_KEY": "your-api-key"
       }
@@ -527,9 +527,9 @@ Cross-service communication protocol for distributed AI systems.
     "graph.ingest"
   ],
   "endpoints": {
-    "query": "http://localhost:7474/cypher",
-    "knn": "http://localhost:7474/knn_traverse",
-    "ingest": "http://localhost:7474/ingest"
+    "query": "http://localhost:15474/cypher",
+    "knn": "http://localhost:15474/knn_traverse",
+    "ingest": "http://localhost:15474/ingest"
   }
 }
 ```
@@ -577,7 +577,7 @@ Cross-service communication protocol for distributed AI systems.
 ```rust
 use nexus_protocol::RestClient;
 
-let client = RestClient::new("http://localhost:7474");
+let client = RestClient::new("http://localhost:15474");
 
 // Execute Cypher
 let result = client.query("MATCH (n:Person) RETURN n LIMIT 10", None).await?;
@@ -597,7 +597,7 @@ let results = client.knn_traverse(
 ```python
 from nexus import NexusClient
 
-client = NexusClient("http://localhost:7474")
+client = NexusClient("http://localhost:15474")
 
 # Execute Cypher
 result = client.query(
@@ -619,7 +619,7 @@ results = client.knn_search(
 ```typescript
 import { NexusClient } from '@nexus/client';
 
-const client = new NexusClient('http://localhost:7474');
+const client = new NexusClient('http://localhost:15474');
 
 // Execute Cypher
 const result = await client.query(

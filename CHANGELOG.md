@@ -192,8 +192,8 @@ Maintained across versions:
 
 ## Links
 
-- **Repository**: https://github.com/your-org/nexus
+- **Repository**: https://github.com/hivellm/nexus
 - **Documentation**: https://docs.nexus-db.io
-- **Releases**: https://github.com/your-org/nexus/releases
-- **Issues**: https://github.com/your-org/nexus/issues
+- **Releases**: https://github.com/hivellm/nexus/releases
+- **Issues**: https://github.com/hivellm/nexus/issues
 

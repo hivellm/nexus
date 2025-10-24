@@ -14,7 +14,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            addr: "127.0.0.1:7474".parse().unwrap(),
+            addr: "127.0.0.1:15474".parse().unwrap(),
             data_dir: "./data".to_string(),
         }
     }
@@ -24,7 +24,7 @@ impl Config {
     /// Load configuration from environment variables
     pub fn from_env() -> Self {
         let addr = std::env::var("NEXUS_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1:7474".to_string())
+            .unwrap_or_else(|_| "127.0.0.1:15474".to_string())
             .parse()
             .expect("Invalid NEXUS_ADDR");
 
