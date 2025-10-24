@@ -336,9 +336,17 @@ MATCH (a:Rare)-[:TYPE1]->(b:Common)-[:TYPE2]->(c)
 
 ## Integration Layer
 
-### REST/HTTP API
+### StreamableHTTP API (Default Protocol)
+
+**Primary protocol** following Vectorizer implementation:
 
 ```
+Default Transport: StreamableHTTP
+- Chunked transfer encoding for large result sets
+- Server-Sent Events (SSE) for streaming
+- HTTP/2 multiplexing and flow control
+- Efficient for both small and large responses
+
 Endpoints:
 
 POST /cypher
@@ -367,26 +375,99 @@ POST /ingest
   ]
 }
 
-Streaming:
-- Server-Sent Events (SSE) for large result sets
-- Chunked transfer encoding
-- Backpressure via HTTP/2 flow control
+Streaming Response (SSE):
+event: row
+data: {"node": {...}, "score": 0.95}
+
+event: row
+data: {"node": {...}, "score": 0.92}
+
+event: complete
+data: {"total": 100, "execution_time_ms": 15}
 ```
 
-### MCP/UMICP Integration
+### MCP Protocol Integration
+
+**Model Context Protocol** for AI integrations (Vectorizer-style):
 
 ```
-Protocol Adapters:
+MCP Tools (19+ focused tools):
+- nexus/query - Execute Cypher queries
+- nexus/knn_search - KNN vector search
+- nexus/pattern_match - Graph pattern matching
+- nexus/ingest_node - Create single node
+- nexus/ingest_relationship - Create relationship
+- nexus/get_schema - Get graph schema
+- nexus/get_stats - Database statistics
+- ... (expandable)
 
-MCP (Model Context Protocol):
-- Semantic search over graph structure
-- LLM-friendly result serialization
-- Context window management
+Benefits:
+- Reduced entropy (no enum parameters)
+- Tool-specific parameters only
+- Better model tool calling accuracy
+```
 
-UMICP (Universal Model Interoperability):
-- Cross-model communication
-- Graph as shared knowledge base
-- Event-driven updates
+### UMICP Protocol Integration
+
+**Universal Model Interoperability Protocol** following Vectorizer v0.2.1:
+
+```
+UMICP Features:
+- Native JSON types support
+- Tool Discovery endpoint: GET /umicp/discover
+- Exposes all MCP tools with full schemas
+- Cross-service graph queries
+- Event-driven graph updates
+
+Discovery Response:
+{
+  "service": "nexus-graph",
+  "version": "0.1.0",
+  "protocol": "UMICP/0.2.1",
+  "tools": [
+    {
+      "name": "graph.query",
+      "description": "Execute Cypher query",
+      "inputSchema": {...}
+    }
+  ]
+}
+```
+
+### Vectorizer Integration (Native)
+
+**Direct integration** with Vectorizer for hybrid search:
+
+```
+Integration Modes:
+
+1. Embedding Generation:
+   POST /vectorizer/embed → vector
+   Store vector in Nexus KNN index
+
+2. Hybrid Search:
+   Nexus KNN search → node_ids
+   Vectorizer semantic search → enhanced relevance
+   Combined ranking via Reciprocal Rank Fusion (RRF)
+
+3. Bidirectional Sync:
+   Vectorizer change → Nexus graph update (relationship creation)
+   Nexus mutation → Vectorizer re-index (embedding update)
+
+Example Flow:
+┌────────────┐      embed()      ┌────────────┐
+│ Vectorizer │◄─────────────────│   Nexus    │
+│            │────────────────►  │            │
+└────────────┘   vector result   └────────────┘
+      │                                │
+      │ semantic search                │ graph traversal
+      ▼                                ▼
+   Relevance scores              Relationship context
+      │                                │
+      └────────────┬───────────────────┘
+                   │
+              Combined Results
+           (RRF ranking algorithm)
 ```
 
 ## Performance Characteristics
@@ -436,6 +517,362 @@ Example (1M nodes, 2M relationships, avg 5 props):
 - Properties: ~160MB (assuming 20 bytes avg per prop)
 - Indexes: ~50MB (bitmaps + HNSW)
 Total: ~340MB (reasonable)
+```
+
+## Authentication & Security
+
+### API Key Authentication
+
+**Vectorizer-style authentication** with flexible configuration:
+
+```
+Configuration:
+- Default: Authentication DISABLED (localhost development)
+- Production: REQUIRED when binding to 0.0.0.0 (public interface)
+- API Keys: 32-character random strings
+- Storage: Hashed with Argon2 in catalog (LMDB)
+
+AuthConfig:
+{
+  "enabled": false,                    // Default: disabled for localhost
+  "require_for_public_bind": true,     // Force enable for 0.0.0.0
+  "api_key_length": 32,
+  "rate_limit_per_minute": 1000,
+  "rate_limit_per_hour": 10000,
+  "jwt_secret": "change-in-production",
+  "jwt_expiration": 3600
+}
+
+API Key Format:
+{
+  "id": "key_abc123",
+  "name": "Production App",
+  "key_hash": "argon2id$...",
+  "user_id": "admin",
+  "permissions": ["read", "write", "admin"],
+  "created_at": 1704067200,
+  "expires_at": null,  // Never expires
+  "active": true
+}
+
+Usage:
+Authorization: Bearer nexus_sk_abc123...xyz
+
+Rate Limiting:
+- 1000 requests/minute per API key
+- 10000 requests/hour per API key
+- 429 Too Many Requests on exceed
+- X-RateLimit-* headers in response
+```
+
+### Security Model (V1)
+
+```
+Permissions:
+- READ: Query execution (MATCH, CALL vector.knn)
+- WRITE: Data mutations (CREATE, SET, DELETE)
+- ADMIN: Index management, constraints, schema changes
+- SUPER: Replication, cluster management
+
+Role-Based Access Control (RBAC):
+- User → Roles → Permissions
+- API Key → Permissions (direct)
+- JWT tokens for session management
+- Audit logging for all write operations
+
+Transport Security:
+- TLS 1.3 for production (via Axum/Tower)
+- mTLS for service-to-service (V2)
+- Certificate-based authentication (optional)
+```
+
+## Replication System (V1)
+
+### Master-Replica Architecture
+
+**Inspired by Redis/Vectorizer replication** with graph-specific optimizations:
+
+```
+Topology:
+┌────────────────┐         ┌────────────────┐
+│  Master Node   │────────>│ Replica Node 1 │
+│  (Read+Write)  │         │  (Read-Only)   │
+└────────┬───────┘         └────────────────┘
+         │
+         └───────────────> ┌────────────────┐
+                           │ Replica Node 2 │
+                           │  (Read-Only)   │
+                           └────────────────┘
+
+Replication Flow:
+1. Master receives write
+2. Append to WAL
+3. Apply to local storage
+4. Stream WAL entry to replicas
+5. Replicas apply + ACK
+6. Master commits transaction
+```
+
+### Replication Modes
+
+```
+1. Full Sync (Initial):
+   - Master creates snapshot
+   - Transfer snapshot.tar.zst to replica
+   - CRC32 checksum verification
+   - Replica loads snapshot
+   - Switch to incremental sync
+
+2. Incremental Sync:
+   - Stream WAL entries to replicas
+   - Circular replication log (1M operations)
+   - Auto-reconnect with exponential backoff
+   - Lag monitoring and alerts
+
+3. Async Replication:
+   - Master doesn't wait for replica ACK (default)
+   - Higher throughput, eventual consistency
+   - Configurable ACK timeout
+
+4. Sync Replication (optional):
+   - Wait for N replicas to ACK
+   - Lower throughput, stronger durability
+   - Configurable quorum
+```
+
+### Replication Protocol
+
+```
+WAL Streaming:
+┌──────────────────────────────────────┐
+│  Master WAL Entry                     │
+│  {epoch, tx_id, type, payload, crc}  │
+└──────────────┬───────────────────────┘
+               │ TCP stream
+┌──────────────▼───────────────────────┐
+│  Replica Receiver                     │
+│  - Validate CRC                       │
+│  - Apply to local WAL                 │
+│  - Update storage                     │
+│  - Send ACK                           │
+└──────────────────────────────────────┘
+
+REST API Endpoints:
+- GET  /replication/status
+- POST /replication/promote   (replica → master)
+- POST /replication/pause
+- POST /replication/resume
+- GET  /replication/lag       (replication lag in seconds)
+```
+
+### Failover & High Availability
+
+```
+Automatic Failover (V1):
+1. Monitor master health (heartbeat every 5s)
+2. Detect master failure (3 missed heartbeats)
+3. Elect new master (manual or via consensus)
+4. Promote replica: POST /replication/promote
+5. Redirect clients to new master
+6. Old master rejoins as replica (when recovered)
+
+Manual Failover:
+curl -X POST http://replica:15474/replication/promote \
+  -H "Authorization: Bearer admin_key"
+```
+
+## Sharding & Distribution (V2)
+
+### Sharding Strategy
+
+**Hash-based partitioning** for horizontal scalability:
+
+```
+Shard Assignment:
+shard_id = hash(node_id) % num_shards
+
+Example (4 shards):
+- Shard 0: node_ids where hash % 4 == 0
+- Shard 1: node_ids where hash % 4 == 1
+- Shard 2: node_ids where hash % 4 == 2
+- Shard 3: node_ids where hash % 4 == 3
+
+Relationship Placement:
+- Relationships reside with source node
+- Cross-shard edges stored as remote pointers
+- Minimize cross-shard hops in queries
+
+Topology:
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   Shard 0    │  │   Shard 1    │  │   Shard 2    │
+│  (Master)    │  │  (Master)    │  │  (Master)    │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       │                 │                 │
+   ┌───┴────┐        ┌───┴────┐        ┌───┴────┐
+   │Replica1│        │Replica1│        │Replica1│
+   └────────┘        └────────┘        └────────┘
+```
+
+### Distributed Queries
+
+```
+Query Coordinator:
+1. Parse Cypher query
+2. Identify required shards (WHERE clause analysis)
+3. Decompose plan into shard-local subplans
+4. Execute in parallel (scatter)
+5. Merge results (gather)
+6. Apply global ORDER BY + LIMIT
+
+Optimizations:
+- Pushdown filters to shards
+- Pushdown LIMIT (top-K per shard)
+- Minimize data transfer
+- Cache remote node metadata
+
+Cross-Shard Traversal:
+MATCH (n:Person)-[:KNOWS]->(m:Person)
+→ If n and m on different shards:
+  1. Execute on n's shard
+  2. Fetch m's metadata remotely
+  3. Continue traversal
+  4. Cache cross-shard edges
+```
+
+### Consensus & Coordination
+
+```
+Raft Consensus (via openraft):
+- One Raft group per shard
+- Leader handles all writes
+- Followers replicate via Raft log
+- Strong consistency per shard
+- Eventual consistency cross-shard
+
+Shard Metadata (in catalog):
+{
+  "shard_id": 0,
+  "leader": "node1:15474",
+  "followers": ["node2:15474", "node3:15474"],
+  "status": "healthy",
+  "node_count": 250000,
+  "rel_count": 500000
+}
+```
+
+## Desktop GUI (Electron)
+
+### Overview
+
+**Modern desktop application** for visual graph management and exploration:
+
+```
+Technology Stack:
+- Electron (cross-platform desktop)
+- Vue 3 + Composition API
+- TailwindCSS (styling)
+- D3.js / Cytoscape.js (graph visualization)
+- Chart.js (metrics)
+
+Features:
+🎨 Beautiful interface with dark/light themes
+📊 Real-time graph visualization (force-directed layout)
+🔍 Visual Cypher query builder
+⚡ Live query execution with syntax highlighting
+📈 Database metrics and monitoring
+💾 Backup/restore operations
+🔧 Configuration editor
+📁 Schema browser (labels, types, properties)
+🎯 KNN vector search interface
+```
+
+### GUI Capabilities
+
+```
+1. Graph Visualization:
+   - Force-directed graph layout
+   - Node filtering by label
+   - Relationship filtering by type
+   - Property inspector
+   - Zoom, pan, node selection
+
+2. Query Interface:
+   - Cypher editor with syntax highlighting
+   - Query history
+   - Result table/graph view toggle
+   - Export results (JSON, CSV)
+   - Saved queries
+
+3. Schema Management:
+   - View all labels and types
+   - Property statistics
+   - Index management
+   - Constraint creation/deletion
+
+4. KNN Vector Search:
+   - Text input → generate embedding
+   - Visual similarity search results
+   - Hybrid query builder (KNN + patterns)
+   - Vector index management
+
+5. Database Operations:
+   - Backup/restore
+   - Import/export data
+   - Replication monitoring
+   - Performance metrics
+   - Log viewer
+
+6. Monitoring Dashboard:
+   - Query throughput
+   - Page cache hit rate
+   - WAL size
+   - Replication lag
+   - Index sizes
+```
+
+### Installation & Usage
+
+```bash
+# Development
+cd gui
+npm install
+npm run dev
+
+# Build installers
+npm run build:win     # Windows MSI
+npm run build:mac     # macOS DMG
+npm run build:linux   # Linux AppImage/DEB
+
+# Run packaged app
+./dist/Nexus-Setup-0.1.0.exe       # Windows
+./dist/Nexus-0.1.0.dmg             # macOS
+./dist/nexus_0.1.0_amd64.AppImage  # Linux
+```
+
+### GUI Architecture
+
+```
+┌─────────────────────────────────────────┐
+│          Electron Main Process          │
+│  - Window management                    │
+│  - Auto-updater                         │
+│  - File system access                   │
+└─────────────┬───────────────────────────┘
+              │ IPC
+┌─────────────▼───────────────────────────┐
+│        Electron Renderer Process        │
+│  ┌────────────────────────────────────┐ │
+│  │  Vue 3 Application                 │ │
+│  │  - Graph Visualization (Cytoscape) │ │
+│  │  - Query Editor (CodeMirror)       │ │
+│  │  - Dashboard (Chart.js)            │ │
+│  └──────────┬─────────────────────────┘ │
+└─────────────┼───────────────────────────┘
+              │ HTTP/WebSocket
+┌─────────────▼───────────────────────────┐
+│         Nexus Server (Axum)              │
+│    http://localhost:15474                │
+└──────────────────────────────────────────┘
 ```
 
 ## Scalability Path

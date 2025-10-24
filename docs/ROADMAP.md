@@ -229,13 +229,91 @@ This document outlines the phased implementation plan for Nexus graph database.
 
 **Test Coverage**: 95%+ with large dataset tests
 
-### 2.5 Monitoring & Operations (Week 20)
+### 2.5 Authentication & Security (Week 20)
+
+- 📋 **API Key Authentication**
+  - API key generation and management
+  - Argon2 hashing for security
+  - Storage in catalog (LMDB)
+  - Disabled by default, required for 0.0.0.0 binding
+
+- 📋 **Rate Limiting**
+  - Per-API-key limits (1000/min, 10000/hour)
+  - X-RateLimit-* headers
+  - 429 Too Many Requests responses
+
+- 📋 **RBAC (Role-Based Access Control)**
+  - Permissions: READ, WRITE, ADMIN, SUPER
+  - User → Roles → Permissions
+  - JWT token support
+  - Audit logging
+
+**Test Coverage**: 95%+ with security scenario tests
+
+### 2.6 Replication System (Week 21-22)
+
+- 📋 **Master-Replica Architecture**
+  - Async replication (default)
+  - Sync replication (optional quorum)
+  - Read-only replicas
+  - WAL streaming to replicas
+
+- 📋 **Replication Protocol**
+  - Full sync via snapshot transfer
+  - Incremental sync via WAL stream
+  - Circular replication log (1M operations)
+  - Auto-reconnect with exponential backoff
+
+- 📋 **Failover Support**
+  - Health monitoring (heartbeat)
+  - Manual promotion (POST /replication/promote)
+  - Automatic failover (V2)
+  - Replication lag monitoring
+
+**Test Coverage**: 95%+ with failover tests
+
+### 2.7 Desktop GUI (Electron) (Week 23-25)
+
+- 📋 **GUI Foundation**
+  - Electron app structure
+  - Vue 3 + TailwindCSS
+  - IPC communication with server
+  - Auto-updater integration
+
+- 📋 **Graph Visualization**
+  - Force-directed graph layout (D3.js/Cytoscape.js)
+  - Node/relationship filtering
+  - Property inspector
+  - Interactive zoom/pan
+
+- 📋 **Query Interface**
+  - Cypher editor (CodeMirror with syntax highlighting)
+  - Query execution
+  - Result table/graph view toggle
+  - Query history and saved queries
+
+- 📋 **Management Features**
+  - Schema browser
+  - Index management
+  - Backup/restore UI
+  - Replication monitoring
+  - Performance dashboard (Chart.js)
+
+- 📋 **KNN Search UI**
+  - Text input with embedding generation
+  - Visual similarity results
+  - Hybrid query builder
+
+**Test Coverage**: 95%+ with E2E GUI tests
+
+### 2.8 Monitoring & Operations (Week 26)
 
 - 📋 **Metrics Exposure**
   - Prometheus metrics endpoint
   - Query latency histograms
   - Cache hit rates
   - WAL size, checkpoint frequency
+  - Replication lag metrics
 
 - 📋 **Operational Tools**
   - Backup/restore utilities
@@ -245,7 +323,7 @@ This document outlines the phased implementation plan for Nexus graph database.
 
 **Test Coverage**: 95%+ with ops scenario tests
 
-**V1 Deliverable**: Production-grade single-node database with advanced features
+**V1 Deliverable**: Production-grade single-node database with replication, GUI, and advanced features
 
 ---
 

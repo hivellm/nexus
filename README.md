@@ -54,11 +54,25 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 💾 **8KB Page Cache** - Clock/2Q/TinyLFU eviction policies
 - 🔄 **Append-Only Architecture**: Predictable write performance
 
-### **Integration**
-- 🌐 **REST/HTTP API**: Cypher, KNN traverse, bulk ingestion
-- 🔌 **MCP Protocol**: Model Context Protocol for AI integrations
-- 🔗 **UMICP Support**: Universal Model Interoperability
-- 🤝 **Vectorizer Integration**: Native embedding generation support
+### **Integration & Protocols**
+- 🌐 **StreamableHTTP**: Default protocol with SSE streaming (Vectorizer-style)
+- 🔌 **MCP Protocol**: 19+ focused tools for AI integrations
+- 🔗 **UMICP v0.2.1**: Tool discovery endpoint + native JSON
+- 🤝 **Vectorizer Integration**: Native hybrid search with RRF ranking
+
+### **Production Features (V1)**
+- 🔐 **API Key Auth**: Disabled by default, required for 0.0.0.0 binding
+- 🔄 **Master-Replica Replication**: Redis-style async/sync replication
+- ⚡ **Automatic Failover**: Health monitoring with replica promotion
+- 📊 **Rate Limiting**: 1000/min, 10000/hour per API key
+
+### **Desktop GUI (Electron)**
+- 🎨 **Beautiful Interface**: Vue 3 + TailwindCSS with dark/light themes
+- 📊 **Graph Visualization**: Interactive force-directed layouts (Cytoscape.js)
+- 💻 **Cypher Editor**: Syntax highlighting, query history, saved queries
+- 🔍 **Visual KNN Search**: Text → embedding → similarity results
+- 📈 **Monitoring Dashboard**: Real-time metrics with Chart.js
+- 🔧 **Management Tools**: Schema browser, backup/restore, replication control
 
 ## 🚀 **Quick Start**
 
@@ -83,6 +97,15 @@ cargo +nightly build --release --workspace
 ```
 
 Server starts on **`http://localhost:15474`** by default.
+
+### **Access Points**
+
+- 🌐 **REST API**: `http://localhost:15474` (StreamableHTTP with SSE)
+- 🔌 **MCP Server**: `http://localhost:15474/mcp` (Model Context Protocol)
+- 🔗 **UMICP**: `http://localhost:15474/umicp` (Universal Model Interoperability)
+- 🔍 **Tool Discovery**: `http://localhost:15474/umicp/discover` (UMICP v0.2.1)
+- ❤️ **Health Check**: `http://localhost:15474/health`
+- 📊 **Statistics**: `http://localhost:15474/stats`
 
 ### **Basic Usage**
 
@@ -295,13 +318,17 @@ LIMIT 5
 
 **Target**: Q4 2024
 
-### **🎯 V1 (Phase 2)** - Advanced Features
+### **🎯 V1 (Phase 2)** - Advanced Features & Production
 
 - [ ] **Advanced Indexes** (B-tree for properties, Tantivy full-text)
 - [ ] **Constraints** (UNIQUE, NOT NULL, CHECK)
 - [ ] **Query Optimization** (cost-based planner with statistics)
 - [ ] **Bulk Loader** (bypass WAL for fast initial load)
+- [ ] **Authentication & Security** (API keys, RBAC, rate limiting)
+- [ ] **Master-Replica Replication** (async/sync, automatic failover)
+- [ ] **Desktop GUI** (Electron app with graph visualization)
 - [ ] **Monitoring & Metrics** (Prometheus, OpenTelemetry)
+- [ ] **Vectorizer Hybrid Search** (RRF ranking, bidirectional sync)
 
 **Target**: Q1 2025
 
@@ -434,30 +461,187 @@ data/
     └── hnsw_*.bin       # HNSW vector indexes
 ```
 
+## 🔐 **Authentication & Security**
+
+### **API Key Authentication (V1)**
+
+**Disabled by default** for localhost development, **required** for public binding:
+
+```bash
+# Localhost (127.0.0.1): No authentication required
+NEXUS_ADDR=127.0.0.1:15474 ./nexus-server
+
+# Public binding (0.0.0.0): Authentication REQUIRED
+NEXUS_ADDR=0.0.0.0:15474 ./nexus-server
+# Error: Authentication must be enabled for public binding
+
+# Enable authentication
+NEXUS_AUTH_ENABLED=true NEXUS_ADDR=0.0.0.0:15474 ./nexus-server
+```
+
+### **API Key Management**
+
+```bash
+# Create API key
+curl -X POST http://localhost:15474/auth/keys \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production App",
+    "permissions": ["read", "write"]
+  }'
+
+# Response
+{
+  "id": "key_abc123",
+  "key": "nexus_sk_abc123def456...",  # Save this! Not shown again
+  "name": "Production App",
+  "permissions": ["read", "write"],
+  "rate_limit": {"per_minute": 1000, "per_hour": 10000}
+}
+
+# Use API key
+curl -X POST http://localhost:15474/cypher \
+  -H "Authorization: Bearer nexus_sk_abc123def456..." \
+  -H "Content-Type: application/json" \
+  -d '{"query": "MATCH (n) RETURN n LIMIT 10"}'
+```
+
+### **Rate Limiting**
+
+- **1,000 requests/minute** per API key
+- **10,000 requests/hour** per API key
+- Returns `429 Too Many Requests` when exceeded
+- Headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+
+## 🖥️ **Desktop GUI** (V1)
+
+### **Nexus Desktop Application**
+
+Modern Electron-based desktop app for visual graph management:
+
+```
+Features:
+🎨 Beautiful Vue 3 interface with dark/light themes
+📊 Interactive graph visualization (force-directed layouts)
+💻 Cypher query editor with syntax highlighting
+🔍 Visual KNN search (text → embedding → results)
+📈 Real-time performance dashboard
+🔧 Complete database management tools
+```
+
+### **Installation**
+
+```bash
+# Download from releases
+# Windows: Nexus-Setup-0.1.0.exe
+# macOS: Nexus-0.1.0.dmg
+# Linux: nexus_0.1.0_amd64.AppImage
+
+# Or build from source
+cd gui
+npm install
+npm run build:win    # Windows MSI installer
+npm run build:mac    # macOS DMG
+npm run build:linux  # Linux AppImage/DEB
+```
+
+### **Screenshots**
+
+**Graph Visualization**
+- Interactive node/relationship exploration
+- Filter by labels and types
+- Property inspector panel
+- Zoom, pan, node selection
+
+**Query Editor**
+- Monaco/CodeMirror with Cypher syntax
+- Query history and saved queries
+- Result view: Table or Graph
+- Export results (JSON, CSV)
+
+**Monitoring Dashboard**
+- Query throughput metrics
+- Page cache hit rate
+- WAL and storage size
+- Replication lag (if enabled)
+
 ## 🔗 **Integrations**
 
 ### **Vectorizer Integration**
 
-Nexus integrates seamlessly with [Vectorizer](https://github.com/hivellm/vectorizer) for embedding generation:
+Nexus integrates **natively** with [Vectorizer](https://github.com/hivellm/vectorizer) for hybrid search:
 
 ```rust
-// Generate embedding via Vectorizer
+// 1. Generate embedding via Vectorizer
 let vectorizer = VectorizerClient::new("http://localhost:15002");
 let embedding = vectorizer.embed("machine learning algorithms").await?;
 
-// Store in graph with KNN index
+// 2. Store in graph with KNN index
 engine.create_node_with_embedding(
     vec!["Document"],
     json!({"title": "ML Guide", "content": "..."}),
     embedding
 )?;
 
-// Hybrid semantic + graph search
+// 3. Hybrid semantic + graph search
 CALL vector.knn('Document', $query_embedding, 10)
 YIELD node AS doc, score
 MATCH (doc)-[:CITES]->(related:Document)
 RETURN doc.title, related.title, score
 ORDER BY score DESC
+```
+
+### **Hybrid Search with RRF Ranking**
+
+Combine Nexus graph traversal + Vectorizer semantic search:
+
+```rust
+// Reciprocal Rank Fusion (RRF) for hybrid ranking
+async fn hybrid_search(query: &str, k: usize) -> Result<Vec<ScoredNode>> {
+    // 1. Nexus KNN search
+    let nexus_results = nexus.knn_search("Document", query_embedding, k).await?;
+    
+    // 2. Vectorizer semantic search  
+    let vectorizer_results = vectorizer.search("docs", query, k).await?;
+    
+    // 3. Combine with RRF
+    let combined = reciprocal_rank_fusion(
+        &nexus_results,
+        &vectorizer_results,
+        k: 60  // RRF constant
+    );
+    
+    Ok(combined)
+}
+
+// Cypher equivalent
+CALL graph.hybrid_search('Document', $query_text, 20)
+YIELD node, graph_score, semantic_score, rrf_score
+RETURN node.title, rrf_score
+ORDER BY rrf_score DESC
+LIMIT 10
+```
+
+### **Bidirectional Sync**
+
+```
+Vectorizer → Nexus:
+- Document added to Vectorizer → Create node in Nexus
+- Embedding updated → Update KNN index
+- Document deleted → Mark node as deleted
+
+Nexus → Vectorizer:
+- Node created → Index in Vectorizer collection
+- Property updated → Re-embed and update
+- Node deleted → Remove from Vectorizer
+
+Configuration:
+{
+  "vectorizer_url": "http://localhost:15002",
+  "sync_enabled": true,
+  "sync_collections": ["documents", "knowledge_base"],
+  "auto_embed_fields": ["title", "content", "description"]
+}
 ```
 
 ### **Protocol Support**
@@ -467,6 +651,62 @@ ORDER BY score DESC
 - 🔗 **UMICP**: Universal Model Interoperability Protocol
 
 See [**API Protocols**](docs/specs/api-protocols.md) for complete specifications.
+
+## 🔄 **Replication & High Availability** (V1)
+
+### **Master-Replica Replication**
+
+Redis-style replication system for read scalability and fault tolerance:
+
+```bash
+# Start master
+NEXUS_ROLE=master NEXUS_ADDR=0.0.0.0:15474 ./nexus-server
+
+# Start replica
+NEXUS_ROLE=replica \
+NEXUS_MASTER_URL=http://master:15474 \
+NEXUS_ADDR=0.0.0.0:15475 \
+./nexus-server
+```
+
+### **Replication Features**
+
+- 📦 **Full Sync**: Initial snapshot transfer with CRC32 verification
+- 🔄 **Incremental Sync**: WAL streaming (circular buffer, 1M operations)
+- ⚡ **Async Replication**: High throughput, eventual consistency (default)
+- 🔒 **Sync Replication**: Configurable quorum for durability
+- 🔌 **Auto-Reconnect**: Exponential backoff on connection loss
+- 📊 **Lag Monitoring**: Real-time replication lag tracking
+
+### **Failover & Promotion**
+
+```bash
+# Check replication status
+curl http://replica:15475/replication/status
+
+# Response
+{
+  "role": "replica",
+  "master_url": "http://master:15474",
+  "lag_seconds": 0.5,
+  "last_sync": 1704067200,
+  "status": "healthy"
+}
+
+# Promote replica to master (manual failover)
+curl -X POST http://replica:15475/replication/promote \
+  -H "Authorization: Bearer admin_key"
+```
+
+### **Replication API**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/replication/status` | GET | Get replication status and lag |
+| `/replication/promote` | POST | Promote replica to master |
+| `/replication/pause` | POST | Pause replication |
+| `/replication/resume` | POST | Resume replication |
+| `/replication/lag` | GET | Get current replication lag |
 
 ## 🧪 **Testing**
 
