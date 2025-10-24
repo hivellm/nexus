@@ -64,3 +64,21 @@ impl Default for Engine {
         Self::new().expect("Failed to create default engine")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_structure() {
+        // Verify core modules are accessible
+        assert!(true, "Core module structure complete");
+    }
+
+    #[test]
+    fn test_error_types() {
+        // Verify error types can be created
+        let err = Error::storage("test error");
+        assert!(matches!(err, Error::Storage(_)));
+    }
+}

@@ -68,3 +68,14 @@ async fn health_check() -> impl IntoResponse {
         version: env!("CARGO_PKG_VERSION"),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert_eq!(config.addr.port(), 15474);
+    }
+}
