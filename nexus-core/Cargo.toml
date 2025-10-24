@@ -1,0 +1,45 @@
+[package]
+name = "nexus-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core graph database engine for Nexus - Property Graph with Cypher subset"
+
+[dependencies]
+# Storage
+memmap2.workspace = true
+heed.workspace = true
+parking_lot.workspace = true
+roaring.workspace = true
+
+# Indexes
+tantivy.workspace = true
+hnsw_rs.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+bytes.workspace = true
+bytemuck.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Observability
+tracing.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+

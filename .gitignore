@@ -1,0 +1,45 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data files
+*.db
+*.db-shm
+*.db-wal
+*.store
+*.log
+*.hnsw
+/data/
+
+# Build artifacts
+/dist/
+/build/
+*.dll
+*.so
+*.dylib
+
+# Environment
+.env
+.env.local
+config.local.yml
+
+# Coverage
+lcov.info
+coverage/
+*.profdata
+*.profraw
+
+# Temporary
+*.tmp
+*.bak
+
