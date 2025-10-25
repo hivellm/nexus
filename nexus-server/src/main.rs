@@ -121,6 +121,20 @@ async fn main() -> anyhow::Result<()> {
         .route("/data/nodes", delete(api::data::delete_node))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
+        // Clustering endpoints
+        .route("/clustering/algorithms", get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", post({
+            let server = nexus_server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", post({
+            let server = nexus_server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", post({
+            let server = nexus_server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }))
         // SSE streaming endpoints
         .route(
             "/sse/cypher",

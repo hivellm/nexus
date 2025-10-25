@@ -37,6 +37,7 @@
 #![allow(dead_code)] // Allow during initial scaffolding
 
 pub mod catalog;
+pub mod clustering;
 pub mod error;
 pub mod executor;
 // pub mod graph; // Temporarily commented out due to storage dependencies

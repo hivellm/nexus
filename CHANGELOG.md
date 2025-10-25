@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Node Clustering and Grouping** (Task 2.3) ✅
+  - Comprehensive clustering algorithms implementation
+  - K-means clustering with k-means++ initialization
+  - Hierarchical clustering with multiple linkage types
+  - Label-based and property-based grouping
+  - Community detection using connected components
+  - DBSCAN density-based clustering
+  - Multiple distance metrics (Euclidean, Manhattan, Cosine, Jaccard, Hamming)
+  - Feature extraction strategies (label-based, property-based, structural, combined)
+  - Quality metrics calculation (silhouette score, WCSS, BCSS, Calinski-Harabasz, Davies-Bouldin)
+
+- **Clustering API Endpoints**
+  - GET /clustering/algorithms - List available algorithms and parameters
+  - POST /clustering/cluster - Perform clustering with configurable parameters
+  - POST /clustering/group-by-label - Group nodes by their labels
+  - POST /clustering/group-by-property - Group nodes by specific properties
+  - Comprehensive request/response models with JSON serialization
+  - Error handling and validation for all clustering operations
+
 - **Core Engine Implementation**
   - Implemented `Engine::new()` method with full component initialization
   - Added storage, catalog, page cache, WAL, and transaction manager integration
