@@ -403,15 +403,15 @@ fn format_duration(duration: Duration) -> String {
 
 /// Get current memory usage
 fn get_memory_usage() -> f64 {
-    use sysinfo::{System};
-    
+    use sysinfo::System;
+
     let mut sys = System::new_all();
     sys.refresh_memory();
-    
+
     // Get total memory usage in MB
     let total_memory = sys.total_memory() as f64 / 1024.0 / 1024.0;
     let used_memory = sys.used_memory() as f64 / 1024.0 / 1024.0;
-    
+
     // Return memory usage as percentage
     if total_memory > 0.0 {
         (used_memory / total_memory) * 100.0
@@ -422,11 +422,11 @@ fn get_memory_usage() -> f64 {
 
 /// Get current CPU usage
 fn get_cpu_usage() -> f64 {
-    use sysinfo::{System};
-    
+    use sysinfo::System;
+
     let mut sys = System::new_all();
     sys.refresh_cpu_all();
-    
+
     // Get CPU usage as percentage
     let cpu_usage = sys.global_cpu_usage();
     cpu_usage as f64
@@ -677,14 +677,14 @@ mod tests {
     fn test_get_memory_usage() {
         let memory = get_memory_usage();
         // Memory usage should be between 0% and 100%
-        assert!(memory >= 0.0 && memory <= 100.0);
+        assert!((0.0..=100.0).contains(&memory));
     }
 
     #[test]
     fn test_get_cpu_usage() {
         let cpu = get_cpu_usage();
         // CPU usage should be between 0% and 100%
-        assert!(cpu >= 0.0 && cpu <= 100.0);
+        assert!((0.0..=100.0).contains(&cpu));
     }
 
     #[tokio::test]

@@ -597,9 +597,9 @@ mod tests {
         assert_eq!(result, "42");
 
         // Test float literal
-        let expr = Expression::Literal(Literal::Float(3.14));
+        let expr = Expression::Literal(Literal::Float(std::f64::consts::PI));
         let result = planner.expression_to_string(&expr).unwrap();
-        assert_eq!(result, "3.14");
+        assert_eq!(result, "3.141592653589793");
 
         // Test boolean literal
         let expr = Expression::Literal(Literal::Boolean(true));

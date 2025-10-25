@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Helper function to create a test graph with sample data
+#[allow(dead_code)]
 fn create_test_graph() -> (Graph, TempDir) {
     let dir = TempDir::new().unwrap();
     let store = RecordStore::new(dir.path()).unwrap();
@@ -96,12 +97,12 @@ fn test_property_value_equality() {
 
     // Test float values
     assert!(GraphComparator::values_equal(
-        &PropertyValue::Float64(3.14),
-        &PropertyValue::Float64(3.14),
+        &PropertyValue::Float64(std::f64::consts::PI),
+        &PropertyValue::Float64(std::f64::consts::PI),
         &options
     ));
     assert!(!GraphComparator::values_equal(
-        &PropertyValue::Float64(3.14),
+        &PropertyValue::Float64(std::f64::consts::PI),
         &PropertyValue::Float64(3.15),
         &options
     ));
@@ -218,8 +219,10 @@ fn test_edge_changes_detection() {
 
 #[test]
 fn test_edge_structural_changes() {
-    let mut options = ComparisonOptions::default();
-    options.include_structural_changes = true;
+    let options = ComparisonOptions {
+        include_structural_changes: true,
+        ..Default::default()
+    };
 
     // Create original edge
     let original = create_test_edge(1, 1, 2, "KNOWS".to_string(), HashMap::new());
@@ -235,8 +238,10 @@ fn test_edge_structural_changes() {
 
 #[test]
 fn test_edge_endpoint_changes() {
-    let mut options = ComparisonOptions::default();
-    options.include_structural_changes = true;
+    let options = ComparisonOptions {
+        include_structural_changes: true,
+        ..Default::default()
+    };
 
     // Create original edge
     let original = create_test_edge(1, 1, 2, "KNOWS".to_string(), HashMap::new());
@@ -270,8 +275,10 @@ fn test_no_changes_detected() {
 #[test]
 fn test_comparison_options() {
     // Test with property changes disabled
-    let mut options = ComparisonOptions::default();
-    options.include_property_changes = false;
+    let options = ComparisonOptions {
+        include_property_changes: false,
+        ..Default::default()
+    };
 
     let mut props1 = HashMap::new();
     props1.insert(
@@ -290,9 +297,11 @@ fn test_comparison_options() {
 
 #[test]
 fn test_label_changes_only() {
-    let mut options = ComparisonOptions::default();
-    options.include_property_changes = false;
-    options.include_label_changes = true;
+    let options = ComparisonOptions {
+        include_property_changes: false,
+        include_label_changes: true,
+        ..Default::default()
+    };
 
     let node1 = create_test_node(1, vec!["Person".to_string()], HashMap::new());
     let node2 = create_test_node(
@@ -312,8 +321,10 @@ fn test_label_changes_only() {
 
 #[test]
 fn test_treat_missing_as_null() {
-    let mut options = ComparisonOptions::default();
-    options.treat_missing_as_null = true;
+    let options = ComparisonOptions {
+        treat_missing_as_null: true,
+        ..Default::default()
+    };
 
     let mut props1 = HashMap::new();
     props1.insert(
@@ -553,19 +564,17 @@ fn test_comparison_options_serialization() {
 
 #[test]
 fn test_graph_diff_creation() {
-    let mut added_nodes = Vec::new();
-    added_nodes.push(create_test_node(
+    let added_nodes = vec![create_test_node(
         1,
         vec!["Person".to_string()],
         HashMap::new(),
-    ));
+    )];
 
-    let mut removed_nodes = Vec::new();
-    removed_nodes.push(create_test_node(
+    let removed_nodes = vec![create_test_node(
         2,
         vec!["Person".to_string()],
         HashMap::new(),
-    ));
+    )];
 
     let mut modified_nodes = Vec::new();
     let mut props = HashMap::new();
@@ -588,23 +597,21 @@ fn test_graph_diff_creation() {
         },
     });
 
-    let mut added_edges = Vec::new();
-    added_edges.push(create_test_edge(
+    let added_edges = vec![create_test_edge(
         1,
         1,
         2,
         "KNOWS".to_string(),
         HashMap::new(),
-    ));
+    )];
 
-    let mut removed_edges = Vec::new();
-    removed_edges.push(create_test_edge(
+    let removed_edges = vec![create_test_edge(
         2,
         2,
         3,
         "KNOWS".to_string(),
         HashMap::new(),
-    ));
+    )];
 
     let mut modified_edges = Vec::new();
     let original_edge = create_test_edge(3, 1, 3, "KNOWS".to_string(), HashMap::new());

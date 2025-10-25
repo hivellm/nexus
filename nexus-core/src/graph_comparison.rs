@@ -454,7 +454,11 @@ impl GraphComparator {
     }
 
     /// Compare two property values for equality
-    pub fn values_equal(a: &PropertyValue, b: &PropertyValue, _options: &ComparisonOptions) -> bool {
+    pub fn values_equal(
+        a: &PropertyValue,
+        b: &PropertyValue,
+        _options: &ComparisonOptions,
+    ) -> bool {
         match (a, b) {
             (PropertyValue::Null, PropertyValue::Null) => true,
             (PropertyValue::Bool(a_val), PropertyValue::Bool(b_val)) => a_val == b_val,

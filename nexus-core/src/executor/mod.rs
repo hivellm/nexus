@@ -2720,7 +2720,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("name".to_string(), Value::String("Alice".to_string()));
         let context = ExecutionContext::new(params);
-        assert!(context.params.get("name").is_some());
+        assert!(context.params.contains_key("name"));
     }
 
     #[test]
@@ -2742,7 +2742,7 @@ mod tests {
     fn test_execution_context_parameter_operations() {
         let mut params = HashMap::new();
         params.insert("param1".to_string(), Value::String("value1".to_string()));
-        let mut context = ExecutionContext::new(params);
+        let context = ExecutionContext::new(params);
 
         // Get parameter
         assert_eq!(
@@ -2751,7 +2751,7 @@ mod tests {
         );
 
         // Get non-existent parameter
-        assert!(context.params.get("nonexistent").is_none());
+        assert!(!context.params.contains_key("nonexistent"));
     }
 
     #[test]

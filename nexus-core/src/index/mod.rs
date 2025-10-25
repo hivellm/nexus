@@ -1384,7 +1384,7 @@ mod tests {
     #[test]
     fn test_property_value_ordering() {
         // Test ordering of different property value types
-        let values = vec![
+        let values = [
             PropertyValue::String("a".to_string()),
             PropertyValue::Integer(1),
             PropertyValue::Float(1.0),
