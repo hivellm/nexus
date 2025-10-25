@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2025-10-25
 
+### Fixed
+
+- **Test Suite Fixes**
+  - Fixed `Executor::default()` to create RecordStore with temporary directory
+  - Fixed `GraphNode` test missing `size` and `color` fields
+  - Fixed packed field unaligned reference errors by copying values locally
+  - Fixed concurrent transaction test to use `Mutex<RecordStore>` for thread-safe access
+  - Corrected `REL_RECORD_SIZE` constant from 40 to 52 bytes
+  - Fixed RecordStore persistence by removing `.truncate(true)` flag that was deleting data
+  - Implemented ID tracking via record scanning to properly restore `next_node_id` and `next_rel_id` on reopening
+  - All 309 tests now passing (195 lib + 15 integration + 84 server + 10 HTTP + 5 doctests)
+
 ### Added
 
 - **Complete MVP Integration & Testing** (Phase 1.6) ✅
