@@ -39,6 +39,7 @@ tracing.workspace = true
 # Utilities
 uuid.workspace = true
 chrono.workspace = true
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
