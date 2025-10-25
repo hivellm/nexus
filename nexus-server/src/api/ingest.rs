@@ -178,8 +178,6 @@ mod tests {
     use super::*;
     use axum::extract::Json;
     use serde_json::json;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn test_ingest_nodes_only() {

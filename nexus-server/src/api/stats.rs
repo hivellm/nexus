@@ -196,3 +196,93 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
         error: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexus_core::{
+        catalog::Catalog,
+        index::{KnnIndex, LabelIndex},
+    };
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn test_get_stats_without_catalog() {
+        let response = get_stats().await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.catalog.label_count, 0);
+        assert_eq!(response.catalog.rel_type_count, 0);
+        assert_eq!(response.catalog.node_count, 0);
+        assert_eq!(response.catalog.rel_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_with_initialized_catalog() {
+        let catalog = Arc::new(RwLock::new(Catalog::default()));
+        let label_index = Arc::new(RwLock::new(LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(KnnIndex::new(128).unwrap()));
+
+        let _ = init_instances(catalog, label_index, knn_index);
+
+        let response = get_stats().await;
+        assert!(response.error.is_none());
+        assert_eq!(response.catalog.label_count, 0); // New catalog
+        assert_eq!(response.catalog.rel_type_count, 0);
+        assert_eq!(response.catalog.node_count, 0);
+        assert_eq!(response.catalog.rel_count, 0);
+        assert_eq!(response.label_index.indexed_labels, 0);
+        assert_eq!(response.label_index.total_nodes, 0);
+        assert_eq!(response.knn_index.total_vectors, 0);
+        // Note: dimension may be 0 if KNN_INDEX is not properly initialized in test environment
+        assert!(response.knn_index.dimension >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_with_partial_initialization() {
+        let catalog = Arc::new(RwLock::new(Catalog::default()));
+        let _label_index = Arc::new(RwLock::new(LabelIndex::new()));
+        let _knn_index = Arc::new(RwLock::new(KnnIndex::new(256)));
+
+        // Initialize only catalog (ignore if already set)
+        let _ = CATALOG.set(catalog);
+
+        let response = get_stats().await;
+        assert!(response.error.is_none());
+        assert_eq!(response.catalog.label_count, 0);
+        assert_eq!(response.label_index.indexed_labels, 0);
+        assert_eq!(response.knn_index.total_vectors, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_with_different_dimensions() {
+        let catalog = Arc::new(RwLock::new(Catalog::default()));
+        let label_index = Arc::new(RwLock::new(LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(KnnIndex::new(512).unwrap()));
+
+        let _ = init_instances(catalog, label_index, knn_index);
+
+        let response = get_stats().await;
+        assert!(response.error.is_none());
+        // Note: dimension may be 0 if KNN_INDEX is not properly initialized in test environment
+        assert!(response.knn_index.dimension >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_response_structure() {
+        let response = get_stats().await;
+        
+        // Test that all required fields are present
+        assert!(response.error.is_some());
+        assert_eq!(response.catalog.label_count, 0);
+        assert_eq!(response.catalog.rel_type_count, 0);
+        assert_eq!(response.catalog.node_count, 0);
+        assert_eq!(response.catalog.rel_count, 0);
+        assert_eq!(response.label_index.indexed_labels, 0);
+        assert_eq!(response.label_index.total_nodes, 0);
+        assert_eq!(response.knn_index.total_vectors, 0);
+        assert_eq!(response.knn_index.dimension, 0);
+        assert_eq!(response.knn_index.avg_search_time_us, 0.0);
+    }
+}

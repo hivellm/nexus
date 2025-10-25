@@ -209,3 +209,179 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
         error: Some("Node deletion not yet implemented in Catalog".to_string()),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Json;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_create_node_without_catalog() {
+        let request = CreateNodeRequest {
+            labels: vec!["Person".to_string()],
+            properties: HashMap::new(),
+        };
+
+        let response = create_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.node_id, 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_node_with_empty_labels() {
+        let request = CreateNodeRequest {
+            labels: vec![],
+            properties: HashMap::new(),
+        };
+
+        let response = create_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_create_node_with_multiple_labels() {
+        let request = CreateNodeRequest {
+            labels: vec!["Person".to_string(), "Developer".to_string()],
+            properties: HashMap::new(),
+        };
+
+        let response = create_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_create_node_with_properties() {
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), json!("Alice"));
+        properties.insert("age".to_string(), json!(30));
+
+        let request = CreateNodeRequest {
+            labels: vec!["Person".to_string()],
+            properties,
+        };
+
+        let response = create_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_create_rel_without_catalog() {
+        let request = CreateRelRequest {
+            source_id: 1,
+            target_id: 2,
+            rel_type: "KNOWS".to_string(),
+            properties: HashMap::new(),
+        };
+
+        let response = create_rel(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.rel_id, 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_rel_with_properties() {
+        let mut properties = HashMap::new();
+        properties.insert("since".to_string(), json!(2020));
+
+        let request = CreateRelRequest {
+            source_id: 1,
+            target_id: 2,
+            rel_type: "KNOWS".to_string(),
+            properties,
+        };
+
+        let response = create_rel(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_create_rel_with_empty_type() {
+        let request = CreateRelRequest {
+            source_id: 1,
+            target_id: 2,
+            rel_type: "".to_string(),
+            properties: HashMap::new(),
+        };
+
+        let response = create_rel(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_update_node_without_catalog() {
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), json!("Bob"));
+
+        let request = UpdateNodeRequest {
+            node_id: 1,
+            properties,
+        };
+
+        let response = update_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_update_node_with_empty_properties() {
+        let request = UpdateNodeRequest {
+            node_id: 1,
+            properties: HashMap::new(),
+        };
+
+        let response = update_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_update_node_with_zero_id() {
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), json!("Alice"));
+
+        let request = UpdateNodeRequest {
+            node_id: 0,
+            properties,
+        };
+
+        let response = update_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_without_catalog() {
+        let request = DeleteNodeRequest { node_id: 1 };
+
+        let response = delete_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_with_zero_id() {
+        let request = DeleteNodeRequest { node_id: 0 };
+
+        let response = delete_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_with_large_id() {
+        let request = DeleteNodeRequest { node_id: u64::MAX };
+
+        let response = delete_node(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+    }
+}

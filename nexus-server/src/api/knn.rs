@@ -162,8 +162,6 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
 mod tests {
     use super::*;
     use axum::extract::Json;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn test_knn_traverse_basic() {
