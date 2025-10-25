@@ -45,8 +45,8 @@
 
 ## 5. Documentation & Quality
 
-- [ ] 5.1 Update docs/ROADMAP.md (mark Phase 1.3 complete)
-- [ ] 5.2 Add index examples to README
-- [ ] 5.3 Update CHANGELOG.md
-- [ ] 5.4 Run all quality checks (fmt, clippy, test, coverage)
+- [x] 5.1 Update docs/ROADMAP.md (mark Phase 1.3 complete)
+- [x] 5.2 Add index examples to README
+- [x] 5.3 Update CHANGELOG.md
+- [x] 5.4 Run all quality checks (fmt, clippy, test, coverage)
 

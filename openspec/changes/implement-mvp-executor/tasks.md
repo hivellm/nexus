@@ -60,8 +60,8 @@
 
 ## 6. Documentation & Quality
 
-- [ ] 6.1 Update docs/ROADMAP.md (mark Phase 1.4 complete)
-- [ ] 6.2 Add query examples to README
-- [ ] 6.3 Update CHANGELOG.md with v0.3.0
-- [ ] 6.4 Run all quality checks
+- [x] 6.1 Update docs/ROADMAP.md (mark Phase 1.4 complete)
+- [x] 6.2 Add query examples to README
+- [x] 6.3 Update CHANGELOG.md with v0.3.0
+- [x] 6.4 Run all quality checks
 

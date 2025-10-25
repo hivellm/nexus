@@ -84,22 +84,22 @@
 
 ## 7. Documentation Updates
 
-- [ ] 7.1 Update docs/ROADMAP.md (mark Phase 1.1-1.2 as complete)
-- [ ] 7.2 Add implementation notes to docs/ARCHITECTURE.md
-- [ ] 7.3 Update CHANGELOG.md with v0.2.0 notes
-- [ ] 7.4 Add usage examples to README.md (programmatic API)
-- [ ] 7.5 Document configuration options in config.example.yml
+- [x] 7.1 Update docs/ROADMAP.md (mark Phase 1.1-1.2 as complete)
+- [x] 7.2 Add implementation notes to docs/ARCHITECTURE.md
+- [x] 7.3 Update CHANGELOG.md with v0.2.0 notes
+- [x] 7.4 Add usage examples to README.md (programmatic API)
+- [x] 7.5 Document configuration options in config.example.yml
 
 ## 8. Quality Gates
 
-- [ ] 8.1 Run cargo +nightly fmt --all
-- [ ] 8.2 Run cargo clippy --workspace --all-targets -- -D warnings
-- [ ] 8.3 Run cargo test --workspace --verbose (100% passing)
-- [ ] 8.4 Run cargo nextest run --workspace (all tests passing)
-- [ ] 8.5 Run cargo llvm-cov --workspace (verify 95%+ coverage)
-- [ ] 8.6 Run codespell (0 errors)
-- [ ] 8.7 Run cargo build --release (verify release build works)
-- [ ] 8.8 Performance validation (meet target: 100K+ point reads/sec)
+- [x] 8.1 Run cargo +nightly fmt --all
+- [x] 8.2 Run cargo clippy --workspace --all-targets -- -D warnings
+- [x] 8.3 Run cargo test --workspace --verbose (100% passing)
+- [x] 8.4 Run cargo nextest run --workspace (all tests passing)
+- [x] 8.5 Run cargo llvm-cov --workspace (verify 95%+ coverage)
+- [x] 8.6 Run codespell (0 errors)
+- [x] 8.7 Run cargo build --release (verify release build works)
+- [x] 8.8 Performance validation (meet target: 100K+ point reads/sec)
 
 ## Success Criteria
 

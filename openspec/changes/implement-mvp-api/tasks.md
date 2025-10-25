@@ -7,7 +7,7 @@
 - [x] 1.3 Implement query execution with timeout
 - [x] 1.4 Add error handling (syntax errors, execution errors)
 - [x] 1.5 Add response formatting (columns, rows, execution_time)
-- [x] 1.6 Add unit tests (95%+ coverage)
+- [ ] 1.6 Add unit tests (95%+ coverage) - Implementation complete, tests needed
 
 ## 2. KNN Traverse Endpoint
 
@@ -17,7 +17,7 @@
 - [x] 2.4 Execute optional graph expansion
 - [x] 2.5 Apply WHERE filters
 - [x] 2.6 Add execution time breakdown (knn, expand, filter)
-- [x] 2.7 Add unit tests (95%+ coverage)
+- [ ] 2.7 Add unit tests (95%+ coverage) - Implementation complete, tests needed
 
 ## 3. Ingest Endpoint
 
@@ -26,7 +26,7 @@
 - [x] 3.3 Batch relationship creation
 - [x] 3.4 Handle partial failures (error array)
 - [x] 3.5 Calculate throughput metrics
-- [x] 3.6 Add unit tests (95%+ coverage)
+- [ ] 3.6 Add unit tests (95%+ coverage) - Implementation complete, tests needed
 
 ## 4. Streaming Support (SSE)
 

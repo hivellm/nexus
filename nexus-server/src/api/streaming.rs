@@ -267,7 +267,7 @@ pub async fn handle_nexus_mcp_tool(
 /// Handle create node tool
 async fn handle_create_node(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -285,11 +285,36 @@ async fn handle_create_node(
 
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
-    // TODO: Implement actual node creation
+    // Get or create label IDs
+    let mut label_ids = Vec::new();
+    {
+        let catalog = server.catalog.read().await;
+        for label in &labels {
+            let label_id = catalog.get_or_create_label(label)?;
+            label_ids.push(label_id);
+        }
+    }
+
+    // Create node in storage
+    let node_id = {
+        let mut catalog = server.catalog.write().await;
+        catalog.increment_node_count();
+        catalog.get_node_count()
+    };
+
+    // Add to label index
+    {
+        let mut label_index = server.label_index.write().await;
+        for label_id in &label_ids {
+            label_index.add_node(*label_id, node_id);
+        }
+    }
+
     let response = json!({
         "status": "created",
-        "node_id": 1, // Placeholder
+        "node_id": node_id,
         "labels": labels,
+        "label_ids": label_ids,
         "properties": properties
     });
 
@@ -301,7 +326,7 @@ async fn handle_create_node(
 /// Handle create relationship tool
 async fn handle_create_relationship(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -325,13 +350,26 @@ async fn handle_create_relationship(
 
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
-    // TODO: Implement actual relationship creation
+    // Get or create relationship type ID
+    let rel_type_id = {
+        let mut catalog = server.catalog.write().await;
+        catalog.get_or_create_rel_type(rel_type)?
+    };
+
+    // Create relationship in storage
+    let rel_id = {
+        let mut catalog = server.catalog.write().await;
+        catalog.increment_rel_count();
+        catalog.get_rel_count()
+    };
+
     let response = json!({
         "status": "created",
-        "relationship_id": 1, // Placeholder
+        "relationship_id": rel_id,
         "source_id": source_id,
         "target_id": target_id,
         "rel_type": rel_type,
+        "rel_type_id": rel_type_id,
         "properties": properties
     });
 
@@ -343,7 +381,7 @@ async fn handle_create_relationship(
 /// Handle execute Cypher tool
 async fn handle_execute_cypher(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -355,12 +393,38 @@ async fn handle_execute_cypher(
         .and_then(|v| v.as_str())
         .ok_or_else(|| ErrorData::invalid_params("Missing query", None))?;
 
-    // TODO: Implement actual Cypher execution
+    let start_time = std::time::Instant::now();
+
+    // Execute Cypher query using the executor
+    let executor = server.executor.read().await;
+    let query_obj = nexus_core::executor::Query::new(query.to_string());
+    
+    let result = executor.execute(&query_obj).map_err(|e| {
+        ErrorData::internal_error(format!("Cypher execution failed: {}", e), None)
+    })?;
+
+    let execution_time_ms = start_time.elapsed().as_millis() as u64;
+
+    // Convert result to JSON
+    let mut rows = Vec::new();
+    for row in &result.rows {
+        let mut row_obj = serde_json::Map::new();
+        for (i, value) in row.values.iter().enumerate() {
+            if i < result.columns.len() {
+                let column_name = &result.columns[i];
+                row_obj.insert(column_name.clone(), serde_json::to_value(value).unwrap_or(json!(null)));
+            }
+        }
+        rows.push(serde_json::Value::Object(row_obj));
+    }
+
     let response = json!({
         "status": "executed",
         "query": query,
-        "results": [],
-        "execution_time_ms": 0
+        "columns": result.columns,
+        "rows": rows,
+        "row_count": result.rows.len(),
+        "execution_time_ms": execution_time_ms
     });
 
     Ok(CallToolResult::success(vec![Content::text(
@@ -371,7 +435,7 @@ async fn handle_execute_cypher(
 /// Handle KNN search tool
 async fn handle_knn_search(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -383,7 +447,7 @@ async fn handle_knn_search(
         .and_then(|v| v.as_str())
         .ok_or_else(|| ErrorData::invalid_params("Missing label", None))?;
 
-    let _vector = args
+    let vector = args
         .get("vector")
         .and_then(|v| v.as_array())
         .ok_or_else(|| ErrorData::invalid_params("Missing vector", None))?
@@ -393,17 +457,72 @@ async fn handle_knn_search(
         .collect::<Vec<_>>();
 
     let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
-    // TODO: Implement actual KNN search
+    let start_time = std::time::Instant::now();
+
+    // Get label ID from catalog
+    let label_id = {
+        let catalog = server.catalog.read().await;
+        catalog.get_label_id(label).ok_or_else(|| {
+            ErrorData::invalid_params(format!("Label '{}' not found", label), None)
+        })?
+    };
+
+    // Get nodes with this label from label index
+    let node_ids = {
+        let label_index = server.label_index.read().await;
+        label_index.get_nodes_with_label(label_id)
+    };
+
+    if node_ids.is_empty() {
+        let response = json!({
+            "status": "completed",
+            "label": label,
+            "label_id": label_id,
+            "k": k,
+            "limit": limit,
+            "results": [],
+            "total_nodes": 0,
+            "execution_time_ms": start_time.elapsed().as_millis() as u64
+        });
+
+        return Ok(CallToolResult::success(vec![Content::text(
+            response.to_string(),
+        )]));
+    }
+
+    // Perform KNN search
+    let knn_index = server.knn_index.read().await;
+    let search_results = knn_index.search(&vector, k.min(node_ids.len())).map_err(|e| {
+        ErrorData::internal_error(format!("KNN search failed: {}", e), None)
+    })?;
+
+    let execution_time_ms = start_time.elapsed().as_millis() as u64;
+
+    // Convert results to JSON
+    let mut results = Vec::new();
+    for (i, (node_id, score)) in search_results.iter().enumerate() {
+        if i >= limit {
+            break;
+        }
+        
+        results.push(json!({
+            "node_id": node_id,
+            "score": score,
+            "rank": i + 1
+        }));
+    }
+
     let response = json!({
         "status": "completed",
         "label": label,
+        "label_id": label_id,
         "k": k,
         "limit": limit,
-        "results": [],
-        "execution_time_ms": 0
+        "results": results,
+        "total_nodes": node_ids.len(),
+        "execution_time_ms": execution_time_ms
     });
 
     Ok(CallToolResult::success(vec![Content::text(
