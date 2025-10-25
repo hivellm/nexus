@@ -272,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_stats_response_structure() {
         let response = get_stats().await;
-        
+
         // Test that all required fields are present
         assert!(response.error.is_some());
         assert_eq!(response.catalog.label_count, 0);

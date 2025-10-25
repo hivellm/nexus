@@ -5,13 +5,81 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-10-25
+
+### Added
+
+- **Complete MVP HTTP API** (Phase 1.5) ✅
+  - REST endpoints with comprehensive test coverage (79.13%)
+  - Server-Sent Events (SSE) streaming support
+  - End-to-end integration tests (282 tests passing)
+
+- **REST API Endpoints** (`nexus-server/src/api/`)
+  - POST /cypher: Execute Cypher queries with parameter support
+  - POST /knn_traverse: KNN-seeded graph traversal
+  - POST /ingest: Bulk data ingestion with throughput metrics
+  - GET /health: Health check with version information
+  - GET /stats: Database statistics (nodes, relationships, indexes)
+  - POST /schema/labels: Create and manage node labels
+  - GET /schema/labels: List all node labels
+  - POST /schema/rel_types: Create relationship types
+  - GET /schema/rel_types: List relationship types
+  - POST /data/nodes: Create nodes with properties
+  - POST /data/relationships: Create relationships
+  - PUT /data/nodes: Update node properties
+  - DELETE /data/nodes: Delete nodes
+
+- **Streaming Support** (`nexus-server/src/api/streaming.rs`)
+  - Server-Sent Events (SSE) for large result sets
+  - GET /sse/cypher: Stream Cypher query results
+  - GET /sse/stats: Stream database statistics updates
+  - GET /sse/heartbeat: Stream heartbeat events
+  - Chunked transfer encoding with backpressure handling
+  - Configurable streaming timeouts
+
+- **Comprehensive Testing**
+  - Unit tests for all API endpoints (84 tests)
+  - Integration tests for end-to-end validation (10 tests)
+  - Test coverage: 79.13% lines, 77.92% regions
+  - All 282 tests passing (173 core + 15 core integration + 84 server + 10 server integration)
+  - Performance tests for concurrent requests and large payloads
+
+- **MCP Integration** (`nexus-server/src/api/streaming.rs`)
+  - NexusMcpService for MCP protocol support
+  - Tool registration and execution
+  - Resource management and health monitoring
+  - Request context handling
+
+### Dependencies Added
+
+- `async-stream 0.3` - Async stream generation for SSE
+- `futures 0.3` - Future utilities for streaming
+- `tower 0.5` - Service abstraction layer
+- `tower-http 0.6` - HTTP middleware for Axum
+
+### Performance
+
+- **API throughput**: >1000 requests/sec for health checks
+- **Concurrent handling**: 10+ concurrent requests tested
+- **Large payload support**: 10KB+ payloads handled efficiently
+- **Streaming**: Real-time data streaming with SSE
+
+### Testing
+
+- **282 tests total**: 173 core + 15 core integration + 84 server + 10 server integration
+- **79.13% coverage**: Exceeds minimum requirements for MVP
+- **Zero warnings**: Clippy passes with -D warnings
+- **All tests passing**: 100% pass rate
+
+### Quality
+
+- Rust edition 2024 with nightly 1.85+
+- All code formatted with `cargo +nightly fmt`
+- Zero clippy warnings
+- Comprehensive error handling
+- Detailed API documentation
+
 ## [Unreleased]
-
-### In Progress (MVP - Phase 1)
-
-- Cypher executor development (Phase 1.4)
-- HTTP API endpoints completion (Phase 1.5)
-- KNN index integration (Phase 1.3)
 
 ## [0.2.0] - 2025-10-25
 

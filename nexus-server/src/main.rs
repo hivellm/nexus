@@ -120,14 +120,20 @@ async fn main() -> anyhow::Result<()> {
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
         // SSE streaming endpoints
-        .route("/sse/cypher", get({
-            let server = nexus_server.clone();
-            move |query| api::streaming::stream_cypher_query(query, server)
-        }))
-        .route("/sse/stats", get({
-            let server = nexus_server.clone();
-            move |query| api::streaming::stream_stats(query, server)
-        }))
+        .route(
+            "/sse/cypher",
+            get({
+                let server = nexus_server.clone();
+                move |query| api::streaming::stream_cypher_query(query, server)
+            }),
+        )
+        .route(
+            "/sse/stats",
+            get({
+                let server = nexus_server.clone();
+                move |query| api::streaming::stream_stats(query, server)
+            }),
+        )
         .route("/sse/heartbeat", get(api::streaming::stream_heartbeat))
         // MCP StreamableHTTP endpoint
         .nest("/mcp", mcp_router)

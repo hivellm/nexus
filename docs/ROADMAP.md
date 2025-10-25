@@ -137,7 +137,7 @@ This document outlines the phased implementation plan for Nexus graph database.
 
 **Test Coverage**: ✅ Core functionality implemented, needs API integration tests
 
-### 1.5 HTTP API (Week 9) 🚧 IN PROGRESS
+### 1.5 HTTP API (Week 9) ✅ COMPLETED
 
 - ✅ **REST Endpoints**
   - POST /cypher: Execute queries
@@ -145,14 +145,31 @@ This document outlines the phased implementation plan for Nexus graph database.
   - POST /ingest: Bulk data loading
   - GET /health: Health check
   - GET /stats: Database statistics
-  - **Coverage**: 0% (916 regions, 916 missed) - No tests yet
+  - POST /schema/labels: Create labels
+  - GET /schema/labels: List labels
+  - POST /schema/rel_types: Create relationship types
+  - GET /schema/rel_types: List relationship types
+  - POST /data/nodes: Create nodes
+  - POST /data/relationships: Create relationships
+  - PUT /data/nodes: Update nodes
+  - DELETE /data/nodes: Delete nodes
+  - **Coverage**: 79.13% (7480 lines, 1561 missed) - Comprehensive tests implemented
 
-- 📋 **Streaming Support**
+- ✅ **Streaming Support**
   - Server-Sent Events (SSE) for large results
   - Chunked transfer encoding
   - Backpressure handling
+  - Streaming timeout
+  - GET /sse/cypher: Stream Cypher query results
+  - GET /sse/stats: Stream database statistics
+  - GET /sse/heartbeat: Stream heartbeat events
 
-**Test Coverage**: 🚧 Implementation complete, tests needed
+- ✅ **Integration Tests**
+  - End-to-end API validation
+  - Health checks, POST endpoints, error handling
+  - Concurrent requests, performance metrics, large payloads
+  - HTTP methods, request headers, 404 handling
+  - All 282 tests passing (173 core + 15 core integration + 84 server + 10 server integration)
 
 ### 1.6 MVP Integration & Testing (Week 10-12)
 

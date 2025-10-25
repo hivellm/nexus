@@ -206,15 +206,13 @@ mod tests {
     async fn test_ingest_relationships_only() {
         let request = IngestRequest {
             nodes: vec![],
-            relationships: vec![
-                RelIngest {
-                    id: None,
-                    src: 1,
-                    dst: 2,
-                    r#type: "KNOWS".to_string(),
-                    properties: json!({"since": 2020}),
-                },
-            ],
+            relationships: vec![RelIngest {
+                id: None,
+                src: 1,
+                dst: 2,
+                r#type: "KNOWS".to_string(),
+                properties: json!({"since": 2020}),
+            }],
         };
 
         let response = ingest_data(Json(request)).await;
@@ -225,22 +223,18 @@ mod tests {
     #[tokio::test]
     async fn test_ingest_mixed_data() {
         let request = IngestRequest {
-            nodes: vec![
-                NodeIngest {
-                    id: None,
-                    labels: vec!["Person".to_string()],
-                    properties: json!({"name": "Alice"}),
-                },
-            ],
-            relationships: vec![
-                RelIngest {
-                    id: None,
-                    src: 1,
-                    dst: 2,
-                    r#type: "KNOWS".to_string(),
-                    properties: json!({}),
-                },
-            ],
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: json!({"name": "Alice"}),
+            }],
+            relationships: vec![RelIngest {
+                id: None,
+                src: 1,
+                dst: 2,
+                r#type: "KNOWS".to_string(),
+                properties: json!({}),
+            }],
         };
 
         let response = ingest_data(Json(request)).await;
@@ -296,13 +290,11 @@ mod tests {
     #[tokio::test]
     async fn test_ingest_with_initialized_executor() {
         let request = IngestRequest {
-            nodes: vec![
-                NodeIngest {
-                    id: None,
-                    labels: vec!["Person".to_string()],
-                    properties: json!({"name": "Alice", "age": 30}),
-                },
-            ],
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: json!({"name": "Alice", "age": 30}),
+            }],
             relationships: vec![],
         };
 
@@ -341,7 +333,11 @@ mod tests {
         let request = IngestRequest {
             nodes: vec![NodeIngest {
                 id: None,
-                labels: vec!["Person".to_string(), "Developer".to_string(), "Rust".to_string()],
+                labels: vec![
+                    "Person".to_string(),
+                    "Developer".to_string(),
+                    "Rust".to_string(),
+                ],
                 properties: json!({"name": "Alice"}),
             }],
             relationships: vec![],
@@ -450,19 +446,17 @@ mod tests {
                     properties: json!({"name": "TechCorp"}),
                 },
             ],
-            relationships: vec![
-                RelIngest {
-                    id: None,
-                    src: 1,
-                    dst: 2,
-                    r#type: "WORKS_FOR".to_string(),
-                    properties: json!({
-                        "position": "Developer",
-                        "start_date": "2024-01-01",
-                        "salary": 100000
-                    }),
-                },
-            ],
+            relationships: vec![RelIngest {
+                id: None,
+                src: 1,
+                dst: 2,
+                r#type: "WORKS_FOR".to_string(),
+                properties: json!({
+                    "position": "Developer",
+                    "start_date": "2024-01-01",
+                    "salary": 100000
+                }),
+            }],
         };
 
         let response = ingest_data(Json(request)).await;

@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::response::{Json, Sse, sse::Event};
 use axum::extract::Query;
+use axum::response::{Json, Sse, sse::Event};
 use futures::stream::Stream;
 use rmcp::ServerHandler;
 use rmcp::model::{
@@ -534,13 +534,15 @@ pub async fn stream_cypher_query(
     Query(params): Query<SseQueryParams>,
     server: Arc<NexusServer>,
 ) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
-    let query = params.query.unwrap_or_else(|| "MATCH (n) RETURN n LIMIT 10".to_string());
+    let query = params
+        .query
+        .unwrap_or_else(|| "MATCH (n) RETURN n LIMIT 10".to_string());
     let interval_ms = params.interval.unwrap_or(1000);
     let limit = params.limit.unwrap_or(100);
-    
+
     let stream = async_stream::stream! {
         let mut count = 0;
-        
+
         while count < limit {
             // Execute query
             let start_time = std::time::Instant::now();
@@ -549,11 +551,11 @@ pub async fn stream_cypher_query(
                 cypher: query.clone(),
                 params: HashMap::new(),
             };
-            
+
             match executor.execute(&query_obj) {
                 Ok(result_set) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
-                    
+
                     // Convert result to JSON
                     let mut rows = Vec::new();
                     for row in &result_set.rows {
@@ -569,7 +571,7 @@ pub async fn stream_cypher_query(
                         }
                         rows.push(serde_json::Value::Object(row_obj));
                     }
-                    
+
                     let event_data = SseEventData {
                         event_type: SseEventType::QueryResult,
                         data: json!({
@@ -583,7 +585,7 @@ pub async fn stream_cypher_query(
                         timestamp: chrono::Utc::now().to_rfc3339(),
                         id: Some(format!("query-{}", count + 1)),
                     };
-                    
+
                     yield Ok(Event::default()
                         .event("query-result")
                         .id(format!("query-{}", count + 1))
@@ -599,21 +601,21 @@ pub async fn stream_cypher_query(
                         timestamp: chrono::Utc::now().to_rfc3339(),
                         id: Some(format!("error-{}", count + 1)),
                     };
-                    
+
                     yield Ok(Event::default()
                         .event("error")
                         .id(format!("error-{}", count + 1))
                         .data(serde_json::to_string(&event_data).unwrap_or_default()));
                 }
             }
-            
+
             count += 1;
-            
+
             // Wait for next iteration
             tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
         }
     };
-    
+
     Sse::new(stream)
 }
 
@@ -624,10 +626,10 @@ pub async fn stream_stats(
 ) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
     let interval_ms = params.interval.unwrap_or(2000);
     let limit = params.limit.unwrap_or(50);
-    
+
     let stream = async_stream::stream! {
         let mut count = 0;
-        
+
         while count < limit {
             // Get catalog stats
             let catalog_stats = match server.catalog.read().await.get_statistics() {
@@ -641,19 +643,19 @@ pub async fn stream_stats(
                     "error": "Failed to get catalog statistics"
                 }),
             };
-            
+
             // Get label index stats
             let label_index_stats = json!({
                 "indexed_labels": server.label_index.read().await.get_stats().label_count,
                 "total_nodes": server.label_index.read().await.get_stats().total_nodes
             });
-            
+
             // Get KNN index stats
             let knn_index_stats = json!({
                 "total_vectors": server.knn_index.read().await.get_stats().total_vectors,
                 "dimension": server.knn_index.read().await.dimension()
             });
-            
+
             let event_data = SseEventData {
                 event_type: SseEventType::StatsUpdate,
                 data: json!({
@@ -665,19 +667,19 @@ pub async fn stream_stats(
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 id: Some(format!("stats-{}", count + 1)),
             };
-            
+
             yield Ok(Event::default()
                 .event("stats-update")
                 .id(format!("stats-{}", count + 1))
                 .data(serde_json::to_string(&event_data).unwrap_or_default()));
-            
+
             count += 1;
-            
+
             // Wait for next iteration
             tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
         }
     };
-    
+
     Sse::new(stream)
 }
 
@@ -687,10 +689,10 @@ pub async fn stream_heartbeat(
 ) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
     let interval_ms = params.interval.unwrap_or(5000);
     let limit = params.limit.unwrap_or(1000); // Heartbeat can run longer
-    
+
     let stream = async_stream::stream! {
         let mut count = 0;
-        
+
         while count < limit {
             let event_data = SseEventData {
                 event_type: SseEventType::Heartbeat,
@@ -702,19 +704,19 @@ pub async fn stream_heartbeat(
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 id: Some(format!("heartbeat-{}", count + 1)),
             };
-            
+
             yield Ok(Event::default()
                 .event("heartbeat")
                 .id(format!("heartbeat-{}", count + 1))
                 .data(serde_json::to_string(&event_data).unwrap_or_default()));
-            
+
             count += 1;
-            
+
             // Wait for next iteration
             tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
         }
     };
-    
+
     Sse::new(stream)
 }
 
@@ -731,14 +733,14 @@ mod tests {
         let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
         let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
         let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-        
+
         let server = Arc::new(NexusServer {
             executor,
             catalog,
             label_index,
             knn_index,
         });
-        
+
         let _service = NexusMcpService::new(server);
         // Service created successfully
     }
@@ -749,19 +751,22 @@ mod tests {
         let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
         let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
         let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-        
+
         let server = Arc::new(NexusServer {
             executor,
             catalog,
             label_index,
             knn_index,
         });
-        
+
         let service = NexusMcpService::new(server);
         let info = service.get_info();
-        
+
         assert_eq!(info.server_info.name, "nexus-server");
-        assert_eq!(info.server_info.title, Some("Nexus Graph Database Server".to_string()));
+        assert_eq!(
+            info.server_info.title,
+            Some("Nexus Graph Database Server".to_string())
+        );
         assert!(info.server_info.website_url.is_some());
         assert!(info.instructions.is_some());
     }
@@ -770,7 +775,7 @@ mod tests {
     async fn test_get_nexus_mcp_tools() {
         let tools = get_nexus_mcp_tools();
         assert!(!tools.is_empty());
-        
+
         // Check that we have the expected tools
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(tool_names.contains(&"create_node"));
@@ -785,21 +790,21 @@ mod tests {
         let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
         let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
         let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-        
+
         let server = Arc::new(NexusServer {
             executor,
             catalog,
             label_index,
             knn_index,
         });
-        
+
         let request = CallToolRequestParam {
             name: "unknown_tool".into(),
             arguments: None,
         };
-        
+
         let result = handle_nexus_mcp_tool(request, server).await;
-        
+
         // The result might be Ok or Err depending on the tool implementation
         if let Ok(tool_result) = result {
             assert!(tool_result.is_error.unwrap_or(false));
@@ -816,24 +821,29 @@ mod tests {
         let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
         let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
         let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-        
+
         let server = Arc::new(NexusServer {
             executor,
             catalog,
             label_index,
             knn_index,
         });
-        
+
         let request = CallToolRequestParam {
             name: "create_node".into(),
-            arguments: Some(json!({
-                "labels": ["Person"],
-                "properties": {"name": "Alice"}
-            }).as_object().unwrap().clone()),
+            arguments: Some(
+                json!({
+                    "labels": ["Person"],
+                    "properties": {"name": "Alice"}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
         };
-        
+
         let result = handle_nexus_mcp_tool(request, server).await;
-        
+
         // The result might be Ok or Err depending on the tool implementation
         if let Ok(tool_result) = result {
             assert!(!tool_result.is_error.unwrap_or(true));
@@ -850,23 +860,28 @@ mod tests {
         let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
         let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
         let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-        
+
         let server = Arc::new(NexusServer {
             executor,
             catalog,
             label_index,
             knn_index,
         });
-        
+
         let request = CallToolRequestParam {
             name: "execute_cypher".into(),
-            arguments: Some(json!({
-                "query": "RETURN 1 as test"
-            }).as_object().unwrap().clone()),
+            arguments: Some(
+                json!({
+                    "query": "RETURN 1 as test"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
         };
-        
+
         let result = handle_nexus_mcp_tool(request, server).await;
-        
+
         // The result might be Ok or Err depending on the tool implementation
         if let Ok(tool_result) = result {
             assert!(!tool_result.is_error.unwrap_or(true));
@@ -883,25 +898,30 @@ mod tests {
         let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
         let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
         let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-        
+
         let server = Arc::new(NexusServer {
             executor,
             catalog,
             label_index,
             knn_index,
         });
-        
+
         let request = CallToolRequestParam {
             name: "knn_search".into(),
-            arguments: Some(json!({
-                "label": "Person",
-                "vector": [0.1, 0.2, 0.3],
-                "k": 5
-            }).as_object().unwrap().clone()),
+            arguments: Some(
+                json!({
+                    "label": "Person",
+                    "vector": [0.1, 0.2, 0.3],
+                    "k": 5
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
         };
-        
+
         let result = handle_nexus_mcp_tool(request, server).await;
-        
+
         // The result might be Ok or Err depending on the tool implementation
         if let Ok(tool_result) = result {
             assert!(!tool_result.is_error.unwrap_or(true));
