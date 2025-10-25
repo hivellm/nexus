@@ -65,3 +65,18 @@
 - [x] 6.3 Update CHANGELOG.md with v0.3.0
 - [x] 6.4 Run all quality checks
 
+## Bug Fixes & Improvements (2025-10-25)
+
+- **Executor::default() Fix**:
+  - Fixed to create RecordStore with temporary directory instead of calling non-existent `::default()`
+  - Uses `tempfile::tempdir()` for test isolation
+  - Memory leak acceptable for testing scenarios (temp dir leaked via `std::mem::forget`)
+
+- **GraphNode Test Fix**:
+  - Added missing `size` and `color` fields to test struct initialization
+  - Updated to match current GraphNode structure with visualization fields
+
+- **Test Suite Status**:
+  - All executor tests passing (part of 309 total tests)
+  - Maintained test coverage targets
+

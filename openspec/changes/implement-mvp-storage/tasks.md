@@ -120,3 +120,22 @@
 - Update documentation as implementation progresses
 - Commit after completing each numbered section
 
+## Bug Fixes & Improvements (2025-10-25)
+
+- **RecordStore Persistence Fix**:
+  - Removed `.truncate(true)` flag that was deleting data on reopen
+  - Implemented ID tracking via record scanning to restore `next_node_id` and `next_rel_id`
+  - Added zero-fill initialization for new files to ensure clean state
+  
+- **Record Size Corrections**:
+  - Corrected `REL_RECORD_SIZE` from 40 to 52 bytes (actual struct size)
+  - Updated all related tests and documentation
+  
+- **Concurrent Access Fixes**:
+  - Fixed integration test to use `Mutex<RecordStore>` for thread-safe access
+  - Resolved packed field unaligned reference errors by copying values locally
+  
+- **Test Coverage Update**:
+  - All 309 tests now passing (195 lib + 15 integration + 84 server + 10 HTTP + 5 doctests)
+  - Maintained 95%+ coverage in core storage modules
+
