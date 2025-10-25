@@ -32,6 +32,8 @@ async-trait.workspace = true
 
 # Async runtime
 tokio.workspace = true
+async-stream = "0.3"
+futures = "0.3"
 
 # Serialization
 serde.workspace = true
