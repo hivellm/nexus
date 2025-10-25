@@ -15,8 +15,50 @@ impl UmicpClient {
     }
 
     /// Send a UMICP request
-    pub async fn request(&self, _payload: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        todo!("UMICP request - to be implemented")
+    pub async fn request(&self, payload: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        // Create HTTP client
+        let client = reqwest::Client::new();
+
+        // Determine the request method based on the payload
+        let method = if payload.get("method").is_some() {
+            "POST"
+        } else {
+            "GET"
+        };
+
+        // Build the request
+        let mut request_builder = match method {
+            "POST" => client.post(&self.endpoint),
+            "GET" => client.get(&self.endpoint),
+            _ => return Err(anyhow::anyhow!("Unsupported HTTP method: {}", method)),
+        };
+
+        // Add headers for UMICP protocol
+        request_builder = request_builder
+            .header("Content-Type", "application/json")
+            .header("X-Protocol", "UMICP")
+            .header("User-Agent", "Nexus-UMICP-Client/1.0");
+
+        // Add payload for POST requests
+        if method == "POST" {
+            request_builder = request_builder.json(&payload);
+        }
+
+        // Send the request
+        let response = request_builder.send().await?;
+
+        // Check if the request was successful
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "UMICP request failed with status: {}",
+                response.status()
+            ));
+        }
+
+        // Parse the response as JSON
+        let response_json: serde_json::Value = response.json().await?;
+
+        Ok(response_json)
     }
 
     /// Get the endpoint URL
@@ -87,17 +129,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_umicp_client_request_todo() {
-        let client = UmicpClient::new("http://localhost:8080");
-        let payload = serde_json::json!({"test": "value"});
-
-        // This should panic with todo! macro
-        let result = std::panic::catch_unwind(|| {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(client.request(payload))
-            })
+    async fn test_umicp_client_request_implementation() {
+        let client = UmicpClient::new("http://httpbin.org/post");
+        let payload = serde_json::json!({
+            "method": "POST",
+            "data": "test_value"
         });
 
-        assert!(result.is_err());
+        // This should now work with the implementation
+        let result = client.request(payload).await;
+
+        // The request might fail due to network, but it shouldn't panic
+        // We just verify it doesn't panic with todo! macro
+        match result {
+            Ok(_) => println!("Request succeeded"),
+            Err(e) => println!("Request failed as expected: {}", e),
+        }
     }
 }

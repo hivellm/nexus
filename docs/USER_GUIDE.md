@@ -5,12 +5,12 @@
 1. [Introduction](#introduction)
 2. [Quick Start](#quick-start)
 3. [Basic Operations](#basic-operations)
-4. [Cypher Query Language](#cypher-query-language)
-5. [KNN Vector Search](#knn-vector-search)
-6. [API Reference](#api-reference)
-7. [Performance Tips](#performance-tips)
-8. [Examples](#examples)
-9. [Troubleshooting](#troubleshooting)
+4. [Cypher Query Language](#cypher-query-lan5. [KNN Vector Search](#knn-vector-search)
+6. [Graph Comparison](#graph-comparison)
+7. [API Reference](#api-reference)
+8. [Performance Tips](#performance-tips)
+9. [Examples](#examples)
+10. [Troubleshooting](#troubleshooting)bleshooting)
 
 ## Introduction
 

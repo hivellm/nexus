@@ -11,6 +11,7 @@ description = "Integration protocols for Nexus - REST, MCP, UMICP"
 [dependencies]
 # HTTP client
 hyper.workspace = true
+reqwest = { version = "0.12", features = ["json"] }
 tokio.workspace = true
 
 # Serialization
@@ -21,6 +22,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 
+# MCP protocol
+rmcp = { version = "0.8.1", features = ["client", "macros"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-

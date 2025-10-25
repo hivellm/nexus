@@ -401,18 +401,35 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-/// Get current memory usage (simplified)
+/// Get current memory usage
 fn get_memory_usage() -> f64 {
-    // TODO: Implement actual memory usage tracking
-    // For now, return a placeholder value
-    128.0
+    use sysinfo::{System};
+    
+    let mut sys = System::new_all();
+    sys.refresh_memory();
+    
+    // Get total memory usage in MB
+    let total_memory = sys.total_memory() as f64 / 1024.0 / 1024.0;
+    let used_memory = sys.used_memory() as f64 / 1024.0 / 1024.0;
+    
+    // Return memory usage as percentage
+    if total_memory > 0.0 {
+        (used_memory / total_memory) * 100.0
+    } else {
+        0.0
+    }
 }
 
-/// Get current CPU usage (simplified)
+/// Get current CPU usage
 fn get_cpu_usage() -> f64 {
-    // TODO: Implement actual CPU usage tracking
-    // For now, return a placeholder value
-    15.0
+    use sysinfo::{System};
+    
+    let mut sys = System::new_all();
+    sys.refresh_cpu_all();
+    
+    // Get CPU usage as percentage
+    let cpu_usage = sys.global_cpu_usage();
+    cpu_usage as f64
 }
 
 /// Get current connection count
@@ -659,13 +676,15 @@ mod tests {
     #[test]
     fn test_get_memory_usage() {
         let memory = get_memory_usage();
-        assert_eq!(memory, 128.0);
+        // Memory usage should be between 0% and 100%
+        assert!(memory >= 0.0 && memory <= 100.0);
     }
 
     #[test]
     fn test_get_cpu_usage() {
         let cpu = get_cpu_usage();
-        assert_eq!(cpu, 15.0);
+        // CPU usage should be between 0% and 100%
+        assert!(cpu >= 0.0 && cpu <= 100.0);
     }
 
     #[tokio::test]

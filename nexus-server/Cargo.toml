@@ -50,6 +50,9 @@ tempfile.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# System monitoring
+sysinfo = "0.32"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 

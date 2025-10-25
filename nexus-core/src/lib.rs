@@ -42,6 +42,7 @@ pub mod clustering;
 pub mod error;
 pub mod executor;
 pub mod graph; // Re-enabled with validation support
+pub mod graph_comparison;
 pub mod graph_construction;
 pub mod graph_correlation;
 pub mod graph_simple;
@@ -55,6 +56,10 @@ pub mod wal;
 
 pub use error::{Error, Result};
 pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
+pub use graph_comparison::{
+    ComparisonOptions, DiffSummary, EdgeChanges, EdgeModification, GraphComparator, GraphDiff,
+    NodeChanges, NodeModification, PropertyValueChange,
+};
 pub use graph_construction::{
     CircularLayout, ConnectedComponents, ForceDirectedLayout, GraphLayout, GridLayout,
     HierarchicalLayout, KMeansClustering, LayoutDirection, LayoutEdge, LayoutNode, Point2D,

@@ -101,6 +101,30 @@ async fn main() -> anyhow::Result<()> {
     // Initialize health check system
     api::health::init();
 
+    // Initialize comparison service with dummy graphs
+    // In a real implementation, these would be actual graph instances
+    let temp_dir_a = tempfile::tempdir()?;
+    let temp_dir_b = tempfile::tempdir()?;
+
+    let store_a = nexus_core::storage::RecordStore::new(temp_dir_a.path())?;
+    let store_b = nexus_core::storage::RecordStore::new(temp_dir_b.path())?;
+
+    let catalog_a = Arc::new(nexus_core::catalog::Catalog::new(
+        temp_dir_a.path().join("catalog"),
+    )?);
+    let catalog_b = Arc::new(nexus_core::catalog::Catalog::new(
+        temp_dir_b.path().join("catalog"),
+    )?);
+
+    let graph_a = Arc::new(std::sync::Mutex::new(nexus_core::Graph::new(
+        store_a, catalog_a,
+    )));
+    let graph_b = Arc::new(std::sync::Mutex::new(nexus_core::Graph::new(
+        store_b, catalog_b,
+    )));
+
+    api::comparison::init_graphs(graph_a, graph_b)?;
+
     // Build main router
     let app = Router::new()
         .route("/", get(api::health::health_check))
@@ -121,6 +145,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/data/nodes", delete(api::data::delete_node))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
+        // Graph comparison endpoints
+        .route("/comparison/compare", post(api::comparison::compare_graphs))
+        .route(
+            "/comparison/similarity",
+            post(api::comparison::calculate_similarity),
+        )
+        .route("/comparison/stats", post(api::comparison::get_graph_stats))
+        .route("/comparison/health", get(api::comparison::health_check))
         // Clustering endpoints
         .route(
             "/clustering/algorithms",

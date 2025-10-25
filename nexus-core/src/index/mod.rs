@@ -482,7 +482,7 @@ pub struct PropertyIndex {
 }
 
 /// Property value for indexing
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PropertyValue {
     /// String property value
     String(String),
@@ -977,7 +977,7 @@ mod tests {
     fn test_index_manager_creation() {
         let temp_dir = tempfile::tempdir().unwrap();
         let manager = IndexManager::new(temp_dir.path()).unwrap();
-        
+
         // Test that all components are initialized
         assert_eq!(manager.label_index.get_stats().total_nodes, 0);
         assert_eq!(manager.knn_index.dimension(), 128);
@@ -988,13 +988,13 @@ mod tests {
     fn test_index_manager_knn_search() {
         let temp_dir = tempfile::tempdir().unwrap();
         let manager = IndexManager::new(temp_dir.path()).unwrap();
-        
+
         // Add some vectors
         let embedding1 = vec![1.0; 128];
         let embedding2 = vec![0.0; 128];
         manager.knn_index.add_vector(1, embedding1).unwrap();
         manager.knn_index.add_vector(2, embedding2).unwrap();
-        
+
         // Search
         let query = vec![1.0; 128];
         let results = manager.knn_search("test", &query, 2).unwrap();
@@ -1005,16 +1005,16 @@ mod tests {
     fn test_index_manager_label_operations() {
         let temp_dir = tempfile::tempdir().unwrap();
         let manager = IndexManager::new(temp_dir.path()).unwrap();
-        
+
         // Add node to label
         manager.add_node_to_label(1, 0).unwrap();
         manager.add_node_to_label(2, 0).unwrap();
-        
+
         let nodes = manager.label_index.get_nodes(0).unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(1));
         assert!(nodes.contains(2));
-        
+
         // Remove node from label
         manager.remove_node_from_label(1, 0).unwrap();
         let nodes = manager.label_index.get_nodes(0).unwrap();
@@ -1026,7 +1026,7 @@ mod tests {
     fn test_index_manager_health_check() {
         let temp_dir = tempfile::tempdir().unwrap();
         let manager = IndexManager::new(temp_dir.path()).unwrap();
-        
+
         // Health check should pass for empty manager
         manager.health_check().unwrap();
     }
@@ -1034,15 +1034,15 @@ mod tests {
     #[test]
     fn test_label_index_estimate_cardinality() {
         let index = LabelIndex::new();
-        
+
         // Empty index
         assert_eq!(index.estimate_cardinality(0), 0);
-        
+
         // Add some nodes
         index.add_node(1, &[0]).unwrap();
         index.add_node(2, &[0]).unwrap();
         index.add_node(3, &[1]).unwrap();
-        
+
         assert_eq!(index.estimate_cardinality(0), 2);
         assert_eq!(index.estimate_cardinality(1), 1);
         assert_eq!(index.estimate_cardinality(2), 0);
@@ -1051,9 +1051,9 @@ mod tests {
     #[test]
     fn test_label_index_has_label() {
         let index = LabelIndex::new();
-        
+
         assert!(!index.has_label(0));
-        
+
         index.add_node(1, &[0]).unwrap();
         assert!(index.has_label(0));
         assert!(!index.has_label(1));
@@ -1062,9 +1062,9 @@ mod tests {
     #[test]
     fn test_label_index_get_all_labels() {
         let index = LabelIndex::new();
-        
+
         assert!(index.get_all_labels().is_empty());
-        
+
         index.add_node(1, &[0, 1, 2]).unwrap();
         let labels = index.get_all_labels();
         assert_eq!(labels.len(), 3);
@@ -1076,10 +1076,10 @@ mod tests {
     #[test]
     fn test_label_index_health_check() {
         let index = LabelIndex::new();
-        
+
         // Empty index should pass health check
         index.health_check().unwrap();
-        
+
         // Add reasonable amount of data
         for i in 0..1000 {
             index.add_node(i, &[i as u32 % 10]).unwrap();
@@ -1098,7 +1098,7 @@ mod tests {
         // Test zero dimension
         let result = KnnIndex::new(0);
         assert!(result.is_err());
-        
+
         // Test too large dimension
         let result = KnnIndex::new(5000);
         assert!(result.is_err());
@@ -1107,10 +1107,10 @@ mod tests {
     #[test]
     fn test_knn_index_search_knn_default() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
         index.add_vector(2, vec![0.0, 1.0, 0.0]).unwrap();
-        
+
         let query = vec![1.0, 0.0, 0.0];
         let results = index.search_knn_default(&query).unwrap();
         assert_eq!(results.len(), 2);
@@ -1119,9 +1119,9 @@ mod tests {
     #[test]
     fn test_knn_index_has_vector() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         assert!(!index.has_vector(1));
-        
+
         index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
         assert!(index.has_vector(1));
         assert!(!index.has_vector(2));
@@ -1130,12 +1130,12 @@ mod tests {
     #[test]
     fn test_knn_index_get_all_nodes() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         assert!(index.get_all_nodes().is_empty());
-        
+
         index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
         index.add_vector(2, vec![0.0, 1.0, 0.0]).unwrap();
-        
+
         let nodes = index.get_all_nodes();
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&1));
@@ -1153,11 +1153,17 @@ mod tests {
     #[test]
     fn test_property_index_add_property() {
         let index = PropertyIndex::new();
-        
-        index.add_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        index.add_property(2, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        index.add_property(1, 0, 1, PropertyValue::Integer(42)).unwrap();
-        
+
+        index
+            .add_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+        index
+            .add_property(2, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+        index
+            .add_property(1, 0, 1, PropertyValue::Integer(42))
+            .unwrap();
+
         let stats = index.get_stats();
         assert_eq!(stats.total_entries, 3);
         assert_eq!(stats.indexed_properties, 2);
@@ -1166,15 +1172,21 @@ mod tests {
     #[test]
     fn test_property_index_remove_property() {
         let index = PropertyIndex::new();
-        
-        index.add_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        index.add_property(2, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        
+
+        index
+            .add_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+        index
+            .add_property(2, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+
         let stats = index.get_stats();
         assert_eq!(stats.total_entries, 2);
-        
-        index.remove_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        
+
+        index
+            .remove_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+
         let stats = index.get_stats();
         assert_eq!(stats.total_entries, 1);
     }
@@ -1182,12 +1194,20 @@ mod tests {
     #[test]
     fn test_property_index_find_exact() {
         let index = PropertyIndex::new();
-        
-        index.add_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        index.add_property(2, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        index.add_property(3, 0, 0, PropertyValue::String("other".to_string())).unwrap();
-        
-        let results = index.find_exact(0, 0, PropertyValue::String("test".to_string())).unwrap();
+
+        index
+            .add_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+        index
+            .add_property(2, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+        index
+            .add_property(3, 0, 0, PropertyValue::String("other".to_string()))
+            .unwrap();
+
+        let results = index
+            .find_exact(0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.contains(1));
         assert!(results.contains(2));
@@ -1197,18 +1217,29 @@ mod tests {
     #[test]
     fn test_property_index_find_range() {
         let index = PropertyIndex::new();
-        
-        index.add_property(1, 0, 0, PropertyValue::Integer(10)).unwrap();
-        index.add_property(2, 0, 0, PropertyValue::Integer(20)).unwrap();
-        index.add_property(3, 0, 0, PropertyValue::Integer(30)).unwrap();
-        index.add_property(4, 0, 0, PropertyValue::Integer(40)).unwrap();
-        
+
+        index
+            .add_property(1, 0, 0, PropertyValue::Integer(10))
+            .unwrap();
+        index
+            .add_property(2, 0, 0, PropertyValue::Integer(20))
+            .unwrap();
+        index
+            .add_property(3, 0, 0, PropertyValue::Integer(30))
+            .unwrap();
+        index
+            .add_property(4, 0, 0, PropertyValue::Integer(40))
+            .unwrap();
+
         // Range 15-35
-        let results = index.find_range(
-            0, 0,
-            Some(PropertyValue::Integer(15)),
-            Some(PropertyValue::Integer(35))
-        ).unwrap();
+        let results = index
+            .find_range(
+                0,
+                0,
+                Some(PropertyValue::Integer(15)),
+                Some(PropertyValue::Integer(35)),
+            )
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.contains(2));
         assert!(results.contains(3));
@@ -1217,12 +1248,20 @@ mod tests {
     #[test]
     fn test_property_index_find_greater_than() {
         let index = PropertyIndex::new();
-        
-        index.add_property(1, 0, 0, PropertyValue::Integer(10)).unwrap();
-        index.add_property(2, 0, 0, PropertyValue::Integer(20)).unwrap();
-        index.add_property(3, 0, 0, PropertyValue::Integer(30)).unwrap();
-        
-        let results = index.find_greater_than(0, 0, PropertyValue::Integer(15)).unwrap();
+
+        index
+            .add_property(1, 0, 0, PropertyValue::Integer(10))
+            .unwrap();
+        index
+            .add_property(2, 0, 0, PropertyValue::Integer(20))
+            .unwrap();
+        index
+            .add_property(3, 0, 0, PropertyValue::Integer(30))
+            .unwrap();
+
+        let results = index
+            .find_greater_than(0, 0, PropertyValue::Integer(15))
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.contains(2));
         assert!(results.contains(3));
@@ -1231,12 +1270,20 @@ mod tests {
     #[test]
     fn test_property_index_find_less_than() {
         let index = PropertyIndex::new();
-        
-        index.add_property(1, 0, 0, PropertyValue::Integer(10)).unwrap();
-        index.add_property(2, 0, 0, PropertyValue::Integer(20)).unwrap();
-        index.add_property(3, 0, 0, PropertyValue::Integer(30)).unwrap();
-        
-        let results = index.find_less_than(0, 0, PropertyValue::Integer(25)).unwrap();
+
+        index
+            .add_property(1, 0, 0, PropertyValue::Integer(10))
+            .unwrap();
+        index
+            .add_property(2, 0, 0, PropertyValue::Integer(20))
+            .unwrap();
+        index
+            .add_property(3, 0, 0, PropertyValue::Integer(30))
+            .unwrap();
+
+        let results = index
+            .find_less_than(0, 0, PropertyValue::Integer(25))
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.contains(1));
         assert!(results.contains(2));
@@ -1245,24 +1292,44 @@ mod tests {
     #[test]
     fn test_property_index_has_value() {
         let index = PropertyIndex::new();
-        
-        assert!(!index.has_value(0, 0, PropertyValue::String("test".to_string())).unwrap());
-        
-        index.add_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        assert!(index.has_value(0, 0, PropertyValue::String("test".to_string())).unwrap());
-        assert!(!index.has_value(0, 0, PropertyValue::String("other".to_string())).unwrap());
+
+        assert!(
+            !index
+                .has_value(0, 0, PropertyValue::String("test".to_string()))
+                .unwrap()
+        );
+
+        index
+            .add_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+        assert!(
+            index
+                .has_value(0, 0, PropertyValue::String("test".to_string()))
+                .unwrap()
+        );
+        assert!(
+            !index
+                .has_value(0, 0, PropertyValue::String("other".to_string()))
+                .unwrap()
+        );
     }
 
     #[test]
     fn test_property_index_get_unique_values() {
         let index = PropertyIndex::new();
-        
+
         assert!(index.get_unique_values(0, 0).unwrap().is_empty());
-        
-        index.add_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        index.add_property(2, 0, 0, PropertyValue::String("other".to_string())).unwrap();
-        index.add_property(3, 0, 0, PropertyValue::String("test".to_string())).unwrap();
-        
+
+        index
+            .add_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+        index
+            .add_property(2, 0, 0, PropertyValue::String("other".to_string()))
+            .unwrap();
+        index
+            .add_property(3, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
+
         let values = index.get_unique_values(0, 0).unwrap();
         assert_eq!(values.len(), 2);
         assert!(values.contains(&PropertyValue::String("test".to_string())));
@@ -1272,10 +1339,12 @@ mod tests {
     #[test]
     fn test_property_index_clear() {
         let index = PropertyIndex::new();
-        
-        index.add_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
+
+        index
+            .add_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
         assert_eq!(index.get_stats().total_entries, 1);
-        
+
         index.clear().unwrap();
         assert_eq!(index.get_stats().total_entries, 0);
     }
@@ -1283,13 +1352,15 @@ mod tests {
     #[test]
     fn test_property_index_estimate_memory_usage() {
         let index = PropertyIndex::new();
-        
+
         // Empty index should have minimal memory usage
         let usage = index.estimate_memory_usage();
         assert_eq!(usage, 0);
-        
+
         // Add some data
-        index.add_property(1, 0, 0, PropertyValue::String("test".to_string())).unwrap();
+        index
+            .add_property(1, 0, 0, PropertyValue::String("test".to_string()))
+            .unwrap();
         let usage = index.estimate_memory_usage();
         assert!(usage > 0);
     }
@@ -1297,13 +1368,15 @@ mod tests {
     #[test]
     fn test_property_index_health_check() {
         let index = PropertyIndex::new();
-        
+
         // Empty index should pass health check
         index.health_check().unwrap();
-        
+
         // Add reasonable amount of data
         for i in 0..1000 {
-            index.add_property(i, i as u32 % 10, 0, PropertyValue::Integer(i as i64)).unwrap();
+            index
+                .add_property(i, i as u32 % 10, 0, PropertyValue::Integer(i as i64))
+                .unwrap();
         }
         index.health_check().unwrap();
     }
@@ -1318,7 +1391,7 @@ mod tests {
             PropertyValue::Boolean(true),
             PropertyValue::Null,
         ];
-        
+
         for i in 0..values.len() {
             for j in 0..values.len() {
                 if i < j {
@@ -1335,14 +1408,17 @@ mod tests {
     #[test]
     fn test_property_value_hashing() {
         use std::collections::HashMap;
-        
+
         let mut map = HashMap::new();
-        
+
         map.insert(PropertyValue::String("test".to_string()), 1);
         map.insert(PropertyValue::Integer(42), 2);
         map.insert(PropertyValue::Boolean(true), 3);
-        
-        assert_eq!(map.get(&PropertyValue::String("test".to_string())), Some(&1));
+
+        assert_eq!(
+            map.get(&PropertyValue::String("test".to_string())),
+            Some(&1)
+        );
         assert_eq!(map.get(&PropertyValue::Integer(42)), Some(&2));
         assert_eq!(map.get(&PropertyValue::Boolean(true)), Some(&3));
         assert_eq!(map.get(&PropertyValue::String("other".to_string())), None);
@@ -1351,11 +1427,11 @@ mod tests {
     #[test]
     fn test_label_index_empty_labels() {
         let index = LabelIndex::new();
-        
+
         // Test with empty label list
         let result = index.get_nodes_with_labels(&[]).unwrap();
         assert!(result.is_empty());
-        
+
         let result = index.get_nodes_with_any_labels(&[]).unwrap();
         assert!(result.is_empty());
     }
@@ -1363,11 +1439,11 @@ mod tests {
     #[test]
     fn test_label_index_nonexistent_labels() {
         let index = LabelIndex::new();
-        
+
         // Test with non-existent labels
         let result = index.get_nodes_with_labels(&[999]).unwrap();
         assert!(result.is_empty());
-        
+
         let result = index.get_nodes_with_any_labels(&[999, 998]).unwrap();
         assert!(result.is_empty());
     }
@@ -1375,7 +1451,7 @@ mod tests {
     #[test]
     fn test_knn_index_search_empty() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         let query = vec![1.0, 0.0, 0.0];
         let results = index.search_knn(&query, 5).unwrap();
         assert!(results.is_empty());
@@ -1384,10 +1460,10 @@ mod tests {
     #[test]
     fn test_knn_index_remove_nonexistent() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         // Removing non-existent vector should not error
         index.remove_vector(999).unwrap();
-        
+
         let stats = index.get_stats();
         assert_eq!(stats.total_vectors, 0);
     }

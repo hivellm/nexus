@@ -595,6 +595,25 @@ impl Executor {
         Ok(rows)
     }
 
+    /// Execute Limit operator
+    fn execute_limit(&self, context: &mut ExecutionContext, count: usize) -> Result<()> {
+        // Limit the number of rows in the result set
+        if context.result_set.rows.len() > count {
+            context.result_set.rows.truncate(count);
+        }
+
+        // Also limit any array variables that might be used for further processing
+        for value in context.variables.values_mut() {
+            if let Value::Array(nodes) = value {
+                if nodes.len() > count {
+                    nodes.truncate(count);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute Sort operator
     fn execute_sort(
         &self,
@@ -903,8 +922,8 @@ impl Executor {
                 context.result_set.rows = rows;
                 context.result_set.columns = columns.clone();
             }
-            Operator::Limit { count: _ } => {
-                // TODO: Implement limit functionality
+            Operator::Limit { count } => {
+                self.execute_limit(context, *count)?;
             }
             Operator::Sort { columns, ascending } => {
                 self.execute_sort(context, columns, ascending)?;
@@ -2707,11 +2726,14 @@ mod tests {
     #[test]
     fn test_execution_context_variable_operations() {
         let mut context = ExecutionContext::new(HashMap::new());
-        
+
         // Set and get variable
         context.set_variable("test", Value::String("value".to_string()));
-        assert_eq!(context.get_variable("test"), Some(&Value::String("value".to_string())));
-        
+        assert_eq!(
+            context.get_variable("test"),
+            Some(&Value::String("value".to_string()))
+        );
+
         // Get non-existent variable
         assert!(context.get_variable("nonexistent").is_none());
     }
@@ -2721,10 +2743,13 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("param1".to_string(), Value::String("value1".to_string()));
         let mut context = ExecutionContext::new(params);
-        
+
         // Get parameter
-        assert_eq!(context.params.get("param1"), Some(&Value::String("value1".to_string())));
-        
+        assert_eq!(
+            context.params.get("param1"),
+            Some(&Value::String("value1".to_string()))
+        );
+
         // Get non-existent parameter
         assert!(context.params.get("nonexistent").is_none());
     }
@@ -2734,9 +2759,8 @@ mod tests {
         let mut context = ExecutionContext::new(HashMap::new());
         context.set_variable("test", Value::String("value".to_string()));
         assert!(context.get_variable("test").is_some());
-        
+
         context.variables.clear();
         assert!(context.get_variable("test").is_none());
     }
-
 }

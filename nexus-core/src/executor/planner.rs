@@ -291,11 +291,11 @@ mod tests {
     use super::*;
     use crate::catalog::Catalog;
     use crate::executor::parser::{
-        BinaryOperator, Clause, CypherQuery, Expression, Literal, MatchClause, NodePattern, 
-        Pattern, PatternElement, RelationshipDirection, RelationshipPattern, ReturnClause, 
-        ReturnItem, WhereClause, LimitClause,
+        BinaryOperator, Clause, CypherQuery, Expression, LimitClause, Literal, MatchClause,
+        NodePattern, Pattern, PatternElement, RelationshipDirection, RelationshipPattern,
+        ReturnClause, ReturnItem, WhereClause,
     };
-    use crate::executor::{JoinType, IndexType};
+    use crate::executor::{IndexType, JoinType};
     use crate::index::{KnnIndex, LabelIndex};
 
     #[test]
@@ -530,7 +530,9 @@ mod tests {
         assert!(operators.len() >= 2); // At least NodeByLabel and Project
 
         // Check for Expand operator
-        let has_expand = operators.iter().any(|op| matches!(op, Operator::Expand { .. }));
+        let has_expand = operators
+            .iter()
+            .any(|op| matches!(op, Operator::Expand { .. }));
         assert!(has_expand, "Expected Expand operator for relationship");
     }
 

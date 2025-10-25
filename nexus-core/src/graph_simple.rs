@@ -61,7 +61,7 @@ impl From<EdgeId> for u64 {
 }
 
 /// Property value types for simplified testing
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PropertyValue {
     /// Null value
     Null,
@@ -445,10 +445,10 @@ impl Graph {
             avg_clustering_coefficient: clustering_coefficient,
             avg_shortest_path_length: path_stats.0,
             diameter: path_stats.1 as usize,
-            isolated_nodes: 0,      // TODO: Calculate isolated nodes
-            leaf_nodes: 0,          // TODO: Calculate leaf nodes
-            self_loops: 0,          // TODO: Calculate self loops
-            bidirectional_edges: 0, // TODO: Calculate bidirectional edges
+            isolated_nodes: self.calculate_isolated_nodes(),
+            leaf_nodes: self.calculate_leaf_nodes(),
+            self_loops: self.calculate_self_loops(),
+            bidirectional_edges: self.calculate_bidirectional_edges(),
         })
     }
     /// Calculate degree statistics
@@ -497,6 +497,76 @@ impl Graph {
         }
 
         components
+    }
+
+    /// Calculate isolated nodes (nodes with degree 0)
+    fn calculate_isolated_nodes(&self) -> usize {
+        self.nodes
+            .keys()
+            .filter(|&node_id| {
+                self.edges
+                    .values()
+                    .all(|edge| edge.source != *node_id && edge.target != *node_id)
+            })
+            .count()
+    }
+
+    /// Calculate leaf nodes (nodes with degree 1)
+    fn calculate_leaf_nodes(&self) -> usize {
+        self.nodes
+            .keys()
+            .filter(|&node_id| {
+                let degree = self
+                    .edges
+                    .values()
+                    .filter(|edge| edge.source == *node_id || edge.target == *node_id)
+                    .count();
+                degree == 1
+            })
+            .count()
+    }
+
+    /// Calculate self loops (edges where source == target)
+    fn calculate_self_loops(&self) -> usize {
+        self.edges
+            .values()
+            .filter(|edge| edge.source == edge.target)
+            .count()
+    }
+
+    /// Calculate bidirectional edges (pairs of edges where (A->B) and (B->A) exist)
+    fn calculate_bidirectional_edges(&self) -> usize {
+        let mut bidirectional_count = 0;
+        let mut processed_pairs = std::collections::HashSet::new();
+
+        for edge in self.edges.values() {
+            let pair = if edge.source < edge.target {
+                (edge.source, edge.target)
+            } else {
+                (edge.target, edge.source)
+            };
+
+            if processed_pairs.contains(&pair) {
+                continue;
+            }
+
+            // Check if both directions exist
+            let has_forward = self
+                .edges
+                .values()
+                .any(|e| e.source == edge.source && e.target == edge.target);
+            let has_reverse = self
+                .edges
+                .values()
+                .any(|e| e.source == edge.target && e.target == edge.source);
+
+            if has_forward && has_reverse {
+                bidirectional_count += 1;
+                processed_pairs.insert(pair);
+            }
+        }
+
+        bidirectional_count
     }
 
     /// DFS helper for connected components

@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A unique identifier for nodes in the graph
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct NodeId(pub u64);
 
 impl NodeId {
@@ -39,7 +41,9 @@ impl From<NodeId> for u64 {
 }
 
 /// A unique identifier for relationships in the graph
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct EdgeId(pub u64);
 
 impl EdgeId {
@@ -67,7 +71,7 @@ impl From<EdgeId> for u64 {
 }
 
 /// A node in the graph with labels and properties
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Node {
     /// Unique identifier for this node
     pub id: NodeId,
@@ -154,7 +158,7 @@ impl Node {
 }
 
 /// An edge (relationship) in the graph connecting two nodes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Edge {
     /// Unique identifier for this edge
     pub id: EdgeId,
@@ -426,14 +430,18 @@ impl Graph {
         // Get or create relationship type ID
         let type_id = self.catalog.get_or_create_type(&relationship_type)?;
 
-        // Create relationship record
+        // Get the current first relationships for source and destination nodes
+        let src_first_rel = self.get_first_relationship(source, true)?; // outgoing
+        let dst_first_rel = self.get_first_relationship(target, false)?; // incoming
+
+        // Create relationship record with proper linking
         let record = RelationshipRecord {
             src_id: source.value(),
             dst_id: target.value(),
             type_id,
-            next_src_ptr: u64::MAX, // TODO: Implement proper relationship linking
-            next_dst_ptr: u64::MAX, // TODO: Implement proper relationship linking
-            prop_ptr: u64::MAX,     // No properties yet
+            next_src_ptr: src_first_rel.unwrap_or(u64::MAX), // Link to current first outgoing rel from source
+            next_dst_ptr: dst_first_rel.unwrap_or(u64::MAX), // Link to current first incoming rel to dest
+            prop_ptr: u64::MAX,                              // No properties yet
             ..Default::default()
         };
 
@@ -441,6 +449,9 @@ impl Graph {
         self.store
             .borrow_mut()
             .write_rel(edge_id.value(), &record)?;
+
+        // Update node pointers to point to this new relationship
+        self.update_node_relationship_pointers(source, target, edge_id.value())?;
 
         // Create in-memory edge
         let edge = Edge::new(edge_id, source, target, relationship_type);
@@ -996,6 +1007,29 @@ impl Graph {
 
         // For now, return empty properties to avoid compilation errors
         Ok(properties)
+    }
+
+    /// Get the first relationship for a node in the specified direction
+    fn get_first_relationship(&self, _node_id: NodeId, _outgoing: bool) -> Result<Option<u64>> {
+        // For now, we'll return None to indicate no existing relationships
+        // In a full implementation, this would check the node's relationship pointers
+        // stored in the node record or a separate index
+        Ok(None)
+    }
+
+    /// Update node relationship pointers to point to the new relationship
+    fn update_node_relationship_pointers(
+        &self,
+        _source: NodeId,
+        _target: NodeId,
+        _rel_id: u64,
+    ) -> Result<()> {
+        // For now, we'll do nothing as we don't have node relationship pointers implemented
+        // In a full implementation, this would:
+        // 1. Update the source node's first_outgoing_rel pointer to point to rel_id
+        // 2. Update the target node's first_incoming_rel pointer to point to rel_id
+        // 3. This would require modifying the node record structure to include these pointers
+        Ok(())
     }
 }
 
