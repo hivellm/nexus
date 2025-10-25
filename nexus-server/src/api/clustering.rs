@@ -472,6 +472,7 @@ mod tests {
     use super::*;
     use nexus_core::graph_simple::Graph;
 
+    #[allow(dead_code)]
     fn create_test_graph() -> Graph {
         let mut graph = Graph::new();
 
@@ -583,9 +584,13 @@ mod tests {
         let algorithms = response.0;
         assert!(!algorithms.algorithms.is_empty());
         assert!(algorithms.algorithms.iter().any(|a| a.name == "kmeans"));
-        assert!(algorithms.algorithms.iter().any(|a| a.name == "label_based"));
+        assert!(
+            algorithms
+                .algorithms
+                .iter()
+                .any(|a| a.name == "label_based")
+        );
     }
-
 
     #[test]
     fn test_parse_algorithm_hierarchical() {
@@ -791,7 +796,7 @@ mod tests {
     fn test_property_value_to_json_float() {
         use nexus_core::graph_simple::PropertyValue;
 
-        let result = property_value_to_json(PropertyValue::Float64(3.14));
+        let result = property_value_to_json(PropertyValue::Float64(std::f64::consts::PI));
         assert!(matches!(result, serde_json::Value::Number(_)));
     }
 

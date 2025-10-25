@@ -1922,10 +1922,7 @@ mod tests {
             5
         );
         assert_eq!(node.metadata.get("lines").unwrap().as_i64().unwrap(), 100);
-        assert_eq!(
-            node.metadata.get("is_public").unwrap().as_bool().unwrap(),
-            true
-        );
+        assert!(node.metadata.get("is_public").unwrap().as_bool().unwrap());
     }
 
     #[test]
@@ -1959,10 +1956,7 @@ mod tests {
             edge.metadata.get("avg_duration").unwrap().as_f64().unwrap(),
             0.5
         );
-        assert_eq!(
-            edge.metadata.get("is_async").unwrap().as_bool().unwrap(),
-            false
-        );
+        assert!(!edge.metadata.get("is_async").unwrap().as_bool().unwrap());
     }
 
     #[test]

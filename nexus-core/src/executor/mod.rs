@@ -1704,14 +1704,14 @@ mod tests {
 
     #[test]
     fn test_execute_node_by_label() {
-        let (executor, _dir) = create_test_executor();
+        let (_executor, _dir) = create_test_executor();
 
         // Create a label and add some nodes to the index
         let catalog = Catalog::new("./test_data").unwrap();
         let label_id = catalog.get_or_create_label("Person").unwrap();
 
         // Add some test nodes to the label index
-        let mut label_index = LabelIndex::new();
+        let label_index = LabelIndex::new();
         label_index.add_node(1, &[label_id]).unwrap();
         label_index.add_node(2, &[label_id]).unwrap();
         label_index.add_node(3, &[label_id]).unwrap();

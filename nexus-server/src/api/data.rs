@@ -512,7 +512,10 @@ mod tests {
 
         let response = create_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Validation failed: At least one label is required");
+        assert_eq!(
+            response.error.as_ref().unwrap(),
+            "Validation failed: At least one label is required"
+        );
     }
 
     #[tokio::test]
@@ -586,7 +589,10 @@ mod tests {
 
         let response = create_rel(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Validation failed: Relationship type cannot be empty");
+        assert_eq!(
+            response.error.as_ref().unwrap(),
+            "Validation failed: Relationship type cannot be empty"
+        );
     }
 
     #[tokio::test]

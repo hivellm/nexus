@@ -54,7 +54,6 @@ pub mod validation;
 pub mod wal;
 
 pub use error::{Error, Result};
-use std::sync::Arc;
 pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
 pub use graph_construction::{
     CircularLayout, ConnectedComponents, ForceDirectedLayout, GraphLayout, GridLayout,
@@ -65,6 +64,7 @@ pub use graph_simple::{
     Edge as SimpleEdge, EdgeId as SimpleEdgeId, Graph as SimpleGraph,
     GraphStats as SimpleGraphStats, Node as SimpleNode, NodeId as SimpleNodeId, PropertyValue,
 };
+use std::sync::Arc;
 pub use validation::{
     GraphValidator, ValidationConfig, ValidationError, ValidationErrorType, ValidationResult,
     ValidationSeverity, ValidationStats, ValidationWarning, ValidationWarningType,
@@ -491,13 +491,15 @@ mod tests {
         let engine = engine.unwrap();
 
         // Test that all components are initialized
-        assert!(engine.catalog.label_count() >= 0);
-        assert!(engine.storage.node_count() >= 0);
-        assert!(engine.storage.relationship_count() >= 0);
-        assert!(engine.page_cache.hit_count() >= 0);
-        assert!(engine.page_cache.miss_count() >= 0);
-        assert!(engine.wal.entry_count() >= 0);
-        assert!(engine.transaction_manager.active_count() >= 0);
+        // Note: These are unsigned types, so >= 0 is always true
+        // We just verify the methods don't panic
+        let _ = engine.catalog.label_count();
+        let _ = engine.storage.node_count();
+        let _ = engine.storage.relationship_count();
+        let _ = engine.page_cache.hit_count();
+        let _ = engine.page_cache.miss_count();
+        let _ = engine.wal.entry_count();
+        let _ = engine.transaction_manager.active_count();
     }
 
     #[test]
@@ -520,14 +522,16 @@ mod tests {
         let stats = engine.stats().unwrap();
 
         // Test that stats are accessible
-        assert!(stats.nodes >= 0);
-        assert!(stats.relationships >= 0);
-        assert!(stats.labels >= 0);
-        assert!(stats.rel_types >= 0);
-        assert!(stats.page_cache_hits >= 0);
-        assert!(stats.page_cache_misses >= 0);
-        assert!(stats.wal_entries >= 0);
-        assert!(stats.active_transactions >= 0);
+        // Note: These are unsigned types, so >= 0 is always true
+        // We just verify the stats are accessible
+        let _ = stats.nodes;
+        let _ = stats.relationships;
+        let _ = stats.labels;
+        let _ = stats.rel_types;
+        let _ = stats.page_cache_hits;
+        let _ = stats.page_cache_misses;
+        let _ = stats.wal_entries;
+        let _ = stats.active_transactions;
     }
 
     #[test]

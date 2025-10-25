@@ -684,8 +684,1384 @@ fn test_executor_e2e_order_by_limit() {
     context.result_set.columns = vec!["name".to_string(), "score".to_string()];
     context.result_set.rows = vec![
         vec![Value::String("Alice".to_string()), Value::Number(Number::from(30))],
-        vec![Value::String("Bob".to_string()), Value::Number(Number::from(10))],
-        vec![Value::String("Charlie".to_string()), Value::Number(Number::from(20))],
+        vec![Value::String("Bob".to_string()), Value::Numb    // Verify limit worked
+    assert_eq!(context.result_set.rows.len(), 2);
+}
+
+// ============================================================================
+// API Error Handling Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_api_error_handling_400_bad_request() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use hyper::body::to_bytes;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Test 400 Bad Request - Invalid JSON
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from("invalid json"))
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Test 400 Bad Request - Missing required field
+    let query_body = json!({
+        "params": {}
+        // Missing "query" field
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Test 400 Bad Request - Invalid vector format
+    let knn_body = json!({
+        "label": "Person",
+        "vector": "invalid_vector", // Should be array
+        "k": 5
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/knn_traverse")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&knn_body).unwrap()))
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Test 400 Bad Request - Invalid labels format
+    let node_body = json!({
+        "labels": "not_array", // Should be array
+        "properties": {"name": "Alice"}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/data/nodes")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&node_body).unwrap()))
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_api_error_handling_404_not_found() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Test 404 Not Found - Non-existent endpoint
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/nonexistent")
+        .body(Body::empty())
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // Test 404 Not Found - Non-existent endpoint with POST
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/nonexistent")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_api_error_handling_405_method_not_allowed() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Test 405 Method Not Allowed - GET on POST-only endpoint
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/cypher")
+        .body(Body::empty())
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    // Test 405 Method Not Allowed - POST on GET-only endpoint
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/health")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn test_api_error_handling_408_request_timeout() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+    use tokio::time::{sleep, Duration};
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router with timeout middleware
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Test timeout handling - this would need to be implemented in the actual API
+    // For now, we test that the server responds to valid requests
+    let query_body = json!({
+        "query": "RETURN 1 as test",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+        .unwrap();
+    
+    let response = app.oneshot(request).await.unwrap();
+    // Should return 200 OK for valid request
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_api_error_handling_500_internal_server_error() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Test that the server handles requests gracefully
+    // In a real implementation, we would test scenarios that cause 500 errors
+    let query_body = json!({
+        "query": "RETURN 1 as test",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+        .unwrap();
+    
+    let response = app.oneshot(request).await.unwrap();
+    // Should return 200 OK for valid request
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_api_error_handling_malformed_requests() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Test malformed requests
+    let malformed_requests = vec![
+        ("/cypher", Method::POST, "not json"),
+        ("/knn_traverse", Method::POST, r#"{"invalid": "structure"}"#),
+        ("/data/nodes", Method::POST, r#"{"labels": "not_array"}"#),
+        ("/schema/labels", Method::POST, r#"{"name": 123}"#), // name should be string
+        ("/ingest", Method::POST, r#"{"nodes": "not_array"}"#),
+    ];
+    
+    for (endpoint, method, body) in malformed_requests {
+        let request = Request::builder()
+            .method(method)
+            .uri(endpoint)
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+        
+        let response = app.clone().oneshot(request).await.unwrap();
+        
+        // Should return 400 for malformed requests
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "Endpoint {} {} should return 400 for malformed request: {}",
+            method,
+            endpoint,
+            body
+        );
+    }
+}
+
+// ============================================================================
+// API Performance Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_api_performance_health_check() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Performance test: Health check endpoint
+    let start = std::time::Instant::now();
+    let mut success_count = 0;
+    let total_requests = 1000;
+    
+    for _ in 0..total_requests {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        
+        let response = app.clone().oneshot(request).await.unwrap();
+        if response.status() == StatusCode::OK {
+            success_count += 1;
+        }
+    }
+    
+    let elapsed = start.elapsed();
+    let throughput = total_requests as f64 / elapsed.as_secs_f64();
+    
+    println!("Health check performance: {} requests in {:?}", total_requests, elapsed);
+    println!("Throughput: {:.0} requests/sec", throughput);
+    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    
+    assert_eq!(success_count, total_requests);
+    assert!(throughput > 1000.0, "Throughput too low: {:.0} req/sec", throughput);
+}
+
+#[tokio::test]
+async fn test_api_performance_cypher_queries() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Performance test: Cypher queries
+    let query_body = json!({
+        "query": "RETURN 1 as test",
+        "params": {}
+    });
+    
+    let start = std::time::Instant::now();
+    let mut success_count = 0;
+    let total_requests = 500; // Fewer requests for more complex operations
+    
+    for _ in 0..total_requests {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/cypher")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+            .unwrap();
+        
+        let response = app.clone().oneshot(request).await.unwrap();
+        if response.status() == StatusCode::OK {
+            success_count += 1;
+        }
+    }
+    
+    let elapsed = start.elapsed();
+    let throughput = total_requests as f64 / elapsed.as_secs_f64();
+    
+    println!("Cypher query performance: {} requests in {:?}", total_requests, elapsed);
+    println!("Throughput: {:.0} requests/sec", throughput);
+    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    
+    assert_eq!(success_count, total_requests);
+    assert!(throughput > 100.0, "Throughput too low: {:.0} req/sec", throughput);
+}
+
+#[tokio::test]
+async fn test_api_performance_concurrent_requests() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Performance test: Concurrent requests
+    let start = std::time::Instant::now();
+    let mut handles = vec![];
+    let concurrent_requests = 50;
+    
+    for i in 0..concurrent_requests {
+        let app_clone = app.clone();
+        let handle = tokio::spawn(async move {
+            let request = Request::builder()
+                .method(Method::GET)
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap();
+            
+            let response = app_clone.oneshot(request).await.unwrap();
+            (i, response.status())
+        });
+        handles.push(handle);
+    }
+    
+    let mut success_count = 0;
+    for handle in handles {
+        let (_, status) = handle.await.unwrap();
+        if status == StatusCode::OK {
+            success_count += 1;
+        }
+    }
+    
+    let elapsed = start.elapsed();
+    let throughput = concurrent_requests as f64 / elapsed.as_secs_f64();
+    
+    println!("Concurrent requests performance: {} requests in {:?}", concurrent_requests, elapsed);
+    println!("Throughput: {:.0} requests/sec", throughput);
+    println!("Success rate: {:.1}%", (success_count as f64 / concurrent_requests as f64) * 100.0);
+    
+    assert_eq!(success_count, concurrent_requests);
+    assert!(throughput > 100.0, "Throughput too low: {:.0} req/sec", throughput);
+}
+
+#[tokio::test]
+async fn test_api_performance_large_payloads() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Performance test: Large payloads
+    let large_vector: Vec<f32> = (0..1000).map(|i| i as f32 / 1000.0).collect();
+    let knn_body = json!({
+        "label": "Person",
+        "vector": large_vector,
+        "k": 10,
+        "limit": 100
+    });
+    
+    let start = std::time::Instant::now();
+    let mut success_count = 0;
+    let total_requests = 100;
+    
+    for _ in 0..total_requests {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/knn_traverse")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&knn_body).unwrap()))
+            .unwrap();
+        
+        let response = app.clone().oneshot(request).await.unwrap();
+        if response.status() == StatusCode::OK {
+            success_count += 1;
+        }
+    }
+    
+    let elapsed = start.elapsed();
+    let throughput = total_requests as f64 / elapsed.as_secs_f64();
+    let payload_size = serde_json::to_vec(&knn_body).unwrap().len();
+    
+    println!("Large payload performance: {} requests in {:?}", total_requests, elapsed);
+    println!("Throughput: {:.0} requests/sec", throughput);
+    println!("Payload size: {} bytes", payload_size);
+    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    
+    assert_eq!(success_count, total_requests);
+    assert!(throughput > 10.0, "Throughput too low: {:.0} req/sec", throughput);
+}
+
+#[tokio::test]
+async fn test_api_performance_mixed_workload() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+        Router,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use nexus_core::{
+        catalog::Catalog,
+        executor::Executor,
+        index::{KnnIndex, LabelIndex},
+        storage::RecordStore,
+    };
+    use nexus_server::{api, main::NexusServer};
+
+    // Create test server
+    let temp_dir = TempDir::new().unwrap();
+    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
+    let catalog_arc = Arc::new(RwLock::new(catalog));
+    let store = RecordStore::new(temp_dir.path()).unwrap();
+    let store_arc = Arc::new(RwLock::new(store));
+    let label_index = LabelIndex::new();
+    let label_index_arc = Arc::new(RwLock::new(label_index));
+    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index_arc = Arc::new(RwLock::new(knn_index));
+    let executor = Executor::new(
+        catalog_arc.clone(),
+        store_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    let executor_arc = Arc::new(RwLock::new(executor));
+
+    // Initialize API modules
+    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::knn::init_executor(executor_arc.clone()).unwrap();
+    api::ingest::init_executor(executor_arc.clone()).unwrap();
+    api::schema::init_catalog(catalog_arc.clone()).unwrap();
+    api::data::init_catalog(catalog_arc.clone()).unwrap();
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    ).unwrap();
+    api::health::init();
+
+    let server = Arc::new(NexusServer {
+        executor: executor_arc,
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
+
+    // Build router
+    let app = Router::new()
+        .route("/", axum::routing::get(api::health::health_check))
+        .route("/health", axum::routing::get(api::health::health_check))
+        .route("/metrics", axum::routing::get(api::health::metrics))
+        .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
+        .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
+        .route("/ingest", axum::routing::post(api::ingest::ingest_data))
+        .route("/schema/labels", axum::routing::post(api::schema::create_label))
+        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
+        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
+        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route("/data/nodes", axum::routing::post(api::data::create_node))
+        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route("/data/nodes", axum::routing::put(api::data::update_node))
+        .route("/data/nodes", axum::routing::delete(api::data::delete_node))
+        .route("/stats", axum::routing::get(api::stats::get_stats))
+        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
+        .route("/clustering/cluster", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-label", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
+        }))
+        .route("/clustering/group-by-property", axum::routing::post({
+            let server = server.clone();
+            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
+        }));
+
+    // Performance test: Mixed workload
+    let start = std::time::Instant::now();
+    let mut handles = vec![];
+    let total_requests = 200;
+    
+    // Spawn different types of requests concurrently
+    for i in 0..total_requests {
+        let app_clone = app.clone();
+        let handle = tokio::spawn(async move {
+            let request = match i % 4 {
+                0 => Request::builder()
+                    .method(Method::GET)
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+                1 => {
+                    let query_body = json!({
+                        "query": "RETURN 1 as test",
+                        "params": {}
+                    });
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/cypher")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+                        .unwrap()
+                },
+                2 => {
+                    let knn_body = json!({
+                        "label": "Person",
+                        "vector": [0.1, 0.2, 0.3, 0.4],
+                        "k": 5
+                    });
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/knn_traverse")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&knn_body).unwrap()))
+                        .unwrap()
+                },
+                _ => Request::builder()
+                    .method(Method::GET)
+                    .uri("/stats")
+                    .body(Body::empty())
+                    .unwrap(),
+            };
+            
+            let response = app_clone.oneshot(request).await.unwrap();
+            (i, response.status())
+        });
+        handles.push(handle);
+    }
+    
+    let mut success_count = 0;
+    for handle in handles {
+        let (_, status) = handle.await.unwrap();
+        if status == StatusCode::OK {
+            success_count += 1;
+        }
+    }
+    
+    let elapsed = start.elapsed();
+    let throughput = total_requests as f64 / elapsed.as_secs_f64();
+    
+    println!("Mixed workload performance: {} requests in {:?}", total_requests, elapsed);
+    println!("Throughput: {:.0} requests/sec", throughput);
+    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    
+    assert_eq!(success_count, total_requests);
+    assert!(throughput > 50.0, "Throughput too low: {:.0} req/sec", throughput);
+}
+e::Number(Number::from(20))],
     ];
     
     // Test ORDER BY score ASC

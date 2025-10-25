@@ -3,13 +3,12 @@
 //! This module provides high-level graph data structures that wrap the low-level
 //! storage records and provide a more user-friendly API for graph operations.
 
-    use crate::storage::{NodeRecord, RelationshipRecord, RecordStore};
-    use crate::catalog::Catalog;
-    use crate::{Error, Result};
-    use crate::graph_simple::PropertyValue;
-    use parking_lot::RwLock;
-    use std::collections::HashMap;
-    use std::sync::Arc;
+use crate::graph_simple::PropertyValue;
+use crate::storage::{NodeRecord, RecordStore, RelationshipRecord};
+use crate::{Error, Result};
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A unique identifier for nodes in the graph
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -279,13 +278,17 @@ impl Graph {
         }
 
         // Create node record
-        let mut record = NodeRecord::default();
-        record.label_bits = label_bits;
-        record.first_rel_ptr = u64::MAX; // No relationships yet
-        record.prop_ptr = u64::MAX; // No properties yet
+        let record = NodeRecord {
+            label_bits,
+            first_rel_ptr: u64::MAX, // No relationships yet
+            prop_ptr: u64::MAX,      // No properties yet
+            ..Default::default()
+        };
 
         // Write to storage
-        self.store.borrow_mut().write_node(node_id.value(), &record)?;
+        self.store
+            .borrow_mut()
+            .write_node(node_id.value(), &record)?;
 
         // Create in-memory node
         let node = Node::new(node_id, labels);
@@ -345,21 +348,19 @@ impl Graph {
         }
 
         // Create updated record
-        let mut record = NodeRecord::default();
-        record.label_bits = label_bits;
-        // Preserve existing relationships and properties
-        if let Ok(Some(existing_node)) = self.get_node(node.id) {
-            // For now, we'll preserve the existing structure
-            // In a full implementation, we'd need to update the record properly
-            record.first_rel_ptr = u64::MAX; // TODO: Implement proper relationship preservation
-            record.prop_ptr = u64::MAX; // TODO: Implement proper property preservation
-        } else {
-            record.first_rel_ptr = u64::MAX;
-            record.prop_ptr = u64::MAX;
-        }
+        // For now, we'll create a simple record with the new label bits
+        // In a full implementation, we'd need to preserve existing relationships and properties
+        let record = NodeRecord {
+            label_bits,
+            first_rel_ptr: u64::MAX, // TODO: Implement proper relationship preservation
+            prop_ptr: u64::MAX,      // TODO: Implement proper property preservation
+            ..Default::default()
+        };
 
         // Write to storage
-        self.store.borrow_mut().write_node(node.id.value(), &record)?;
+        self.store
+            .borrow_mut()
+            .write_node(node.id.value(), &record)?;
 
         // Update cache
         self.node_cache.write().insert(node.id, node);
@@ -377,7 +378,9 @@ impl Graph {
         // Mark as deleted in storage
         let mut record = self.store.borrow().read_node(node_id.value())?;
         record.mark_deleted();
-        self.store.borrow_mut().write_node(node_id.value(), &record)?;
+        self.store
+            .borrow_mut()
+            .write_node(node_id.value(), &record)?;
 
         // Remove from cache
         self.node_cache.write().remove(&node_id);
@@ -425,7 +428,9 @@ impl Graph {
         };
 
         // Write to storage
-        self.store.borrow_mut().write_rel(edge_id.value(), &record)?;
+        self.store
+            .borrow_mut()
+            .write_rel(edge_id.value(), &record)?;
 
         // Create in-memory edge
         let edge = Edge::new(edge_id, source, target, relationship_type);
@@ -493,7 +498,9 @@ impl Graph {
         };
 
         // Write to storage
-        self.store.borrow_mut().write_rel(edge.id.value(), &record)?;
+        self.store
+            .borrow_mut()
+            .write_rel(edge.id.value(), &record)?;
 
         // Update cache
         self.edge_cache.write().insert(edge.id, edge);
@@ -511,7 +518,9 @@ impl Graph {
         // Mark as deleted in storage
         let mut record = self.store.borrow().read_rel(edge_id.value())?;
         record.mark_deleted();
-        self.store.borrow_mut().write_rel(edge_id.value(), &record)?;
+        self.store
+            .borrow_mut()
+            .write_rel(edge_id.value(), &record)?;
 
         // Remove from cache
         self.edge_cache.write().remove(&edge_id);
@@ -628,7 +637,10 @@ impl Graph {
     }
 
     /// Validate the graph with custom configuration
-    pub fn validate_with_config(&self, config: crate::validation::ValidationConfig) -> Result<crate::validation::ValidationResult> {
+    pub fn validate_with_config(
+        &self,
+        config: crate::validation::ValidationConfig,
+    ) -> Result<crate::validation::ValidationResult> {
         let validator = crate::validation::GraphValidator::with_config(config);
         validator.validate_graph(self)
     }
@@ -648,17 +660,17 @@ impl Graph {
     /// Load properties from the property chain
     fn load_properties(&self, _prop_ptr: u64) -> Result<HashMap<String, PropertyValue>> {
         let properties = HashMap::new();
-        
+
         // For now, we'll implement a simple property loading mechanism
         // In a full implementation, this would traverse the property chain
         // and load all properties from the storage layer
-        
+
         // TODO: Implement full property chain traversal
         // This would involve:
         // 1. Reading property records from storage
         // 2. Deserializing property values
         // 3. Building the properties HashMap
-        
+
         // For now, return empty properties to avoid compilation errors
         Ok(properties)
     }
@@ -693,7 +705,7 @@ pub struct GraphStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // use crate::catalog::Catalog;
+    use crate::catalog::Catalog;
     use tempfile::TempDir;
 
     fn create_test_graph() -> (Graph, TempDir) {
@@ -738,7 +750,10 @@ mod tests {
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let mut node = graph.get_node(node_id).unwrap().unwrap();
 
-        node.set_property("name".to_string(), PropertyValue::String("test".to_string()));
+        node.set_property(
+            "name".to_string(),
+            PropertyValue::String("test".to_string()),
+        );
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
         assert!(node.has_property("name"));
@@ -931,7 +946,10 @@ mod tests {
         let mut node = graph.get_node(node_id).unwrap().unwrap();
 
         // Set properties
-        node.set_property("name".to_string(), PropertyValue::String("test".to_string()));
+        node.set_property(
+            "name".to_string(),
+            PropertyValue::String("test".to_string()),
+        );
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
         // Check properties

@@ -55,7 +55,7 @@ pub enum ValidationErrorType {
     NodeHasInvalidProperties,
     NodeHasDuplicateProperties,
     NodeHasDuplicateLabels,
-    
+
     /// Edge validation errors
     EdgeNotFound,
     EdgeHasInvalidId,
@@ -65,13 +65,13 @@ pub enum ValidationErrorType {
     EdgeHasInvalidProperties,
     EdgeHasDuplicateProperties,
     EdgeReferencesNonExistentNode,
-    
+
     /// Graph consistency errors
     OrphanedEdge,
     DuplicateEdge,
     SelfLoop,
     InvalidGraphStructure,
-    
+
     /// Storage consistency errors
     StorageInconsistency,
     CatalogInconsistency,
@@ -85,13 +85,13 @@ pub enum ValidationWarningType {
     LargePropertyValue,
     ExcessiveLabels,
     ExcessiveProperties,
-    
+
     /// Data quality warnings
     EmptyNode,
     EmptyEdge,
     UnusedLabel,
     UnusedRelationshipType,
-    
+
     /// Structural warnings
     IsolatedNode,
     DenseSubgraph,
@@ -231,8 +231,11 @@ impl GraphValidator {
         result.stats.validation_time_ms = start_time.elapsed().as_millis() as u64;
 
         // Determine overall validity
-        result.is_valid = result.errors.is_empty() || 
-            result.errors.iter().all(|e| e.severity < ValidationSeverity::Critical);
+        result.is_valid = result.errors.is_empty()
+            || result
+                .errors
+                .iter()
+                .all(|e| e.severity < ValidationSeverity::Critical);
 
         Ok(result)
     }
@@ -244,10 +247,14 @@ impl GraphValidator {
 
         for node in nodes {
             self.validate_node(&node, graph, result)?;
-            
+
             // Check if we should stop due to critical errors
-            if self.config.stop_on_critical && 
-               result.errors.iter().any(|e| e.severity == ValidationSeverity::Critical) {
+            if self.config.stop_on_critical
+                && result
+                    .errors
+                    .iter()
+                    .any(|e| e.severity == ValidationSeverity::Critical)
+            {
                 break;
             }
 
@@ -261,7 +268,12 @@ impl GraphValidator {
     }
 
     /// Validate a single node
-    fn validate_node(&self, node: &Node, _graph: &Graph, result: &mut ValidationResult) -> Result<()> {
+    fn validate_node(
+        &self,
+        node: &Node,
+        _graph: &Graph,
+        result: &mut ValidationResult,
+    ) -> Result<()> {
         // Validate node ID
         if node.id.value() == u64::MAX {
             result.errors.push(ValidationError {
@@ -336,10 +348,14 @@ impl GraphValidator {
 
         for edge in edges {
             self.validate_edge(&edge, graph, result)?;
-            
+
             // Check if we should stop due to critical errors
-            if self.config.stop_on_critical && 
-               result.errors.iter().any(|e| e.severity == ValidationSeverity::Critical) {
+            if self.config.stop_on_critical
+                && result
+                    .errors
+                    .iter()
+                    .any(|e| e.severity == ValidationSeverity::Critical)
+            {
                 break;
             }
 
@@ -353,7 +369,12 @@ impl GraphValidator {
     }
 
     /// Validate a single edge
-    fn validate_edge(&self, edge: &Edge, graph: &Graph, result: &mut ValidationResult) -> Result<()> {
+    fn validate_edge(
+        &self,
+        edge: &Edge,
+        graph: &Graph,
+        result: &mut ValidationResult,
+    ) -> Result<()> {
         // Validate edge ID
         if edge.id.value() == u64::MAX {
             result.errors.push(ValidationError {
@@ -368,7 +389,10 @@ impl GraphValidator {
         if graph.get_node(edge.source)?.is_none() {
             result.errors.push(ValidationError {
                 error_type: ValidationErrorType::EdgeReferencesNonExistentNode,
-                message: format!("Edge references non-existent source node: {}", edge.source.value()),
+                message: format!(
+                    "Edge references non-existent source node: {}",
+                    edge.source.value()
+                ),
                 entity_id: Some(format!("edge:{}", edge.id.value())),
                 severity: ValidationSeverity::Critical,
             });
@@ -378,7 +402,10 @@ impl GraphValidator {
         if graph.get_node(edge.target)?.is_none() {
             result.errors.push(ValidationError {
                 error_type: ValidationErrorType::EdgeReferencesNonExistentNode,
-                message: format!("Edge references non-existent target node: {}", edge.target.value()),
+                message: format!(
+                    "Edge references non-existent target node: {}",
+                    edge.target.value()
+                ),
                 entity_id: Some(format!("edge:{}", edge.id.value())),
                 severity: ValidationSeverity::Critical,
             });
@@ -439,7 +466,12 @@ impl GraphValidator {
     }
 
     /// Validate a property value
-    fn validate_property_value(&self, key: &str, value: &PropertyValue, result: &mut ValidationResult) -> Result<()> {
+    fn validate_property_value(
+        &self,
+        key: &str,
+        value: &PropertyValue,
+        result: &mut ValidationResult,
+    ) -> Result<()> {
         match value {
             PropertyValue::String(_) => {
                 // String references are valid
@@ -496,7 +528,7 @@ impl GraphValidator {
     fn check_orphaned_edges(&self, graph: &Graph, result: &mut ValidationResult) -> Result<()> {
         let edges = graph.get_all_edges()?;
         let mut node_ids = HashSet::new();
-        
+
         // Collect all valid node IDs
         let nodes = graph.get_all_nodes()?;
         for node in nodes {
@@ -569,11 +601,15 @@ impl GraphValidator {
         // Check graph density
         let node_count = nodes.len();
         let edge_count = edges.len();
-        
+
         if node_count > 0 {
             let max_edges = node_count * (node_count - 1) / 2;
-            let density = if max_edges > 0 { edge_count as f64 / max_edges as f64 } else { 0.0 };
-            
+            let density = if max_edges > 0 {
+                edge_count as f64 / max_edges as f64
+            } else {
+                0.0
+            };
+
             if density > 0.8 {
                 result.warnings.push(ValidationWarning {
                     warning_type: ValidationWarningType::DenseSubgraph,
@@ -608,7 +644,8 @@ mod tests {
     fn create_test_graph() -> (Graph, TempDir) {
         let dir = TempDir::new().unwrap();
         let store = crate::storage::RecordStore::new(dir.path()).unwrap();
-        let catalog = std::sync::Arc::new(crate::catalog::Catalog::new(dir.path().join("catalog")).unwrap());
+        let catalog =
+            std::sync::Arc::new(crate::catalog::Catalog::new(dir.path().join("catalog")).unwrap());
         let graph = Graph::new(store, catalog);
         (graph, dir)
     }
@@ -717,7 +754,7 @@ mod tests {
     #[test]
     fn test_validate_graph_with_nodes() {
         let (graph, _dir) = create_test_graph();
-        
+
         // Create some nodes
         let _node1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let _node2 = graph.create_node(vec!["Company".to_string()]).unwrap();
@@ -733,7 +770,7 @@ mod tests {
     #[test]
     fn test_validate_node_with_duplicate_labels() {
         let (graph, _dir) = create_test_graph();
-        
+
         // Create a node with duplicate labels directly (bypassing add_label check)
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let mut node = graph.get_node(node_id).unwrap().unwrap();
@@ -745,20 +782,26 @@ mod tests {
 
         // The validation should catch the duplicate label
         assert!(!result.errors.is_empty());
-        assert!(result.errors.iter().any(|e| 
-            e.error_type == ValidationErrorType::NodeHasDuplicateLabels
-        ));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.error_type == ValidationErrorType::NodeHasDuplicateLabels)
+        );
     }
 
     #[test]
     fn test_validate_node_properties() {
         let (graph, _dir) = create_test_graph();
-        
+
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let mut node = graph.get_node(node_id).unwrap().unwrap();
-        
+
         // Add some properties
-        node.set_property("name".to_string(), PropertyValue::String("test".to_string()));
+        node.set_property(
+            "name".to_string(),
+            PropertyValue::String("test".to_string()),
+        );
         node.set_property("age".to_string(), PropertyValue::Int64(30));
         node.set_property("height".to_string(), PropertyValue::Float64(1.75));
         graph.update_node(node).unwrap();
@@ -773,14 +816,20 @@ mod tests {
     #[test]
     fn test_validate_invalid_property_values() {
         let (graph, _dir) = create_test_graph();
-        
+
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let mut node = graph.get_node(node_id).unwrap().unwrap();
-        
+
         // Add invalid property values
-        node.set_property("invalid_float".to_string(), PropertyValue::Float64(f64::NAN));
-        node.set_property("infinite_float".to_string(), PropertyValue::Float64(f64::INFINITY));
-        
+        node.set_property(
+            "invalid_float".to_string(),
+            PropertyValue::Float64(f64::NAN),
+        );
+        node.set_property(
+            "infinite_float".to_string(),
+            PropertyValue::Float64(f64::INFINITY),
+        );
+
         // Test validation directly on the node (since properties aren't persisted yet)
         let validator = GraphValidator::new();
         let mut result = ValidationResult {
@@ -796,25 +845,32 @@ mod tests {
                 validation_time_ms: 0,
             },
         };
-        
-        validator.validate_node_properties(&node, &mut result).unwrap();
-        
+
+        validator
+            .validate_node_properties(&node, &mut result)
+            .unwrap();
+
         assert!(!result.errors.is_empty());
-        assert!(result.errors.iter().any(|e| 
-            e.message.contains("invalid float value")
-        ));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("invalid float value"))
+        );
     }
 
     #[test]
     fn test_validate_edges() {
         let (graph, _dir) = create_test_graph();
-        
+
         // Create nodes
         let node1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let node2 = graph.create_node(vec!["Person".to_string()]).unwrap();
-        
+
         // Create edge
-        let _edge = graph.create_edge(node1, node2, "KNOWS".to_string()).unwrap();
+        let _edge = graph
+            .create_edge(node1, node2, "KNOWS".to_string())
+            .unwrap();
 
         let validator = GraphValidator::new();
         let result = validator.validate_graph(&graph).unwrap();
@@ -827,9 +883,9 @@ mod tests {
     #[test]
     fn test_validate_self_loop() {
         let (graph, _dir) = create_test_graph();
-        
+
         let node = graph.create_node(vec!["Person".to_string()]).unwrap();
-        
+
         // Create self-loop edge
         let _edge = graph.create_edge(node, node, "KNOWS".to_string()).unwrap();
 
@@ -838,15 +894,18 @@ mod tests {
 
         assert!(result.is_valid);
         assert!(!result.warnings.is_empty());
-        assert!(result.warnings.iter().any(|w| 
-            w.warning_type == ValidationWarningType::DenseSubgraph
-        ));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.warning_type == ValidationWarningType::DenseSubgraph)
+        );
     }
 
     #[test]
     fn test_validate_isolated_node() {
         let (graph, _dir) = create_test_graph();
-        
+
         // Create isolated node
         let _node = graph.create_node(vec!["Person".to_string()]).unwrap();
 
@@ -855,9 +914,12 @@ mod tests {
 
         assert!(result.is_valid);
         assert!(!result.warnings.is_empty());
-        assert!(result.warnings.iter().any(|w| 
-            w.warning_type == ValidationWarningType::IsolatedNode
-        ));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.warning_type == ValidationWarningType::IsolatedNode)
+        );
     }
 
     #[test]

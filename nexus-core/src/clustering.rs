@@ -1340,11 +1340,14 @@ mod tests {
     #[test]
     fn test_cluster_metadata_operations() {
         let mut cluster = Cluster::new(0, vec![NodeId::new(1)]);
-        
+
         // Test setting metadata
-        cluster.set_metadata("key1".to_string(), PropertyValue::String("value1".to_string()));
+        cluster.set_metadata(
+            "key1".to_string(),
+            PropertyValue::String("value1".to_string()),
+        );
         cluster.set_metadata("key2".to_string(), PropertyValue::Int64(42));
-        
+
         // Test getting metadata
         assert_eq!(
             cluster.get_metadata("key1"),
@@ -1355,17 +1358,20 @@ mod tests {
             Some(&PropertyValue::Int64(42))
         );
         assert_eq!(cluster.get_metadata("nonexistent"), None);
-        
+
         // Test removing metadata by setting to None
         cluster.set_metadata("key1".to_string(), PropertyValue::Null);
         assert_eq!(cluster.get_metadata("key1"), Some(&PropertyValue::Null));
-        assert_eq!(cluster.get_metadata("key2"), Some(&PropertyValue::Int64(42)));
+        assert_eq!(
+            cluster.get_metadata("key2"),
+            Some(&PropertyValue::Int64(42))
+        );
     }
 
     #[test]
     fn test_cluster_contains_node() {
         let cluster = Cluster::new(0, vec![NodeId::new(1), NodeId::new(2), NodeId::new(3)]);
-        
+
         assert!(cluster.nodes.contains(&NodeId::new(1)));
         assert!(cluster.nodes.contains(&NodeId::new(2)));
         assert!(cluster.nodes.contains(&NodeId::new(3)));
@@ -1375,14 +1381,17 @@ mod tests {
     #[test]
     fn test_cluster_clear() {
         let mut cluster = Cluster::new(0, vec![NodeId::new(1), NodeId::new(2)]);
-        cluster.set_metadata("test".to_string(), PropertyValue::String("value".to_string()));
-        
+        cluster.set_metadata(
+            "test".to_string(),
+            PropertyValue::String("value".to_string()),
+        );
+
         assert_eq!(cluster.size(), 2);
         assert!(!cluster.is_empty());
-        
+
         cluster.nodes.clear();
         cluster.metadata.clear();
-        
+
         assert_eq!(cluster.size(), 0);
         assert!(cluster.is_empty());
         assert!(cluster.get_metadata("test").is_none());
@@ -1391,8 +1400,17 @@ mod tests {
     #[test]
     fn test_clustering_config_default() {
         let config = ClusteringConfig::default();
-        assert!(matches!(config.algorithm, ClusteringAlgorithm::KMeans { k: 3, max_iterations: 100 }));
-        assert!(matches!(config.feature_strategy, FeatureStrategy::LabelBased));
+        assert!(matches!(
+            config.algorithm,
+            ClusteringAlgorithm::KMeans {
+                k: 3,
+                max_iterations: 100
+            }
+        ));
+        assert!(matches!(
+            config.feature_strategy,
+            FeatureStrategy::LabelBased
+        ));
         assert!(matches!(config.distance_metric, DistanceMetric::Euclidean));
         assert_eq!(config.random_seed, None);
     }
@@ -1405,9 +1423,12 @@ mod tests {
             distance_metric: DistanceMetric::Manhattan,
             random_seed: Some(42),
         };
-        
+
         assert!(matches!(config.algorithm, ClusteringAlgorithm::LabelBased));
-        assert!(matches!(config.feature_strategy, FeatureStrategy::Structural));
+        assert!(matches!(
+            config.feature_strategy,
+            FeatureStrategy::Structural
+        ));
         assert!(matches!(config.distance_metric, DistanceMetric::Manhattan));
         assert_eq!(config.random_seed, Some(42));
     }
@@ -1463,8 +1484,10 @@ mod tests {
             Cluster::new(0, vec![NodeId::new(1)]),
             Cluster::new(1, vec![NodeId::new(2)]),
         ];
-        let mut metrics = ClusteringMetrics::default();
-        metrics.silhouette_score = 0.8;
+        let metrics = ClusteringMetrics {
+            silhouette_score: 0.8,
+            ..Default::default()
+        };
         let result = ClusteringResult {
             clusters,
             algorithm: ClusteringAlgorithm::LabelBased,
@@ -1484,7 +1507,7 @@ mod tests {
         let graph = Graph::new();
         let config = ClusteringConfig::default();
         let engine = ClusteringEngine::new(config);
-        
+
         let result = engine.cluster(&graph).unwrap();
         assert!(result.clusters.is_empty());
         assert!(result.converged);
@@ -1494,10 +1517,10 @@ mod tests {
     fn test_single_node_clustering() {
         let mut graph = Graph::new();
         let _node = graph.create_node(vec!["Person".to_string()]).unwrap();
-        
+
         let config = ClusteringConfig::default();
         let engine = ClusteringEngine::new(config);
-        
+
         let result = engine.cluster(&graph).unwrap();
         assert!(!result.clusters.is_empty());
         assert!(result.converged);
@@ -1507,7 +1530,10 @@ mod tests {
     fn test_dbscan_clustering() {
         let graph = create_test_graph();
         let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::DBSCAN { eps: 0.5, min_points: 2 },
+            algorithm: ClusteringAlgorithm::DBSCAN {
+                eps: 0.5,
+                min_points: 2,
+            },
             feature_strategy: FeatureStrategy::Structural,
             distance_metric: DistanceMetric::Euclidean,
             random_seed: Some(42),
@@ -1524,7 +1550,9 @@ mod tests {
     fn test_hierarchical_clustering() {
         let graph = create_test_graph();
         let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::Hierarchical { linkage: LinkageType::Single },
+            algorithm: ClusteringAlgorithm::Hierarchical {
+                linkage: LinkageType::Single,
+            },
             feature_strategy: FeatureStrategy::Structural,
             distance_metric: DistanceMetric::Euclidean,
             random_seed: Some(42),
@@ -1558,7 +1586,10 @@ mod tests {
     fn test_structural_feature_strategy() {
         let graph = create_test_graph();
         let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::KMeans { k: 2, max_iterations: 10 },
+            algorithm: ClusteringAlgorithm::KMeans {
+                k: 2,
+                max_iterations: 10,
+            },
             feature_strategy: FeatureStrategy::Structural,
             distance_metric: DistanceMetric::Euclidean,
             random_seed: Some(42),
@@ -1575,11 +1606,16 @@ mod tests {
     fn test_combined_feature_strategy() {
         let graph = create_test_graph();
         let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::KMeans { k: 2, max_iterations: 10 },
+            algorithm: ClusteringAlgorithm::KMeans {
+                k: 2,
+                max_iterations: 10,
+            },
             feature_strategy: FeatureStrategy::Combined {
                 strategies: vec![
                     FeatureStrategy::LabelBased,
-                    FeatureStrategy::PropertyBased { property_keys: vec!["age".to_string()] },
+                    FeatureStrategy::PropertyBased {
+                        property_keys: vec!["age".to_string()],
+                    },
                     FeatureStrategy::Structural,
                 ],
             },
