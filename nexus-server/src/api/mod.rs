@@ -2,6 +2,7 @@
 
 pub mod cypher;
 pub mod data;
+pub mod health;
 pub mod ingest;
 pub mod knn;
 pub mod schema;

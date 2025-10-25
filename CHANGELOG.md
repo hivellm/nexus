@@ -5,6 +5,58 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2025-10-25
+
+### Added
+
+- **Core Engine Implementation**
+  - Implemented `Engine::new()` method with full component initialization
+  - Added storage, catalog, page cache, WAL, and transaction manager integration
+  - Added `Engine::new_default()` convenience method
+
+- **Protocol Client Implementations**
+  - Implemented REST client with POST, GET, and streaming methods
+  - Implemented MCP client with JSON-RPC 2.0 support
+  - Implemented UMICP client for universal model communication
+  - Added proper error handling and HTTP status code checking
+
+- **Performance Optimizations**
+  - Added query cache with configurable TTL and capacity
+  - Implemented exponential backoff retry mechanism
+  - Added jitter to prevent thundering herd problems
+  - Added cache statistics and management
+
+- **Error Handling and Recovery**
+  - Added comprehensive retry mechanisms for transient failures
+  - Implemented retryable error detection for I/O and database errors
+  - Added retry statistics and context tracking
+  - Added specialized retry functions for storage, network, and database operations
+
+- **Monitoring and Logging**
+  - Added comprehensive health check endpoint with component status
+  - Implemented detailed metrics endpoint with system information
+  - Added uptime tracking and human-readable duration formatting
+  - Added component-specific health checks with timeout handling
+
+### Changed
+
+- **API Endpoints**
+  - Updated health check endpoint to use new health module
+  - Added `/metrics` endpoint for detailed system metrics
+  - Enhanced error responses with more detailed information
+
+- **Dependencies**
+  - Added `reqwest` and `futures-util` for HTTP client functionality
+  - Added `rand` for retry mechanism jitter
+  - Added `chrono` for timestamp formatting
+
+### Technical Details
+
+- **Query Cache**: 1000 entry capacity with 5-minute TTL
+- **Retry Configuration**: 3 attempts with exponential backoff (100ms initial, 2x multiplier)
+- **Health Check Timeouts**: Database (5s), Storage (3s), Indexes (2s), WAL (1s), Page Cache (500ms)
+- **Error Recovery**: Automatic retry for transient I/O and database errors
+
 ## [0.5.0] - 2025-10-25
 
 ### Fixed

@@ -100,10 +100,14 @@ async fn main() -> anyhow::Result<()> {
     // Create MCP router with StreamableHTTP transport
     let mcp_router = create_mcp_router(nexus_server.clone()).await?;
 
+    // Initialize health check system
+    api::health::init();
+
     // Build main router
     let app = Router::new()
-        .route("/", get(health_check))
-        .route("/health", get(health_check))
+        .route("/", get(api::health::health_check))
+        .route("/health", get(api::health::health_check))
+        .route("/metrics", get(api::health::metrics))
         .route("/cypher", post(api::cypher::execute_cypher))
         .route("/knn_traverse", post(api::knn::knn_traverse))
         .route("/ingest", post(api::ingest::ingest_data))
@@ -186,19 +190,6 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
     Ok(router)
 }
 
-/// Health check endpoint
-async fn health_check() -> impl IntoResponse {
-    #[derive(Serialize)]
-    struct HealthResponse {
-        status: &'static str,
-        version: &'static str,
-    }
-
-    Json(HealthResponse {
-        status: "ok",
-        version: env!("CARGO_PKG_VERSION"),
-    })
-}
 
 #[cfg(test)]
 mod tests {

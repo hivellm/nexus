@@ -19,15 +19,18 @@
 
 Nexus is a modern **property graph database** built for **read-heavy workloads** with **first-class vector search**. Inspired by Neo4j's battle-tested architecture, it combines the power of graph traversal with semantic similarity search for hybrid **RAG (Retrieval-Augmented Generation)** applications.
 
-Think of it as **Neo4j meets Vector Search** - optimized for AI applications that need both structured relationships and semantic similarity.
-
-## ✨ **Version 0.1.0 - Architecture & Foundation**
+Think of it as **Neo4j meets Vector Search** - optimized for AI applications that need both structured relationships and s## ✨ **Version 0.6.0 - Core Implementation & Monitoring**
 
 ### 🎉 **Current Status**
 - ✅ **Complete Architecture Documentation** - Neo4j-inspired design with native KNN
 - ✅ **Project Scaffolding** - Cargo workspace (edition 2024, nightly)
 - ✅ **Module Structure** - Storage, executor, indexes, transactions
 - ✅ **REST API Framework** - Axum-based HTTP server
+- ✅ **Core Engine Implementation** - Full component initialization and integration
+- ✅ **Protocol Clients** - REST, MCP, and UMICP client implementations
+- ✅ **Performance Optimizations** - Query caching and retry mechanisms
+- ✅ **Error Handling** - Comprehensive retry logic for transient failures
+- ✅ **Monitoring & Health Checks** - Component status and detailed metricsrk** - Axum-based HTTP server
 - ✅ **OpenSpec Integration** - Spec-driven development workflow
 - 📋 **MVP Implementation** - In progress (Phase 1)
 

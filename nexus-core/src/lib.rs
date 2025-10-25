@@ -44,6 +44,7 @@ pub mod graph_correlation;
 pub mod graph_simple;
 pub mod index;
 pub mod page_cache;
+pub mod retry;
 pub mod storage;
 pub mod transaction;
 pub mod wal;

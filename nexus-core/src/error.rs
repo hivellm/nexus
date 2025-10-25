@@ -48,6 +48,10 @@ pub enum Error {
     #[error("Graph correlation error: {0}")]
     GraphCorrelation(String),
 
+    /// Retryable errors (temporary failures)
+    #[error("Retryable error: {0}")]
+    Retryable(String),
+
     /// Cypher parsing errors
     #[error("Cypher syntax error: {0}")]
     CypherSyntax(String),
