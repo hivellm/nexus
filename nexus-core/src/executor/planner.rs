@@ -1,0 +1,371 @@
+use super::parser::{
+    BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement,
+    RelationshipDirection, ReturnItem,
+};
+use super::{Direction, Operator};
+use crate::catalog::Catalog;
+use crate::index::{KnnIndex, LabelIndex};
+use crate::{Error, Result};
+
+/// Query planner for optimizing Cypher execution
+pub struct QueryPlanner<'a> {
+    catalog: &'a Catalog,
+    label_index: &'a LabelIndex,
+    knn_index: &'a KnnIndex,
+}
+
+impl<'a> QueryPlanner<'a> {
+    /// Create a new query planner
+    pub fn new(catalog: &'a Catalog, label_index: &'a LabelIndex, knn_index: &'a KnnIndex) -> Self {
+        Self {
+            catalog,
+            label_index,
+            knn_index,
+        }
+    }
+
+    /// Plan a Cypher query into optimized operators
+    pub fn plan_query(&self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        let mut operators = Vec::new();
+
+        // Extract patterns and constraints
+        let mut patterns = Vec::new();
+        let mut where_clauses = Vec::new();
+        let mut return_items = Vec::new();
+        let mut limit_count = None;
+
+        for clause in &query.clauses {
+            match clause {
+                Clause::Match(match_clause) => {
+                    patterns.push(match_clause.pattern.clone());
+                    if let Some(where_clause) = &match_clause.where_clause {
+                        where_clauses.push(where_clause.expression.clone());
+                    }
+                }
+                Clause::Where(where_clause) => {
+                    where_clauses.push(where_clause.expression.clone());
+                }
+                Clause::Return(return_clause) => {
+                    return_items = return_clause.items.clone();
+                }
+                Clause::Limit(limit_clause) => {
+                    if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
+                        limit_count = Some(*count as usize);
+                    }
+                }
+                _ => {
+                    // Other clauses not implemented in MVP
+                }
+            }
+        }
+
+        // Plan execution strategy
+        self.plan_execution_strategy(
+            &patterns,
+            &where_clauses,
+            &return_items,
+            limit_count,
+            &mut operators,
+        )?;
+
+        Ok(operators)
+    }
+
+    /// Plan execution strategy based on patterns and constraints
+    fn plan_execution_strategy(
+        &self,
+        patterns: &[Pattern],
+        where_clauses: &[Expression],
+        return_items: &[ReturnItem],
+        limit_count: Option<usize>,
+        operators: &mut Vec<Operator>,
+    ) -> Result<()> {
+        // Start with the most selective pattern
+        let start_pattern = self.select_start_pattern(patterns)?;
+
+        // Add NodeByLabel operators for each node pattern
+        for element in &start_pattern.elements {
+            if let PatternElement::Node(node) = element {
+                if let Some(variable) = &node.variable {
+                    if let Some(label) = node.labels.first() {
+                        let label_id = self.catalog.get_or_create_label(label)?;
+                        operators.push(Operator::NodeByLabel {
+                            label_id,
+                            variable: variable.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Add relationship traversal operators
+        self.add_relationship_operators(patterns, operators)?;
+
+        // Add filter operators for WHERE clauses
+        for where_clause in where_clauses {
+            operators.push(Operator::Filter {
+                predicate: self.expression_to_string(where_clause)?,
+            });
+        }
+
+        // Add projection operator for RETURN clause
+        if !return_items.is_empty() {
+            let columns: Vec<String> = return_items
+                .iter()
+                .map(|item| -> String {
+                    if let Some(alias) = &item.alias {
+                        alias.clone()
+                    } else {
+                        self.expression_to_string(&item.expression)
+                            .unwrap_or_default()
+                    }
+                })
+                .collect();
+
+            operators.push(Operator::Project { columns });
+        }
+
+        // Add limit operator if specified
+        if let Some(count) = limit_count {
+            operators.push(Operator::Limit { count });
+        }
+
+        Ok(())
+    }
+
+    /// Select the most selective pattern to start execution
+    fn select_start_pattern<'b>(&self, patterns: &'b [Pattern]) -> Result<&'b Pattern> {
+        if patterns.is_empty() {
+            return Err(Error::CypherSyntax(
+                "No patterns found in query".to_string(),
+            ));
+        }
+
+        // For MVP, just return the first pattern
+        // In a full implementation, we would analyze selectivity
+        Ok(&patterns[0])
+    }
+
+    /// Add relationship traversal operators
+    fn add_relationship_operators(
+        &self,
+        patterns: &[Pattern],
+        operators: &mut Vec<Operator>,
+    ) -> Result<()> {
+        for pattern in patterns {
+            for element in &pattern.elements {
+                if let PatternElement::Relationship(rel) = element {
+                    let direction = match rel.direction {
+                        RelationshipDirection::Outgoing => Direction::Outgoing,
+                        RelationshipDirection::Incoming => Direction::Incoming,
+                        RelationshipDirection::Both => Direction::Both,
+                    };
+
+                    operators.push(Operator::Expand {
+                        type_id: Some(0),           // MVP: use default type
+                        source_var: "".to_string(), // MVP: will be filled by executor
+                        target_var: "".to_string(), // MVP: will be filled by executor
+                        rel_var: rel.variable.clone().unwrap_or_default(),
+                        direction,
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Convert expression to string representation
+    fn expression_to_string(&self, expr: &Expression) -> Result<String> {
+        match expr {
+            Expression::Variable(name) => Ok(name.clone()),
+            Expression::PropertyAccess { variable, property } => {
+                Ok(format!("{}.{}", variable, property))
+            }
+            Expression::Literal(literal) => match literal {
+                Literal::String(s) => Ok(format!("\"{}\"", s)),
+                Literal::Integer(i) => Ok(i.to_string()),
+                Literal::Float(f) => Ok(f.to_string()),
+                Literal::Boolean(b) => Ok(b.to_string()),
+                Literal::Null => Ok("NULL".to_string()),
+            },
+            Expression::BinaryOp { left, op, right } => {
+                let left_str = self.expression_to_string(left)?;
+                let right_str = self.expression_to_string(right)?;
+                let op_str = match op {
+                    BinaryOperator::Equal => "=",
+                    BinaryOperator::NotEqual => "!=",
+                    BinaryOperator::LessThan => "<",
+                    BinaryOperator::LessThanOrEqual => "<=",
+                    BinaryOperator::GreaterThan => ">",
+                    BinaryOperator::GreaterThanOrEqual => ">=",
+                    BinaryOperator::And => "AND",
+                    BinaryOperator::Or => "OR",
+                    BinaryOperator::Add => "+",
+                    BinaryOperator::Subtract => "-",
+                    BinaryOperator::Multiply => "*",
+                    BinaryOperator::Divide => "/",
+                    _ => "?",
+                };
+                Ok(format!("{} {} {}", left_str, op_str, right_str))
+            }
+            Expression::Parameter(name) => Ok(format!("${}", name)),
+            _ => Ok("?".to_string()),
+        }
+    }
+
+    /// Estimate query cost for optimization
+    pub fn estimate_cost(&self, operators: &[Operator]) -> Result<f64> {
+        let mut total_cost = 0.0;
+
+        for operator in operators {
+            match operator {
+                Operator::NodeByLabel { label_id, .. } => {
+                    // Estimate cost based on label selectivity
+                    let selectivity = self.estimate_label_selectivity(*label_id)?;
+                    total_cost += 1000.0 * selectivity;
+                }
+                Operator::Filter { .. } => {
+                    // Filter operations are relatively cheap
+                    total_cost += 10.0;
+                }
+                Operator::Expand { .. } => {
+                    // Relationship traversal is expensive
+                    total_cost += 100.0;
+                }
+                Operator::Project { .. } => {
+                    // Projection is cheap
+                    total_cost += 1.0;
+                }
+                Operator::Limit { count } => {
+                    // Limit reduces cost
+                    total_cost *= (*count as f64) / 1000.0;
+                }
+                Operator::Sort { .. } => {
+                    // Sorting is moderately expensive
+                    total_cost += 50.0;
+                }
+                Operator::Aggregate { .. } => {
+                    // Aggregation is moderately expensive
+                    total_cost += 30.0;
+                }
+                Operator::Union { .. } => {
+                    // Union is relatively cheap
+                    total_cost += 20.0;
+                }
+                Operator::Join { .. } => {
+                    // Join is expensive
+                    total_cost += 200.0;
+                }
+                Operator::IndexScan { .. } => {
+                    // Index scan is very cheap
+                    total_cost += 5.0;
+                }
+                Operator::Distinct { .. } => {
+                    // Distinct is moderately expensive
+                    total_cost += 40.0;
+                }
+            }
+        }
+
+        Ok(total_cost)
+    }
+
+    /// Estimate selectivity of a label
+    fn estimate_label_selectivity(&self, _label_id: u32) -> Result<f64> {
+        // For MVP, return a simple estimate
+        // In a full implementation, we would use statistics
+        Ok(0.1) // 10% selectivity
+    }
+
+    /// Optimize operator order based on cost estimates
+    pub fn optimize_operator_order(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
+        // For MVP, just return operators in original order
+        // In a full implementation, we would reorder based on cost estimates
+        Ok(operators)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::Catalog;
+    use crate::executor::parser::{
+        Clause, CypherQuery, Expression, MatchClause, NodePattern, Pattern, PatternElement,
+        ReturnClause, ReturnItem,
+    };
+    use crate::index::{KnnIndex, LabelIndex};
+
+    #[test]
+    fn test_plan_simple_query() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    pattern: Pattern {
+                        elements: vec![PatternElement::Node(NodePattern {
+                            variable: Some("n".to_string()),
+                            labels: vec!["Person".to_string()],
+                            properties: None,
+                        })],
+                    },
+                    where_clause: None,
+                }),
+                Clause::Return(ReturnClause {
+                    items: vec![ReturnItem {
+                        expression: Expression::Variable("n".to_string()),
+                        alias: None,
+                    }],
+                    distinct: false,
+                }),
+            ],
+            params: std::collections::HashMap::new(),
+        };
+
+        let operators = planner.plan_query(&query).unwrap();
+        assert_eq!(operators.len(), 2);
+
+        match &operators[0] {
+            Operator::NodeByLabel { variable, .. } => {
+                assert_eq!(variable, "n");
+            }
+            _ => panic!("Expected NodeByLabel operator"),
+        }
+
+        match &operators[1] {
+            Operator::Project { columns } => {
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0], "n");
+            }
+            _ => panic!("Expected Project operator"),
+        }
+    }
+
+    #[test]
+    fn test_estimate_cost() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let operators = vec![
+            Operator::NodeByLabel {
+                label_id: 1,
+                variable: "n".to_string(),
+            },
+            Operator::Filter {
+                predicate: "n.age > 18".to_string(),
+            },
+            Operator::Project {
+                columns: vec!["n".to_string()],
+            },
+        ];
+
+        let cost = planner.estimate_cost(&operators).unwrap();
+        assert!(cost > 0.0);
+    }
+}

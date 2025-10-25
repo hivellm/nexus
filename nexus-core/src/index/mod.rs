@@ -7,10 +7,11 @@
 //! - KNN index: Simple cosine similarity for MVP
 
 use crate::{Error, Result};
+use hnsw_rs::prelude::*;
+use parking_lot::RwLock;
 use roaring::RoaringBitmap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// Label bitmap index using roaring bitmaps
 ///
@@ -49,7 +50,7 @@ impl LabelIndex {
         let mut stats = self.stats.write();
 
         for &label_id in label_ids {
-            bitmaps.entry(label_id).or_insert_with(RoaringBitmap::new).insert(node_id as u32);
+            bitmaps.entry(label_id).or_default().insert(node_id as u32);
         }
 
         stats.total_nodes += 1;
@@ -164,17 +165,23 @@ impl Default for LabelIndex {
     }
 }
 
-/// KNN vector index using simple cosine similarity
+/// KNN vector index using HNSW (Hierarchical Navigable Small World)
 ///
 /// Maps node_id → embedding for fast similarity search.
-/// Uses simple cosine similarity for MVP implementation.
+/// Uses HNSW algorithm for sub-linear search complexity.
 pub struct KnnIndex {
-    /// Mapping from node_id to embedding vector
-    node_to_embedding: Arc<RwLock<HashMap<u64, Vec<f32>>>>,
+    /// HNSW index for fast KNN search
+    hnsw: Arc<RwLock<Hnsw<'static, f32, DistCosine>>>,
+    /// Mapping from node_id to vector index in HNSW
+    node_to_index: Arc<RwLock<HashMap<u64, usize>>>,
+    /// Mapping from vector index to node_id
+    index_to_node: Arc<RwLock<HashMap<usize, u64>>>,
     /// Vector dimension
     dimension: usize,
     /// Statistics
     stats: Arc<RwLock<KnnIndexStats>>,
+    /// Next available index
+    next_index: Arc<RwLock<usize>>,
 }
 
 /// Statistics for KNN index
@@ -198,17 +205,27 @@ impl KnnIndex {
     /// Returns an error if dimension is invalid
     pub fn new(dimension: usize) -> Result<Self> {
         if dimension == 0 || dimension > 4096 {
-            return Err(Error::InvalidId(format!("Invalid vector dimension: {}", dimension)));
+            return Err(Error::InvalidId(format!(
+                "Invalid vector dimension: {}",
+                dimension
+            )));
         }
 
+        // Create HNSW index with cosine distance
+        // Parameters: max_nb_connection, max_elements, max_layer, ef_construction, distance_function
+        let hnsw = Hnsw::new(16, 10000, 16, 200, DistCosine);
+
         Ok(Self {
-            node_to_embedding: Arc::new(RwLock::new(HashMap::new())),
+            hnsw: Arc::new(RwLock::new(hnsw)),
+            node_to_index: Arc::new(RwLock::new(HashMap::new())),
+            index_to_node: Arc::new(RwLock::new(HashMap::new())),
             dimension,
             stats: Arc::new(RwLock::new(KnnIndexStats {
                 total_vectors: 0,
                 dimension,
                 avg_search_time_us: 0.0,
             })),
+            next_index: Arc::new(RwLock::new(0)),
         })
     }
 
@@ -227,9 +244,27 @@ impl KnnIndex {
             )));
         }
 
-        let mut vectors = self.node_to_embedding.write();
-        vectors.insert(node_id, embedding);
+        let hnsw = self.hnsw.write();
+        let mut node_to_index = self.node_to_index.write();
+        let mut index_to_node = self.index_to_node.write();
+        let mut next_index = self.next_index.write();
 
+        // Check if node already exists
+        if let Some(&_existing_index) = node_to_index.get(&node_id) {
+            // Update existing vector - HNSW doesn't support updates, so we'll just add new
+            // In a production system, you might want to implement a more sophisticated update mechanism
+        }
+
+        // Add new vector to HNSW using insert method
+        let vector_index = *next_index;
+        hnsw.insert((&embedding, vector_index));
+
+        // Update mappings
+        node_to_index.insert(node_id, vector_index);
+        index_to_node.insert(vector_index, node_id);
+        *next_index += 1;
+
+        // Update statistics
         let mut stats = self.stats.write();
         stats.total_vectors += 1;
 
@@ -238,11 +273,18 @@ impl KnnIndex {
 
     /// Remove a vector for a node
     pub fn remove_vector(&self, node_id: u64) -> Result<()> {
-        let mut vectors = self.node_to_embedding.write();
-        vectors.remove(&node_id);
+        let mut node_to_index = self.node_to_index.write();
+        let mut index_to_node = self.index_to_node.write();
 
-        let mut stats = self.stats.write();
-        stats.total_vectors = stats.total_vectors.saturating_sub(1);
+        if let Some(&vector_index) = node_to_index.get(&node_id) {
+            // Remove from mappings
+            node_to_index.remove(&node_id);
+            index_to_node.remove(&vector_index);
+
+            // Update statistics
+            let mut stats = self.stats.write();
+            stats.total_vectors = stats.total_vectors.saturating_sub(1);
+        }
 
         Ok(())
     }
@@ -257,17 +299,27 @@ impl KnnIndex {
             )));
         }
 
-        let vectors = self.node_to_embedding.read();
-        let mut results = Vec::new();
+        let start_time = std::time::Instant::now();
 
-        for (&node_id, embedding) in vectors.iter() {
-            let similarity = self.cosine_similarity(query, embedding);
-            results.push((node_id, similarity));
+        let hnsw = self.hnsw.read();
+        let index_to_node = self.index_to_node.read();
+
+        // Search using HNSW - using search method with ef parameter
+        let search_results = hnsw.search(query, k, 50);
+
+        let mut results = Vec::new();
+        for neighbour in search_results {
+            if let Some(&node_id) = index_to_node.get(&neighbour.d_id) {
+                // Convert distance to similarity (1 - distance for cosine)
+                let similarity = 1.0 - neighbour.distance;
+                results.push((node_id, similarity));
+            }
         }
 
-        // Sort by similarity (highest first) and take top k
-        results.sort_by(|a: &(u64, f32), b: &(u64, f32)| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(k);
+        // Update search time statistics
+        let search_time_us = start_time.elapsed().as_micros() as f64;
+        let mut stats = self.stats.write();
+        stats.avg_search_time_us = (stats.avg_search_time_us + search_time_us) / 2.0;
 
         Ok(results)
     }
@@ -289,44 +341,36 @@ impl KnnIndex {
 
     /// Check if a node has a vector
     pub fn has_vector(&self, node_id: u64) -> bool {
-        let vectors = self.node_to_embedding.read();
-        vectors.contains_key(&node_id)
+        let node_to_index = self.node_to_index.read();
+        node_to_index.contains_key(&node_id)
     }
 
     /// Get all node IDs with vectors
     pub fn get_all_nodes(&self) -> Vec<u64> {
-        let vectors = self.node_to_embedding.read();
-        vectors.keys().copied().collect()
+        let node_to_index = self.node_to_index.read();
+        node_to_index.keys().copied().collect()
     }
 
     /// Clear all data
     pub fn clear(&mut self) -> Result<()> {
-        let mut vectors = self.node_to_embedding.write();
-        vectors.clear();
+        let mut hnsw = self.hnsw.write();
+        let mut node_to_index = self.node_to_index.write();
+        let mut index_to_node = self.index_to_node.write();
+        let mut next_index = self.next_index.write();
 
+        // Create new HNSW index
+        *hnsw = Hnsw::new(16, 10000, 16, 200, DistCosine);
+
+        // Clear mappings
+        node_to_index.clear();
+        index_to_node.clear();
+        *next_index = 0;
+
+        // Reset statistics
         let mut stats = self.stats.write();
         stats.total_vectors = 0;
 
         Ok(())
-    }
-
-    /// Compute cosine similarity between two vectors
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        let mut dot_product = 0.0;
-        let mut norm_a = 0.0;
-        let mut norm_b = 0.0;
-
-        for i in 0..a.len() {
-            dot_product += a[i] * b[i];
-            norm_a += a[i] * a[i];
-            norm_b += b[i] * b[i];
-        }
-
-        if norm_a == 0.0 || norm_b == 0.0 {
-            0.0
-        } else {
-            dot_product / (norm_a.sqrt() * norm_b.sqrt())
-        }
     }
 
     /// Normalize a vector to unit length
@@ -361,7 +405,7 @@ mod tests {
     #[test]
     fn test_label_index_add_node() {
         let index = LabelIndex::new();
-        
+
         index.add_node(1, &[0, 1]).unwrap();
         index.add_node(2, &[0]).unwrap();
         index.add_node(3, &[1, 2]).unwrap();
@@ -379,7 +423,7 @@ mod tests {
     #[test]
     fn test_label_index_intersection() {
         let index = LabelIndex::new();
-        
+
         index.add_node(1, &[0, 1]).unwrap();
         index.add_node(2, &[0]).unwrap();
         index.add_node(3, &[1, 2]).unwrap();
@@ -392,7 +436,7 @@ mod tests {
     #[test]
     fn test_label_index_union() {
         let index = LabelIndex::new();
-        
+
         index.add_node(1, &[0, 1]).unwrap();
         index.add_node(2, &[0]).unwrap();
         index.add_node(3, &[1, 2]).unwrap();
@@ -404,7 +448,7 @@ mod tests {
     #[test]
     fn test_label_index_remove_node() {
         let index = LabelIndex::new();
-        
+
         index.add_node(1, &[0, 1]).unwrap();
         index.add_node(2, &[0]).unwrap();
 
@@ -419,7 +463,7 @@ mod tests {
     fn test_knn_index_creation() {
         let index = KnnIndex::new(128).unwrap();
         assert_eq!(index.dimension(), 128);
-        
+
         let stats = index.get_stats();
         assert_eq!(stats.total_vectors, 0);
         assert_eq!(stats.dimension, 128);
@@ -428,10 +472,10 @@ mod tests {
     #[test]
     fn test_knn_index_add_vector() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         let embedding1 = vec![1.0, 0.0, 0.0];
         let embedding2 = vec![0.0, 1.0, 0.0];
-        
+
         index.add_vector(1, embedding1).unwrap();
         index.add_vector(2, embedding2).unwrap();
 
@@ -442,11 +486,11 @@ mod tests {
     #[test]
     fn test_knn_index_search() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         let embedding1 = vec![1.0, 0.0, 0.0];
         let embedding2 = vec![0.0, 1.0, 0.0];
         let embedding3 = vec![0.0, 0.0, 1.0];
-        
+
         index.add_vector(1, embedding1).unwrap();
         index.add_vector(2, embedding2).unwrap();
         index.add_vector(3, embedding3).unwrap();
@@ -462,7 +506,7 @@ mod tests {
     #[test]
     fn test_knn_index_dimension_mismatch() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         let wrong_dimension = vec![1.0, 0.0];
         let result = index.add_vector(1, wrong_dimension);
         assert!(result.is_err());
@@ -471,44 +515,57 @@ mod tests {
     #[test]
     fn test_knn_index_remove_vector() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         let embedding = vec![1.0, 0.0, 0.0];
         index.add_vector(1, embedding).unwrap();
-        
+
         assert!(index.has_vector(1));
-        
+
         index.remove_vector(1).unwrap();
-        
+
         assert!(!index.has_vector(1));
-        
+
         let stats = index.get_stats();
         assert_eq!(stats.total_vectors, 0);
     }
 
     #[test]
     fn test_cosine_similarity() {
-        let index = KnnIndex::new(3).unwrap();
-        
+        let _index = KnnIndex::new(3).unwrap();
+
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 0.0, 0.0];
         let c = vec![0.0, 1.0, 0.0];
-        
+
+        // Helper function to calculate cosine similarity
+        fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+            let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+            let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+            if norm_a == 0.0 || norm_b == 0.0 {
+                0.0
+            } else {
+                dot_product / (norm_a * norm_b)
+            }
+        }
+
         // Same vectors should have similarity 1.0
-        let sim_ab = index.cosine_similarity(&a, &b);
+        let sim_ab = cosine_similarity(&a, &b);
         assert!((sim_ab - 1.0).abs() < 1e-6);
-        
+
         // Orthogonal vectors should have similarity 0.0
-        let sim_ac = index.cosine_similarity(&a, &c);
+        let sim_ac = cosine_similarity(&a, &c);
         assert!((sim_ac - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_normalize_vector() {
         let index = KnnIndex::new(3).unwrap();
-        
+
         let mut vector = vec![3.0, 4.0, 0.0];
         index.normalize_vector(&mut vector);
-        
+
         let norm: f32 = vector.iter().map(|&x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-6);
     }
@@ -516,14 +573,14 @@ mod tests {
     #[test]
     fn test_knn_index_clear() {
         let mut index = KnnIndex::new(3).unwrap();
-        
+
         index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
         index.add_vector(2, vec![0.0, 1.0, 0.0]).unwrap();
-        
+
         assert_eq!(index.get_stats().total_vectors, 2);
-        
+
         index.clear().unwrap();
-        
+
         assert_eq!(index.get_stats().total_vectors, 0);
         assert!(index.get_all_nodes().is_empty());
     }
@@ -531,14 +588,14 @@ mod tests {
     #[test]
     fn test_label_index_clear() {
         let mut index = LabelIndex::new();
-        
+
         index.add_node(1, &[0, 1]).unwrap();
         index.add_node(2, &[0]).unwrap();
-        
+
         assert_eq!(index.get_stats().total_nodes, 2);
-        
+
         index.clear().unwrap();
-        
+
         assert_eq!(index.get_stats().total_nodes, 0);
         assert_eq!(index.get_stats().label_count, 0);
     }

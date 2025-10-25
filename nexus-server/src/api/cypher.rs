@@ -14,7 +14,9 @@ static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLoc
 pub fn init_executor() -> anyhow::Result<Arc<RwLock<Executor>>> {
     let executor = Executor::default();
     let executor_arc = Arc::new(RwLock::new(executor));
-    EXECUTOR.set(executor_arc.clone()).map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
+    EXECUTOR
+        .set(executor_arc.clone())
+        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
     Ok(executor_arc)
 }
 
@@ -45,7 +47,7 @@ pub struct CypherResponse {
 /// Execute Cypher query
 pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherResponse> {
     let start_time = std::time::Instant::now();
-    
+
     tracing::info!("Executing Cypher query: {}", request.query);
 
     // Get executor instance
@@ -73,7 +75,7 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
     match executor.execute(&query) {
         Ok(result_set) => {
             let execution_time = start_time.elapsed().as_millis() as u64;
-            
+
             tracing::info!(
                 "Query executed successfully in {}ms, {} rows returned",
                 execution_time,
@@ -82,18 +84,20 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
             Json(CypherResponse {
                 columns: result_set.columns,
-                rows: result_set.rows.into_iter().map(|row| {
-                    serde_json::Value::Array(row.values)
-                }).collect(),
+                rows: result_set
+                    .rows
+                    .into_iter()
+                    .map(|row| serde_json::Value::Array(row.values))
+                    .collect(),
                 execution_time_ms: execution_time,
                 error: None,
             })
         }
         Err(e) => {
             let execution_time = start_time.elapsed().as_millis() as u64;
-            
+
             tracing::error!("Query execution failed: {}", e);
-            
+
             Json(CypherResponse {
                 columns: vec![],
                 rows: vec![],

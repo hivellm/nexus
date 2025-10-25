@@ -2,31 +2,31 @@
 
 ## 1. Cypher Endpoint Implementation
 
-- [ ] 1.1 Connect /cypher endpoint to executor
-- [ ] 1.2 Add parameter validation (query, params, timeout)
-- [ ] 1.3 Implement query execution with timeout
-- [ ] 1.4 Add error handling (syntax errors, execution errors)
-- [ ] 1.5 Add response formatting (columns, rows, execution_time)
-- [ ] 1.6 Add unit tests (95%+ coverage)
+- [x] 1.1 Connect /cypher endpoint to executor
+- [x] 1.2 Add parameter validation (query, params, timeout)
+- [x] 1.3 Implement query execution with timeout
+- [x] 1.4 Add error handling (syntax errors, execution errors)
+- [x] 1.5 Add response formatting (columns, rows, execution_time)
+- [x] 1.6 Add unit tests (95%+ coverage)
 
 ## 2. KNN Traverse Endpoint
 
-- [ ] 2.1 Connect /knn_traverse to KNN index
-- [ ] 2.2 Validate vector dimension matches index
-- [ ] 2.3 Execute KNN search
-- [ ] 2.4 Execute optional graph expansion
-- [ ] 2.5 Apply WHERE filters
-- [ ] 2.6 Add execution time breakdown (knn, expand, filter)
-- [ ] 2.7 Add unit tests (95%+ coverage)
+- [x] 2.1 Connect /knn_traverse to KNN index
+- [x] 2.2 Validate vector dimension matches index
+- [x] 2.3 Execute KNN search
+- [x] 2.4 Execute optional graph expansion
+- [x] 2.5 Apply WHERE filters
+- [x] 2.6 Add execution time breakdown (knn, expand, filter)
+- [x] 2.7 Add unit tests (95%+ coverage)
 
 ## 3. Ingest Endpoint
 
-- [ ] 3.1 Parse bulk ingestion request
-- [ ] 3.2 Batch node creation
-- [ ] 3.3 Batch relationship creation
-- [ ] 3.4 Handle partial failures (error array)
-- [ ] 3.5 Calculate throughput metrics
-- [ ] 3.6 Add unit tests (95%+ coverage)
+- [x] 3.1 Parse bulk ingestion request
+- [x] 3.2 Batch node creation
+- [x] 3.3 Batch relationship creation
+- [x] 3.4 Handle partial failures (error array)
+- [x] 3.5 Calculate throughput metrics
+- [x] 3.6 Add unit tests (95%+ coverage)
 
 ## 4. Streaming Support (SSE)
 

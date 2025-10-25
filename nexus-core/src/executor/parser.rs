@@ -4,7 +4,7 @@
 //! logic for Cypher queries. It supports the MVP subset of Cypher including
 //! MATCH, WHERE, RETURN, ORDER BY, LIMIT, and SKIP clauses.
 
-use crate::{Result, Error};
+use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -349,14 +349,20 @@ impl CypherParser {
 
         // Parse clauses
         while self.pos < self.input.len() {
-            let clause = self.parse_clause()?;
-            clauses.push(clause);
-            
-            // Skip whitespace
-            self.skip_whitespace();
-            
-            // Check for end of input
-            if self.pos >= self.input.len() {
+            // Check if we're at a clause boundary
+            if self.is_clause_boundary() {
+                let clause = self.parse_clause()?;
+                clauses.push(clause);
+
+                // Skip whitespace
+                self.skip_whitespace();
+
+                // Check for end of input
+                if self.pos >= self.input.len() {
+                    break;
+                }
+            } else {
+                // No more clauses to parse
                 break;
             }
         }
@@ -367,7 +373,7 @@ impl CypherParser {
     /// Parse a single clause
     fn parse_clause(&mut self) -> Result<Clause> {
         let keyword = self.parse_keyword()?;
-        
+
         match keyword.to_uppercase().as_str() {
             "MATCH" => {
                 let match_clause = self.parse_match_clause()?;
@@ -394,7 +400,7 @@ impl CypherParser {
                 let skip_clause = self.parse_skip_clause()?;
                 Ok(Clause::Skip(skip_clause))
             }
-            _ => Err(self.error(&format!("Unexpected keyword: {}", keyword)))
+            _ => Err(self.error(&format!("Unexpected keyword: {}", keyword))),
         }
     }
 
@@ -402,45 +408,40 @@ impl CypherParser {
     fn parse_match_clause(&mut self) -> Result<MatchClause> {
         self.skip_whitespace();
         let pattern = self.parse_pattern()?;
-        
-        // Check for WHERE clause
-        let where_clause = if self.peek_keyword("WHERE") {
-            self.parse_keyword()?; // consume WHERE
-            Some(self.parse_where_clause()?)
-        } else {
-            None
-        };
 
         Ok(MatchClause {
             pattern,
-            where_clause,
+            where_clause: None, // WHERE is now a separate clause
         })
     }
 
     /// Parse pattern
     fn parse_pattern(&mut self) -> Result<Pattern> {
         let mut elements = Vec::new();
-        
+
         // Parse first node
         let node = self.parse_node_pattern()?;
         elements.push(PatternElement::Node(node));
-        
+
         // Parse relationships and nodes
         while self.pos < self.input.len() {
             // Check if there's a relationship pattern by looking ahead
             let saved_pos = self.pos;
             let saved_line = self.line;
             let saved_column = self.column;
-            
+
             // Skip whitespace
             self.skip_whitespace();
-            
+
             // Check if we have a relationship pattern
-            if self.peek_char() == Some('-') || self.peek_char() == Some('<') || self.peek_char() == Some('>') {
+            if self.peek_char() == Some('-')
+                || self.peek_char() == Some('<')
+                || self.peek_char() == Some('>')
+            {
                 // Parse relationship
                 let rel = self.parse_relationship_pattern()?;
                 elements.push(PatternElement::Relationship(rel));
-                
+
                 // Parse next node
                 let node = self.parse_node_pattern()?;
                 elements.push(PatternElement::Node(node));
@@ -452,34 +453,34 @@ impl CypherParser {
                 break;
             }
         }
-        
+
         Ok(Pattern { elements })
     }
 
     /// Parse node pattern
     fn parse_node_pattern(&mut self) -> Result<NodePattern> {
         self.expect_char('(')?;
-        
+
         let variable = if self.is_identifier_start() {
             Some(self.parse_identifier()?)
         } else {
             None
         };
-        
+
         let labels = if self.peek_char() == Some(':') {
             self.parse_labels()?
         } else {
             Vec::new()
         };
-        
+
         let properties = if self.peek_char() == Some('{') {
             Some(self.parse_property_map()?)
         } else {
             None
         };
-        
+
         self.expect_char(')')?;
-        
+
         Ok(NodePattern {
             variable,
             labels,
@@ -489,32 +490,67 @@ impl CypherParser {
 
     /// Parse relationship pattern
     fn parse_relationship_pattern(&mut self) -> Result<RelationshipPattern> {
-        let direction = self.parse_relationship_direction()?;
-        
+        // Parse initial direction: "-" or "<-"
+        let left_arrow = if self.peek_char() == Some('<') {
+            self.consume_char();
+            self.expect_char('-')?;
+            true
+        } else if self.peek_char() == Some('-') {
+            self.consume_char();
+            false
+        } else {
+            return Err(Error::CypherSyntax(format!(
+                "Expected relationship direction at line 1, column {}",
+                self.pos + 1
+            )));
+        };
+
         self.expect_char('[')?;
-        
+
         let variable = if self.is_identifier_start() {
             Some(self.parse_identifier()?)
         } else {
             None
         };
-        
+
         let types = if self.peek_char() == Some(':') {
             self.parse_types()?
         } else {
             Vec::new()
         };
-        
+
         let properties = if self.peek_char() == Some('{') {
             Some(self.parse_property_map()?)
         } else {
             None
         };
-        
+
         let quantifier = self.parse_relationship_quantifier()?;
-        
+
         self.expect_char(']')?;
-        
+
+        // Parse final direction: "->" or "-"
+        self.expect_char('-')?;
+        let right_arrow = if self.peek_char() == Some('>') {
+            self.consume_char();
+            true
+        } else {
+            false
+        };
+
+        // Determine final direction
+        let direction = match (left_arrow, right_arrow) {
+            (true, false) => RelationshipDirection::Incoming, // <-[r]-
+            (false, true) => RelationshipDirection::Outgoing, // -[r]->
+            (false, false) => RelationshipDirection::Both,    // -[r]-
+            (true, true) => {
+                return Err(Error::CypherSyntax(format!(
+                    "Invalid relationship direction <-[]-> at line 1, column {}",
+                    self.pos + 1
+                )));
+            }
+        };
+
         Ok(RelationshipPattern {
             variable,
             types,
@@ -545,56 +581,56 @@ impl CypherParser {
                     Err(self.error("Invalid relationship direction"))
                 }
             }
-            _ => Err(self.error("Expected relationship direction"))
+            _ => Err(self.error("Expected relationship direction")),
         }
     }
 
     /// Parse labels
     fn parse_labels(&mut self) -> Result<Vec<String>> {
         let mut labels = Vec::new();
-        
+
         while self.peek_char() == Some(':') {
             self.consume_char(); // consume ':'
             let label = self.parse_identifier()?;
             labels.push(label);
         }
-        
+
         Ok(labels)
     }
 
     /// Parse types
     fn parse_types(&mut self) -> Result<Vec<String>> {
         let mut types = Vec::new();
-        
+
         while self.peek_char() == Some(':') {
             self.consume_char(); // consume ':'
             let r#type = self.parse_identifier()?;
             types.push(r#type);
         }
-        
+
         Ok(types)
     }
 
     /// Parse property map
     fn parse_property_map(&mut self) -> Result<PropertyMap> {
         self.expect_char('{')?;
-        
+
         let mut properties = HashMap::new();
-        
+
         while self.peek_char() != Some('}') {
             let key = self.parse_identifier()?;
             self.expect_char(':')?;
             let value = self.parse_expression()?;
             properties.insert(key, value);
-            
+
             if self.peek_char() == Some(',') {
                 self.consume_char();
                 self.skip_whitespace();
             }
         }
-        
+
         self.expect_char('}')?;
-        
+
         Ok(PropertyMap { properties })
     }
 
@@ -613,9 +649,7 @@ impl CypherParser {
                 self.consume_char();
                 Ok(Some(RelationshipQuantifier::ZeroOrOne))
             }
-            Some('{') => {
-                self.parse_range_quantifier()
-            }
+            Some('{') => self.parse_range_quantifier(),
             _ => Ok(None),
         }
     }
@@ -623,13 +657,13 @@ impl CypherParser {
     /// Parse range quantifier
     fn parse_range_quantifier(&mut self) -> Result<Option<RelationshipQuantifier>> {
         self.expect_char('{')?;
-        
+
         let start = if self.is_digit() {
             Some(self.parse_number()?)
         } else {
             None
         };
-        
+
         if self.peek_char() == Some(',') {
             self.consume_char();
             let end = if self.is_digit() {
@@ -637,18 +671,20 @@ impl CypherParser {
             } else {
                 None
             };
-            
+
             self.expect_char('}')?;
-            
+
             match (start, end) {
-                (Some(n), Some(m)) => Ok(Some(RelationshipQuantifier::Range(n as usize, m as usize))),
+                (Some(n), Some(m)) => {
+                    Ok(Some(RelationshipQuantifier::Range(n as usize, m as usize)))
+                }
                 (Some(n), None) => Ok(Some(RelationshipQuantifier::Range(n as usize, usize::MAX))),
                 (None, Some(m)) => Ok(Some(RelationshipQuantifier::Range(0, m as usize))),
                 (None, None) => Ok(Some(RelationshipQuantifier::ZeroOrMore)),
             }
         } else {
             self.expect_char('}')?;
-            
+
             if let Some(n) = start {
                 Ok(Some(RelationshipQuantifier::Exact(n as usize)))
             } else {
@@ -667,22 +703,22 @@ impl CypherParser {
     /// Parse RETURN clause
     fn parse_return_clause(&mut self) -> Result<ReturnClause> {
         self.skip_whitespace();
-        
+
         let distinct = if self.peek_keyword("DISTINCT") {
             self.parse_keyword()?;
             true
         } else {
             false
         };
-        
+
         self.skip_whitespace();
-        
+
         let mut items = Vec::new();
-        
+
         loop {
             let item = self.parse_return_item()?;
             items.push(item);
-            
+
             if self.peek_char() == Some(',') {
                 self.consume_char();
                 self.skip_whitespace();
@@ -690,33 +726,33 @@ impl CypherParser {
                 break;
             }
         }
-        
+
         Ok(ReturnClause { items, distinct })
     }
 
     /// Parse return item
     fn parse_return_item(&mut self) -> Result<ReturnItem> {
         let expression = self.parse_expression()?;
-        
+
         let alias = if self.peek_keyword("AS") {
             self.parse_keyword()?;
             Some(self.parse_identifier()?)
         } else {
             None
         };
-        
+
         Ok(ReturnItem { expression, alias })
     }
 
     /// Parse ORDER BY clause
     fn parse_order_by_clause(&mut self) -> Result<OrderByClause> {
         self.skip_whitespace();
-        
+
         let mut items = Vec::new();
-        
+
         loop {
             let expression = self.parse_expression()?;
-            
+
             let direction = if self.peek_keyword("ASC") {
                 self.parse_keyword()?;
                 SortDirection::Ascending
@@ -726,9 +762,12 @@ impl CypherParser {
             } else {
                 SortDirection::Ascending
             };
-            
-            items.push(SortItem { expression, direction });
-            
+
+            items.push(SortItem {
+                expression,
+                direction,
+            });
+
             if self.peek_char() == Some(',') {
                 self.consume_char();
                 self.skip_whitespace();
@@ -736,7 +775,7 @@ impl CypherParser {
                 break;
             }
         }
-        
+
         Ok(OrderByClause { items })
     }
 
@@ -755,132 +794,137 @@ impl CypherParser {
     }
 
     /// Parse expression
-    fn parse_expression(&mut self) -> Result<Expression> {
-        self.parse_or_expression()
-    }
-
-    /// Parse OR expression
-    fn parse_or_expression(&mut self) -> Result<Expression> {
-        let mut left = self.parse_and_expression()?;
-        
-        while self.peek_keyword("OR") {
-            self.parse_keyword()?;
-            let right = self.parse_and_expression()?;
-            left = Expression::BinaryOp {
-                left: Box::new(left),
-                op: BinaryOperator::Or,
-                right: Box::new(right),
-            };
-        }
-        
-        Ok(left)
-    }
-
-    /// Parse AND expression
-    fn parse_and_expression(&mut self) -> Result<Expression> {
-        let mut left = self.parse_not_expression()?;
-        
-        while self.peek_keyword("AND") {
-            self.parse_keyword()?;
-            let right = self.parse_not_expression()?;
-            left = Expression::BinaryOp {
-                left: Box::new(left),
-                op: BinaryOperator::And,
-                right: Box::new(right),
-            };
-        }
-        
-        Ok(left)
-    }
-
-    /// Parse NOT expression
-    fn parse_not_expression(&mut self) -> Result<Expression> {
-        if self.peek_keyword("NOT") {
-            self.parse_keyword()?;
-            let operand = self.parse_comparison_expression()?;
-            Ok(Expression::UnaryOp {
-                op: UnaryOperator::Not,
-                operand: Box::new(operand),
-            })
-        } else {
-            self.parse_comparison_expression()
-        }
-    }
-
-    /// Parse comparison expression
-    fn parse_comparison_expression(&mut self) -> Result<Expression> {
-        let mut left = self.parse_additive_expression()?;
-        
-        while let Some(op) = self.parse_comparison_operator() {
-            let right = self.parse_additive_expression()?;
-            left = Expression::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
-        }
-        
-        Ok(left)
-    }
-
-    /// Parse additive expression
-    fn parse_additive_expression(&mut self) -> Result<Expression> {
-        let mut left = self.parse_multiplicative_expression()?;
-        
-        while let Some(op) = self.parse_additive_operator() {
-            let right = self.parse_multiplicative_expression()?;
-            left = Expression::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
-        }
-        
-        Ok(left)
-    }
-
-    /// Parse multiplicative expression
-    fn parse_multiplicative_expression(&mut self) -> Result<Expression> {
-        let mut left = self.parse_unary_expression()?;
-        
-        while let Some(op) = self.parse_multiplicative_operator() {
-            let right = self.parse_unary_expression()?;
-            left = Expression::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
-        }
-        
-        Ok(left)
-    }
-
-    /// Parse unary expression
-    fn parse_unary_expression(&mut self) -> Result<Expression> {
-        if let Some(op) = self.parse_unary_operator() {
-            let operand = self.parse_primary_expression()?;
-            Ok(Expression::UnaryOp {
-                op,
-                operand: Box::new(operand),
-            })
-        } else {
-            self.parse_primary_expression()
-        }
-    }
-
-    /// Parse primary expression
-    fn parse_primary_expression(&mut self) -> Result<Expression> {
+    /// Parse expression (simplified for MVP)
+    pub fn parse_expression(&mut self) -> Result<Expression> {
         self.skip_whitespace();
-        
+
+        // Try to parse a simple expression
+        let mut left = self.parse_simple_expression()?;
+
+        // Check for binary operators (including AND, OR)
+        while let Some(op) = self.parse_binary_operator() {
+            self.skip_whitespace();
+            let right = self.parse_simple_expression()?;
+            left = Expression::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            };
+            self.skip_whitespace();
+        }
+
+        Ok(left)
+    }
+
+    /// Parse simple expression (no binary operators)
+    fn parse_simple_expression(&mut self) -> Result<Expression> {
+        self.skip_whitespace();
+
         match self.peek_char() {
             Some('(') => self.parse_parenthesized_expression(),
             Some('$') => self.parse_parameter(),
             Some('"') | Some('\'') => self.parse_string_literal(),
             Some(c) if c.is_ascii_digit() => self.parse_numeric_literal(),
-            Some(c) if self.is_identifier_start() => self.parse_identifier_expression(),
+            Some(c) if self.is_identifier_start() => {
+                // Check if it's a keyword first
+                if self.peek_keyword("CASE") {
+                    self.parse_case_expression()
+                } else {
+                    self.parse_identifier_expression()
+                }
+            }
             Some('[') => self.parse_list_expression(),
             Some('{') => self.parse_map_expression(),
-            Some('C') if self.peek_keyword("CASE") => self.parse_case_expression(),
+            _ => Err(self.error("Unexpected character in expression")),
+        }
+    }
+
+    /// Parse binary operator
+    fn parse_binary_operator(&mut self) -> Option<BinaryOperator> {
+        self.skip_whitespace();
+
+        // Check for keyword operators first (AND, OR)
+        if self.peek_keyword("AND") {
+            self.parse_keyword().ok()?;
+            return Some(BinaryOperator::And);
+        } else if self.peek_keyword("OR") {
+            self.parse_keyword().ok()?;
+            return Some(BinaryOperator::Or);
+        }
+
+        // Then check for symbol operators
+        match self.peek_char() {
+            Some('=') => {
+                self.consume_char();
+                Some(BinaryOperator::Equal)
+            }
+            Some('!') if self.peek_char_at(1) == Some('=') => {
+                self.consume_char();
+                self.consume_char();
+                Some(BinaryOperator::NotEqual)
+            }
+            Some('<') => {
+                self.consume_char();
+                if self.peek_char() == Some('=') {
+                    self.consume_char();
+                    Some(BinaryOperator::LessThanOrEqual)
+                } else {
+                    Some(BinaryOperator::LessThan)
+                }
+            }
+            Some('>') => {
+                self.consume_char();
+                if self.peek_char() == Some('=') {
+                    self.consume_char();
+                    Some(BinaryOperator::GreaterThanOrEqual)
+                } else {
+                    Some(BinaryOperator::GreaterThan)
+                }
+            }
+            Some('+') => {
+                self.consume_char();
+                Some(BinaryOperator::Add)
+            }
+            Some('-') => {
+                self.consume_char();
+                Some(BinaryOperator::Subtract)
+            }
+            Some('*') => {
+                self.consume_char();
+                Some(BinaryOperator::Multiply)
+            }
+            Some('/') => {
+                self.consume_char();
+                Some(BinaryOperator::Divide)
+            }
+            _ => None,
+        }
+    }
+
+    /// Peek character at specific offset
+    fn peek_char_at(&self, offset: usize) -> Option<char> {
+        self.input.chars().nth(self.pos + offset)
+    }
+
+    /// Parse primary expression
+    fn parse_primary_expression(&mut self) -> Result<Expression> {
+        self.skip_whitespace();
+
+        match self.peek_char() {
+            Some('(') => self.parse_parenthesized_expression(),
+            Some('$') => self.parse_parameter(),
+            Some('"') | Some('\'') => self.parse_string_literal(),
+            Some(c) if c.is_ascii_digit() => self.parse_numeric_literal(),
+            Some(c) if self.is_identifier_start() => {
+                // Check if it's a keyword first
+                if self.peek_keyword("CASE") {
+                    self.parse_case_expression()
+                } else {
+                    self.parse_identifier_expression()
+                }
+            }
+            Some('[') => self.parse_list_expression(),
+            Some('{') => self.parse_map_expression(),
             _ => Err(self.error("Unexpected character in expression")),
         }
     }
@@ -904,7 +948,7 @@ impl CypherParser {
     fn parse_string_literal(&mut self) -> Result<Expression> {
         let quote = self.consume_char().unwrap();
         let mut value = String::new();
-        
+
         while self.pos < self.input.len() {
             let ch = self.consume_char().unwrap();
             if ch == quote {
@@ -922,33 +966,35 @@ impl CypherParser {
                 value.push(ch);
             }
         }
-        
+
         Ok(Expression::Literal(Literal::String(value)))
     }
 
     /// Parse numeric literal
     fn parse_numeric_literal(&mut self) -> Result<Expression> {
         let start = self.pos;
-        
+
         // Parse integer part
         while self.pos < self.input.len() && self.is_digit() {
             self.consume_char();
         }
-        
+
         // Check for decimal point
         if self.peek_char() == Some('.') {
             self.consume_char();
             while self.pos < self.input.len() && self.is_digit() {
                 self.consume_char();
             }
-            
+
             // Parse as float
-            let value = self.input[start..self.pos].parse::<f64>()
+            let value = self.input[start..self.pos]
+                .parse::<f64>()
                 .map_err(|_| self.error("Invalid float literal"))?;
             Ok(Expression::Literal(Literal::Float(value)))
         } else {
             // Parse as integer
-            let value = self.input[start..self.pos].parse::<i64>()
+            let value = self.input[start..self.pos]
+                .parse::<i64>()
                 .map_err(|_| self.error("Invalid integer literal"))?;
             Ok(Expression::Literal(Literal::Integer(value)))
         }
@@ -957,7 +1003,7 @@ impl CypherParser {
     /// Parse identifier expression
     fn parse_identifier_expression(&mut self) -> Result<Expression> {
         let identifier = self.parse_identifier()?;
-        
+
         // Check for property access
         if self.peek_char() == Some('.') {
             self.consume_char();
@@ -974,19 +1020,19 @@ impl CypherParser {
     /// Parse list expression
     fn parse_list_expression(&mut self) -> Result<Expression> {
         self.expect_char('[')?;
-        
+
         let mut elements = Vec::new();
-        
+
         while self.peek_char() != Some(']') {
             let expr = self.parse_expression()?;
             elements.push(expr);
-            
+
             if self.peek_char() == Some(',') {
                 self.consume_char();
                 self.skip_whitespace();
             }
         }
-        
+
         self.expect_char(']')?;
         Ok(Expression::List(elements))
     }
@@ -999,33 +1045,33 @@ impl CypherParser {
 
     /// Parse case expression
     fn parse_case_expression(&mut self) -> Result<Expression> {
-        self.parse_keyword()?; // consume CASE
-        
+        self.expect_keyword("CASE")?; // consume CASE
+
         let input = if self.peek_char() != Some('W') {
             Some(Box::new(self.parse_expression()?))
         } else {
             None
         };
-        
+
         let mut when_clauses = Vec::new();
-        
+
         while self.peek_keyword("WHEN") {
-            self.parse_keyword()?;
+            self.expect_keyword("WHEN")?;
             let condition = self.parse_expression()?;
             self.expect_keyword("THEN")?;
             let result = self.parse_expression()?;
             when_clauses.push(WhenClause { condition, result });
         }
-        
+
         let else_clause = if self.peek_keyword("ELSE") {
-            self.parse_keyword()?;
+            self.expect_keyword("ELSE")?;
             Some(Box::new(self.parse_expression()?))
         } else {
             None
         };
-        
+
         self.expect_keyword("END")?;
-        
+
         Ok(Expression::Case {
             input,
             when_clauses,
@@ -1122,43 +1168,46 @@ impl CypherParser {
 
     /// Parse keyword
     fn parse_keyword(&mut self) -> Result<String> {
+        self.skip_whitespace(); // Skip whitespace before parsing keyword
+
         let start = self.pos;
-        
+
         while self.pos < self.input.len() && self.is_keyword_char() {
             self.consume_char();
         }
-        
+
         let keyword = self.input[start..self.pos].to_string();
-        self.skip_whitespace();
+        self.skip_whitespace(); // Skip whitespace after parsing keyword
         Ok(keyword)
     }
 
     /// Parse identifier
     fn parse_identifier(&mut self) -> Result<String> {
         let start = self.pos;
-        
+
         if !self.is_identifier_start() {
             return Err(self.error("Expected identifier"));
         }
-        
+
         self.consume_char();
-        
+
         while self.pos < self.input.len() && self.is_identifier_char() {
             self.consume_char();
         }
-        
+
         Ok(self.input[start..self.pos].to_string())
     }
 
     /// Parse number
     fn parse_number(&mut self) -> Result<i64> {
         let start = self.pos;
-        
+
         while self.pos < self.input.len() && self.is_digit() {
             self.consume_char();
         }
-        
-        self.input[start..self.pos].parse::<i64>()
+
+        self.input[start..self.pos]
+            .parse::<i64>()
             .map_err(|_| self.error("Invalid number"))
     }
 
@@ -1168,12 +1217,16 @@ impl CypherParser {
             .map(|c| c.is_ascii_alphabetic() || c == '_')
             .unwrap_or(false)
     }
-    
+
     /// Check if we're at a clause boundary
     fn is_clause_boundary(&self) -> bool {
-        self.peek_char()
-            .map(|c| c.is_ascii_alphabetic() || c == '_')
-            .unwrap_or(false)
+        // Check if we're at the start of a valid clause keyword
+        self.peek_keyword("MATCH")
+            || self.peek_keyword("WHERE")
+            || self.peek_keyword("RETURN")
+            || self.peek_keyword("ORDER")
+            || self.peek_keyword("LIMIT")
+            || self.peek_keyword("SKIP")
     }
 
     /// Check if character is identifier start
@@ -1202,24 +1255,19 @@ impl CypherParser {
         self.input.chars().nth(self.pos)
     }
 
-    /// Peek at character at offset
-    fn peek_char_at(&self, offset: usize) -> Option<char> {
-        self.input.chars().nth(self.pos + offset)
-    }
-
     /// Consume current character
     fn consume_char(&mut self) -> Option<char> {
         if self.pos < self.input.len() {
             let ch = self.input.chars().nth(self.pos).unwrap();
             self.pos += 1;
-            
+
             if ch == '\n' {
                 self.line += 1;
                 self.column = 1;
             } else {
                 self.column += 1;
             }
-            
+
             Some(ch)
         } else {
             None
@@ -1249,7 +1297,7 @@ impl CypherParser {
     fn peek_keyword(&self, keyword: &str) -> bool {
         let start = self.pos;
         let mut pos = start;
-        
+
         // Skip whitespace
         while pos < self.input.len() {
             let ch = self.input.chars().nth(pos).unwrap();
@@ -1259,12 +1307,17 @@ impl CypherParser {
                 break;
             }
         }
-        
+
         // Check if keyword matches
         let remaining = &self.input[pos..];
-        remaining.to_uppercase().starts_with(&keyword.to_uppercase()) &&
-        (remaining.len() == keyword.len() || 
-         !remaining.chars().nth(keyword.len()).unwrap().is_ascii_alphanumeric())
+        remaining
+            .to_uppercase()
+            .starts_with(&keyword.to_uppercase())
+            && (remaining.len() == keyword.len()
+                || remaining
+                    .chars()
+                    .nth(keyword.len())
+                    .is_none_or(|c| !c.is_ascii_alphanumeric()))
     }
 
     /// Skip whitespace
@@ -1281,7 +1334,10 @@ impl CypherParser {
 
     /// Create error with position information
     fn error(&self, message: &str) -> Error {
-        Error::CypherSyntax(format!("{} at line {}, column {}", message, self.line, self.column))
+        Error::CypherSyntax(format!(
+            "{} at line {}, column {}",
+            message, self.line, self.column
+        ))
     }
 }
 
@@ -1293,9 +1349,9 @@ mod tests {
     fn test_parse_simple_match() {
         let mut parser = CypherParser::new("MATCH (n:Person) RETURN n".to_string());
         let query = parser.parse().unwrap();
-        
+
         assert_eq!(query.clauses.len(), 2);
-        
+
         match &query.clauses[0] {
             Clause::Match(match_clause) => {
                 assert_eq!(match_clause.pattern.elements.len(), 1);
@@ -1309,7 +1365,7 @@ mod tests {
             }
             _ => panic!("Expected match clause"),
         }
-        
+
         match &query.clauses[1] {
             Clause::Return(return_clause) => {
                 assert_eq!(return_clause.items.len(), 1);
@@ -1321,18 +1377,19 @@ mod tests {
 
     #[test]
     fn test_parse_match_with_where() {
-        let mut parser = CypherParser::new("MATCH (n:Person) WHERE n.age > 18 RETURN n".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (n:Person) WHERE n.age > 18 RETURN n".to_string());
         let query = parser.parse().unwrap();
-        
+
         assert_eq!(query.clauses.len(), 3);
-        
+
         match &query.clauses[0] {
             Clause::Match(match_clause) => {
                 assert!(match_clause.where_clause.is_none());
             }
             _ => panic!("Expected match clause"),
         }
-        
+
         match &query.clauses[1] {
             Clause::Where(where_clause) => {
                 // Check that it's a binary operation
@@ -1349,13 +1406,14 @@ mod tests {
 
     #[test]
     fn test_parse_relationship_pattern() {
-        let mut parser = CypherParser::new("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b".to_string());
         let query = parser.parse().unwrap();
-        
+
         match &query.clauses[0] {
             Clause::Match(match_clause) => {
                 assert_eq!(match_clause.pattern.elements.len(), 3); // node, rel, node
-                
+
                 match &match_clause.pattern.elements[1] {
                     PatternElement::Relationship(rel) => {
                         assert_eq!(rel.variable, Some("r".to_string()));
@@ -1371,17 +1429,18 @@ mod tests {
 
     #[test]
     fn test_parse_return_with_alias() {
-        let mut parser = CypherParser::new("MATCH (n:Person) RETURN n.name AS person_name".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (n:Person) RETURN n.name AS person_name".to_string());
         let query = parser.parse().unwrap();
-        
+
         match &query.clauses[1] {
             Clause::Return(return_clause) => {
                 assert_eq!(return_clause.items.len(), 1);
-                
+
                 match &return_clause.items[0] {
                     ReturnItem { expression, alias } => {
                         assert_eq!(alias, &Some("person_name".to_string()));
-                        
+
                         match expression {
                             Expression::PropertyAccess { variable, property } => {
                                 assert_eq!(variable, "n");
@@ -1398,11 +1457,12 @@ mod tests {
 
     #[test]
     fn test_parse_order_by() {
-        let mut parser = CypherParser::new("MATCH (n:Person) RETURN n ORDER BY n.age DESC".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (n:Person) RETURN n ORDER BY n.age DESC".to_string());
         let query = parser.parse().unwrap();
-        
+
         assert_eq!(query.clauses.len(), 3);
-        
+
         match &query.clauses[2] {
             Clause::OrderBy(order_clause) => {
                 assert_eq!(order_clause.items.len(), 1);
@@ -1416,68 +1476,188 @@ mod tests {
     fn test_parse_limit_skip() {
         let mut parser = CypherParser::new("MATCH (n:Person) RETURN n SKIP 10 LIMIT 5".to_string());
         let query = parser.parse().unwrap();
-        
+
         assert_eq!(query.clauses.len(), 4);
-        
+
         match &query.clauses[2] {
-            Clause::Skip(skip_clause) => {
-                match &skip_clause.count {
-                    Expression::Literal(Literal::Integer(10)) => {}
-                    _ => panic!("Expected integer literal"),
-                }
-            }
+            Clause::Skip(skip_clause) => match &skip_clause.count {
+                Expression::Literal(Literal::Integer(10)) => {}
+                _ => panic!("Expected integer literal"),
+            },
             _ => panic!("Expected skip clause"),
         }
-        
+
         match &query.clauses[3] {
-            Clause::Limit(limit_clause) => {
-                match &limit_clause.count {
-                    Expression::Literal(Literal::Integer(5)) => {}
-                    _ => panic!("Expected integer literal"),
-                }
-            }
+            Clause::Limit(limit_clause) => match &limit_clause.count {
+                Expression::Literal(Literal::Integer(5)) => {}
+                _ => panic!("Expected integer literal"),
+            },
             _ => panic!("Expected limit clause"),
         }
     }
 
     #[test]
     fn test_parse_parameter() {
-        let mut parser = CypherParser::new("MATCH (n:Person) WHERE n.name = $name RETURN n".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (n:Person) WHERE n.name = $name RETURN n".to_string());
         let query = parser.parse().unwrap();
-        
+
         match &query.clauses[1] {
-            Clause::Where(where_clause) => {
-                match &where_clause.expression {
-                    Expression::BinaryOp { right, .. } => {
-                        match right.as_ref() {
-                            Expression::Parameter(name) => {
-                                assert_eq!(name, "name");
-                            }
-                            _ => panic!("Expected parameter"),
-                        }
+            Clause::Where(where_clause) => match &where_clause.expression {
+                Expression::BinaryOp { right, .. } => match right.as_ref() {
+                    Expression::Parameter(name) => {
+                        assert_eq!(name, "name");
                     }
-                    _ => panic!("Expected binary operation"),
-                }
-            }
+                    _ => panic!("Expected parameter"),
+                },
+                _ => panic!("Expected binary operation"),
+            },
             _ => panic!("Expected where clause"),
         }
     }
 
     #[test]
-    fn test_parse_case_expression() {
-        let mut parser = CypherParser::new("MATCH (n:Person) RETURN CASE WHEN n.age < 18 THEN 'minor' ELSE 'adult' END AS category".to_string());
-        let query = parser.parse().unwrap();
-        
-        match &query.clauses[1] {
-            Clause::Return(return_clause) => {
-                match &return_clause.items[0].expression {
-                    Expression::Case { when_clauses, else_clause, .. } => {
-                        assert_eq!(when_clauses.len(), 1);
-                        assert!(else_clause.is_some());
+    fn test_debug_binary_expression() {
+        let mut parser = CypherParser::new("n.age < 18".to_string());
+        let expr = parser.parse_expression().unwrap();
+
+        match expr {
+            Expression::BinaryOp { left, op, right } => {
+                assert_eq!(op, BinaryOperator::LessThan);
+                match *left {
+                    Expression::PropertyAccess { variable, property } => {
+                        assert_eq!(variable, "n");
+                        assert_eq!(property, "age");
                     }
-                    _ => panic!("Expected case expression"),
+                    _ => panic!("Expected property access"),
+                }
+                match *right {
+                    Expression::Literal(Literal::Integer(value)) => {
+                        assert_eq!(value, 18);
+                    }
+                    _ => panic!("Expected integer literal"),
                 }
             }
+            _ => panic!("Expected binary operation"),
+        }
+    }
+
+    #[test]
+    fn test_debug_case_expression() {
+        let mut parser =
+            CypherParser::new("CASE WHEN n.age < 18 THEN 'minor' ELSE 'adult' END".to_string());
+        let expr = parser.parse_expression().unwrap();
+
+        match expr {
+            Expression::Case {
+                when_clauses,
+                else_clause,
+                ..
+            } => {
+                assert_eq!(when_clauses.len(), 1);
+                assert!(else_clause.is_some());
+            }
+            _ => panic!("Expected case expression"),
+        }
+    }
+
+    #[test]
+    fn test_debug_when_keyword() {
+        let mut parser =
+            CypherParser::new("WHEN n.age < 18 THEN 'minor' ELSE 'adult' END".to_string());
+
+        // Test parsing WHEN keyword
+        assert!(parser.peek_keyword("WHEN"));
+        parser.expect_keyword("WHEN").unwrap();
+
+        // Debug: print remaining input after WHEN
+        let remaining = &parser.input[parser.pos..];
+        println!("Remaining after WHEN: '{}'", remaining);
+
+        // Test parsing the condition
+        let condition = parser.parse_expression().unwrap();
+        match condition {
+            Expression::BinaryOp {
+                left: _,
+                op,
+                right: _,
+            } => {
+                assert_eq!(op, BinaryOperator::LessThan);
+            }
+            _ => panic!("Expected binary operation"),
+        }
+
+        // Debug: print remaining input after condition
+        let remaining = &parser.input[parser.pos..];
+        println!("Remaining after condition: '{}'", remaining);
+
+        // Debug: test peek_keyword for THEN
+        println!("peek_keyword('THEN'): {}", parser.peek_keyword("THEN"));
+
+        // Test parsing THEN keyword
+        assert!(parser.peek_keyword("THEN"));
+        parser.expect_keyword("THEN").unwrap();
+    }
+
+    #[test]
+    fn test_parse_case_expression() {
+        // Test simple binary expression first
+        let mut parser = CypherParser::new("n.age < 18".to_string());
+        let expr = parser.parse_expression().unwrap();
+
+        match expr {
+            Expression::BinaryOp { left, op, right } => {
+                assert_eq!(op, BinaryOperator::LessThan);
+                match *left {
+                    Expression::PropertyAccess { variable, property } => {
+                        assert_eq!(variable, "n");
+                        assert_eq!(property, "age");
+                    }
+                    _ => panic!("Expected property access"),
+                }
+                match *right {
+                    Expression::Literal(Literal::Integer(value)) => {
+                        assert_eq!(value, 18);
+                    }
+                    _ => panic!("Expected integer literal"),
+                }
+            }
+            _ => panic!("Expected binary operation"),
+        }
+
+        // Test simple CASE expression
+        let mut parser =
+            CypherParser::new("CASE WHEN n.age < 18 THEN 'minor' ELSE 'adult' END".to_string());
+        let expr = parser.parse_expression().unwrap();
+
+        match expr {
+            Expression::Case {
+                when_clauses,
+                else_clause,
+                ..
+            } => {
+                assert_eq!(when_clauses.len(), 1);
+                assert!(else_clause.is_some());
+            }
+            _ => panic!("Expected case expression"),
+        }
+
+        // Now test full query
+        let mut parser = CypherParser::new("MATCH (n:Person) RETURN CASE WHEN n.age < 18 THEN 'minor' ELSE 'adult' END AS category".to_string());
+        let query = parser.parse().unwrap();
+
+        match &query.clauses[1] {
+            Clause::Return(return_clause) => match &return_clause.items[0].expression {
+                Expression::Case {
+                    when_clauses,
+                    else_clause,
+                    ..
+                } => {
+                    assert_eq!(when_clauses.len(), 1);
+                    assert!(else_clause.is_some());
+                }
+                _ => panic!("Expected case expression"),
+            },
             _ => panic!("Expected return clause"),
         }
     }
@@ -1486,7 +1666,7 @@ mod tests {
     fn test_parse_error_reporting() {
         let mut parser = CypherParser::new("MATCH (n:Person RETURN n".to_string());
         let result = parser.parse();
-        
+
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(error.to_string().contains("line"));
@@ -1502,22 +1682,29 @@ mod tests {
             ORDER BY friendship_since DESC
             LIMIT 10
         "#;
-        
+
         let mut parser = CypherParser::new(query_str.to_string());
         let query = parser.parse().unwrap();
-        
+
         assert_eq!(query.clauses.len(), 5); // MATCH, WHERE, RETURN, ORDER BY, LIMIT
-        
+
         // Verify all clause types are present
-        let clause_types: Vec<&str> = query.clauses.iter().map(|c| match c {
-            Clause::Match(_) => "MATCH",
-            Clause::Where(_) => "WHERE",
-            Clause::Return(_) => "RETURN",
-            Clause::OrderBy(_) => "ORDER BY",
-            Clause::Limit(_) => "LIMIT",
-            _ => "OTHER",
-        }).collect();
-        
-        assert_eq!(clause_types, vec!["MATCH", "WHERE", "RETURN", "ORDER BY", "LIMIT"]);
+        let clause_types: Vec<&str> = query
+            .clauses
+            .iter()
+            .map(|c| match c {
+                Clause::Match(_) => "MATCH",
+                Clause::Where(_) => "WHERE",
+                Clause::Return(_) => "RETURN",
+                Clause::OrderBy(_) => "ORDER BY",
+                Clause::Limit(_) => "LIMIT",
+                _ => "OTHER",
+            })
+            .collect();
+
+        assert_eq!(
+            clause_types,
+            vec!["MATCH", "WHERE", "RETURN", "ORDER BY", "LIMIT"]
+        );
     }
 }

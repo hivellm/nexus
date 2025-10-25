@@ -6,11 +6,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Global executor instance (shared with other endpoints)
-static EXECUTOR: std::sync::OnceLock<std::sync::Arc<tokio::sync::RwLock<Executor>>> = std::sync::OnceLock::new();
+static EXECUTOR: std::sync::OnceLock<std::sync::Arc<tokio::sync::RwLock<Executor>>> =
+    std::sync::OnceLock::new();
 
 /// Initialize the executor (called from cypher module)
-pub fn init_executor(executor: std::sync::Arc<tokio::sync::RwLock<Executor>>) -> anyhow::Result<()> {
-    EXECUTOR.set(executor).map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
+pub fn init_executor(
+    executor: std::sync::Arc<tokio::sync::RwLock<Executor>>,
+) -> anyhow::Result<()> {
+    EXECUTOR
+        .set(executor)
+        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
     Ok(())
 }
 
@@ -29,10 +34,12 @@ pub struct IngestRequest {
 #[derive(Debug, Deserialize)]
 pub struct NodeIngest {
     /// Node ID (optional, auto-generated if not provided)
+    #[allow(dead_code)]
     pub id: Option<u64>,
     /// Labels
     pub labels: Vec<String>,
     /// Properties
+    #[allow(dead_code)]
     pub properties: serde_json::Value,
 }
 
@@ -40,6 +47,7 @@ pub struct NodeIngest {
 #[derive(Debug, Deserialize)]
 pub struct RelIngest {
     /// Relationship ID (optional)
+    #[allow(dead_code)]
     pub id: Option<u64>,
     /// Source node ID
     pub src: u64,
@@ -48,6 +56,7 @@ pub struct RelIngest {
     /// Relationship type
     pub r#type: String,
     /// Properties
+    #[allow(dead_code)]
     pub properties: serde_json::Value,
 }
 
@@ -68,7 +77,7 @@ pub struct IngestResponse {
 /// Ingest bulk data
 pub async fn ingest_data(Json(request): Json<IngestRequest>) -> Json<IngestResponse> {
     let start_time = std::time::Instant::now();
-    
+
     tracing::info!(
         "Ingesting {} nodes and {} relationships",
         request.nodes.len(),
@@ -102,7 +111,7 @@ pub async fn ingest_data(Json(request): Json<IngestRequest>) -> Json<IngestRespo
         } else {
             format!(":{}", node.labels.join(":"))
         };
-        
+
         let cypher_query = format!("CREATE (n{}) RETURN n", labels_str);
         let query = Query {
             cypher: cypher_query,
@@ -144,7 +153,7 @@ pub async fn ingest_data(Json(request): Json<IngestRequest>) -> Json<IngestRespo
     }
 
     let execution_time = start_time.elapsed().as_millis() as u64;
-    
+
     tracing::info!(
         "Ingestion completed in {}ms: {} nodes, {} relationships",
         execution_time,

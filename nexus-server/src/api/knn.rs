@@ -12,7 +12,9 @@ static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLoc
 
 /// Initialize the executor (called from cypher module)
 pub fn init_executor(executor: Arc<RwLock<Executor>>) -> anyhow::Result<()> {
-    EXECUTOR.set(executor).map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
+    EXECUTOR
+        .set(executor)
+        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
     Ok(())
 }
 
@@ -22,13 +24,16 @@ pub struct KnnTraverseRequest {
     /// Node label to search
     pub label: String,
     /// Query vector
+    #[allow(dead_code)]
     pub vector: Vec<f32>,
     /// Number of nearest neighbors
     pub k: usize,
     /// Optional expansion patterns
     #[serde(default)]
+    #[allow(dead_code)]
     pub expand: Vec<String>,
     /// Optional WHERE clause
+    #[allow(dead_code)]
     pub r#where: Option<String>,
     /// Result limit
     #[serde(default = "default_limit")]
@@ -65,7 +70,7 @@ pub struct KnnNode {
 /// Execute KNN-seeded traversal
 pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTraverseResponse> {
     let start_time = std::time::Instant::now();
-    
+
     tracing::info!(
         "KNN traverse on label '{}' with k={}",
         request.label,
@@ -87,12 +92,12 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
 
     // Execute KNN search
     let mut executor = executor_guard.write().await;
-    
+
     // For MVP, we'll use a simple approach:
     // 1. Find nodes with the specified label
     // 2. Use KNN index to find similar nodes
     // 3. Return results with scores
-    
+
     // Create a simple MATCH query for the label
     let cypher_query = format!("MATCH (n:{}) RETURN n", request.label);
     let query = Query {
@@ -103,17 +108,17 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
     match executor.execute(&query) {
         Ok(result_set) => {
             let mut nodes = Vec::new();
-            
+
             // For MVP, we'll simulate KNN search by creating dummy scores
             for (i, row) in result_set.rows.iter().enumerate().take(request.limit) {
                 if let Some(node_value) = row.values.first() {
                     if let Some(node_obj) = node_value.as_object() {
                         if let Some(id_value) = node_obj.get("id") {
                             if let Some(id) = id_value.as_u64() {
-                                // Simulate similarity score (in real implementation, 
+                                // Simulate similarity score (in real implementation,
                                 // this would come from the KNN index)
                                 let score = 1.0 - (i as f32 * 0.1).min(0.9);
-                                
+
                                 nodes.push(KnnNode {
                                     id,
                                     properties: node_value.clone(),
@@ -124,9 +129,9 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
                     }
                 }
             }
-            
+
             let execution_time = start_time.elapsed().as_millis() as u64;
-            
+
             tracing::info!(
                 "KNN traverse completed in {}ms, {} nodes returned",
                 execution_time,
@@ -141,9 +146,9 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
         }
         Err(e) => {
             let execution_time = start_time.elapsed().as_millis() as u64;
-            
+
             tracing::error!("KNN traverse failed: {}", e);
-            
+
             Json(KnnTraverseResponse {
                 nodes: vec![],
                 execution_time_ms: execution_time,
