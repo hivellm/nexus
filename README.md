@@ -40,14 +40,22 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 🔍 **Cypher Subset**: Familiar query language covering 80% of common use cases
 - ⚡ **Neo4j-Inspired Storage**: Fixed-size record stores (32B nodes, 48B relationships)
 - 🔗 **O(1) Traversal**: Doubly-linked adjacency lists without index lookups
-- 💾 **ACID Transactions**: WAL + MVCC for durability and snapshot isolation
-
-### **Vector Search (Native KNN)**
+- 💾 **ACID Transactions**: WAL + MVCC for durab### **Vector Search (Native KNN)**
 - 🎯 **HNSW Indexes**: Hierarchical Navigable Small World for fast approximate search
 - 📊 **Per-Label Indexes**: Separate vector space for each node label
 - 🔄 **Hybrid Queries**: Combine vector similarity with graph traversal in single query
 - ⚡ **High Performance**: 10,000+ KNN queries/sec (k=10)
 - 📐 **Multiple Metrics**: Cosine similarity, Euclidean distance
+
+### **Graph Construction & Visualization**
+- 🎨 **Layout Algorithms**: Force-directed, hierarchical, circular, and grid layouts
+- 🔧 **Force-Directed Layout**: Spring-based positioning with configurable parameters
+- 📊 **Hierarchical Layout**: Tree-like positioning for DAGs and organizational structures
+- ⭕ **Circular Layout**: Circular positioning for cyclic graphs and networks
+- 🔲 **Grid Layout**: Regular grid positioning for structured data visualization
+- 🎯 **K-Means Clustering**: Partition nodes into k clusters for grouping analysis
+- 🔗 **Connected Components**: Find strongly/weakly connected components
+- ⚙️ **Graph Operations**: Centering, scaling, neighbor finding, and density calculationCosine similarity, Euclidean distance
 
 ### **Performance & Scalability**
 - 🚀 **100K+ point reads/sec** - Direct offset access via record IDs
