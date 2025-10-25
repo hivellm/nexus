@@ -365,6 +365,11 @@ impl Wal {
         self.stats.file_size
     }
 
+    /// Get WAL file path
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Truncate WAL (after checkpoint and backup)
     pub fn truncate(&mut self) -> Result<()> {
         self.file.set_len(0)?;
