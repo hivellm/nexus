@@ -26,7 +26,12 @@ fn log_operation(operation: &str, details: &str) {
 
 /// Helper function to log errors with context
 fn log_error(operation: &str, error: &str, context: &str) {
-    tracing::error!("Operation: {} - Error: {} - Context: {}", operation, error, context);
+    tracing::error!(
+        "Operation: {} - Error: {} - Context: {}",
+        operation,
+        error,
+        context
+    );
 }
 
 /// Initialize the catalog
@@ -55,7 +60,7 @@ impl CreateNodeRequest {
         if self.labels.is_empty() {
             return Err("At least one label is required".to_string());
         }
-        
+
         // Validate label names
         for label in &self.labels {
             if label.is_empty() {
@@ -64,11 +69,14 @@ impl CreateNodeRequest {
             if label.len() > 100 {
                 return Err("Label names cannot exceed 100 characters".to_string());
             }
-            if !label.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            if !label
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
                 return Err("Label names can only contain alphanumeric characters, underscores, and hyphens".to_string());
             }
         }
-        
+
         // Validate properties
         for (key, value) in &self.properties {
             if key.is_empty() {
@@ -77,17 +85,20 @@ impl CreateNodeRequest {
             if key.len() > 100 {
                 return Err("Property keys cannot exceed 100 characters".to_string());
             }
-            if !key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            if !key
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
                 return Err("Property keys can only contain alphanumeric characters, underscores, and hyphens".to_string());
             }
-            
+
             // Validate property value size
             let value_size = serde_json::to_string(value).unwrap_or_default().len();
             if value_size > 10000 {
                 return Err("Property values cannot exceed 10KB".to_string());
             }
         }
-        
+
         Ok(())
     }
 }
@@ -132,7 +143,7 @@ impl CreateRelRequest {
         if self.source_id == self.target_id {
             return Err("Source and target node IDs cannot be the same".to_string());
         }
-        
+
         // Validate relationship type
         if self.rel_type.is_empty() {
             return Err("Relationship type cannot be empty".to_string());
@@ -140,10 +151,14 @@ impl CreateRelRequest {
         if self.rel_type.len() > 100 {
             return Err("Relationship type cannot exceed 100 characters".to_string());
         }
-        if !self.rel_type.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        if !self
+            .rel_type
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
             return Err("Relationship type can only contain alphanumeric characters, underscores, and hyphens".to_string());
         }
-        
+
         // Validate properties
         for (key, value) in &self.properties {
             if key.is_empty() {
@@ -152,17 +167,20 @@ impl CreateRelRequest {
             if key.len() > 100 {
                 return Err("Property keys cannot exceed 100 characters".to_string());
             }
-            if !key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            if !key
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
                 return Err("Property keys can only contain alphanumeric characters, underscores, and hyphens".to_string());
             }
-            
+
             // Validate property value size
             let value_size = serde_json::to_string(value).unwrap_or_default().len();
             if value_size > 10000 {
                 return Err("Property values cannot exceed 10KB".to_string());
             }
         }
-        
+
         Ok(())
     }
 }
@@ -245,13 +263,19 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
     // Implement actual node creation
     let start_time = Instant::now();
     log_operation("create_node", &format!("Labels: {:?}", request.labels));
-    
+
     match create_engine() {
         Ok(mut engine) => {
-            match engine.create_node(request.labels.clone(), serde_json::Value::Object(request.properties.clone().into_iter().collect())) {
+            match engine.create_node(
+                request.labels.clone(),
+                serde_json::Value::Object(request.properties.clone().into_iter().collect()),
+            ) {
                 Ok(node_id) => {
                     let duration = start_time.elapsed();
-                    log_operation("create_node", &format!("Success - Node ID: {} - Duration: {:?}", node_id, duration));
+                    log_operation(
+                        "create_node",
+                        &format!("Success - Node ID: {} - Duration: {:?}", node_id, duration),
+                    );
                     Json(CreateNodeResponse {
                         node_id,
                         message: "Node created successfully".to_string(),
@@ -259,7 +283,11 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
                     })
                 }
                 Err(e) => {
-                    log_error("create_node", &e.to_string(), &format!("Labels: {:?}", request.labels));
+                    log_error(
+                        "create_node",
+                        &e.to_string(),
+                        &format!("Labels: {:?}", request.labels),
+                    );
                     Json(CreateNodeResponse {
                         node_id: 0,
                         message: "".to_string(),
@@ -368,7 +396,10 @@ pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateN
         Ok(mut engine) => {
             // For now, we'll create a new node with the updated properties
             // In a full implementation, we'd need to implement proper node updating
-            match engine.create_node(vec!["Updated".to_string()], serde_json::Value::Object(request.properties.into_iter().collect())) {
+            match engine.create_node(
+                vec!["Updated".to_string()],
+                serde_json::Value::Object(request.properties.into_iter().collect()),
+            ) {
                 Ok(_node_id) => {
                     tracing::info!("Node updated successfully");
                     Json(UpdateNodeResponse {
@@ -417,7 +448,10 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
             // In a full implementation, we'd need to implement proper node deletion
             match engine.get_node(request.node_id) {
                 Ok(Some(_node)) => {
-                    tracing::info!("Node {} found (deletion not fully implemented)", request.node_id);
+                    tracing::info!(
+                        "Node {} found (deletion not fully implemented)",
+                        request.node_id
+                    );
                     Json(DeleteNodeResponse {
                         message: "Node found (deletion not fully implemented)".to_string(),
                         error: None,
@@ -478,7 +512,7 @@ mod tests {
 
         let response = create_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.error.as_ref().unwrap(), "Validation failed: At least one label is required");
     }
 
     #[tokio::test]
@@ -552,7 +586,7 @@ mod tests {
 
         let response = create_rel(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.error.as_ref().unwrap(), "Validation failed: Relationship type cannot be empty");
     }
 
     #[tokio::test]

@@ -3,15 +3,15 @@
 //! This module provides HTTP API endpoints for node clustering and grouping operations.
 
 use axum::{
+    Router,
     extract::{Query, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
-    Router,
 };
 use nexus_core::clustering::{
-    ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, DistanceMetric,
-    FeatureStrategy, LinkageType,
+    ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, DistanceMetric, FeatureStrategy,
+    LinkageType,
 };
 use nexus_core::graph_simple::Graph;
 use serde::{Deserialize, Serialize};
@@ -115,6 +115,7 @@ pub struct AlgorithmInfo {
 }
 
 /// Create clustering API router
+#[allow(dead_code)]
 pub fn create_router() -> Router<Arc<crate::NexusServer>> {
     Router::new()
         .route("/clustering/algorithms", get(get_algorithms))
@@ -201,7 +202,7 @@ pub async fn cluster_nodes(
 ) -> Result<Json<ClusteringResponse>, StatusCode> {
     // Create a simple graph for testing - in a real implementation, you'd extract nodes from the server
     let graph = Graph::new();
-    
+
     let algorithm = parse_algorithm(&request)?;
     let feature_strategy = parse_feature_strategy(&request)?;
     let distance_metric = parse_distance_metric(&request)?;
@@ -214,7 +215,9 @@ pub async fn cluster_nodes(
     };
 
     let engine = ClusteringEngine::new(config);
-    let result = engine.cluster(&graph).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = engine
+        .cluster(&graph)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let clusters: Vec<ClusterInfo> = result
         .clusters
@@ -259,7 +262,7 @@ pub async fn group_by_label(
 ) -> Result<Json<ClusteringResponse>, StatusCode> {
     // Create a simple graph for testing - in a real implementation, you'd extract nodes from the server
     let graph = Graph::new();
-    
+
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::LabelBased,
         feature_strategy: FeatureStrategy::LabelBased,
@@ -268,7 +271,9 @@ pub async fn group_by_label(
     };
 
     let engine = ClusteringEngine::new(config);
-    let result = engine.cluster(&graph).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = engine
+        .cluster(&graph)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let clusters: Vec<ClusterInfo> = result
         .clusters
@@ -313,14 +318,16 @@ pub async fn group_by_property(
 ) -> Result<Json<ClusteringResponse>, StatusCode> {
     // Create a simple graph for testing - in a real implementation, you'd extract nodes from the server
     let graph = Graph::new();
-    
+
     let property_key = params
         .get("property_key")
         .ok_or(StatusCode::BAD_REQUEST)?
         .clone();
 
     let config = ClusteringConfig {
-        algorithm: ClusteringAlgorithm::PropertyBased { property_key: property_key.clone() },
+        algorithm: ClusteringAlgorithm::PropertyBased {
+            property_key: property_key.clone(),
+        },
         feature_strategy: FeatureStrategy::PropertyBased {
             property_keys: vec![property_key.clone()],
         },
@@ -329,7 +336,9 @@ pub async fn group_by_property(
     };
 
     let engine = ClusteringEngine::new(config);
-    let result = engine.cluster(&graph).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = engine
+        .cluster(&graph)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let clusters: Vec<ClusterInfo> = result
         .clusters
@@ -376,12 +385,8 @@ fn parse_algorithm(request: &ClusteringRequest) -> Result<ClusteringAlgorithm, S
             Ok(ClusteringAlgorithm::KMeans { k, max_iterations })
         }
         "hierarchical" => {
-            let linkage = request
-                .linkage
-                .as_deref()
-                .unwrap_or("average");
-            let linkage = parse_linkage_type(linkage)
-                .map_err(|_| StatusCode::BAD_REQUEST)?;
+            let linkage = request.linkage.as_deref().unwrap_or("average");
+            let linkage = parse_linkage_type(linkage).map_err(|_| StatusCode::BAD_REQUEST)?;
             Ok(ClusteringAlgorithm::Hierarchical { linkage })
         }
         "label_based" => Ok(ClusteringAlgorithm::LabelBased),
@@ -407,10 +412,7 @@ fn parse_feature_strategy(request: &ClusteringRequest) -> Result<FeatureStrategy
     match request.feature_strategy.as_deref().unwrap_or("label_based") {
         "label_based" => Ok(FeatureStrategy::LabelBased),
         "property_based" => {
-            let property_keys = request
-                .property_keys
-                .clone()
-                .unwrap_or_default();
+            let property_keys = request.property_keys.clone().unwrap_or_default();
             Ok(FeatureStrategy::PropertyBased { property_keys })
         }
         "structural" => Ok(FeatureStrategy::Structural),
@@ -450,14 +452,18 @@ fn property_value_to_json(value: nexus_core::graph_simple::PropertyValue) -> ser
     match value {
         nexus_core::graph_simple::PropertyValue::Null => serde_json::Value::Null,
         nexus_core::graph_simple::PropertyValue::Bool(b) => serde_json::Value::Bool(b),
-        nexus_core::graph_simple::PropertyValue::Int64(i) => serde_json::Value::Number(serde_json::Number::from(i)),
-        nexus_core::graph_simple::PropertyValue::Float64(f) => {
-            serde_json::Value::Number(serde_json::Number::from_f64(f).unwrap_or(serde_json::Number::from(0)))
+        nexus_core::graph_simple::PropertyValue::Int64(i) => {
+            serde_json::Value::Number(serde_json::Number::from(i))
         }
+        nexus_core::graph_simple::PropertyValue::Float64(f) => serde_json::Value::Number(
+            serde_json::Number::from_f64(f).unwrap_or(serde_json::Number::from(0)),
+        ),
         nexus_core::graph_simple::PropertyValue::String(s) => serde_json::Value::String(s),
-        nexus_core::graph_simple::PropertyValue::Bytes(b) => {
-            serde_json::Value::Array(b.into_iter().map(|x| serde_json::Value::Number(serde_json::Number::from(x))).collect())
-        }
+        nexus_core::graph_simple::PropertyValue::Bytes(b) => serde_json::Value::Array(
+            b.into_iter()
+                .map(|x| serde_json::Value::Number(serde_json::Number::from(x)))
+                .collect(),
+        ),
     }
 }
 
@@ -468,12 +474,16 @@ mod tests {
 
     fn create_test_graph() -> Graph {
         let mut graph = Graph::new();
-        
+
         // Create test nodes
-        let _person1 = graph.create_node(vec!["Person".to_string(), "Employee".to_string()]).unwrap();
-        let _person2 = graph.create_node(vec!["Person".to_string(), "Manager".to_string()]).unwrap();
+        let _person1 = graph
+            .create_node(vec!["Person".to_string(), "Employee".to_string()])
+            .unwrap();
+        let _person2 = graph
+            .create_node(vec!["Person".to_string(), "Manager".to_string()])
+            .unwrap();
         let _company1 = graph.create_node(vec!["Company".to_string()]).unwrap();
-        
+
         graph
     }
 
@@ -494,7 +504,13 @@ mod tests {
         };
 
         let algorithm = parse_algorithm(&request).unwrap();
-        assert!(matches!(algorithm, ClusteringAlgorithm::KMeans { k: 3, max_iterations: 50 }));
+        assert!(matches!(
+            algorithm,
+            ClusteringAlgorithm::KMeans {
+                k: 3,
+                max_iterations: 50
+            }
+        ));
     }
 
     #[test]
@@ -541,9 +557,250 @@ mod tests {
     fn test_property_value_to_json() {
         use nexus_core::graph_simple::PropertyValue;
 
-        assert_eq!(property_value_to_json(PropertyValue::Null), serde_json::Value::Null);
-        assert_eq!(property_value_to_json(PropertyValue::Bool(true)), serde_json::Value::Bool(true));
-        assert_eq!(property_value_to_json(PropertyValue::Int64(42)), serde_json::Value::Number(serde_json::Number::from(42)));
-        assert_eq!(property_value_to_json(PropertyValue::String("test".to_string())), serde_json::Value::String("test".to_string()));
+        assert_eq!(
+            property_value_to_json(PropertyValue::Null),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            property_value_to_json(PropertyValue::Bool(true)),
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(
+            property_value_to_json(PropertyValue::Int64(42)),
+            serde_json::Value::Number(serde_json::Number::from(42))
+        );
+        assert_eq!(
+            property_value_to_json(PropertyValue::String("test".to_string())),
+            serde_json::Value::String("test".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_algorithms() {
+        let result = get_algorithms().await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        let algorithms = response.0;
+        assert!(!algorithms.algorithms.is_empty());
+        assert!(algorithms.algorithms.iter().any(|a| a.name == "kmeans"));
+        assert!(algorithms.algorithms.iter().any(|a| a.name == "label_based"));
+    }
+
+
+    #[test]
+    fn test_parse_algorithm_hierarchical() {
+        let request = ClusteringRequest {
+            algorithm: "hierarchical".to_string(),
+            k: None,
+            max_iterations: None,
+            eps: None,
+            min_points: None,
+            linkage: Some("complete".to_string()),
+            property_key: None,
+            feature_strategy: None,
+            property_keys: None,
+            distance_metric: None,
+            random_seed: None,
+        };
+
+        let algorithm = parse_algorithm(&request).unwrap();
+        assert!(matches!(
+            algorithm,
+            ClusteringAlgorithm::Hierarchical {
+                linkage: LinkageType::Complete
+            }
+        ));
+    }
+
+    #[test]
+    fn test_parse_algorithm_community_detection() {
+        let request = ClusteringRequest {
+            algorithm: "community_detection".to_string(),
+            k: None,
+            max_iterations: None,
+            eps: None,
+            min_points: None,
+            linkage: None,
+            property_key: None,
+            feature_strategy: None,
+            property_keys: None,
+            distance_metric: None,
+            random_seed: None,
+        };
+
+        let algorithm = parse_algorithm(&request).unwrap();
+        assert!(matches!(algorithm, ClusteringAlgorithm::CommunityDetection));
+    }
+
+    #[test]
+    fn test_parse_algorithm_invalid() {
+        let request = ClusteringRequest {
+            algorithm: "invalid".to_string(),
+            k: None,
+            max_iterations: None,
+            eps: None,
+            min_points: None,
+            linkage: None,
+            property_key: None,
+            feature_strategy: None,
+            property_keys: None,
+            distance_metric: None,
+            random_seed: None,
+        };
+
+        let result = parse_algorithm(&request);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_feature_strategy() {
+        let request = ClusteringRequest {
+            algorithm: "kmeans".to_string(),
+            k: Some(3),
+            max_iterations: None,
+            eps: None,
+            min_points: None,
+            linkage: None,
+            property_key: None,
+            feature_strategy: Some("property_based".to_string()),
+            property_keys: Some(vec!["age".to_string(), "salary".to_string()]),
+            distance_metric: None,
+            random_seed: None,
+        };
+
+        let strategy = parse_feature_strategy(&request).unwrap();
+        assert!(matches!(
+            strategy,
+            FeatureStrategy::PropertyBased { property_keys } if property_keys == vec!["age".to_string(), "salary".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_parse_feature_strategy_structural() {
+        let request = ClusteringRequest {
+            algorithm: "kmeans".to_string(),
+            k: Some(3),
+            max_iterations: None,
+            eps: None,
+            min_points: None,
+            linkage: None,
+            property_key: None,
+            feature_strategy: Some("structural".to_string()),
+            property_keys: None,
+            distance_metric: None,
+            random_seed: None,
+        };
+
+        let strategy = parse_feature_strategy(&request).unwrap();
+        assert!(matches!(strategy, FeatureStrategy::Structural));
+    }
+
+    #[test]
+    fn test_parse_feature_strategy_invalid() {
+        let request = ClusteringRequest {
+            algorithm: "kmeans".to_string(),
+            k: Some(3),
+            max_iterations: None,
+            eps: None,
+            min_points: None,
+            linkage: None,
+            property_key: None,
+            feature_strategy: Some("invalid".to_string()),
+            property_keys: None,
+            distance_metric: None,
+            random_seed: None,
+        };
+
+        let result = parse_feature_strategy(&request);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_distance_metric_all_variants() {
+        let metrics = vec![
+            ("euclidean", DistanceMetric::Euclidean),
+            ("manhattan", DistanceMetric::Manhattan),
+            ("cosine", DistanceMetric::Cosine),
+            ("jaccard", DistanceMetric::Jaccard),
+            ("hamming", DistanceMetric::Hamming),
+        ];
+
+        for (name, _expected) in metrics {
+            let request = ClusteringRequest {
+                algorithm: "kmeans".to_string(),
+                k: Some(3),
+                max_iterations: None,
+                eps: None,
+                min_points: None,
+                linkage: None,
+                property_key: None,
+                feature_strategy: None,
+                property_keys: None,
+                distance_metric: Some(name.to_string()),
+                random_seed: None,
+            };
+
+            let metric = parse_distance_metric(&request).unwrap();
+            assert!(matches!(metric, _expected));
+        }
+    }
+
+    #[test]
+    fn test_parse_distance_metric_invalid() {
+        let request = ClusteringRequest {
+            algorithm: "kmeans".to_string(),
+            k: Some(3),
+            max_iterations: None,
+            eps: None,
+            min_points: None,
+            linkage: None,
+            property_key: None,
+            feature_strategy: None,
+            property_keys: None,
+            distance_metric: Some("invalid".to_string()),
+            random_seed: None,
+        };
+
+        let result = parse_distance_metric(&request);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_linkage_type() {
+        let linkages = vec![
+            ("single", LinkageType::Single),
+            ("complete", LinkageType::Complete),
+            ("average", LinkageType::Average),
+            ("ward", LinkageType::Ward),
+        ];
+
+        for (name, expected) in linkages {
+            let result = parse_linkage_type(name);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_parse_linkage_type_invalid() {
+        let result = parse_linkage_type("invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_property_value_to_json_float() {
+        use nexus_core::graph_simple::PropertyValue;
+
+        let result = property_value_to_json(PropertyValue::Float64(3.14));
+        assert!(matches!(result, serde_json::Value::Number(_)));
+    }
+
+    #[test]
+    fn test_property_value_to_json_bytes() {
+        use nexus_core::graph_simple::PropertyValue;
+
+        let bytes = vec![1, 2, 3, 4];
+        let result = property_value_to_json(PropertyValue::Bytes(bytes));
+        assert!(matches!(result, serde_json::Value::Array(_)));
     }
 }

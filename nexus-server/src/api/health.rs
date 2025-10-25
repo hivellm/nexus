@@ -125,13 +125,17 @@ async fn check_database() -> ComponentStatus {
     match timeout(Duration::from_secs(5), async {
         // Try to create a test engine instance to verify database connectivity
         match nexus_core::Engine::new() {
-            Ok(mut engine) => {
+            Ok(engine) => {
                 // Test basic operations
-                let _stats = engine.stats().map_err(|e| format!("Stats check failed: {}", e))?;
-                let _health = engine.health_check().map_err(|e| format!("Health check failed: {}", e))?;
+                let _stats = engine
+                    .stats()
+                    .map_err(|e| format!("Stats check failed: {}", e))?;
+                let _health = engine
+                    .health_check()
+                    .map_err(|e| format!("Health check failed: {}", e))?;
                 Ok::<(), String>(())
             }
-            Err(e) => Err(format!("Database initialization failed: {}", e))
+            Err(e) => Err(format!("Database initialization failed: {}", e)),
         }
     })
     .await
@@ -164,13 +168,16 @@ async fn check_storage() -> ComponentStatus {
         match nexus_core::Engine::new() {
             Ok(mut engine) => {
                 // Test storage operations
-                let _stats = engine.stats().map_err(|e| format!("Storage stats failed: {}", e))?;
+                let _stats = engine
+                    .stats()
+                    .map_err(|e| format!("Storage stats failed: {}", e))?;
                 // Test creating a test node
-                let _node_id = engine.create_node(vec!["Test".to_string()], serde_json::Value::Null)
+                let _node_id = engine
+                    .create_node(vec!["Test".to_string()], serde_json::Value::Null)
                     .map_err(|e| format!("Storage write test failed: {}", e))?;
                 Ok::<(), String>(())
             }
-            Err(e) => Err(format!("Storage initialization failed: {}", e))
+            Err(e) => Err(format!("Storage initialization failed: {}", e)),
         }
     })
     .await
@@ -201,15 +208,18 @@ async fn check_indexes() -> ComponentStatus {
     match timeout(Duration::from_secs(2), async {
         // Create a test engine to verify indexes
         match nexus_core::Engine::new() {
-            Ok(mut engine) => {
+            Ok(engine) => {
                 // Test index operations
-                let _stats = engine.stats().map_err(|e| format!("Index stats failed: {}", e))?;
+                let _stats = engine
+                    .stats()
+                    .map_err(|e| format!("Index stats failed: {}", e))?;
                 // Test KNN search (even with empty index)
-                let _knn_result = engine.knn_search("Test", &[0.1, 0.2, 0.3], 5)
+                let _knn_result = engine
+                    .knn_search("Test", &[0.1, 0.2, 0.3], 5)
                     .map_err(|e| format!("Index search test failed: {}", e))?;
                 Ok::<(), String>(())
             }
-            Err(e) => Err(format!("Index initialization failed: {}", e))
+            Err(e) => Err(format!("Index initialization failed: {}", e)),
         }
     })
     .await
@@ -242,13 +252,16 @@ async fn check_wal() -> ComponentStatus {
         match nexus_core::Engine::new() {
             Ok(mut engine) => {
                 // Test WAL operations by creating a transaction
-                let _stats = engine.stats().map_err(|e| format!("WAL stats failed: {}", e))?;
+                let _stats = engine
+                    .stats()
+                    .map_err(|e| format!("WAL stats failed: {}", e))?;
                 // Test creating a node (which should write to WAL)
-                let _node_id = engine.create_node(vec!["Test".to_string()], serde_json::Value::Null)
+                let _node_id = engine
+                    .create_node(vec!["Test".to_string()], serde_json::Value::Null)
                     .map_err(|e| format!("WAL write test failed: {}", e))?;
                 Ok::<(), String>(())
             }
-            Err(e) => Err(format!("WAL initialization failed: {}", e))
+            Err(e) => Err(format!("WAL initialization failed: {}", e)),
         }
     })
     .await
@@ -281,13 +294,16 @@ async fn check_page_cache() -> ComponentStatus {
         match nexus_core::Engine::new() {
             Ok(mut engine) => {
                 // Test page cache operations
-                let _stats = engine.stats().map_err(|e| format!("Page cache stats failed: {}", e))?;
+                let _stats = engine
+                    .stats()
+                    .map_err(|e| format!("Page cache stats failed: {}", e))?;
                 // Test reading operations (which should use page cache)
-                let _node_result = engine.get_node(1)
+                let _node_result = engine
+                    .get_node(1)
                     .map_err(|e| format!("Page cache read test failed: {}", e))?;
                 Ok::<(), String>(())
             }
-            Err(e) => Err(format!("Page cache initialization failed: {}", e))
+            Err(e) => Err(format!("Page cache initialization failed: {}", e)),
         }
     })
     .await

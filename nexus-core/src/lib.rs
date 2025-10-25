@@ -467,7 +467,7 @@ mod tests {
         let engine = Engine::new();
         assert!(engine.is_ok());
         let engine = engine.unwrap();
-        
+
         // Test that all components are initialized
         assert!(engine.catalog.label_count() >= 0);
         assert!(engine.storage.node_count() >= 0);
@@ -496,7 +496,7 @@ mod tests {
     fn test_engine_stats() {
         let engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
-        
+
         // Test that stats are accessible
         assert!(stats.nodes >= 0);
         assert!(stats.relationships >= 0);
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn test_engine_execute_cypher() {
         let mut engine = Engine::new().unwrap();
-        
+
         // Test executing a simple query
         let result = engine.execute_cypher("MATCH (n) RETURN n");
         // Should not panic, even if query fails
@@ -521,11 +521,11 @@ mod tests {
     #[test]
     fn test_engine_create_node() {
         let mut engine = Engine::new().unwrap();
-        
+
         // Test creating a node
         let labels = vec!["Person".to_string()];
         let properties = serde_json::json!({"name": "Alice", "age": 30});
-        
+
         let result = engine.create_node(labels, properties);
         // Should not panic, even if creation fails
         drop(result);
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn test_engine_create_relationship() {
         let mut engine = Engine::new().unwrap();
-        
+
         // Test creating a relationship
         let result = engine.create_relationship(
             1, // from
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_engine_get_node() {
         let mut engine = Engine::new().unwrap();
-        
+
         // Test getting a node
         let result = engine.get_node(1);
         // Should not panic, even if node doesn't exist
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn test_engine_get_relationship() {
         let mut engine = Engine::new().unwrap();
-        
+
         // Test getting a relationship
         let result = engine.get_relationship(1);
         // Should not panic, even if relationship doesn't exist
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn test_engine_knn_search() {
         let engine = Engine::new().unwrap();
-        
+
         // Test KNN search
         let vector = vec![0.1, 0.2, 0.3, 0.4];
         let result = engine.knn_search("Person", &vector, 5);
@@ -580,14 +580,17 @@ mod tests {
     #[test]
     fn test_engine_health_check() {
         let engine = Engine::new().unwrap();
-        
+
         // Test health check
         let status = engine.health_check().unwrap();
-        
+
         // Test that health status is properly structured
-        assert!(matches!(status.overall, HealthState::Healthy | HealthState::Unhealthy | HealthState::Degraded));
+        assert!(matches!(
+            status.overall,
+            HealthState::Healthy | HealthState::Unhealthy | HealthState::Degraded
+        ));
         assert!(!status.components.is_empty());
-        
+
         // Test that all expected components are present
         let expected_components = ["catalog", "storage", "page_cache", "wal", "indexes"];
         for component in expected_components {
@@ -599,7 +602,7 @@ mod tests {
     fn test_engine_stats_serialization() {
         let engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
-        
+
         // Test JSON serialization
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("nodes"));
@@ -610,7 +613,7 @@ mod tests {
         assert!(json.contains("page_cache_misses"));
         assert!(json.contains("wal_entries"));
         assert!(json.contains("active_transactions"));
-        
+
         // Test deserialization
         let deserialized: EngineStats = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.nodes, stats.nodes);
@@ -625,14 +628,16 @@ mod tests {
             overall: HealthState::Healthy,
             components: std::collections::HashMap::new(),
         };
-        status.components.insert("test".to_string(), HealthState::Healthy);
-        
+        status
+            .components
+            .insert("test".to_string(), HealthState::Healthy);
+
         // Test JSON serialization
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("overall"));
         assert!(json.contains("components"));
         assert!(json.contains("test"));
-        
+
         // Test deserialization
         let deserialized: HealthStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.overall, HealthState::Healthy);
@@ -645,18 +650,18 @@ mod tests {
         assert_eq!(HealthState::Healthy, HealthState::Healthy);
         assert_eq!(HealthState::Unhealthy, HealthState::Unhealthy);
         assert_eq!(HealthState::Degraded, HealthState::Degraded);
-        
+
         assert_ne!(HealthState::Healthy, HealthState::Unhealthy);
         assert_ne!(HealthState::Healthy, HealthState::Degraded);
         assert_ne!(HealthState::Unhealthy, HealthState::Degraded);
-        
+
         // Test serialization
         let healthy_json = serde_json::to_string(&HealthState::Healthy).unwrap();
         assert!(healthy_json.contains("Healthy"));
-        
+
         let unhealthy_json = serde_json::to_string(&HealthState::Unhealthy).unwrap();
         assert!(unhealthy_json.contains("Unhealthy"));
-        
+
         let degraded_json = serde_json::to_string(&HealthState::Degraded).unwrap();
         assert!(degraded_json.contains("Degraded"));
     }
@@ -666,7 +671,7 @@ mod tests {
         let engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
         let cloned_stats = stats.clone();
-        
+
         assert_eq!(stats.nodes, cloned_stats.nodes);
         assert_eq!(stats.relationships, cloned_stats.relationships);
         assert_eq!(stats.labels, cloned_stats.labels);
@@ -683,8 +688,10 @@ mod tests {
             overall: HealthState::Healthy,
             components: std::collections::HashMap::new(),
         };
-        status.components.insert("test".to_string(), HealthState::Healthy);
-        
+        status
+            .components
+            .insert("test".to_string(), HealthState::Healthy);
+
         let cloned_status = status.clone();
         assert_eq!(status.overall, cloned_status.overall);
         assert_eq!(status.components.len(), cloned_status.components.len());
@@ -695,7 +702,7 @@ mod tests {
     fn test_health_state_copy() {
         let healthy = HealthState::Healthy;
         let copied = healthy;
-        
+
         assert_eq!(healthy, copied);
         assert_eq!(format!("{:?}", healthy), "Healthy");
         assert_eq!(format!("{:?}", copied), "Healthy");
@@ -706,7 +713,7 @@ mod tests {
         let engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
         let debug = format!("{:?}", stats);
-        
+
         assert!(debug.contains("EngineStats"));
         assert!(debug.contains("nodes"));
         assert!(debug.contains("relationships"));
@@ -718,8 +725,10 @@ mod tests {
             overall: HealthState::Healthy,
             components: std::collections::HashMap::new(),
         };
-        status.components.insert("test".to_string(), HealthState::Healthy);
-        
+        status
+            .components
+            .insert("test".to_string(), HealthState::Healthy);
+
         let debug = format!("{:?}", status);
         assert!(debug.contains("HealthStatus"));
         assert!(debug.contains("overall"));
@@ -731,11 +740,11 @@ mod tests {
         let healthy = HealthState::Healthy;
         let debug = format!("{:?}", healthy);
         assert_eq!(debug, "Healthy");
-        
+
         let unhealthy = HealthState::Unhealthy;
         let debug = format!("{:?}", unhealthy);
         assert_eq!(debug, "Unhealthy");
-        
+
         let degraded = HealthState::Degraded;
         let debug = format!("{:?}", degraded);
         assert_eq!(debug, "Degraded");
@@ -744,7 +753,7 @@ mod tests {
     #[test]
     fn test_engine_component_access() {
         let engine = Engine::new().unwrap();
-        
+
         // Test that all components are accessible
         let _catalog = &engine.catalog;
         let _storage = &engine.storage;
@@ -753,22 +762,23 @@ mod tests {
         let _transaction_manager = &engine.transaction_manager;
         let _indexes = &engine.indexes;
         let _executor = &engine.executor;
-        
+
         // Test passes if all components are accessible
     }
 
     #[test]
     fn test_engine_mut_operations() {
         let mut engine = Engine::new().unwrap();
-        
+
         // Test mutable operations
         let _stats = engine.stats().unwrap();
         let _cypher_result = engine.execute_cypher("MATCH (n) RETURN n");
         let _node_result = engine.create_node(vec!["Test".to_string()], serde_json::Value::Null);
-        let _rel_result = engine.create_relationship(1, 2, "TEST".to_string(), serde_json::Value::Null);
+        let _rel_result =
+            engine.create_relationship(1, 2, "TEST".to_string(), serde_json::Value::Null);
         let _get_node = engine.get_node(1);
         let _get_rel = engine.get_relationship(1);
-        
+
         // Test passes if all mutable operations compile
     }
 }

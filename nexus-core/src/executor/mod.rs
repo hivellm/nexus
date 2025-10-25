@@ -1709,7 +1709,7 @@ mod tests {
         // Create a label and add some nodes to the index
         let catalog = Catalog::new("./test_data").unwrap();
         let label_id = catalog.get_or_create_label("Person").unwrap();
-        
+
         // Add some test nodes to the label index
         let mut label_index = LabelIndex::new();
         label_index.add_node(1, &[label_id]).unwrap();
@@ -1743,7 +1743,7 @@ mod tests {
         let (executor, _dir) = create_test_executor();
 
         let mut context = ExecutionContext::new(HashMap::new());
-        
+
         // Create test nodes
         let mut node1 = Map::new();
         node1.insert("id".to_string(), Value::Number(1.into()));
@@ -1755,10 +1755,10 @@ mod tests {
         node2.insert("name".to_string(), Value::String("Bob".to_string()));
         node2.insert("age".to_string(), Value::Number(30.into()));
 
-        context.set_variable("n", Value::Array(vec![
-            Value::Object(node1),
-            Value::Object(node2),
-        ]));
+        context.set_variable(
+            "n",
+            Value::Array(vec![Value::Object(node1), Value::Object(node2)]),
+        );
 
         // Test filter with age > 25
         executor.execute_filter(&mut context, "n.age > 25").unwrap();
@@ -1767,7 +1767,10 @@ mod tests {
         if let Some(Value::Array(nodes)) = context.get_variable("n") {
             assert_eq!(nodes.len(), 1);
             if let Value::Object(node_obj) = &nodes[0] {
-                assert_eq!(node_obj.get("name"), Some(&Value::String("Bob".to_string())));
+                assert_eq!(
+                    node_obj.get("name"),
+                    Some(&Value::String("Bob".to_string()))
+                );
             }
         } else {
             panic!("Expected array of nodes");
@@ -1779,21 +1782,23 @@ mod tests {
         let (executor, _dir) = create_test_executor();
 
         let mut context = ExecutionContext::new(HashMap::new());
-        
+
         // Create test source nodes
         let mut source_node = Map::new();
         source_node.insert("id".to_string(), Value::Number(1.into()));
         context.set_variable("source", Value::Array(vec![Value::Object(source_node)]));
 
         // Test expand operation
-        executor.execute_expand(
-            &mut context,
-            None, // any type
-            Direction::Outgoing,
-            "source",
-            "target",
-            "rel",
-        ).unwrap();
+        executor
+            .execute_expand(
+                &mut context,
+                None, // any type
+                Direction::Outgoing,
+                "source",
+                "target",
+                "rel",
+            )
+            .unwrap();
 
         // Should have target nodes and relationships
         assert!(context.get_variable("target").is_some());
@@ -1805,16 +1810,18 @@ mod tests {
         let (executor, _dir) = create_test_executor();
 
         let mut context = ExecutionContext::new(HashMap::new());
-        
+
         // Create test nodes
         let mut node = Map::new();
         node.insert("id".to_string(), Value::Number(1.into()));
         node.insert("name".to_string(), Value::String("Alice".to_string()));
-        
+
         context.set_variable("n", Value::Array(vec![Value::Object(node)]));
 
         // Test project operation
-        let results = executor.execute_project(&context, &["n".to_string()]).unwrap();
+        let results = executor
+            .execute_project(&context, &["n".to_string()])
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].values.len(), 1);
     }
@@ -1824,7 +1831,7 @@ mod tests {
         let (executor, _dir) = create_test_executor();
 
         let mut context = ExecutionContext::new(HashMap::new());
-        
+
         // Create test nodes with different ages
         let mut node1 = Map::new();
         node1.insert("id".to_string(), Value::Number(1.into()));
@@ -1838,14 +1845,19 @@ mod tests {
         node3.insert("id".to_string(), Value::Number(3.into()));
         node3.insert("age".to_string(), Value::Number(25.into()));
 
-        context.set_variable("n", Value::Array(vec![
-            Value::Object(node1),
-            Value::Object(node2),
-            Value::Object(node3),
-        ]));
+        context.set_variable(
+            "n",
+            Value::Array(vec![
+                Value::Object(node1),
+                Value::Object(node2),
+                Value::Object(node3),
+            ]),
+        );
 
         // Test sort by age ascending
-        executor.execute_sort(&mut context, &["age".to_string()], &[true]).unwrap();
+        executor
+            .execute_sort(&mut context, &["age".to_string()], &[true])
+            .unwrap();
 
         // Check that nodes are sorted by age
         if let Some(Value::Array(nodes)) = context.get_variable("n") {
@@ -1872,7 +1884,9 @@ mod tests {
         let (executor, _dir) = create_test_executor();
 
         let mut context = ExecutionContext::new(HashMap::new());
-        context.params.insert("min_age".to_string(), Value::Number(25.into()));
+        context
+            .params
+            .insert("min_age".to_string(), Value::Number(25.into()));
 
         // Create test node
         let mut node = Map::new();
@@ -1883,17 +1897,23 @@ mod tests {
         // Test various predicates
         let mut parser = parser::CypherParser::new("n.age > $min_age".to_string());
         let expr = parser.parse_expression().unwrap();
-        let result = executor.evaluate_predicate(&node_value, &expr, &context).unwrap();
+        let result = executor
+            .evaluate_predicate(&node_value, &expr, &context)
+            .unwrap();
         assert!(result); // 30 > 25
 
         let mut parser = parser::CypherParser::new("n.age < 20".to_string());
         let expr = parser.parse_expression().unwrap();
-        let result = executor.evaluate_predicate(&node_value, &expr, &context).unwrap();
+        let result = executor
+            .evaluate_predicate(&node_value, &expr, &context)
+            .unwrap();
         assert!(!result); // 30 < 20 is false
 
         let mut parser = parser::CypherParser::new("n.age = 30".to_string());
         let expr = parser.parse_expression().unwrap();
-        let result = executor.evaluate_predicate(&node_value, &expr, &context).unwrap();
+        let result = executor
+            .evaluate_predicate(&node_value, &expr, &context)
+            .unwrap();
         assert!(result); // 30 = 30
     }
 
@@ -1902,7 +1922,9 @@ mod tests {
         let (executor, _dir) = create_test_executor();
 
         let mut context = ExecutionContext::new(HashMap::new());
-        context.params.insert("param1".to_string(), Value::String("test".to_string()));
+        context
+            .params
+            .insert("param1".to_string(), Value::String("test".to_string()));
 
         // Create test node
         let mut node = Map::new();
@@ -1913,19 +1935,25 @@ mod tests {
         // Test variable access
         let mut parser = parser::CypherParser::new("n.name".to_string());
         let expr = parser.parse_expression().unwrap();
-        let result = executor.evaluate_expression(&node_value, &expr, &context).unwrap();
+        let result = executor
+            .evaluate_expression(&node_value, &expr, &context)
+            .unwrap();
         assert_eq!(result, Value::String("Alice".to_string()));
 
         // Test parameter access
         let mut parser = parser::CypherParser::new("$param1".to_string());
         let expr = parser.parse_expression().unwrap();
-        let result = executor.evaluate_expression(&node_value, &expr, &context).unwrap();
+        let result = executor
+            .evaluate_expression(&node_value, &expr, &context)
+            .unwrap();
         assert_eq!(result, Value::String("test".to_string()));
 
         // Test literal
         let mut parser = parser::CypherParser::new("42".to_string());
         let expr = parser.parse_expression().unwrap();
-        let result = executor.evaluate_expression(&node_value, &expr, &context).unwrap();
+        let result = executor
+            .evaluate_expression(&node_value, &expr, &context)
+            .unwrap();
         assert_eq!(result, Value::Number(42.into()));
     }
 
@@ -1934,8 +1962,16 @@ mod tests {
         let (executor, _dir) = create_test_executor();
 
         // Test value_to_number
-        assert_eq!(executor.value_to_number(&Value::Number(42.into())).unwrap(), 42.0);
-        assert_eq!(executor.value_to_number(&Value::String("123".to_string())).unwrap(), 123.0);
+        assert_eq!(
+            executor.value_to_number(&Value::Number(42.into())).unwrap(),
+            42.0
+        );
+        assert_eq!(
+            executor
+                .value_to_number(&Value::String("123".to_string()))
+                .unwrap(),
+            123.0
+        );
         assert_eq!(executor.value_to_number(&Value::Bool(true)).unwrap(), 1.0);
         assert_eq!(executor.value_to_number(&Value::Bool(false)).unwrap(), 0.0);
         assert_eq!(executor.value_to_number(&Value::Null).unwrap(), 0.0);
@@ -1945,8 +1981,16 @@ mod tests {
         assert!(!executor.value_to_bool(&Value::Bool(false)).unwrap());
         assert!(executor.value_to_bool(&Value::Number(1.into())).unwrap());
         assert!(!executor.value_to_bool(&Value::Number(0.into())).unwrap());
-        assert!(executor.value_to_bool(&Value::String("hello".to_string())).unwrap());
-        assert!(!executor.value_to_bool(&Value::String("".to_string())).unwrap());
+        assert!(
+            executor
+                .value_to_bool(&Value::String("hello".to_string()))
+                .unwrap()
+        );
+        assert!(
+            !executor
+                .value_to_bool(&Value::String("".to_string()))
+                .unwrap()
+        );
         assert!(!executor.value_to_bool(&Value::Null).unwrap());
     }
 
@@ -1986,11 +2030,17 @@ mod tests {
 
         // Test string comparisons
         assert_eq!(
-            executor.compare_values_for_sort(&Value::String("a".to_string()), &Value::String("b".to_string())),
+            executor.compare_values_for_sort(
+                &Value::String("a".to_string()),
+                &Value::String("b".to_string())
+            ),
             Ordering::Less
         );
         assert_eq!(
-            executor.compare_values_for_sort(&Value::String("b".to_string()), &Value::String("a".to_string())),
+            executor.compare_values_for_sort(
+                &Value::String("b".to_string()),
+                &Value::String("a".to_string())
+            ),
             Ordering::Greater
         );
     }
@@ -2166,14 +2216,19 @@ mod tests {
         let label_id = catalog.get_or_create_label("Person").unwrap();
 
         // Test AST to operators conversion
-        let mut parser = parser::CypherParser::new("MATCH (n:Person) WHERE n.age > 25 RETURN n LIMIT 10".to_string());
+        let mut parser = parser::CypherParser::new(
+            "MATCH (n:Person) WHERE n.age > 25 RETURN n LIMIT 10".to_string(),
+        );
         let ast = parser.parse().unwrap();
         let operators = executor.ast_to_operators(&ast).unwrap();
 
         assert_eq!(operators.len(), 4); // NodeByLabel, Filter, Project, Limit
 
         match &operators[0] {
-            Operator::NodeByLabel { label_id: parsed_label_id, variable } => {
+            Operator::NodeByLabel {
+                label_id: parsed_label_id,
+                variable,
+            } => {
                 assert_eq!(*parsed_label_id, label_id);
                 assert_eq!(variable, "n");
             }
@@ -2217,30 +2272,33 @@ mod tests {
             label_id: 2,
             variable: "m".to_string(),
         };
-        executor.execute_union(&mut context, &left_op, &right_op).unwrap();
+        executor
+            .execute_union(&mut context, &left_op, &right_op)
+            .unwrap();
         // Should not panic (MVP implementation does nothing)
 
         // Test Join operator (MVP implementation)
-        executor.execute_join(
-            &mut context,
-            &left_op,
-            &right_op,
-            JoinType::Inner,
-            Some("n.id = m.id"),
-        ).unwrap();
+        executor
+            .execute_join(
+                &mut context,
+                &left_op,
+                &right_op,
+                JoinType::Inner,
+                Some("n.id = m.id"),
+            )
+            .unwrap();
         // Should not panic (MVP implementation does nothing)
 
         // Test IndexScan operator (MVP implementation)
-        executor.execute_index_scan(
-            &mut context,
-            IndexType::Label,
-            "Person",
-            "n",
-        ).unwrap();
+        executor
+            .execute_index_scan(&mut context, IndexType::Label, "Person", "n")
+            .unwrap();
         // Should not panic (MVP implementation does nothing)
 
         // Test Distinct operator (MVP implementation)
-        executor.execute_distinct(&mut context, &["n.id".to_string()]).unwrap();
+        executor
+            .execute_distinct(&mut context, &["n.id".to_string()])
+            .unwrap();
         // Should not panic (MVP implementation does nothing)
     }
 }

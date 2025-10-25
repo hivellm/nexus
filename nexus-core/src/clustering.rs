@@ -4,8 +4,8 @@
 //! for organizing nodes in the graph based on their properties, labels, and
 //! structural relationships.
 
-use crate::graph_simple::{Graph, Node, NodeId, PropertyValue};
 use crate::error::Result;
+use crate::graph_simple::{Graph, Node, NodeId, PropertyValue};
 use std::collections::{HashMap, HashSet};
 // use std::cmp::{max, min}; // Not used in current implementation
 use std::f64;
@@ -128,7 +128,10 @@ pub struct ClusteringConfig {
 impl Default for ClusteringConfig {
     fn default() -> Self {
         Self {
-            algorithm: ClusteringAlgorithm::KMeans { k: 3, max_iterations: 100 },
+            algorithm: ClusteringAlgorithm::KMeans {
+                k: 3,
+                max_iterations: 100,
+            },
             feature_strategy: FeatureStrategy::LabelBased,
             distance_metric: DistanceMetric::Euclidean,
             random_seed: None,
@@ -240,15 +243,11 @@ impl ClusteringEngine {
             ClusteringAlgorithm::Hierarchical { linkage } => {
                 self.hierarchical_clustering(graph, linkage, &nodes)
             }
-            ClusteringAlgorithm::LabelBased => {
-                self.label_based_grouping(graph, &nodes)
-            }
+            ClusteringAlgorithm::LabelBased => self.label_based_grouping(graph, &nodes),
             ClusteringAlgorithm::PropertyBased { property_key } => {
                 self.property_based_grouping(graph, property_key, &nodes)
             }
-            ClusteringAlgorithm::CommunityDetection => {
-                self.community_detection(graph, &nodes)
-            }
+            ClusteringAlgorithm::CommunityDetection => self.community_detection(graph, &nodes),
             ClusteringAlgorithm::DBSCAN { eps, min_points } => {
                 self.dbscan_clustering(graph, *eps, *min_points, &nodes)
             }
@@ -282,20 +281,20 @@ impl ClusteringEngine {
         // This is a simplified implementation - in practice, you'd want to
         // maintain a global label vocabulary
         let mut features = vec![0.0; 10]; // Fixed size for simplicity
-        
+
         for (i, _label) in node.labels.iter().enumerate() {
             if i < features.len() {
                 features[i] = 1.0;
             }
         }
-        
+
         features
     }
 
     /// Extract features from node properties
     fn extract_property_features(&self, node: &Node, property_keys: &[String]) -> Vec<f64> {
         let mut features = Vec::new();
-        
+
         for key in property_keys {
             if let Some(value) = node.get_property(key) {
                 match value {
@@ -312,37 +311,42 @@ impl ClusteringEngine {
                 features.push(0.0);
             }
         }
-        
+
         features
     }
 
     /// Extract structural features from the graph
     fn extract_structural_features(&self, graph: &Graph, node: &Node) -> Vec<f64> {
         let mut features = Vec::new();
-        
+
         // Degree centrality (number of connections)
         let edges = graph.get_edges_for_node(node.id).unwrap_or_default();
         features.push(edges.len() as f64);
-        
+
         // In-degree and out-degree
         let in_degree = edges.iter().filter(|e| e.target == node.id).count();
         let out_degree = edges.iter().filter(|e| e.source == node.id).count();
         features.push(in_degree as f64);
         features.push(out_degree as f64);
-        
+
         // Label count
         features.push(node.labels.len() as f64);
-        
+
         // Property count
         features.push(node.properties.len() as f64);
-        
+
         features
     }
 
     /// Extract features using multiple strategies
-    fn extract_combined_features(&self, graph: &Graph, node: &Node, strategies: &[FeatureStrategy]) -> Vec<f64> {
+    fn extract_combined_features(
+        &self,
+        graph: &Graph,
+        node: &Node,
+        strategies: &[FeatureStrategy],
+    ) -> Vec<f64> {
         let mut all_features = Vec::new();
-        
+
         for strategy in strategies {
             let features = match strategy {
                 FeatureStrategy::LabelBased => self.extract_label_features(node),
@@ -357,7 +361,7 @@ impl ClusteringEngine {
             };
             all_features.extend(features);
         }
-        
+
         all_features
     }
 
@@ -368,27 +372,26 @@ impl ClusteringEngine {
         }
 
         match self.config.distance_metric {
-            DistanceMetric::Euclidean => {
-                features1.iter()
-                    .zip(features2.iter())
-                    .map(|(a, b)| (a - b).powi(2))
-                    .sum::<f64>()
-                    .sqrt()
-            }
-            DistanceMetric::Manhattan => {
-                features1.iter()
-                    .zip(features2.iter())
-                    .map(|(a, b)| (a - b).abs())
-                    .sum()
-            }
+            DistanceMetric::Euclidean => features1
+                .iter()
+                .zip(features2.iter())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f64>()
+                .sqrt(),
+            DistanceMetric::Manhattan => features1
+                .iter()
+                .zip(features2.iter())
+                .map(|(a, b)| (a - b).abs())
+                .sum(),
             DistanceMetric::Cosine => {
-                let dot_product: f64 = features1.iter()
+                let dot_product: f64 = features1
+                    .iter()
                     .zip(features2.iter())
                     .map(|(a, b)| a * b)
                     .sum();
                 let norm1: f64 = features1.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
                 let norm2: f64 = features2.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
-                
+
                 if norm1 == 0.0 || norm2 == 0.0 {
                     1.0
                 } else {
@@ -397,28 +400,45 @@ impl ClusteringEngine {
             }
             DistanceMetric::Jaccard => {
                 // For binary features
-                let intersection: f64 = features1.iter()
+                let intersection: f64 = features1
+                    .iter()
                     .zip(features2.iter())
                     .map(|(a, b)| if *a > 0.0 && *b > 0.0 { 1.0 } else { 0.0 })
                     .sum();
-                let union: f64 = features1.iter()
+                let union: f64 = features1
+                    .iter()
                     .zip(features2.iter())
                     .map(|(a, b)| if *a > 0.0 || *b > 0.0 { 1.0 } else { 0.0 })
                     .sum();
-                
-                if union == 0.0 { 1.0 } else { 1.0 - (intersection / union) }
+
+                if union == 0.0 {
+                    1.0
+                } else {
+                    1.0 - (intersection / union)
+                }
             }
-            DistanceMetric::Hamming => {
-                features1.iter()
-                    .zip(features2.iter())
-                    .map(|(a, b)| if (a - b).abs() < f64::EPSILON { 0.0 } else { 1.0 })
-                    .sum()
-            }
+            DistanceMetric::Hamming => features1
+                .iter()
+                .zip(features2.iter())
+                .map(|(a, b)| {
+                    if (a - b).abs() < f64::EPSILON {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                })
+                .sum(),
         }
     }
 
     /// K-means clustering implementation
-    fn kmeans_clustering(&self, graph: &Graph, k: usize, max_iterations: usize, nodes: &[Node]) -> Result<ClusteringResult> {
+    fn kmeans_clustering(
+        &self,
+        graph: &Graph,
+        k: usize,
+        max_iterations: usize,
+        nodes: &[Node],
+    ) -> Result<ClusteringResult> {
         if nodes.is_empty() || k == 0 {
             return Ok(ClusteringResult {
                 clusters: vec![],
@@ -441,10 +461,10 @@ impl ClusteringEngine {
 
         for iteration in 0..max_iterations {
             iterations = iteration + 1;
-            
+
             // Assign nodes to clusters
-            for i in 0..actual_k {
-                clusters[i].nodes.clear();
+            for cluster in clusters.iter_mut().take(actual_k) {
+                cluster.nodes.clear();
             }
 
             for (node_idx, feature_vector) in features.iter().enumerate() {
@@ -543,7 +563,8 @@ impl ClusteringEngine {
         for _ in 1..k {
             let mut distances = Vec::new();
             for feature in features {
-                let min_distance = centroids.iter()
+                let min_distance = centroids
+                    .iter()
                     .map(|centroid| self.calculate_distance(feature, centroid))
                     .fold(f64::INFINITY, f64::min);
                 distances.push(min_distance);
@@ -552,9 +573,8 @@ impl ClusteringEngine {
             // Convert distances to probabilities
             let total_distance: f64 = distances.iter().sum();
             if total_distance > 0.0 {
-                let probabilities: Vec<f64> = distances.iter()
-                    .map(|d| d / total_distance)
-                    .collect();
+                let probabilities: Vec<f64> =
+                    distances.iter().map(|d| d / total_distance).collect();
 
                 // Choose next centroid based on probabilities
                 let random_val: f64 = rng.gen_f64();
@@ -608,7 +628,12 @@ impl ClusteringEngine {
     }
 
     /// Hierarchical clustering implementation
-    fn hierarchical_clustering(&self, graph: &Graph, _linkage: &LinkageType, nodes: &[Node]) -> Result<ClusteringResult> {
+    fn hierarchical_clustering(
+        &self,
+        graph: &Graph,
+        _linkage: &LinkageType,
+        nodes: &[Node],
+    ) -> Result<ClusteringResult> {
         // Simplified hierarchical clustering implementation
         let features = self.extract_features(graph, nodes)?;
         let n = features.len();
@@ -664,7 +689,12 @@ impl ClusteringEngine {
     }
 
     /// Property-based grouping
-    fn property_based_grouping(&self, graph: &Graph, property_key: &str, nodes: &[Node]) -> Result<ClusteringResult> {
+    fn property_based_grouping(
+        &self,
+        graph: &Graph,
+        property_key: &str,
+        nodes: &[Node],
+    ) -> Result<ClusteringResult> {
         let mut property_groups: HashMap<String, Vec<NodeId>> = HashMap::new();
 
         for node in nodes {
@@ -688,10 +718,7 @@ impl ClusteringEngine {
             .enumerate()
             .map(|(i, (value, node_ids))| {
                 let mut cluster = Cluster::new(i as u64, node_ids);
-                cluster.set_metadata(
-                    property_key.to_string(),
-                    PropertyValue::String(value),
-                );
+                cluster.set_metadata(property_key.to_string(), PropertyValue::String(value));
                 cluster
             })
             .collect();
@@ -720,10 +747,13 @@ impl ClusteringEngine {
             if !visited.contains(&node.id) {
                 let mut cluster_nodes = Vec::new();
                 self.dfs_community_detection(graph, node.id, &mut visited, &mut cluster_nodes)?;
-                
+
                 if !cluster_nodes.is_empty() {
                     let mut cluster = Cluster::new(cluster_id, cluster_nodes);
-                    cluster.set_metadata("community_id".to_string(), PropertyValue::Int64(cluster_id as i64));
+                    cluster.set_metadata(
+                        "community_id".to_string(),
+                        PropertyValue::Int64(cluster_id as i64),
+                    );
                     clusters.push(cluster);
                     cluster_id += 1;
                 }
@@ -765,7 +795,13 @@ impl ClusteringEngine {
     }
 
     /// DBSCAN clustering implementation
-    fn dbscan_clustering(&self, graph: &Graph, eps: f64, min_points: usize, nodes: &[Node]) -> Result<ClusteringResult> {
+    fn dbscan_clustering(
+        &self,
+        graph: &Graph,
+        eps: f64,
+        min_points: usize,
+        nodes: &[Node],
+    ) -> Result<ClusteringResult> {
         if nodes.is_empty() {
             return Ok(ClusteringResult {
                 clusters: vec![],
@@ -811,7 +847,10 @@ impl ClusteringEngine {
 
             if !cluster_nodes.is_empty() {
                 let mut cluster = Cluster::new(cluster_id, cluster_nodes);
-                cluster.set_metadata("density".to_string(), PropertyValue::Int64(min_points as i64));
+                cluster.set_metadata(
+                    "density".to_string(),
+                    PropertyValue::Int64(min_points as i64),
+                );
                 clusters.push(cluster);
                 cluster_id += 1;
             }
@@ -896,55 +935,77 @@ impl ClusteringEngine {
             for &node_id in &cluster.nodes {
                 if let Some(node_idx) = nodes.iter().position(|n| n.id == node_id) {
                     let node_features = &features[node_idx];
-                    
+
                     // Calculate average distance to other points in same cluster
                     let mut intra_cluster_dist = 0.0;
                     let mut intra_count = 0;
-                    
+
                     for &other_node_id in &cluster.nodes {
                         if other_node_id != node_id {
-                            if let Some(other_idx) = nodes.iter().position(|n| n.id == other_node_id) {
-                                intra_cluster_dist += self.calculate_distance(node_features, &features[other_idx]);
+                            if let Some(other_idx) =
+                                nodes.iter().position(|n| n.id == other_node_id)
+                            {
+                                intra_cluster_dist +=
+                                    self.calculate_distance(node_features, &features[other_idx]);
                                 intra_count += 1;
                             }
                         }
                     }
-                    
-                    let a = if intra_count > 0 { intra_cluster_dist / intra_count as f64 } else { 0.0 };
-                    
+
+                    let a = if intra_count > 0 {
+                        intra_cluster_dist / intra_count as f64
+                    } else {
+                        0.0
+                    };
+
                     // Calculate average distance to nearest other cluster
                     let mut min_inter_cluster_dist = f64::INFINITY;
-                    
+
                     for other_cluster in clusters {
                         if other_cluster.id != cluster.id {
                             let mut inter_cluster_dist = 0.0;
                             let mut inter_count = 0;
-                            
+
                             for &other_node_id in &other_cluster.nodes {
-                                if let Some(other_idx) = nodes.iter().position(|n| n.id == other_node_id) {
-                                    inter_cluster_dist += self.calculate_distance(node_features, &features[other_idx]);
+                                if let Some(other_idx) =
+                                    nodes.iter().position(|n| n.id == other_node_id)
+                                {
+                                    inter_cluster_dist += self
+                                        .calculate_distance(node_features, &features[other_idx]);
                                     inter_count += 1;
                                 }
                             }
-                            
-                            let b = if inter_count > 0 { inter_cluster_dist / inter_count as f64 } else { 0.0 };
+
+                            let b = if inter_count > 0 {
+                                inter_cluster_dist / inter_count as f64
+                            } else {
+                                0.0
+                            };
                             min_inter_cluster_dist = min_inter_cluster_dist.min(b);
                         }
                     }
-                    
-                    let b = if min_inter_cluster_dist == f64::INFINITY { 0.0 } else { min_inter_cluster_dist };
-                    
+
+                    let b = if min_inter_cluster_dist == f64::INFINITY {
+                        0.0
+                    } else {
+                        min_inter_cluster_dist
+                    };
+
                     // Calculate silhouette score for this point
                     let max_ab = a.max(b);
                     let silhouette = if max_ab > 0.0 { (b - a) / max_ab } else { 0.0 };
-                    
+
                     total_score += silhouette;
                     total_points += 1;
                 }
             }
         }
 
-        Ok(if total_points > 0 { total_score / total_points as f64 } else { 0.0 })
+        Ok(if total_points > 0 {
+            total_score / total_points as f64
+        } else {
+            0.0
+        })
     }
 
     /// Calculate within-cluster and between-cluster sum of squares
@@ -1060,11 +1121,19 @@ impl ClusteringEngine {
             }
         }
 
-        Ok(if count > 0 { (total_distance / count as f64).sqrt() } else { 0.0 })
+        Ok(if count > 0 {
+            (total_distance / count as f64).sqrt()
+        } else {
+            0.0
+        })
     }
 
     /// Calculate simple distance between cluster centroids
-    fn calculate_cluster_distance_simple(&self, cluster1: &Cluster, cluster2: &Cluster) -> Result<f64> {
+    fn calculate_cluster_distance_simple(
+        &self,
+        cluster1: &Cluster,
+        cluster2: &Cluster,
+    ) -> Result<f64> {
         if let (Some(centroid1), Some(centroid2)) = (&cluster1.centroid, &cluster2.centroid) {
             Ok(self.calculate_distance(centroid1, centroid2))
         } else {
@@ -1102,36 +1171,57 @@ mod tests {
 
     fn create_test_graph() -> Graph {
         let mut graph = Graph::new();
-        
+
         // Create test nodes with different labels and properties
-        let person1 = graph.create_node(vec!["Person".to_string(), "Employee".to_string()]).unwrap();
-        let person2 = graph.create_node(vec!["Person".to_string(), "Manager".to_string()]).unwrap();
-        let person3 = graph.create_node(vec!["Person".to_string(), "Employee".to_string()]).unwrap();
+        let person1 = graph
+            .create_node(vec!["Person".to_string(), "Employee".to_string()])
+            .unwrap();
+        let person2 = graph
+            .create_node(vec!["Person".to_string(), "Manager".to_string()])
+            .unwrap();
+        let person3 = graph
+            .create_node(vec!["Person".to_string(), "Employee".to_string()])
+            .unwrap();
         let company1 = graph.create_node(vec!["Company".to_string()]).unwrap();
         let company2 = graph.create_node(vec!["Company".to_string()]).unwrap();
 
         // Add properties
         let mut node1 = graph.get_node_mut(person1).unwrap().unwrap().clone();
         node1.set_property("age".to_string(), PropertyValue::Int64(25));
-        node1.set_property("department".to_string(), PropertyValue::String("Engineering".to_string()));
+        node1.set_property(
+            "department".to_string(),
+            PropertyValue::String("Engineering".to_string()),
+        );
         graph.update_node(node1).unwrap();
 
         let mut node2 = graph.get_node_mut(person2).unwrap().unwrap().clone();
         node2.set_property("age".to_string(), PropertyValue::Int64(35));
-        node2.set_property("department".to_string(), PropertyValue::String("Management".to_string()));
+        node2.set_property(
+            "department".to_string(),
+            PropertyValue::String("Management".to_string()),
+        );
         graph.update_node(node2).unwrap();
 
         let mut node3 = graph.get_node_mut(person3).unwrap().unwrap().clone();
         node3.set_property("age".to_string(), PropertyValue::Int64(28));
-        node3.set_property("department".to_string(), PropertyValue::String("Engineering".to_string()));
+        node3.set_property(
+            "department".to_string(),
+            PropertyValue::String("Engineering".to_string()),
+        );
         graph.update_node(node3).unwrap();
 
         let mut comp1 = graph.get_node_mut(company1).unwrap().unwrap().clone();
-        comp1.set_property("industry".to_string(), PropertyValue::String("Technology".to_string()));
+        comp1.set_property(
+            "industry".to_string(),
+            PropertyValue::String("Technology".to_string()),
+        );
         graph.update_node(comp1).unwrap();
 
         let mut comp2 = graph.get_node_mut(company2).unwrap().unwrap().clone();
-        comp2.set_property("industry".to_string(), PropertyValue::String("Finance".to_string()));
+        comp2.set_property(
+            "industry".to_string(),
+            PropertyValue::String("Finance".to_string()),
+        );
         graph.update_node(comp2).unwrap();
 
         graph
@@ -1159,11 +1249,11 @@ mod tests {
     fn test_property_based_grouping() {
         let graph = create_test_graph();
         let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::PropertyBased { 
-                property_key: "department".to_string() 
+            algorithm: ClusteringAlgorithm::PropertyBased {
+                property_key: "department".to_string(),
             },
-            feature_strategy: FeatureStrategy::PropertyBased { 
-                property_keys: vec!["department".to_string()] 
+            feature_strategy: FeatureStrategy::PropertyBased {
+                property_keys: vec!["department".to_string()],
             },
             distance_metric: DistanceMetric::Euclidean,
             random_seed: Some(42),
@@ -1180,7 +1270,10 @@ mod tests {
     fn test_kmeans_clustering() {
         let graph = create_test_graph();
         let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::KMeans { k: 2, max_iterations: 10 },
+            algorithm: ClusteringAlgorithm::KMeans {
+                k: 2,
+                max_iterations: 10,
+            },
             feature_strategy: FeatureStrategy::Structural,
             distance_metric: DistanceMetric::Euclidean,
             random_seed: Some(42),
@@ -1207,14 +1300,17 @@ mod tests {
     #[test]
     fn test_cluster_operations() {
         let mut cluster = Cluster::new(0, vec![NodeId::new(1)]);
-        
+
         cluster.add_node(NodeId::new(2));
         assert_eq!(cluster.size(), 2);
-        
+
         cluster.remove_node(NodeId::new(1));
         assert_eq!(cluster.size(), 1);
-        
-        cluster.set_metadata("test".to_string(), PropertyValue::String("value".to_string()));
+
+        cluster.set_metadata(
+            "test".to_string(),
+            PropertyValue::String("value".to_string()),
+        );
         assert!(cluster.get_metadata("test").is_some());
     }
 
@@ -1222,11 +1318,316 @@ mod tests {
     fn test_distance_calculations() {
         let config = ClusteringConfig::default();
         let engine = ClusteringEngine::new(config);
-        
+
         let features1 = vec![1.0, 2.0, 3.0];
         let features2 = vec![4.0, 5.0, 6.0];
-        
+
         let euclidean = engine.calculate_distance(&features1, &features2);
         assert!((euclidean - 5.196).abs() < 0.01); // sqrt(3^2 + 3^2 + 3^2)
+    }
+
+    #[test]
+    fn test_cluster_with_centroid() {
+        let nodes = vec![NodeId::new(1), NodeId::new(2)];
+        let centroid = vec![1.5, 2.5, 3.5];
+        let cluster = Cluster::with_centroid(0, nodes, centroid.clone());
+
+        assert_eq!(cluster.id, 0);
+        assert_eq!(cluster.size(), 2);
+        assert_eq!(cluster.centroid, Some(centroid));
+    }
+
+    #[test]
+    fn test_cluster_metadata_operations() {
+        let mut cluster = Cluster::new(0, vec![NodeId::new(1)]);
+        
+        // Test setting metadata
+        cluster.set_metadata("key1".to_string(), PropertyValue::String("value1".to_string()));
+        cluster.set_metadata("key2".to_string(), PropertyValue::Int64(42));
+        
+        // Test getting metadata
+        assert_eq!(
+            cluster.get_metadata("key1"),
+            Some(&PropertyValue::String("value1".to_string()))
+        );
+        assert_eq!(
+            cluster.get_metadata("key2"),
+            Some(&PropertyValue::Int64(42))
+        );
+        assert_eq!(cluster.get_metadata("nonexistent"), None);
+        
+        // Test removing metadata by setting to None
+        cluster.set_metadata("key1".to_string(), PropertyValue::Null);
+        assert_eq!(cluster.get_metadata("key1"), Some(&PropertyValue::Null));
+        assert_eq!(cluster.get_metadata("key2"), Some(&PropertyValue::Int64(42)));
+    }
+
+    #[test]
+    fn test_cluster_contains_node() {
+        let cluster = Cluster::new(0, vec![NodeId::new(1), NodeId::new(2), NodeId::new(3)]);
+        
+        assert!(cluster.nodes.contains(&NodeId::new(1)));
+        assert!(cluster.nodes.contains(&NodeId::new(2)));
+        assert!(cluster.nodes.contains(&NodeId::new(3)));
+        assert!(!cluster.nodes.contains(&NodeId::new(4)));
+    }
+
+    #[test]
+    fn test_cluster_clear() {
+        let mut cluster = Cluster::new(0, vec![NodeId::new(1), NodeId::new(2)]);
+        cluster.set_metadata("test".to_string(), PropertyValue::String("value".to_string()));
+        
+        assert_eq!(cluster.size(), 2);
+        assert!(!cluster.is_empty());
+        
+        cluster.nodes.clear();
+        cluster.metadata.clear();
+        
+        assert_eq!(cluster.size(), 0);
+        assert!(cluster.is_empty());
+        assert!(cluster.get_metadata("test").is_none());
+    }
+
+    #[test]
+    fn test_clustering_config_default() {
+        let config = ClusteringConfig::default();
+        assert!(matches!(config.algorithm, ClusteringAlgorithm::KMeans { k: 3, max_iterations: 100 }));
+        assert!(matches!(config.feature_strategy, FeatureStrategy::LabelBased));
+        assert!(matches!(config.distance_metric, DistanceMetric::Euclidean));
+        assert_eq!(config.random_seed, None);
+    }
+
+    #[test]
+    fn test_clustering_config_creation() {
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::Structural,
+            distance_metric: DistanceMetric::Manhattan,
+            random_seed: Some(42),
+        };
+        
+        assert!(matches!(config.algorithm, ClusteringAlgorithm::LabelBased));
+        assert!(matches!(config.feature_strategy, FeatureStrategy::Structural));
+        assert!(matches!(config.distance_metric, DistanceMetric::Manhattan));
+        assert_eq!(config.random_seed, Some(42));
+    }
+
+    #[test]
+    fn test_clustering_engine_new() {
+        let config = ClusteringConfig::default();
+        let engine = ClusteringEngine::new(config);
+        assert!(engine.config.random_seed.is_none());
+    }
+
+    #[test]
+    fn test_distance_metrics() {
+        let config_euclidean = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::LabelBased,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: None,
+        };
+        let engine_euclidean = ClusteringEngine::new(config_euclidean);
+
+        let config_manhattan = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::LabelBased,
+            distance_metric: DistanceMetric::Manhattan,
+            random_seed: None,
+        };
+        let engine_manhattan = ClusteringEngine::new(config_manhattan);
+
+        let config_cosine = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::LabelBased,
+            distance_metric: DistanceMetric::Cosine,
+            random_seed: None,
+        };
+        let engine_cosine = ClusteringEngine::new(config_cosine);
+
+        let features1 = vec![1.0, 0.0];
+        let features2 = vec![0.0, 1.0];
+
+        let euclidean = engine_euclidean.calculate_distance(&features1, &features2);
+        let manhattan = engine_manhattan.calculate_distance(&features1, &features2);
+        let cosine = engine_cosine.calculate_distance(&features1, &features2);
+
+        assert!((euclidean - 1.414).abs() < 0.01); // sqrt(2)
+        assert!((manhattan - 2.0).abs() < 0.01); // 1 + 1
+        assert!((cosine - 1.0).abs() < 0.01); // 1 - 0 = 1
+    }
+
+    #[test]
+    fn test_clustering_result_creation() {
+        let clusters = vec![
+            Cluster::new(0, vec![NodeId::new(1)]),
+            Cluster::new(1, vec![NodeId::new(2)]),
+        ];
+        let mut metrics = ClusteringMetrics::default();
+        metrics.silhouette_score = 0.8;
+        let result = ClusteringResult {
+            clusters,
+            algorithm: ClusteringAlgorithm::LabelBased,
+            converged: true,
+            iterations: 5,
+            metrics,
+        };
+
+        assert_eq!(result.clusters.len(), 2);
+        assert!(result.converged);
+        assert_eq!(result.iterations, 5);
+        assert_eq!(result.metrics.silhouette_score, 0.8);
+    }
+
+    #[test]
+    fn test_empty_graph_clustering() {
+        let graph = Graph::new();
+        let config = ClusteringConfig::default();
+        let engine = ClusteringEngine::new(config);
+        
+        let result = engine.cluster(&graph).unwrap();
+        assert!(result.clusters.is_empty());
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_single_node_clustering() {
+        let mut graph = Graph::new();
+        let _node = graph.create_node(vec!["Person".to_string()]).unwrap();
+        
+        let config = ClusteringConfig::default();
+        let engine = ClusteringEngine::new(config);
+        
+        let result = engine.cluster(&graph).unwrap();
+        assert!(!result.clusters.is_empty());
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_dbscan_clustering() {
+        let graph = create_test_graph();
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::DBSCAN { eps: 0.5, min_points: 2 },
+            feature_strategy: FeatureStrategy::Structural,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: Some(42),
+        };
+
+        let engine = ClusteringEngine::new(config);
+        let result = engine.cluster(&graph).unwrap();
+
+        assert!(!result.clusters.is_empty());
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_hierarchical_clustering() {
+        let graph = create_test_graph();
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::Hierarchical { linkage: LinkageType::Single },
+            feature_strategy: FeatureStrategy::Structural,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: Some(42),
+        };
+
+        let engine = ClusteringEngine::new(config);
+        let result = engine.cluster(&graph).unwrap();
+
+        assert!(!result.clusters.is_empty());
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_community_detection_clustering() {
+        let graph = create_test_graph();
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::CommunityDetection,
+            feature_strategy: FeatureStrategy::Structural,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: Some(42),
+        };
+
+        let engine = ClusteringEngine::new(config);
+        let result = engine.cluster(&graph).unwrap();
+
+        assert!(!result.clusters.is_empty());
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_structural_feature_strategy() {
+        let graph = create_test_graph();
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::KMeans { k: 2, max_iterations: 10 },
+            feature_strategy: FeatureStrategy::Structural,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: Some(42),
+        };
+
+        let engine = ClusteringEngine::new(config);
+        let result = engine.cluster(&graph).unwrap();
+
+        assert!(!result.clusters.is_empty());
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_combined_feature_strategy() {
+        let graph = create_test_graph();
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::KMeans { k: 2, max_iterations: 10 },
+            feature_strategy: FeatureStrategy::Combined {
+                strategies: vec![
+                    FeatureStrategy::LabelBased,
+                    FeatureStrategy::PropertyBased { property_keys: vec!["age".to_string()] },
+                    FeatureStrategy::Structural,
+                ],
+            },
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: Some(42),
+        };
+
+        let engine = ClusteringEngine::new(config);
+        let result = engine.cluster(&graph).unwrap();
+
+        assert!(!result.clusters.is_empty());
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_jaccard_distance() {
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::LabelBased,
+            distance_metric: DistanceMetric::Jaccard,
+            random_seed: None,
+        };
+        let engine = ClusteringEngine::new(config);
+
+        let features1 = vec![1.0, 0.0, 1.0, 0.0];
+        let features2 = vec![0.0, 1.0, 1.0, 0.0];
+
+        let jaccard = engine.calculate_distance(&features1, &features2);
+        // Jaccard distance = 1 - Jaccard similarity
+        // Jaccard similarity = intersection / union = 1 / 3 = 0.333...
+        // Jaccard distance = 1 - 0.333... = 0.666...
+        assert!((jaccard - 0.666).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hamming_distance() {
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::LabelBased,
+            distance_metric: DistanceMetric::Hamming,
+            random_seed: None,
+        };
+        let engine = ClusteringEngine::new(config);
+
+        let features1 = vec![1.0, 0.0, 1.0, 0.0];
+        let features2 = vec![0.0, 1.0, 1.0, 0.0];
+
+        let hamming = engine.calculate_distance(&features1, &features2);
+        assert!((hamming - 2.0).abs() < 0.01); // 2 different positions
     }
 }

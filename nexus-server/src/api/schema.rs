@@ -141,7 +141,7 @@ pub async fn list_labels() -> Json<ListLabelsResponse> {
                     });
                 }
             };
-            
+
             // For now, return a basic list based on available stats
             // In a full implementation, we'd query the catalog for actual labels
             let labels = if stats.labels > 0 {
@@ -153,7 +153,7 @@ pub async fn list_labels() -> Json<ListLabelsResponse> {
             } else {
                 vec![]
             };
-            
+
             tracing::info!("Listed {} labels", labels.len());
             Json(ListLabelsResponse {
                 labels,
@@ -246,7 +246,7 @@ pub async fn list_rel_types() -> Json<ListRelTypesResponse> {
                     });
                 }
             };
-            
+
             // For now, return a basic list based on available stats
             // In a full implementation, we'd query the catalog for actual types
             let types = if stats.rel_types > 0 {
@@ -258,12 +258,9 @@ pub async fn list_rel_types() -> Json<ListRelTypesResponse> {
             } else {
                 vec![]
             };
-            
+
             tracing::info!("Listed {} relationship types", types.len());
-            Json(ListRelTypesResponse {
-                types,
-                error: None,
-            })
+            Json(ListRelTypesResponse { types, error: None })
         }
         Err(e) => {
             tracing::error!("Failed to initialize engine: {}", e);

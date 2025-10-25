@@ -1679,24 +1679,24 @@ mod tests {
         assert_eq!(GraphType::Dependency, GraphType::Dependency);
         assert_eq!(GraphType::DataFlow, GraphType::DataFlow);
         assert_eq!(GraphType::Component, GraphType::Component);
-        
+
         assert_ne!(GraphType::Call, GraphType::Dependency);
         assert_ne!(GraphType::Call, GraphType::DataFlow);
         assert_ne!(GraphType::Call, GraphType::Component);
         assert_ne!(GraphType::Dependency, GraphType::DataFlow);
         assert_ne!(GraphType::Dependency, GraphType::Component);
         assert_ne!(GraphType::DataFlow, GraphType::Component);
-        
+
         // Test serialization
         let call_json = serde_json::to_string(&GraphType::Call).unwrap();
         assert!(call_json.contains("Call"));
-        
+
         let dep_json = serde_json::to_string(&GraphType::Dependency).unwrap();
         assert!(dep_json.contains("Dependency"));
-        
+
         let flow_json = serde_json::to_string(&GraphType::DataFlow).unwrap();
         assert!(flow_json.contains("DataFlow"));
-        
+
         let comp_json = serde_json::to_string(&GraphType::Component).unwrap();
         assert!(comp_json.contains("Component"));
     }
@@ -1704,9 +1704,12 @@ mod tests {
     #[test]
     fn test_graph_node_creation() {
         let mut metadata = HashMap::new();
-        metadata.insert("file".to_string(), serde_json::Value::String("test.rs".to_string()));
+        metadata.insert(
+            "file".to_string(),
+            serde_json::Value::String("test.rs".to_string()),
+        );
         metadata.insert("line".to_string(), serde_json::Value::Number(42.into()));
-        
+
         let node = GraphNode {
             id: "node1".to_string(),
             node_type: NodeType::Function,
@@ -1716,7 +1719,7 @@ mod tests {
             size: Some(5.0),
             color: Some("#FF0000".to_string()),
         };
-        
+
         assert_eq!(node.id, "node1");
         assert_eq!(node.node_type, NodeType::Function);
         assert_eq!(node.label, "test_function");
@@ -1724,7 +1727,7 @@ mod tests {
         assert_eq!(node.position, Some((10.0, 20.0)));
         assert_eq!(node.size, Some(5.0));
         assert_eq!(node.color, Some("#FF0000".to_string()));
-        
+
         // Test clone
         let cloned = node.clone();
         assert_eq!(node.id, cloned.id);
@@ -1739,9 +1742,15 @@ mod tests {
     #[test]
     fn test_graph_edge_creation() {
         let mut metadata = HashMap::new();
-        metadata.insert("weight".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(1.5).unwrap()));
-        metadata.insert("frequency".to_string(), serde_json::Value::Number(10.into()));
-        
+        metadata.insert(
+            "weight".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(1.5).unwrap()),
+        );
+        metadata.insert(
+            "frequency".to_string(),
+            serde_json::Value::Number(10.into()),
+        );
+
         let edge = GraphEdge {
             id: "edge1".to_string(),
             source: "node1".to_string(),
@@ -1751,7 +1760,7 @@ mod tests {
             weight: 1.5,
             label: Some("#00FF00".to_string()),
         };
-        
+
         assert_eq!(edge.id, "edge1");
         assert_eq!(edge.source, "node1");
         assert_eq!(edge.target, "node2");
@@ -1759,7 +1768,7 @@ mod tests {
         assert_eq!(edge.metadata.len(), 2);
         assert_eq!(edge.weight, 1.5);
         assert_eq!(edge.label, Some("#00FF00".to_string()));
-        
+
         // Test clone
         let cloned = edge.clone();
         assert_eq!(edge.id, cloned.id);
@@ -1774,7 +1783,7 @@ mod tests {
     #[test]
     fn test_graph_statistics_calculation() {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test Graph".to_string());
-        
+
         // Add nodes
         let node1 = GraphNode {
             id: "node1".to_string(),
@@ -1803,11 +1812,11 @@ mod tests {
             size: None,
             color: None,
         };
-        
+
         graph.add_node(node1).unwrap();
         graph.add_node(node2).unwrap();
         graph.add_node(node3).unwrap();
-        
+
         // Add edges
         let edge1 = GraphEdge {
             id: "edge1".to_string(),
@@ -1827,20 +1836,19 @@ mod tests {
             weight: 1.0,
             label: None,
         };
-        
+
         graph.add_edge(edge1).unwrap();
         graph.add_edge(edge2).unwrap();
-        
+
         let stats = graph.statistics();
         assert_eq!(stats.node_count, 3);
         assert_eq!(stats.edge_count, 2);
     }
 
-
     #[test]
     fn test_graph_serialization() {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test Graph".to_string());
-        
+
         // Add test data
         let node1 = GraphNode {
             id: "node1".to_string(),
@@ -1869,22 +1877,22 @@ mod tests {
             weight: 1.0,
             label: None,
         };
-        
+
         graph.add_node(node1).unwrap();
         graph.add_node(node2).unwrap();
         graph.add_edge(edge1).unwrap();
-        
+
         // Test JSON serialization
         let json = graph.to_json().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        
+
         assert!(parsed.is_object());
         assert!(parsed.get("nodes").is_some());
         assert!(parsed.get("edges").is_some());
-        
+
         let nodes = parsed.get("nodes").unwrap().as_array().unwrap();
         let edges = parsed.get("edges").unwrap().as_array().unwrap();
-        
+
         assert_eq!(nodes.len(), 2);
         assert_eq!(edges.len(), 1);
     }
@@ -1892,10 +1900,13 @@ mod tests {
     #[test]
     fn test_graph_node_metadata() {
         let mut metadata = HashMap::new();
-        metadata.insert("complexity".to_string(), serde_json::Value::Number(5.into()));
+        metadata.insert(
+            "complexity".to_string(),
+            serde_json::Value::Number(5.into()),
+        );
         metadata.insert("lines".to_string(), serde_json::Value::Number(100.into()));
         metadata.insert("is_public".to_string(), serde_json::Value::Bool(true));
-        
+
         let node = GraphNode {
             id: "complex_node".to_string(),
             node_type: NodeType::Function,
@@ -1905,19 +1916,31 @@ mod tests {
             size: None,
             color: None,
         };
-        
-        assert_eq!(node.metadata.get("complexity").unwrap().as_i64().unwrap(), 5);
+
+        assert_eq!(
+            node.metadata.get("complexity").unwrap().as_i64().unwrap(),
+            5
+        );
         assert_eq!(node.metadata.get("lines").unwrap().as_i64().unwrap(), 100);
-        assert_eq!(node.metadata.get("is_public").unwrap().as_bool().unwrap(), true);
+        assert_eq!(
+            node.metadata.get("is_public").unwrap().as_bool().unwrap(),
+            true
+        );
     }
 
     #[test]
     fn test_graph_edge_metadata() {
         let mut metadata = HashMap::new();
-        metadata.insert("call_count".to_string(), serde_json::Value::Number(50.into()));
-        metadata.insert("avg_duration".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(0.5).unwrap()));
+        metadata.insert(
+            "call_count".to_string(),
+            serde_json::Value::Number(50.into()),
+        );
+        metadata.insert(
+            "avg_duration".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(0.5).unwrap()),
+        );
         metadata.insert("is_async".to_string(), serde_json::Value::Bool(false));
-        
+
         let edge = GraphEdge {
             id: "frequent_call".to_string(),
             source: "caller".to_string(),
@@ -1927,27 +1950,36 @@ mod tests {
             weight: 50.0,
             label: None,
         };
-        
-        assert_eq!(edge.metadata.get("call_count").unwrap().as_i64().unwrap(), 50);
-        assert_eq!(edge.metadata.get("avg_duration").unwrap().as_f64().unwrap(), 0.5);
-        assert_eq!(edge.metadata.get("is_async").unwrap().as_bool().unwrap(), false);
+
+        assert_eq!(
+            edge.metadata.get("call_count").unwrap().as_i64().unwrap(),
+            50
+        );
+        assert_eq!(
+            edge.metadata.get("avg_duration").unwrap().as_f64().unwrap(),
+            0.5
+        );
+        assert_eq!(
+            edge.metadata.get("is_async").unwrap().as_bool().unwrap(),
+            false
+        );
     }
 
     #[test]
     fn test_graph_manager_operations() {
         let manager = GraphCorrelationManager::new();
-        
+
         // Test available graph types
         let graph_types = manager.available_graph_types();
         assert!(!graph_types.is_empty());
         assert!(graph_types.contains(&GraphType::Call));
         assert!(graph_types.contains(&GraphType::Dependency));
-        
+
         // Test building graphs
         let source_data = GraphSourceData::new();
         let call_graph = manager.build_graph(GraphType::Call, &source_data);
         assert!(call_graph.is_ok());
-        
+
         let dep_graph = manager.build_graph(GraphType::Dependency, &source_data);
         assert!(dep_graph.is_ok());
     }
@@ -1955,11 +1987,14 @@ mod tests {
     #[test]
     fn test_graph_visualization_properties() {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test Graph".to_string());
-        
+
         // Add nodes with visualization properties
         let mut node1_metadata = HashMap::new();
-        node1_metadata.insert("importance".to_string(), serde_json::Value::String("high".to_string()));
-        
+        node1_metadata.insert(
+            "importance".to_string(),
+            serde_json::Value::String("high".to_string()),
+        );
+
         let node = GraphNode {
             id: "important_func".to_string(),
             node_type: NodeType::Function,
@@ -1970,11 +2005,14 @@ mod tests {
             color: Some("#FF0000".to_string()),
         };
         graph.add_node(node).unwrap();
-        
+
         // Add edge with weight
         let mut edge_metadata = HashMap::new();
-        edge_metadata.insert("frequency".to_string(), serde_json::Value::Number(100.into()));
-        
+        edge_metadata.insert(
+            "frequency".to_string(),
+            serde_json::Value::Number(100.into()),
+        );
+
         // Add the target node first
         let other_node = GraphNode {
             id: "other_func".to_string(),
@@ -1986,7 +2024,7 @@ mod tests {
             color: None,
         };
         graph.add_node(other_node).unwrap();
-        
+
         let edge = GraphEdge {
             id: "frequent_call".to_string(),
             source: "important_func".to_string(),
@@ -1997,12 +2035,12 @@ mod tests {
             label: Some("frequent".to_string()),
         };
         graph.add_edge(edge).unwrap();
-        
+
         // Test that visualization properties are preserved
         let important_node = graph.get_node("important_func").unwrap();
         assert_eq!(important_node.label, "Important Function");
         assert_eq!(important_node.node_type, NodeType::Function);
-        
+
         let frequent_edge = graph.get_edge("frequent_call").unwrap();
         assert_eq!(frequent_edge.edge_type, EdgeType::Calls);
         assert_eq!(frequent_edge.source, "important_func");
@@ -2012,7 +2050,7 @@ mod tests {
     #[test]
     fn test_graph_error_handling() {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test Graph".to_string());
-        
+
         // Test adding duplicate node
         let node1 = GraphNode {
             id: "node1".to_string(),
@@ -2024,7 +2062,7 @@ mod tests {
             color: None,
         };
         graph.add_node(node1).unwrap();
-        
+
         let node1_dup = GraphNode {
             id: "node1".to_string(),
             node_type: NodeType::Function,
@@ -2036,7 +2074,7 @@ mod tests {
         };
         let result = graph.add_node(node1_dup);
         assert!(result.is_err());
-        
+
         // Test adding edge with non-existent nodes
         let edge = GraphEdge {
             id: "edge1".to_string(),
@@ -2054,7 +2092,7 @@ mod tests {
     #[test]
     fn test_graph_clear_operations() {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test Graph".to_string());
-        
+
         // Add some data
         let node1 = GraphNode {
             id: "node1".to_string(),
@@ -2076,7 +2114,7 @@ mod tests {
         };
         graph.add_node(node1).unwrap();
         graph.add_node(node2).unwrap();
-        
+
         let edge = GraphEdge {
             id: "edge1".to_string(),
             source: "node1".to_string(),
@@ -2087,19 +2125,19 @@ mod tests {
             label: None,
         };
         graph.add_edge(edge).unwrap();
-        
+
         // Verify data exists
         let stats = graph.statistics();
         assert_eq!(stats.node_count, 2);
         assert_eq!(stats.edge_count, 1);
-        
+
         // Clear and verify
         graph.nodes.clear();
         graph.edges.clear();
         let stats_after_clear = graph.statistics();
         assert_eq!(stats_after_clear.node_count, 0);
         assert_eq!(stats_after_clear.edge_count, 0);
-        
+
         // Should be able to add new data after clear
         let node3 = GraphNode {
             id: "node3".to_string(),
