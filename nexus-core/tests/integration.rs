@@ -522,7 +522,9 @@ fn test_concurrent_transactions() {
     use std::thread;
 
     let dir = TempDir::new().unwrap();
-    let store = Arc::new(parking_lot::Mutex::new(RecordStore::new(dir.path()).unwrap()));
+    let store = Arc::new(parking_lot::Mutex::new(
+        RecordStore::new(dir.path()).unwrap(),
+    ));
     let tx_mgr = Arc::new(parking_lot::Mutex::new(TransactionManager::new().unwrap()));
 
     let mut handles = vec![];

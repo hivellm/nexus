@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn test_node_type_clone() {
         let original = NodeType::Function;
-        let cloned = original.clone();
+        let cloned = original; // NodeType implements Copy, so no need for clone()
         assert_eq!(original, cloned);
     }
 
@@ -901,7 +901,7 @@ mod tests {
     #[test]
     fn test_node_type_all_variants() {
         // Test that we can iterate through all variants
-        let all_variants = vec![
+        let all_variants = [
             NodeType::Function,
             NodeType::Module,
             NodeType::Class,
@@ -910,6 +910,173 @@ mod tests {
         ];
 
         assert_eq!(all_variants.len(), 5);
+
+        // Test that all variants are unique
+        for (i, variant1) in all_variants.iter().enumerate() {
+            for (j, variant2) in all_variants.iter().enumerate() {
+                if i != j {
+                    assert_ne!(variant1, variant2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_edge_type_enum_variants() {
+        // Test all EdgeType variants exist
+        let calls = EdgeType::Calls;
+        let imports = EdgeType::Imports;
+        let inherits = EdgeType::Inherits;
+        let composes = EdgeType::Composes;
+        let transforms = EdgeType::Transforms;
+        let uses = EdgeType::Uses;
+        let depends = EdgeType::Depends;
+
+        // Test debug formatting
+        assert_eq!(format!("{:?}", calls), "Calls");
+        assert_eq!(format!("{:?}", imports), "Imports");
+        assert_eq!(format!("{:?}", inherits), "Inherits");
+        assert_eq!(format!("{:?}", composes), "Composes");
+        assert_eq!(format!("{:?}", transforms), "Transforms");
+        assert_eq!(format!("{:?}", uses), "Uses");
+        assert_eq!(format!("{:?}", depends), "Depends");
+    }
+
+    #[test]
+    fn test_edge_type_equality() {
+        // Test equality between same variants
+        assert_eq!(EdgeType::Calls, EdgeType::Calls);
+        assert_eq!(EdgeType::Imports, EdgeType::Imports);
+        assert_eq!(EdgeType::Inherits, EdgeType::Inherits);
+        assert_eq!(EdgeType::Composes, EdgeType::Composes);
+        assert_eq!(EdgeType::Transforms, EdgeType::Transforms);
+        assert_eq!(EdgeType::Uses, EdgeType::Uses);
+        assert_eq!(EdgeType::Depends, EdgeType::Depends);
+
+        // Test inequality between different variants
+        assert_ne!(EdgeType::Calls, EdgeType::Imports);
+        assert_ne!(EdgeType::Imports, EdgeType::Inherits);
+        assert_ne!(EdgeType::Inherits, EdgeType::Composes);
+        assert_ne!(EdgeType::Composes, EdgeType::Transforms);
+        assert_ne!(EdgeType::Transforms, EdgeType::Uses);
+        assert_ne!(EdgeType::Uses, EdgeType::Depends);
+        assert_ne!(EdgeType::Depends, EdgeType::Calls);
+    }
+
+    #[test]
+    fn test_edge_type_clone() {
+        let original = EdgeType::Calls;
+        let cloned = original; // EdgeType implements Copy, so no need for clone()
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn test_edge_type_copy() {
+        let original = EdgeType::Imports;
+        let copied = original; // This should work because EdgeType implements Copy
+        assert_eq!(original, copied);
+        assert_eq!(original, EdgeType::Imports); // original should still be valid
+    }
+
+    #[test]
+    fn test_edge_type_serialization() {
+        let edge_types = vec![
+            EdgeType::Calls,
+            EdgeType::Imports,
+            EdgeType::Inherits,
+            EdgeType::Composes,
+            EdgeType::Transforms,
+            EdgeType::Uses,
+            EdgeType::Depends,
+        ];
+
+        for edge_type in edge_types {
+            // Test JSON serialization
+            let json = serde_json::to_string(&edge_type).unwrap();
+            let deserialized: EdgeType = serde_json::from_str(&json).unwrap();
+            assert_eq!(edge_type, deserialized);
+
+            // Test that serialized JSON contains expected strings
+            match edge_type {
+                EdgeType::Calls => assert!(json.contains("Calls")),
+                EdgeType::Imports => assert!(json.contains("Imports")),
+                EdgeType::Inherits => assert!(json.contains("Inherits")),
+                EdgeType::Composes => assert!(json.contains("Composes")),
+                EdgeType::Transforms => assert!(json.contains("Transforms")),
+                EdgeType::Uses => assert!(json.contains("Uses")),
+                EdgeType::Depends => assert!(json.contains("Depends")),
+            }
+        }
+    }
+
+    #[test]
+    fn test_edge_type_deserialization() {
+        // Test deserialization from JSON strings
+        let test_cases = vec![
+            ("Calls", EdgeType::Calls),
+            ("Imports", EdgeType::Imports),
+            ("Inherits", EdgeType::Inherits),
+            ("Composes", EdgeType::Composes),
+            ("Transforms", EdgeType::Transforms),
+            ("Uses", EdgeType::Uses),
+            ("Depends", EdgeType::Depends),
+        ];
+
+        for (json_str, expected) in test_cases {
+            let deserialized: EdgeType =
+                serde_json::from_str(&format!("\"{}\"", json_str)).unwrap();
+            assert_eq!(deserialized, expected);
+        }
+    }
+
+    #[test]
+    fn test_edge_type_in_graph_edge() {
+        // Test EdgeType usage in GraphEdge
+        let edge = GraphEdge {
+            id: "test_edge".to_string(),
+            source: "node1".to_string(),
+            target: "node2".to_string(),
+            edge_type: EdgeType::Calls,
+            weight: 1.0,
+            metadata: HashMap::new(),
+            label: None,
+        };
+
+        assert_eq!(edge.edge_type, EdgeType::Calls);
+        assert_eq!(edge.id, "test_edge");
+    }
+
+    #[test]
+    fn test_edge_type_pattern_matching() {
+        let edge_type = EdgeType::Transforms;
+
+        let description = match edge_type {
+            EdgeType::Calls => "Function calls another function",
+            EdgeType::Imports => "Module imports another module",
+            EdgeType::Inherits => "Class inherits from another class",
+            EdgeType::Composes => "Component composes another component",
+            EdgeType::Transforms => "Data transforms from one format to another",
+            EdgeType::Uses => "Uses or references another entity",
+            EdgeType::Depends => "Depends on another entity",
+        };
+
+        assert_eq!(description, "Data transforms from one format to another");
+    }
+
+    #[test]
+    fn test_edge_type_all_variants() {
+        // Test that we can iterate through all variants
+        let all_variants = [
+            EdgeType::Calls,
+            EdgeType::Imports,
+            EdgeType::Inherits,
+            EdgeType::Composes,
+            EdgeType::Transforms,
+            EdgeType::Uses,
+            EdgeType::Depends,
+        ];
+
+        assert_eq!(all_variants.len(), 7);
 
         // Test that all variants are unique
         for (i, variant1) in all_variants.iter().enumerate() {

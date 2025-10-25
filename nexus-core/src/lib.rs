@@ -144,24 +144,24 @@ mod tests {
     fn test_node_type_export() {
         // Test that NodeType is properly exported from the main library
         use crate::NodeType;
-        
+
         let function = NodeType::Function;
         let module = NodeType::Module;
         let class = NodeType::Class;
         let variable = NodeType::Variable;
         let api = NodeType::API;
-        
+
         // Test that all variants are accessible
         assert_eq!(format!("{:?}", function), "Function");
         assert_eq!(format!("{:?}", module), "Module");
         assert_eq!(format!("{:?}", class), "Class");
         assert_eq!(format!("{:?}", variable), "Variable");
         assert_eq!(format!("{:?}", api), "API");
-        
+
         // Test serialization
         let json = serde_json::to_string(&api).unwrap();
         assert!(json.contains("API"));
-        
+
         let deserialized: NodeType = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, NodeType::API);
     }

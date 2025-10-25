@@ -369,7 +369,7 @@ mod tests {
 
         let response = create_rel_type(Json(request)).await;
         assert!(response.error.is_none());
-        assert!(response.type_id >= 0); // Allow 0 if catalog not properly initialized
+        assert!(response.type_id > 0); // Should be positive for valid type
         assert!(response.message.contains("KNOWS"));
     }
 

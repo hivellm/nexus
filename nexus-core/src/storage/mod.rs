@@ -181,6 +181,7 @@ impl RecordStore {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&nodes_path)?;
 
         // Create or open relationships file
@@ -188,6 +189,7 @@ impl RecordStore {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&rels_path)?;
 
         // Get file sizes
