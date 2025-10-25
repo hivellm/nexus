@@ -225,16 +225,16 @@ pub struct Executor {
 impl Executor {
     /// Create a new executor
     pub fn new(
-        catalog: Catalog,
-        store: RecordStore,
-        label_index: LabelIndex,
-        knn_index: KnnIndex,
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
     ) -> Result<Self> {
         Ok(Self {
-            catalog,
-            store,
-            label_index,
-            knn_index,
+            catalog: catalog.clone(),
+            store: store.clone(),
+            label_index: label_index.clone(),
+            knn_index: knn_index.clone(),
         })
     }
 
@@ -1236,9 +1236,10 @@ impl Default for Executor {
         let label_index = LabelIndex::default();
         let knn_index = KnnIndex::new_default(128).expect("Failed to create default KNN index");
 
-        Self::new(catalog, store, label_index, knn_index)
+        Self::new(&catalog, &store, &label_index, &knn_index)
             .expect("Failed to create default executor")
     }
+    
 }
 
 #[cfg(test)]
@@ -1253,7 +1254,7 @@ mod tests {
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new_default(128).unwrap();
 
-        let executor = Executor::new(catalog, store, label_index, knn_index).unwrap();
+        let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
         (executor, dir)
     }
 

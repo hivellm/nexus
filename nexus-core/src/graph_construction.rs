@@ -21,7 +21,7 @@
 //! - **Node Repulsion**: Prevent node overlap with repulsion forces
 //! - **Edge Length Optimization**: Minimize edge crossings and lengths
 
-use crate::{Error, Result};
+use crate::Result;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::consts::PI;
 
@@ -330,7 +330,7 @@ impl ForceDirectedLayout {
 
         let mut temperature = self.temperature;
 
-        for iteration in 0..self.iterations {
+        for _iteration in 0..self.iterations {
             // Reset forces
             for node in &mut graph.nodes {
                 node.force = Point2D::new(0.0, 0.0);
@@ -719,7 +719,7 @@ impl GridLayout {
         }
 
         let cols = (graph.nodes.len() as f64).sqrt().ceil() as usize;
-        let rows = (graph.nodes.len() + cols - 1) / cols;
+        let _rows = (graph.nodes.len() + cols - 1) / cols;
 
         for (i, node) in graph.nodes.iter_mut().enumerate() {
             let row = i / cols;
@@ -778,7 +778,7 @@ impl KMeansClustering {
         let mut assignments = vec![0; n];
         let mut prev_assignments = vec![usize::MAX; n];
 
-        for iteration in 0..self.max_iterations {
+        for _iteration in 0..self.max_iterations {
             // Assign nodes to closest centroid
             for (i, node) in graph.nodes.iter().enumerate() {
                 let mut min_distance = f64::INFINITY;
@@ -810,8 +810,6 @@ impl KMeansClustering {
     }
 
     fn initialize_centroids(&self, graph: &GraphLayout, k: usize) -> Vec<Point2D> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
 
         let mut centroids = Vec::new();
         let mut used_indices = HashSet::new();

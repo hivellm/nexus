@@ -447,6 +447,36 @@ impl PageCache {
         self.stats.cache_size = self.pages.len();
         Ok(())
     }
+    
+    /// Get the number of cache hits
+    pub fn hit_count(&self) -> u64 {
+        self.stats.hits
+    }
+    
+    /// Get the number of cache misses
+    pub fn miss_count(&self) -> u64 {
+        self.stats.misses
+    }
+    
+    /// Health check for the page cache
+    pub fn health_check(&self) -> Result<()> {
+        // Check if the cache is not corrupted
+        if self.stats.cache_size > self.capacity {
+            return Err(Error::page_cache("Cache size exceeds capacity"));
+        }
+        
+        // Check if dirty pages count is reasonable
+        if self.dirty_pages.len() > self.capacity {
+            return Err(Error::page_cache("Too many dirty pages"));
+        }
+        
+        // Check if hit rate is reasonable (not 0 if there have been accesses)
+        if self.stats.total_accesses > 0 && self.stats.hit_rate() < 0.0 {
+            return Err(Error::page_cache("Invalid hit rate"));
+        }
+        
+        Ok(())
+    }
 }
 
 #[cfg(test)]

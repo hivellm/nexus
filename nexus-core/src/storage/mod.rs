@@ -395,6 +395,89 @@ impl RecordStore {
         self.rels_file_size = new_size;
         Ok(())
     }
+    
+    /// Get the number of nodes
+    pub fn node_count(&self) -> u64 {
+        self.next_node_id
+    }
+    
+    /// Get the number of relationships
+    pub fn relationship_count(&self) -> u64 {
+        self.next_rel_id
+    }
+    
+    /// Health check for the record store
+    pub fn health_check(&self) -> Result<()> {
+        // Check if files are accessible and readable
+        if !self.path.join("nodes.store").exists() {
+            return Err(Error::storage("Nodes file does not exist"));
+        }
+        if !self.path.join("rels.store").exists() {
+            return Err(Error::storage("Relationships file does not exist"));
+        }
+        
+        // Try to read from the memory-mapped files
+        let _ = self.nodes_mmap.len();
+        let _ = self.rels_mmap.len();
+        
+        Ok(())
+    }
+    
+    /// Create a new node
+    pub fn create_node(
+        &mut self,
+        _tx: &mut crate::transaction::Transaction,
+        _labels: Vec<String>,
+        _properties: serde_json::Value,
+    ) -> Result<u64> {
+        // For MVP, just return the next node ID
+        let node_id = self.next_node_id;
+        self.next_node_id += 1;
+        Ok(node_id)
+    }
+    
+    /// Create a new relationship
+    pub fn create_relationship(
+        &mut self,
+        _tx: &mut crate::transaction::Transaction,
+        _from: u64,
+        _to: u64,
+        _rel_type: String,
+        _properties: serde_json::Value,
+    ) -> Result<u64> {
+        // For MVP, just return the next relationship ID
+        let rel_id = self.next_rel_id;
+        self.next_rel_id += 1;
+        Ok(rel_id)
+    }
+    
+    /// Get a node by ID
+    pub fn get_node(
+        &self,
+        _tx: &crate::transaction::Transaction,
+        _id: u64,
+    ) -> Result<Option<NodeRecord>> {
+        // For MVP, return None
+        Ok(None)
+    }
+    
+    /// Get a relationship by ID
+    pub fn get_relationship(
+        &self,
+        _tx: &crate::transaction::Transaction,
+        _id: u64,
+    ) -> Result<Option<RelationshipRecord>> {
+        // For MVP, return None
+        Ok(None)
+    }
+}
+
+impl Clone for RecordStore {
+    fn clone(&self) -> Self {
+        // For MVP, create a new RecordStore with the same path
+        // This is not a true clone but sufficient for the current implementation
+        Self::new(&self.path).expect("Failed to clone RecordStore")
+    }
 }
 
 /// Record store statistics

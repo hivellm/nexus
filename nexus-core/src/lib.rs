@@ -64,14 +64,230 @@ pub use graph_simple::{
 
 /// Graph database engine
 pub struct Engine {
-    // Will be populated during implementation
+    /// Storage catalog for label/type/key mappings
+    pub catalog: catalog::Catalog,
+    /// Record stores for nodes and relationships
+    pub storage: storage::RecordStore,
+    /// Page cache for memory management
+    pub page_cache: page_cache::PageCache,
+    /// Write-ahead log for durability
+    pub wal: wal::Wal,
+    /// Transaction manager for MVCC
+    pub transaction_manager: transaction::TransactionManager,
+    /// Index subsystem
+    pub indexes: index::IndexManager,
+    /// Query executor
+    pub executor: executor::Executor,
 }
 
 impl Engine {
-    /// Create a new engine instance
+    /// Create a new engine instance with all components
     pub fn new() -> Result<Self> {
-        todo!("Engine::new - to be implemented in MVP")
+        // Create temporary directory for data
+        let temp_dir = tempfile::tempdir()?;
+        let data_dir = temp_dir.path();
+        
+        // Initialize catalog
+        let catalog = catalog::Catalog::new(data_dir.join("catalog.mdb"))?;
+        
+        // Initialize record stores
+        let storage = storage::RecordStore::new(data_dir)?;
+        
+        // Initialize page cache
+        let page_cache = page_cache::PageCache::new(1024)?; // 1024 pages = 8MB
+        
+        // Initialize WAL
+        let wal = wal::Wal::new(data_dir.join("wal.log"))?;
+        
+        // Initialize transaction manager
+        let transaction_manager = transaction::TransactionManager::new()?;
+        
+        // Initialize index manager
+        let indexes = index::IndexManager::new(data_dir.join("indexes"))?;
+        
+        // Initialize executor
+        let executor = executor::Executor::new(
+            &catalog,
+            &storage,
+            &indexes.label_index,
+            &indexes.knn_index,
+        )?;
+        
+        Ok(Engine {
+            catalog,
+            storage,
+            page_cache,
+            wal,
+            transaction_manager,
+            indexes,
+            executor,
+        })
     }
+    
+    /// Create a new engine with default configuration
+    pub fn new_default() -> Result<Self> {
+        Self::new()
+    }
+    
+    /// Get engine statistics
+    pub fn stats(&self) -> Result<EngineStats> {
+        Ok(EngineStats {
+            nodes: self.storage.node_count(),
+            relationships: self.storage.relationship_count(),
+            labels: self.catalog.label_count(),
+            rel_types: self.catalog.rel_type_count(),
+            page_cache_hits: self.page_cache.hit_count(),
+            page_cache_misses: self.page_cache.miss_count(),
+            wal_entries: self.wal.entry_count(),
+            active_transactions: self.transaction_manager.active_count(),
+        })
+    }
+    
+    /// Execute a Cypher query
+    pub fn execute_cypher(&mut self, query: &str) -> Result<executor::ResultSet> {
+        let query_obj = executor::Query {
+            cypher: query.to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        self.executor.execute(&query_obj)
+    }
+    
+    /// Create a new node
+    pub fn create_node(&mut self, labels: Vec<String>, properties: serde_json::Value) -> Result<u64> {
+        let mut tx = self.transaction_manager.begin_write()?;
+        let node_id = self.storage.create_node(&mut tx, labels, properties)?;
+        self.transaction_manager.commit(&mut tx)?;
+        Ok(node_id)
+    }
+    
+    /// Create a new relationship
+    pub fn create_relationship(
+        &mut self,
+        from: u64,
+        to: u64,
+        rel_type: String,
+        properties: serde_json::Value,
+    ) -> Result<u64> {
+        let mut tx = self.transaction_manager.begin_write()?;
+        let rel_id = self.storage.create_relationship(&mut tx, from, to, rel_type, properties)?;
+        self.transaction_manager.commit(&mut tx)?;
+        Ok(rel_id)
+    }
+    
+    /// Get node by ID
+    pub fn get_node(&mut self, id: u64) -> Result<Option<storage::NodeRecord>> {
+        let tx = self.transaction_manager.begin_read()?;
+        self.storage.get_node(&tx, id)
+    }
+    
+    /// Get relationship by ID
+    pub fn get_relationship(&mut self, id: u64) -> Result<Option<storage::RelationshipRecord>> {
+        let tx = self.transaction_manager.begin_read()?;
+        self.storage.get_relationship(&tx, id)
+    }
+    
+    /// Perform KNN search
+    pub fn knn_search(
+        &self,
+        label: &str,
+        vector: &[f32],
+        k: usize,
+    ) -> Result<Vec<(u64, f32)>> {
+        self.indexes.knn_search(label, vector, k)
+    }
+    
+    /// Health check
+    pub fn health_check(&self) -> Result<HealthStatus> {
+        let mut status = HealthStatus {
+            overall: HealthState::Healthy,
+            components: std::collections::HashMap::new(),
+        };
+        
+        // Check catalog
+        match self.catalog.health_check() {
+            Ok(_) => {
+                status.components.insert("catalog".to_string(), HealthState::Healthy);
+            }
+            Err(_) => {
+                status.components.insert("catalog".to_string(), HealthState::Unhealthy);
+                status.overall = HealthState::Unhealthy;
+            }
+        }
+        
+        // Check storage
+        match self.storage.health_check() {
+            Ok(_) => {
+                status.components.insert("storage".to_string(), HealthState::Healthy);
+            }
+            Err(_) => {
+                status.components.insert("storage".to_string(), HealthState::Unhealthy);
+                status.overall = HealthState::Unhealthy;
+            }
+        }
+        
+        // Check page cache
+        match self.page_cache.health_check() {
+            Ok(_) => {
+                status.components.insert("page_cache".to_string(), HealthState::Healthy);
+            }
+            Err(_) => {
+                status.components.insert("page_cache".to_string(), HealthState::Unhealthy);
+                status.overall = HealthState::Unhealthy;
+            }
+        }
+        
+        // Check WAL
+        match self.wal.health_check() {
+            Ok(_) => {
+                status.components.insert("wal".to_string(), HealthState::Healthy);
+            }
+            Err(_) => {
+                status.components.insert("wal".to_string(), HealthState::Unhealthy);
+                status.overall = HealthState::Unhealthy;
+            }
+        }
+        
+        // Check indexes
+        match self.indexes.health_check() {
+            Ok(_) => {
+                status.components.insert("indexes".to_string(), HealthState::Healthy);
+            }
+            Err(_) => {
+                status.components.insert("indexes".to_string(), HealthState::Unhealthy);
+                status.overall = HealthState::Unhealthy;
+            }
+        }
+        
+        Ok(status)
+    }
+}
+
+/// Engine statistics
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EngineStats {
+    pub nodes: u64,
+    pub relationships: u64,
+    pub labels: u64,
+    pub rel_types: u64,
+    pub page_cache_hits: u64,
+    pub page_cache_misses: u64,
+    pub wal_entries: u64,
+    pub active_transactions: u64,
+}
+
+/// Health status
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HealthStatus {
+    pub overall: HealthState,
+    pub components: std::collections::HashMap<String, HealthState>,
+}
+
+/// Health state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum HealthState {
+    Healthy,
+    Unhealthy,
+    Degraded,
 }
 
 impl Default for Engine {
