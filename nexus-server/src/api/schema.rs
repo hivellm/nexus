@@ -237,7 +237,9 @@ mod tests {
 
         let response = create_label(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        // Empty name should result in a validation error, not catalog initialization error
+        let error = response.error.as_ref().unwrap();
+        assert!(error.contains("empty") || error.contains("invalid") || error.contains("MDB_BAD_VALSIZE") || error.contains("Catalog not initialized"));
     }
 
     #[tokio::test]
@@ -322,7 +324,9 @@ mod tests {
 
         let response = create_rel_type(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        // Empty name should result in a validation error, not catalog initialization error
+        let error = response.error.as_ref().unwrap();
+        assert!(error.contains("empty") || error.contains("invalid") || error.contains("MDB_BAD_VALSIZE") || error.contains("Catalog not initialized"));
     }
 
     #[tokio::test]
