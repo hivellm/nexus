@@ -9,13 +9,14 @@
 use crate::error::{Error, Result};
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Size of a node record in bytes (32 bytes)
 pub const NODE_RECORD_SIZE: usize = 32;
 
-/// Size of a relationship record in bytes (40 bytes)
-pub const REL_RECORD_SIZE: usize = 40;
+/// Size of a relationship record in bytes (52 bytes)
+pub const REL_RECORD_SIZE: usize = 52;
 
 /// Initial file size for nodes.store (1MB)
 const INITIAL_NODES_FILE_SIZE: usize = 1024 * 1024;
@@ -93,7 +94,7 @@ impl NodeRecord {
     }
 }
 
-/// Relationship record structure (40 bytes)
+/// Relationship record structure (52 bytes)
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct RelationshipRecord {
@@ -176,19 +177,17 @@ impl RecordStore {
         let rels_path = path.join("rels.store");
 
         // Create or open nodes file
-        let nodes_file = OpenOptions::new()
+        let mut nodes_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .truncate(true)
             .open(&nodes_path)?;
 
         // Create or open relationships file
-        let rels_file = OpenOptions::new()
+        let mut rels_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .truncate(true)
             .open(&rels_path)?;
 
         // Get file sizes
@@ -198,6 +197,9 @@ impl RecordStore {
         // Initialize files if empty
         let nodes_file_size = if nodes_file_size == 0 {
             nodes_file.set_len(INITIAL_NODES_FILE_SIZE as u64)?;
+            // Zero out the file to ensure it's filled with zeros
+            nodes_file.write_all(&vec![0u8; INITIAL_NODES_FILE_SIZE])?;
+            nodes_file.sync_all()?;
             INITIAL_NODES_FILE_SIZE
         } else {
             nodes_file_size
@@ -205,6 +207,9 @@ impl RecordStore {
 
         let rels_file_size = if rels_file_size == 0 {
             rels_file.set_len(INITIAL_RELS_FILE_SIZE as u64)?;
+            // Zero out the file to ensure it's filled with zeros
+            rels_file.write_all(&vec![0u8; INITIAL_RELS_FILE_SIZE])?;
+            rels_file.sync_all()?;
             INITIAL_RELS_FILE_SIZE
         } else {
             rels_file_size
@@ -215,14 +220,42 @@ impl RecordStore {
 
         let rels_mmap = unsafe { MmapOptions::new().map_mut(&rels_file)? };
 
+        // Calculate next available IDs by scanning existing data
+        // Count non-empty records (records where any field is non-zero)
+        let mut next_node_id = 0u64;
+        for i in 0..(nodes_file_size / NODE_RECORD_SIZE) {
+            let offset = i * NODE_RECORD_SIZE;
+            let slice = &nodes_mmap[offset..offset + NODE_RECORD_SIZE];
+            // Check if record is non-empty (any byte is non-zero)
+            if slice.iter().any(|&b| b != 0) {
+                next_node_id = (i + 1) as u64;
+            } else {
+                // Found first empty record, stop scanning
+                break;
+            }
+        }
+
+        let mut next_rel_id = 0u64;
+        for i in 0..(rels_file_size / REL_RECORD_SIZE) {
+            let offset = i * REL_RECORD_SIZE;
+            let slice = &rels_mmap[offset..offset + REL_RECORD_SIZE];
+            // Check if record is non-empty (any byte is non-zero)
+            if slice.iter().any(|&b| b != 0) {
+                next_rel_id = (i + 1) as u64;
+            } else {
+                // Found first empty record, stop scanning
+                break;
+            }
+        }
+
         Ok(Self {
             path,
             nodes_file,
             rels_file,
             nodes_mmap,
             rels_mmap,
-            next_node_id: 0,
-            next_rel_id: 0,
+            next_node_id,
+            next_rel_id,
             nodes_file_size,
             rels_file_size,
         })
