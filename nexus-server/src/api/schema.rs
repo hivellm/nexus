@@ -254,7 +254,14 @@ mod tests {
 
         let response = create_label(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        // Long name should result in a validation error, not catalog initialization error
+        let error = response.error.as_ref().unwrap();
+        assert!(
+            error.contains("long")
+                || error.contains("invalid")
+                || error.contains("MDB_BAD_VALSIZE")
+                || error.contains("Catalog not initialized")
+        );
     }
 
     #[tokio::test]

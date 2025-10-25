@@ -1,0 +1,446 @@
+{
+  "name": "Social Network Dataset",
+  "description": "A sample social network with users, posts, comments, and relationships",
+  "version": "1.0.0",
+  "created": "2025-10-25",
+  "nodes": [
+    {
+      "id": 1,
+      "labels": ["User"],
+      "properties": {
+        "name": "Alice Johnson",
+        "email": "alice@example.com",
+        "age": 28,
+        "location": "San Francisco",
+        "bio": "Software engineer passionate about graph databases",
+        "created_at": "2024-01-15T10:30:00Z",
+        "is_verified": true
+      }
+    },
+    {
+      "id": 2,
+      "labels": ["User"],
+      "properties": {
+        "name": "Bob Smith",
+        "email": "bob@example.com",
+        "age": 32,
+        "location": "New York",
+        "bio": "Data scientist and machine learning enthusiast",
+        "created_at": "2024-01-20T14:15:00Z",
+        "is_verified": false
+      }
+    },
+    {
+      "id": 3,
+      "labels": ["User"],
+      "properties": {
+        "name": "Carol Davis",
+        "email": "carol@example.com",
+        "age": 25,
+        "location": "Seattle",
+        "bio": "UX designer focused on user experience",
+        "created_at": "2024-02-01T09:45:00Z",
+        "is_verified": true
+      }
+    },
+    {
+      "id": 4,
+      "labels": ["User"],
+      "properties": {
+        "name": "David Wilson",
+        "email": "david@example.com",
+        "age": 35,
+        "location": "Austin",
+        "bio": "Product manager with startup experience",
+        "created_at": "2024-02-10T16:20:00Z",
+        "is_verified": false
+      }
+    },
+    {
+      "id": 5,
+      "labels": ["User"],
+      "properties": {
+        "name": "Eve Brown",
+        "email": "eve@example.com",
+        "age": 29,
+        "location": "Boston",
+        "bio": "DevOps engineer and cloud architecture expert",
+        "created_at": "2024-02-15T11:30:00Z",
+        "is_verified": true
+      }
+    },
+    {
+      "id": 101,
+      "labels": ["Post"],
+      "properties": {
+        "title": "Getting Started with Graph Databases",
+        "content": "Graph databases are revolutionizing how we think about data relationships...",
+        "created_at": "2024-03-01T10:00:00Z",
+        "likes": 45,
+        "shares": 12,
+        "tags": ["graph-database", "tutorial", "neo4j"]
+      }
+    },
+    {
+      "id": 102,
+      "labels": ["Post"],
+      "properties": {
+        "title": "Machine Learning in Production",
+        "content": "Deploying ML models at scale requires careful consideration of...",
+        "created_at": "2024-03-05T14:30:00Z",
+        "likes": 78,
+        "shares": 23,
+        "tags": ["machine-learning", "production", "mlops"]
+      }
+    },
+    {
+      "id": 103,
+      "labels": ["Post"],
+      "properties": {
+        "title": "Design Systems That Scale",
+        "content": "Building consistent design systems across large organizations...",
+        "created_at": "2024-03-10T09:15:00Z",
+        "likes": 34,
+        "shares": 8,
+        "tags": ["design", "ux", "design-systems"]
+      }
+    },
+    {
+      "id": 104,
+      "labels": ["Post"],
+      "properties": {
+        "title": "Startup Lessons Learned",
+        "content": "Five years of building products taught me these key lessons...",
+        "created_at": "2024-03-12T16:45:00Z",
+        "likes": 92,
+        "shares": 31,
+        "tags": ["startup", "product", "lessons"]
+      }
+    },
+    {
+      "id": 105,
+      "labels": ["Post"],
+      "properties": {
+        "title": "Cloud Architecture Patterns",
+        "content": "Common patterns for building scalable cloud applications...",
+        "created_at": "2024-03-15T13:20:00Z",
+        "likes": 56,
+        "shares": 15,
+        "tags": ["cloud", "architecture", "aws"]
+      }
+    },
+    {
+      "id": 201,
+      "labels": ["Comment"],
+      "properties": {
+        "content": "Great tutorial! This really helped me understand the basics.",
+        "created_at": "2024-03-01T11:30:00Z",
+        "likes": 8
+      }
+    },
+    {
+      "id": 202,
+      "labels": ["Comment"],
+      "properties": {
+        "content": "Thanks for sharing your experience. Very insightful!",
+        "created_at": "2024-03-05T15:45:00Z",
+        "likes": 12
+      }
+    },
+    {
+      "id": 203,
+      "labels": ["Comment"],
+      "properties": {
+        "content": "Love the design system approach. We're implementing something similar.",
+        "created_at": "2024-03-10T10:20:00Z",
+        "likes": 5
+      }
+    },
+    {
+      "id": 204,
+      "labels": ["Comment"],
+      "properties": {
+        "content": "These lessons are gold! Thanks for the detailed breakdown.",
+        "created_at": "2024-03-12T17:30:00Z",
+        "likes": 15
+      }
+    },
+    {
+      "id": 205,
+      "labels": ["Comment"],
+      "properties": {
+        "content": "Excellent architecture patterns. Bookmarking this for reference.",
+        "created_at": "2024-03-15T14:10:00Z",
+        "likes": 9
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "id": 1,
+      "type": "FOLLOWS",
+      "source": 1,
+      "target": 2,
+      "properties": {
+        "created_at": "2024-01-25T10:00:00Z",
+        "notifications_enabled": true
+      }
+    },
+    {
+      "id": 2,
+      "type": "FOLLOWS",
+      "source": 1,
+      "target": 3,
+      "properties": {
+        "created_at": "2024-02-05T14:30:00Z",
+        "notifications_enabled": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "FOLLOWS",
+      "source": 2,
+      "target": 1,
+      "properties": {
+        "created_at": "2024-01-30T09:15:00Z",
+        "notifications_enabled": false
+      }
+    },
+    {
+      "id": 4,
+      "type": "FOLLOWS",
+      "source": 2,
+      "target": 4,
+      "properties": {
+        "created_at": "2024-02-12T16:20:00Z",
+        "notifications_enabled": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "FOLLOWS",
+      "source": 3,
+      "target": 1,
+      "properties": {
+        "created_at": "2024-02-08T11:45:00Z",
+        "notifications_enabled": true
+      }
+    },
+    {
+      "id": 6,
+      "type": "FOLLOWS",
+      "source": 3,
+      "target": 5,
+      "properties": {
+        "created_at": "2024-02-20T13:30:00Z",
+        "notifications_enabled": true
+      }
+    },
+    {
+      "id": 7,
+      "type": "FOLLOWS",
+      "source": 4,
+      "target": 2,
+      "properties": {
+        "created_at": "2024-02-15T10:15:00Z",
+        "notifications_enabled": false
+      }
+    },
+    {
+      "id": 8,
+      "type": "FOLLOWS",
+      "source": 5,
+      "target": 1,
+      "properties": {
+        "created_at": "2024-02-25T15:00:00Z",
+        "notifications_enabled": true
+      }
+    },
+    {
+      "id": 9,
+      "type": "FOLLOWS",
+      "source": 5,
+      "target": 3,
+      "properties": {
+        "created_at": "2024-02-28T12:30:00Z",
+        "notifications_enabled": true
+      }
+    },
+    {
+      "id": 10,
+      "type": "CREATED",
+      "source": 1,
+      "target": 101,
+      "properties": {
+        "created_at": "2024-03-01T10:00:00Z"
+      }
+    },
+    {
+      "id": 11,
+      "type": "CREATED",
+      "source": 2,
+      "target": 102,
+      "properties": {
+        "created_at": "2024-03-05T14:30:00Z"
+      }
+    },
+    {
+      "id": 12,
+      "type": "CREATED",
+      "source": 3,
+      "target": 103,
+      "properties": {
+        "created_at": "2024-03-10T09:15:00Z"
+      }
+    },
+    {
+      "id": 13,
+      "type": "CREATED",
+      "source": 4,
+      "target": 104,
+      "properties": {
+        "created_at": "2024-03-12T16:45:00Z"
+      }
+    },
+    {
+      "id": 14,
+      "type": "CREATED",
+      "source": 5,
+      "target": 105,
+      "properties": {
+        "created_at": "2024-03-15T13:20:00Z"
+      }
+    },
+    {
+      "id": 15,
+      "type": "COMMENTED_ON",
+      "source": 2,
+      "target": 101,
+      "properties": {
+        "comment_id": 201,
+        "created_at": "2024-03-01T11:30:00Z"
+      }
+    },
+    {
+      "id": 16,
+      "type": "COMMENTED_ON",
+      "source": 3,
+      "target": 102,
+      "properties": {
+        "comment_id": 202,
+        "created_at": "2024-03-05T15:45:00Z"
+      }
+    },
+    {
+      "id": 17,
+      "type": "COMMENTED_ON",
+      "source": 1,
+      "target": 103,
+      "properties": {
+        "comment_id": 203,
+        "created_at": "2024-03-10T10:20:00Z"
+      }
+    },
+    {
+      "id": 18,
+      "type": "COMMENTED_ON",
+      "source": 5,
+      "target": 104,
+      "properties": {
+        "comment_id": 204,
+        "created_at": "2024-03-12T17:30:00Z"
+      }
+    },
+    {
+      "id": 19,
+      "type": "COMMENTED_ON",
+      "source": 2,
+      "target": 105,
+      "properties": {
+        "comment_id": 205,
+        "created_at": "2024-03-15T14:10:00Z"
+      }
+    },
+    {
+      "id": 20,
+      "type": "LIKED",
+      "source": 2,
+      "target": 101,
+      "properties": {
+        "created_at": "2024-03-01T12:00:00Z"
+      }
+    },
+    {
+      "id": 21,
+      "type": "LIKED",
+      "source": 3,
+      "target": 101,
+      "properties": {
+        "created_at": "2024-03-01T13:15:00Z"
+      }
+    },
+    {
+      "id": 22,
+      "type": "LIKED",
+      "source": 1,
+      "target": 102,
+      "properties": {
+        "created_at": "2024-03-05T15:00:00Z"
+      }
+    },
+    {
+      "id": 23,
+      "type": "LIKED",
+      "source": 4,
+      "target": 102,
+      "properties": {
+        "created_at": "2024-03-05T16:30:00Z"
+      }
+    },
+    {
+      "id": 24,
+      "type": "LIKED",
+      "source": 5,
+      "target": 102,
+      "properties": {
+        "created_at": "2024-03-05T17:45:00Z"
+      }
+    },
+    {
+      "id": 25,
+      "type": "SHARED",
+      "source": 1,
+      "target": 102,
+      "properties": {
+        "created_at": "2024-03-05T18:00:00Z",
+        "platform": "twitter"
+      }
+    },
+    {
+      "id": 26,
+      "type": "SHARED",
+      "source": 3,
+      "target": 104,
+      "properties": {
+        "created_at": "2024-03-12T18:30:00Z",
+        "platform": "linkedin"
+      }
+    }
+  ],
+  "statistics": {
+    "total_nodes": 15,
+    "total_relationships": 26,
+    "node_labels": {
+      "User": 5,
+      "Post": 5,
+      "Comment": 5
+    },
+    "relationship_types": {
+      "FOLLOWS": 9,
+      "CREATED": 5,
+      "COMMENTED_ON": 5,
+      "LIKED": 5,
+      "SHARED": 2
+    }
+  }
+}

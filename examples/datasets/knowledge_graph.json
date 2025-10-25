@@ -1,0 +1,499 @@
+{
+  "name": "Knowledge Graph Dataset",
+  "description": "A sample knowledge graph with entities, concepts, and semantic relationships",
+  "version": "1.0.0",
+  "created": "2025-10-25",
+  "nodes": [
+    {
+      "id": 1,
+      "labels": ["Person"],
+      "properties": {
+        "name": "Albert Einstein",
+        "birth_year": 1879,
+        "death_year": 1955,
+        "nationality": "German-American",
+        "profession": "Physicist",
+        "description": "Theoretical physicist who developed the theory of relativity",
+        "vector": [0.8, 0.6, 0.4, 0.9, 0.7, 0.3, 0.5, 0.8]
+      }
+    },
+    {
+      "id": 2,
+      "labels": ["Person"],
+      "properties": {
+        "name": "Marie Curie",
+        "birth_year": 1867,
+        "death_year": 1934,
+        "nationality": "Polish-French",
+        "profession": "Physicist",
+        "description": "First woman to win a Nobel Prize and first person to win Nobel Prizes in two different sciences",
+        "vector": [0.7, 0.8, 0.5, 0.6, 0.9, 0.4, 0.6, 0.7]
+      }
+    },
+    {
+      "id": 3,
+      "labels": ["Person"],
+      "properties": {
+        "name": "Isaac Newton",
+        "birth_year": 1643,
+        "death_year": 1727,
+        "nationality": "English",
+        "profession": "Physicist",
+        "description": "Mathematician and physicist who formulated the laws of motion and universal gravitation",
+        "vector": [0.9, 0.5, 0.7, 0.8, 0.6, 0.5, 0.4, 0.9]
+      }
+    },
+    {
+      "id": 4,
+      "labels": ["Person"],
+      "properties": {
+        "name": "Charles Darwin",
+        "birth_year": 1809,
+        "death_year": 1882,
+        "nationality": "English",
+        "profession": "Naturalist",
+        "description": "Naturalist who formulated the theory of evolution by natural selection",
+        "vector": [0.6, 0.7, 0.8, 0.5, 0.4, 0.9, 0.7, 0.6]
+      }
+    },
+    {
+      "id": 5,
+      "labels": ["Person"],
+      "properties": {
+        "name": "Leonardo da Vinci",
+        "birth_year": 1452,
+        "death_year": 1519,
+        "nationality": "Italian",
+        "profession": "Polymath",
+        "description": "Renaissance polymath known for his contributions to art, science, and engineering",
+        "vector": [0.8, 0.9, 0.6, 0.7, 0.8, 0.5, 0.9, 0.8]
+      }
+    },
+    {
+      "id": 101,
+      "labels": ["Concept"],
+      "properties": {
+        "name": "Theory of Relativity",
+        "type": "Scientific Theory",
+        "description": "Einstein's theory describing the relationship between space and time",
+        "discovered_by": "Albert Einstein",
+        "year": 1905,
+        "vector": [0.9, 0.4, 0.8, 0.9, 0.3, 0.2, 0.7, 0.8]
+      }
+    },
+    {
+      "id": 102,
+      "labels": ["Concept"],
+      "properties": {
+        "name": "Radioactivity",
+        "type": "Physical Phenomenon",
+        "description": "The emission of radiation by unstable atomic nuclei",
+        "discovered_by": "Marie Curie",
+        "year": 1896,
+        "vector": [0.7, 0.8, 0.5, 0.6, 0.9, 0.4, 0.6, 0.7]
+      }
+    },
+    {
+      "id": 103,
+      "labels": ["Concept"],
+      "properties": {
+        "name": "Laws of Motion",
+        "type": "Scientific Law",
+        "description": "Three fundamental laws describing the relationship between motion and forces",
+        "discovered_by": "Isaac Newton",
+        "year": 1687,
+        "vector": [0.9, 0.5, 0.7, 0.8, 0.6, 0.5, 0.4, 0.9]
+      }
+    },
+    {
+      "id": 104,
+      "labels": ["Concept"],
+      "properties": {
+        "name": "Natural Selection",
+        "type": "Biological Process",
+        "description": "The process by which organisms better adapted to their environment tend to survive",
+        "discovered_by": "Charles Darwin",
+        "year": 1859,
+        "vector": [0.6, 0.7, 0.8, 0.5, 0.4, 0.9, 0.7, 0.6]
+      }
+    },
+    {
+      "id": 105,
+      "labels": ["Concept"],
+      "properties": {
+        "name": "Renaissance Art",
+        "type": "Artistic Movement",
+        "description": "Artistic movement characterized by realistic representation and humanistic themes",
+        "associated_with": "Leonardo da Vinci",
+        "period": "14th-17th century",
+        "vector": [0.8, 0.9, 0.6, 0.7, 0.8, 0.5, 0.9, 0.8]
+      }
+    },
+    {
+      "id": 201,
+      "labels": ["Institution"],
+      "properties": {
+        "name": "University of Cambridge",
+        "type": "University",
+        "location": "Cambridge, England",
+        "founded": 1209,
+        "description": "One of the world's oldest universities and leading academic institutions",
+        "vector": [0.5, 0.6, 0.7, 0.4, 0.8, 0.6, 0.5, 0.7]
+      }
+    },
+    {
+      "id": 202,
+      "labels": ["Institution"],
+      "properties": {
+        "name": "Sorbonne University",
+        "type": "University",
+        "location": "Paris, France",
+        "founded": 1257,
+        "description": "Historic university in Paris, now part of the University of Paris",
+        "vector": [0.4, 0.7, 0.6, 0.5, 0.7, 0.5, 0.6, 0.8]
+      }
+    },
+    {
+      "id": 203,
+      "labels": ["Institution"],
+      "properties": {
+        "name": "Princeton University",
+        "type": "University",
+        "location": "Princeton, New Jersey",
+        "founded": 1746,
+        "description": "Private research university in Princeton, New Jersey",
+        "vector": [0.6, 0.5, 0.8, 0.7, 0.6, 0.4, 0.7, 0.5]
+      }
+    },
+    {
+      "id": 204,
+      "labels": ["Institution"],
+      "properties": {
+        "name": "Royal Society",
+        "type": "Scientific Society",
+        "location": "London, England",
+        "founded": 1660,
+        "description": "The oldest scientific academy in continuous existence",
+        "vector": [0.7, 0.4, 0.9, 0.6, 0.5, 0.3, 0.8, 0.6]
+      }
+    },
+    {
+      "id": 205,
+      "labels": ["Institution"],
+      "properties": {
+        "name": "Florence Academy",
+        "type": "Art Academy",
+        "location": "Florence, Italy",
+        "founded": 1563,
+        "description": "Art academy founded during the Renaissance period",
+        "vector": [0.8, 0.9, 0.5, 0.8, 0.7, 0.6, 0.9, 0.7]
+      }
+    },
+    {
+      "id": 301,
+      "labels": ["Award"],
+      "properties": {
+        "name": "Nobel Prize in Physics",
+        "type": "Scientific Award",
+        "description": "Annual award for outstanding contributions to physics",
+        "first_awarded": 1901,
+        "vector": [0.9, 0.3, 0.8, 0.9, 0.2, 0.1, 0.7, 0.8]
+      }
+    },
+    {
+      "id": 302,
+      "labels": ["Award"],
+      "properties": {
+        "name": "Nobel Prize in Chemistry",
+        "type": "Scientific Award",
+        "description": "Annual award for outstanding contributions to chemistry",
+        "first_awarded": 1901,
+        "vector": [0.8, 0.4, 0.7, 0.8, 0.3, 0.2, 0.6, 0.7]
+      }
+    },
+    {
+      "id": 303,
+      "labels": ["Award"],
+      "properties": {
+        "name": "Copley Medal",
+        "type": "Scientific Award",
+        "description": "Premier award of the Royal Society for outstanding research",
+        "first_awarded": 1731,
+        "vector": [0.7, 0.5, 0.9, 0.7, 0.4, 0.3, 0.8, 0.6]
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "id": 1,
+      "type": "DISCOVERED",
+      "source": 1,
+      "target": 101,
+      "properties": {
+        "year": 1905,
+        "significance": "Revolutionary"
+      }
+    },
+    {
+      "id": 2,
+      "type": "DISCOVERED",
+      "source": 2,
+      "target": 102,
+      "properties": {
+        "year": 1896,
+        "significance": "Groundbreaking"
+      }
+    },
+    {
+      "id": 3,
+      "type": "DISCOVERED",
+      "source": 3,
+      "target": 103,
+      "properties": {
+        "year": 1687,
+        "significance": "Fundamental"
+      }
+    },
+    {
+      "id": 4,
+      "type": "DISCOVERED",
+      "source": 4,
+      "target": 104,
+      "properties": {
+        "year": 1859,
+        "significance": "Revolutionary"
+      }
+    },
+    {
+      "id": 5,
+      "type": "CONTRIBUTED_TO",
+      "source": 5,
+      "target": 105,
+      "properties": {
+        "period": "1490-1519",
+        "significance": "Masterpiece"
+      }
+    },
+    {
+      "id": 6,
+      "type": "STUDIED_AT",
+      "source": 1,
+      "target": 201,
+      "properties": {
+        "period": "1896-1900",
+        "degree": "PhD"
+      }
+    },
+    {
+      "id": 7,
+      "type": "STUDIED_AT",
+      "source": 2,
+      "target": 202,
+      "properties": {
+        "period": "1883-1891",
+        "degree": "PhD"
+      }
+    },
+    {
+      "id": 8,
+      "type": "STUDIED_AT",
+      "source": 3,
+      "target": 201,
+      "properties": {
+        "period": "1661-1665",
+        "degree": "Bachelor"
+      }
+    },
+    {
+      "id": 9,
+      "type": "STUDIED_AT",
+      "source": 4,
+      "target": 201,
+      "properties": {
+        "period": "1825-1831",
+        "degree": "Bachelor"
+      }
+    },
+    {
+      "id": 10,
+      "type": "WORKED_AT",
+      "source": 1,
+      "target": 203,
+      "properties": {
+        "period": "1933-1955",
+        "position": "Professor"
+      }
+    },
+    {
+      "id": 11,
+      "type": "WORKED_AT",
+      "source": 2,
+      "target": 202,
+      "properties": {
+        "period": "1891-1934",
+        "position": "Professor"
+      }
+    },
+    {
+      "id": 12,
+      "type": "WORKED_AT",
+      "source": 3,
+      "target": 201,
+      "properties": {
+        "period": "1667-1703",
+        "position": "Professor"
+      }
+    },
+    {
+      "id": 13,
+      "type": "MEMBER_OF",
+      "source": 3,
+      "target": 204,
+      "properties": {
+        "period": "1672-1727",
+        "position": "President"
+      }
+    },
+    {
+      "id": 14,
+      "type": "MEMBER_OF",
+      "source": 4,
+      "target": 204,
+      "properties": {
+        "period": "1839-1882",
+        "position": "Fellow"
+      }
+    },
+    {
+      "id": 15,
+      "type": "WON",
+      "source": 1,
+      "target": 301,
+      "properties": {
+        "year": 1921,
+        "reason": "For his services to Theoretical Physics, and especially for his discovery of the law of the photoelectric effect"
+      }
+    },
+    {
+      "id": 16,
+      "type": "WON",
+      "source": 2,
+      "target": 301,
+      "properties": {
+        "year": 1903,
+        "reason": "For their joint researches on the radiation phenomena discovered by Professor Henri Becquerel"
+      }
+    },
+    {
+      "id": 17,
+      "type": "WON",
+      "source": 2,
+      "target": 302,
+      "properties": {
+        "year": 1911,
+        "reason": "For the discovery of the elements radium and polonium"
+      }
+    },
+    {
+      "id": 18,
+      "type": "WON",
+      "source": 3,
+      "target": 303,
+      "properties": {
+        "year": 1705,
+        "reason": "For his contributions to mathematics and physics"
+      }
+    },
+    {
+      "id": 19,
+      "type": "INFLUENCED_BY",
+      "source": 1,
+      "target": 3,
+      "properties": {
+        "aspect": "Mathematical rigor",
+        "significance": "High"
+      }
+    },
+    {
+      "id": 20,
+      "type": "INFLUENCED_BY",
+      "source": 2,
+      "target": 1,
+      "properties": {
+        "aspect": "Scientific method",
+        "significance": "Medium"
+      }
+    },
+    {
+      "id": 21,
+      "type": "CONTEMPORARY_OF",
+      "source": 1,
+      "target": 2,
+      "properties": {
+        "overlap_period": "1896-1934",
+        "interaction": "Scientific correspondence"
+      }
+    },
+    {
+      "id": 22,
+      "type": "CONTEMPORARY_OF",
+      "source": 3,
+      "target": 4,
+      "properties": {
+        "overlap_period": "None",
+        "interaction": "Historical influence"
+      }
+    },
+    {
+      "id": 23,
+      "type": "RELATED_TO",
+      "source": 101,
+      "target": 103,
+      "properties": {
+        "relationship": "Generalization",
+        "description": "Relativity generalizes Newton's laws for high speeds"
+      }
+    },
+    {
+      "id": 24,
+      "type": "RELATED_TO",
+      "source": 102,
+      "target": 301,
+      "properties": {
+        "relationship": "Research area",
+        "description": "Radioactivity research led to Nobel Prize"
+      }
+    },
+    {
+      "id": 25,
+      "type": "APPLIED_IN",
+      "source": 103,
+      "target": 105,
+      "properties": {
+        "application": "Engineering principles",
+        "description": "Newton's laws applied in Renaissance engineering"
+      }
+    }
+  ],
+  "statistics": {
+    "total_nodes": 18,
+    "total_relationships": 25,
+    "node_labels": {
+      "Person": 5,
+      "Concept": 5,
+      "Institution": 5,
+      "Award": 3
+    },
+    "relationship_types": {
+      "DISCOVERED": 5,
+      "STUDIED_AT": 4,
+      "WORKED_AT": 3,
+      "MEMBER_OF": 2,
+      "WON": 4,
+      "INFLUENCED_BY": 2,
+      "CONTEMPORARY_OF": 2,
+      "RELATED_TO": 2,
+      "APPLIED_IN": 1
+    }
+  }
+}

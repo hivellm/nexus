@@ -5,6 +5,66 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-10-25
+
+### Added
+
+- **Complete MVP Integration & Testing** (Phase 1.6) ✅
+  - Comprehensive end-to-end testing framework
+  - Performance benchmarking suite
+  - Complete documentation ecosystem
+
+- **Sample Datasets** (`examples/datasets/`)
+  - Social network dataset with users, posts, comments, and relationships
+  - Knowledge graph dataset with entities, concepts, and semantic relationships
+  - Dataset loader utility for easy data ingestion
+
+- **Cypher Test Suite** (`examples/cypher_tests/`)
+  - Comprehensive test suite with 7 categories of tests
+  - Basic queries, aggregation, relationships, knowledge graph queries
+  - KNN vector queries, performance tests, error handling
+  - Test runner with performance benchmarking capabilities
+
+- **KNN + Traversal Hybrid Queries**
+  - Vector similarity search combined with graph traversal
+  - Hybrid queries for recommendation systems
+  - Semantic similarity with relationship analysis
+
+- **Crash Recovery Testing** (`examples/crash_recovery_tests/`)
+  - WAL recovery during write transactions
+  - Catalog recovery after corruption
+  - Index recovery after crash scenarios
+  - Partial transaction recovery testing
+  - Concurrent transaction recovery testing
+  - Performance testing for recovery scenarios
+
+- **Performance Benchmarks** (`examples/benchmarks/`)
+  - Point reads benchmarking (100K+ ops/sec target)
+  - KNN queries benchmarking (10K+ ops/sec target)
+  - Pattern traversal benchmarking (1K-10K ops/sec target)
+  - Bulk ingest benchmarking (100K+ nodes/sec target)
+  - Memory usage monitoring and optimization
+
+- **Comprehensive Documentation**
+  - **User Guide** (`docs/USER_GUIDE.md`): Complete usage guide with examples
+  - **API Reference** (`docs/api/openapi.yml`): OpenAPI 3.0.3 specification
+  - **Deployment Guide** (`docs/DEPLOYMENT_GUIDE.md`): Production deployment instructions
+  - **Performance Tuning Guide** (`docs/PERFORMANCE_TUNING_GUIDE.md`): Optimization strategies
+
+### Changed
+
+- **MVP Phase Completion**: All MVP phases (1.1-1.6) now complete
+- **Documentation Structure**: Organized documentation in `/docs` directory
+- **Test Coverage**: Maintained 79.13% test coverage with comprehensive integration tests
+
+### Technical Details
+
+- **Dataset Format**: JSON-based datasets with nodes, relationships, and metadata
+- **Test Framework**: Rust-based testing with async support and performance metrics
+- **Recovery Testing**: Comprehensive crash recovery scenarios with WAL and transaction management
+- **Benchmarking**: Multi-threaded performance testing with detailed metrics
+- **Documentation**: Markdown-based documentation with code examples and best practices
+
 ## [0.4.0] - 2025-10-25
 
 ### Added

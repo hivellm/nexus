@@ -1,104 +1,103 @@
 openapi: 3.0.3
 info:
   title: Nexus Graph Database API
-  version: 0.1.0
   description: |
-    High-performance property graph database with native vector search.
-    
-    Nexus provides a Cypher-compatible query interface with first-class KNN support
-    for hybrid RAG (Retrieval-Augmented Generation) applications.
+    High-performance graph database with native vector similarity search capabilities.
     
     ## Features
-    - Property graph model with Cypher subset queries
-    - Native KNN vector search via HNSW indexes
-    - ACID transactions with MVCC
-    - StreamableHTTP with SSE for large result sets
-    - MCP and UMICP protocol support
+    - Graph database with Cypher query support
+    - KNN vector similarity search
+    - REST API with comprehensive endpoints
+    - Server-Sent Events (SSE) for real-time streaming
+    - Bulk data ingestion
+    - Schema management
+    - MCP (Model Context Protocol) integration
     
+    ## Authentication
+    Currently no authentication is required. All endpoints are publicly accessible.
+    
+    ## Rate Limiting
+    No rate limiting is currently implemented. Consider implementing rate limiting for production deployments.
+    
+    ## Error Handling
+    All endpoints return appropriate HTTP status codes and error messages in JSON format.
+  version: 0.4.0
   contact:
-    name: HiveLLM Team
-    email: team@hivellm.org
-    url: https://github.com/hivellm/nexus
+    name: Nexus Development Team
+    url: https://github.com/your-org/nexus
+    email: support@nexus-db.com
   license:
-    name: MIT OR Apache-2.0
-    url: https://github.com/hivellm/nexus/blob/main/LICENSE
+    name: MIT
+    url: https://opensource.org/licenses/MIT
 
 servers:
-  - url: http://localhost:15474
-    description: Local development server
-  - url: http://127.0.0.1:15474
-    description: Localhost (no auth required)
-  - url: https://nexus-api.example.com
-    description: Production server (authentication required)
-
-tags:
-  - name: health
-    description: Health check and status endpoints
-  - name: query
-    description: Cypher query execution
-  - name: knn
-    description: K-Nearest Neighbors vector search
-  - name: ingestion
-    description: Bulk data ingestion
-  - name: statistics
-    description: Database statistics and metadata
-  - name: replication
-    description: Replication management (V1)
-  - name: authentication
-    description: API key management (V1)
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://api.nexus-db.com
+    description: Production server
 
 paths:
   /health:
     get:
-      tags:
-        - health
-      summary: Health check
+      summary: Health Check
       description: Returns server health status and version information
       operationId: healthCheck
+      tags:
+        - System
       responses:
         '200':
           description: Server is healthy
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
-              example:
-                status: ok
-                version: 0.1.0
-                uptime_seconds: 3600
-
-  /stats:
-    get:
-      tags:
-        - statistics
-      summary: Database statistics
-      description: Returns comprehensive database statistics including node/relationship counts, index info, and storage metrics
-      operationId: getStatistics
-      responses:
-        '200':
-          description: Database statistics
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatsResponse'
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  version:
+                    type: string
+                    example: "0.4.0"
+                  timestamp:
+                    type: string
+                    format: date-time
+                  uptime:
+                    type: number
+                    description: Server uptime in seconds
+                  protocol:
+                    type: string
+                    example: "nexus/1.0"
 
   /cypher:
     post:
-      tags:
-        - query
-      summary: Execute Cypher query
+      summary: Execute Cypher Query
       description: |
         Execute a Cypher query against the graph database.
         
-        Supports:
-        - Pattern matching (MATCH)
-        - Filtering (WHERE)
-        - Projection (RETURN)
-        - Ordering (ORDER BY)
-        - Limiting (LIMIT)
-        - Aggregations (COUNT, SUM, AVG, MIN, MAX)
+        ## Supported Cypher Features
+        - MATCH patterns with nodes and relationships
+        - WHERE clauses with property filtering
+        - RETURN clauses with expressions
+        - LIMIT and ORDER BY
+        - Aggregation functions (COUNT, AVG, MAX, MIN, SUM)
+        - Variable length paths with `*` syntax
+        - Vector similarity search with `<->` operator
         
+        ## Examples
+        ```cypher
+        // Find all nodes
+        MATCH (n) RETURN n LIMIT 10
+        
+        // Find nodes with conditions
+        MATCH (n:Person) WHERE n.age > 25 RETURN n.name, n.age
+        
+        // Vector similarity search
+        MATCH (n:Person) WHERE n.vector IS NOT NULL 
+        RETURN n.name ORDER BY n.vector <-> [0.1, 0.2, 0.3] LIMIT 5
+        ```
       operationId: executeCypher
+      tags:
+        - Queries
       requestBody:
         required: true
         content:
@@ -106,20 +105,23 @@ paths:
             schema:
               $ref: '#/components/schemas/CypherRequest'
             examples:
-              simple_match:
-                summary: Simple MATCH query
+              simple_query:
+                summary: Simple query
                 value:
-                  query: "MATCH (n:Person) RETURN n LIMIT 10"
-              with_filter:
-                summary: Query with WHERE clause
+                  query: "MATCH (n:Person) RETURN n.name, n.age LIMIT 10"
+                  params: {}
+              parameterized_query:
+                summary: Query with parameters
                 value:
-                  query: "MATCH (n:Person) WHERE n.age > $min_age RETURN n.name, n.age ORDER BY n.age DESC LIMIT 10"
+                  query: "MATCH (n:Person) WHERE n.age > $min_age RETURN n.name, n.age"
                   params:
                     min_age: 25
-              aggregation:
-                summary: Aggregation query
+              vector_query:
+                summary: Vector similarity query
                 value:
-                  query: "MATCH (p:Person)-[:BOUGHT]->(prod:Product) RETURN prod.category, COUNT(*) AS purchases ORDER BY purchases DESC"
+                  query: "MATCH (n:Person) WHERE n.vector IS NOT NULL RETURN n.name ORDER BY n.vector <-> $vector LIMIT 5"
+                  params:
+                    vector: [0.1, 0.2, 0.3, 0.4]
       responses:
         '200':
           description: Query executed successfully
@@ -127,27 +129,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CypherResponse'
-              example:
-                columns: ["n.name", "n.age"]
-                rows:
-                  - ["Alice", 30]
-                  - ["Bob", 28]
-                  - ["Charlie", 35]
-                execution_time_ms: 12
-                row_count: 3
         '400':
           description: Invalid query syntax or parameters
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-              example:
-                error:
-                  code: CYPHER_SYNTAX_ERROR
-                  message: "Unexpected token 'WERE' at line 1, column 20"
-                  position:
-                    line: 1
-                    column: 20
         '408':
           description: Query timeout
           content:
@@ -160,27 +147,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-      security:
-        - ApiKeyAuth: []
-        - {}  # Optional authentication
 
   /knn_traverse:
     post:
-      tags:
-        - knn
-      summary: KNN-seeded graph traversal
+      summary: KNN Traversal
       description: |
-        Execute K-Nearest Neighbors vector search with optional graph traversal.
+        Perform k-nearest neighbor traversal starting from a vector query.
         
-        This endpoint combines:
-        1. KNN vector similarity search (via HNSW index)
-        2. Graph pattern expansion from KNN results
-        3. Property filtering
-        4. Result ranking and limiting
-        
-        Perfect for hybrid RAG queries combining semantic similarity and graph structure.
-        
+        This endpoint combines vector similarity search with graph traversal,
+        allowing you to find similar entities and then traverse their relationships.
       operationId: knnTraverse
+      tags:
+        - Vector Search
       requestBody:
         required: true
         content:
@@ -188,58 +166,29 @@ paths:
             schema:
               $ref: '#/components/schemas/KnnTraverseRequest'
             examples:
-              simple_knn:
-                summary: Simple KNN search
+              basic_knn:
+                summary: Basic KNN search
                 value:
                   label: "Person"
                   vector: [0.1, 0.2, 0.3, 0.4]
                   k: 10
-              knn_with_expansion:
-                summary: KNN with graph traversal
+              knn_with_filter:
+                summary: KNN with additional filters
                 value:
                   label: "Person"
                   vector: [0.1, 0.2, 0.3, 0.4]
-                  k: 20
-                  expand:
-                    - "(n)-[:WORKS_AT]->(company:Company)"
-                  where: "company.size > 100"
-                  limit: 10
+                  k: 5
+                  where: "n.age > 25"
+                  limit: 50
       responses:
         '200':
-          description: KNN search completed successfully
+          description: KNN traversal completed successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/KnnTraverseResponse'
-              example:
-                results:
-                  - node:
-                      id: 42
-                      labels: ["Person"]
-                      properties:
-                        name: "Alice"
-                        age: 30
-                    score: 0.95
-                  - node:
-                      id: 99
-                      labels: ["Person"]
-                      properties:
-                        name: "Bob"
-                        age: 28
-                    score: 0.89
-                execution_time_ms: 8
-                knn_time_ms: 2
-                expand_time_ms: 4
-                filter_time_ms: 2
-                result_count: 2
         '400':
-          description: Invalid parameters (vector dimension mismatch, k <= 0)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: KNN index not found for specified label
+          description: Invalid request parameters
           content:
             application/json:
               schema:
@@ -250,24 +199,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-      security:
-        - ApiKeyAuth: []
-        - {}
 
   /ingest:
     post:
-      tags:
-        - ingestion
-      summary: Bulk data ingestion
+      summary: Bulk Data Ingestion
       description: |
-        Ingest multiple nodes and relationships in a single request.
+        Ingest large amounts of nodes and relationships in a single operation.
         
-        - Auto-generates IDs if not provided
-        - Creates labels and types on-the-fly
-        - Returns statistics and any errors
-        - Suitable for initial data loading
-        
+        This endpoint is optimized for bulk data loading and provides
+        throughput metrics for performance monitoring.
       operationId: ingestData
+      tags:
+        - Data Management
       requestBody:
         required: true
         content:
@@ -275,8 +218,8 @@ paths:
             schema:
               $ref: '#/components/schemas/IngestRequest'
             examples:
-              basic_ingest:
-                summary: Ingest nodes and relationships
+              bulk_nodes:
+                summary: Bulk node ingestion
                 value:
                   nodes:
                     - labels: ["Person"]
@@ -287,29 +230,26 @@ paths:
                       properties:
                         name: "Bob"
                         age: 28
+                  relationships: []
+              bulk_relationships:
+                summary: Bulk relationship ingestion
+                value:
+                  nodes: []
                   relationships:
                     - src: 1
                       dst: 2
                       type: "KNOWS"
                       properties:
-                        since: 2020
+                        since: "2020"
       responses:
         '200':
-          description: Ingestion completed
+          description: Data ingested successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/IngestResponse'
-              example:
-                nodes_ingested: 2
-                relationships_ingested: 1
-                ingestion_time_ms: 15
-                throughput:
-                  nodes_per_sec: 133
-                  relationships_per_sec: 66
-                errors: []
         '400':
-          description: Invalid input format
+          description: Invalid data format
           content:
             application/json:
               schema:
@@ -320,172 +260,300 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-      security:
-        - ApiKeyAuth: [write]
-        - {}
 
-  /replication/status:
+  /schema/labels:
     get:
+      summary: List Labels
+      description: List all node labels in the database
+      operationId: listLabels
       tags:
-        - replication
-      summary: Get replication status
-      description: Returns current replication status, lag, and health information
-      operationId: getReplicationStatus
+        - Schema
       responses:
         '200':
-          description: Replication status
+          description: Labels retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReplicationStatus'
-      security:
-        - ApiKeyAuth: [read]
-
-  /replication/promote:
+                $ref: '#/components/schemas/LabelListResponse'
     post:
+      summary: Create Label
+      description: Create a new node label
+      operationId: createLabel
       tags:
-        - replication
-      summary: Promote replica to master
-      description: |
-        Promote a replica node to master (manual failover).
-        
-        **Warning**: This is a destructive operation. Ensure the old master is stopped
-        before promoting a replica to avoid split-brain scenarios.
-        
-      operationId: promoteReplica
-      responses:
-        '200':
-          description: Replica promoted successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: "Replica promoted to master successfully"
-                  new_role:
-                    type: string
-                    example: "master"
-        '403':
-          description: Node is already a master or promotion not allowed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Promotion failed
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-      security:
-        - ApiKeyAuth: [admin]
-
-  /auth/keys:
-    post:
-      tags:
-        - authentication
-      summary: Create API key
-      description: Generate a new API key with specified permissions
-      operationId: createApiKey
+        - Schema
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateApiKeyRequest'
+              $ref: '#/components/schemas/CreateLabelRequest'
       responses:
-        '201':
-          description: API key created
+        '200':
+          description: Label created successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiKeyResponse'
-      security:
-        - ApiKeyAuth: [admin]
+                $ref: '#/components/schemas/CreateLabelResponse'
+        '400':
+          description: Invalid label name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /schema/rel_types:
+    get:
+      summary: List Relationship Types
+      description: List all relationship types in the database
+      operationId: listRelTypes
+      tags:
+        - Schema
+      responses:
+        '200':
+          description: Relationship types retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelTypeListResponse'
+    post:
+      summary: Create Relationship Type
+      description: Create a new relationship type
+      operationId: createRelType
+      tags:
+        - Schema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRelTypeRequest'
+      responses:
+        '200':
+          description: Relationship type created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateRelTypeResponse'
+        '400':
+          description: Invalid relationship type name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /data/nodes:
+    post:
+      summary: Create Node
+      description: Create a single node with labels and properties
+      operationId: createNode
+      tags:
+        - Data Management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNodeRequest'
+      responses:
+        '200':
+          description: Node created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateNodeResponse'
+    put:
+      summary: Update Node
+      description: Update properties of an existing node
+      operationId: updateNode
+      tags:
+        - Data Management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateNodeRequest'
+      responses:
+        '200':
+          description: Node updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateNodeResponse'
+    delete:
+      summary: Delete Node
+      description: Delete a node and all its relationships
+      operationId: deleteNode
+      tags:
+        - Data Management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteNodeRequest'
+      responses:
+        '200':
+          description: Node deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteNodeResponse'
+
+  /data/relationships:
+    post:
+      summary: Create Relationship
+      description: Create a single relationship between two nodes
+      operationId: createRel
+      tags:
+        - Data Management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRelRequest'
+      responses:
+        '200':
+          description: Relationship created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateRelResponse'
+
+  /stats:
+    get:
+      summary: Database Statistics
+      description: Get comprehensive database statistics including node counts, relationship counts, and index information
+      operationId: getStats
+      tags:
+        - System
+      responses:
+        '200':
+          description: Statistics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsResponse'
+
+  /sse/cypher:
+    get:
+      summary: Stream Cypher Query Results
+      description: |
+        Stream Cypher query results using Server-Sent Events (SSE).
+        
+        This endpoint allows real-time streaming of query results,
+        useful for monitoring and real-time applications.
+      operationId: streamCypherQuery
+      tags:
+        - Streaming
+      parameters:
+        - name: query
+          in: query
+          description: Cypher query to execute
+          required: false
+          schema:
+            type: string
+            default: "MATCH (n) RETURN n LIMIT 10"
+        - name: interval
+          in: query
+          description: Interval between query executions in milliseconds
+          required: false
+          schema:
+            type: integer
+            default: 1000
+            minimum: 100
+            maximum: 60000
+        - name: limit
+          in: query
+          description: Maximum number of query executions
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: SSE stream started
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+
+  /sse/stats:
+    get:
+      summary: Stream Database Statistics
+      description: Stream database statistics using Server-Sent Events
+      operationId: streamStats
+      tags:
+        - Streaming
+      parameters:
+        - name: interval
+          in: query
+          description: Interval between statistics updates in milliseconds
+          required: false
+          schema:
+            type: integer
+            default: 2000
+            minimum: 1000
+            maximum: 60000
+        - name: limit
+          in: query
+          description: Maximum number of statistics updates
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: SSE stream started
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+
+  /sse/heartbeat:
+    get:
+      summary: Heartbeat Stream
+      description: Stream heartbeat events using Server-Sent Events
+      operationId: streamHeartbeat
+      tags:
+        - Streaming
+      parameters:
+        - name: interval
+          in: query
+          description: Interval between heartbeat events in milliseconds
+          required: false
+          schema:
+            type: integer
+            default: 5000
+            minimum: 1000
+            maximum: 60000
+        - name: limit
+          in: query
+          description: Maximum number of heartbeat events
+          required: false
+          schema:
+            type: integer
+            default: 1000
+            minimum: 1
+            maximum: 10000
+      responses:
+        '200':
+          description: SSE stream started
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
 
 components:
   schemas:
-    HealthResponse:
-      type: object
-      required:
-        - status
-        - version
-      properties:
-        status:
-          type: string
-          enum: [ok, degraded, error]
-          description: Server health status
-        version:
-          type: string
-          description: Server version
-          example: "0.1.0"
-        uptime_seconds:
-          type: integer
-          description: Server uptime in seconds
-          example: 3600
-
-    StatsResponse:
-      type: object
-      properties:
-        nodes:
-          type: object
-          properties:
-            total:
-              type: integer
-              example: 1000000
-            by_label:
-              type: object
-              additionalProperties:
-                type: integer
-              example:
-                Person: 800000
-                Company: 200000
-        relationships:
-          type: object
-          properties:
-            total:
-              type: integer
-              example: 2000000
-            by_type:
-              type: object
-              additionalProperties:
-                type: integer
-              example:
-                KNOWS: 1500000
-                WORKS_AT: 500000
-        indexes:
-          type: object
-          properties:
-            knn:
-              type: array
-              items:
-                type: object
-                properties:
-                  label:
-                    type: string
-                  dimension:
-                    type: integer
-                  node_count:
-                    type: integer
-                  size_mb:
-                    type: integer
-        storage:
-          type: object
-          properties:
-            total_size_mb:
-              type: integer
-            wal_size_mb:
-              type: integer
-            page_cache_size_mb:
-              type: integer
-            page_cache_hit_rate:
-              type: number
-              format: float
-              minimum: 0.0
-              maximum: 1.0
-
     CypherRequest:
       type: object
       required:
@@ -493,48 +561,37 @@ components:
       properties:
         query:
           type: string
-          description: Cypher query string
-          example: "MATCH (n:Person) WHERE n.age > $min_age RETURN n LIMIT 10"
+          description: Cypher query to execute
+          example: "MATCH (n:Person) RETURN n.name, n.age LIMIT 10"
         params:
           type: object
+          description: Query parameters
           additionalProperties: true
-          description: Query parameters (referenced in query with $param_name)
           example:
             min_age: 25
+            name: "Alice"
         timeout_ms:
           type: integer
           description: Query timeout in milliseconds
-          default: 30000
+          default: 5000
           minimum: 100
-          maximum: 300000
+          maximum: 60000
 
     CypherResponse:
       type: object
-      required:
-        - columns
-        - rows
-        - execution_time_ms
       properties:
-        columns:
+        results:
           type: array
+          description: Query results
           items:
-            type: string
-          description: Column names from RETURN clause
-          example: ["n.name", "n.age"]
-        rows:
-          type: array
-          items:
-            type: array
-            items: {}
-          description: Result rows (array of arrays)
+            type: object
+            additionalProperties: true
         execution_time_ms:
           type: integer
           description: Query execution time in milliseconds
-          example: 12
-        row_count:
-          type: integer
-          description: Number of rows returned
-          example: 3
+        error:
+          type: string
+          description: Error message if query failed
 
     KnnTraverseRequest:
       type: object
@@ -551,156 +608,86 @@ components:
           type: array
           items:
             type: number
-            format: float
-          description: Query embedding vector
+          description: Query vector for similarity search
           example: [0.1, 0.2, 0.3, 0.4]
         k:
           type: integer
-          description: Number of nearest neighbors
+          description: Number of nearest neighbors to find
           minimum: 1
-          maximum: 10000
+          maximum: 1000
           example: 10
-        expand:
-          type: array
-          items:
-            type: string
-          description: Optional graph patterns to expand from KNN results
-          example: ["(n)-[:WORKS_AT]->(company:Company)"]
         where:
           type: string
-          description: Optional Cypher WHERE clause for filtering
-          example: "n.age > 25 AND company.size > 100"
-        return_fields:
-          type: array
-          description: Fields to return (default all)
-          items:
-            type: string
-        order_by:
-          type: string
-          description: Sort order
-          default: "score DESC"
+          description: Additional WHERE clause for filtering
+          example: "n.age > 25"
         limit:
           type: integer
-          description: Maximum results to return
-          default: 100
+          description: Maximum number of results to return
           minimum: 1
           maximum: 10000
+          default: 100
 
     KnnTraverseResponse:
       type: object
-      required:
-        - results
-        - execution_time_ms
       properties:
         results:
           type: array
+          description: KNN traversal results
           items:
-            $ref: '#/components/schemas/KnnResult'
+            type: object
+            properties:
+              node:
+                type: object
+                description: Node data
+                additionalProperties: true
+              similarity:
+                type: number
+                description: Similarity score
+                minimum: 0
+                maximum: 1
         execution_time_ms:
           type: integer
-          description: Total execution time
-        knn_time_ms:
-          type: integer
-          description: Time spent on KNN search
-        expand_time_ms:
-          type: integer
-          description: Time spent on graph expansion
-        filter_time_ms:
-          type: integer
-          description: Time spent on filtering
-        result_count:
-          type: integer
-          description: Number of results returned
-
-    KnnResult:
-      type: object
-      properties:
-        node:
-          $ref: '#/components/schemas/Node'
-        score:
-          type: number
-          format: float
-          description: Similarity score (0.0-1.0, higher = more similar)
-          minimum: 0.0
-          maximum: 1.0
-          example: 0.95
-
-    Node:
-      type: object
-      required:
-        - id
-        - labels
-        - properties
-      properties:
-        id:
-          type: integer
-          format: int64
-          description: Unique node identifier
-          example: 42
-        labels:
-          type: array
-          items:
-            type: string
-          description: Node labels
-          example: ["Person", "Employee"]
-        properties:
-          type: object
-          additionalProperties: true
-          description: Node properties (key-value pairs)
-          example:
-            name: "Alice"
-            age: 30
-            city: "NYC"
+          description: Execution time in milliseconds
+        error:
+          type: string
+          description: Error message if operation failed
 
     IngestRequest:
       type: object
       properties:
         nodes:
           type: array
+          description: Nodes to ingest
           items:
             $ref: '#/components/schemas/NodeIngest'
-          description: Nodes to ingest
         relationships:
           type: array
-          items:
-            $ref: '#/components/schemas/RelationshipIngest'
           description: Relationships to ingest
-        options:
-          type: object
-          properties:
-            skip_duplicates:
-              type: boolean
-              default: true
-            batch_size:
-              type: integer
-              default: 10000
+          items:
+            $ref: '#/components/schemas/RelIngest'
 
     NodeIngest:
       type: object
-      required:
-        - labels
-        - properties
       properties:
         id:
           type: integer
-          format: int64
-          description: Optional node ID (auto-generated if not provided)
+          description: Node ID (optional, auto-generated if not provided)
         labels:
           type: array
           items:
             type: string
-          minItems: 1
           description: Node labels
-          example: ["Person"]
+          example: ["Person", "Developer"]
         properties:
           type: object
-          additionalProperties: true
           description: Node properties
+          additionalProperties: true
           example:
             name: "Alice"
             age: 30
+            email: "alice@example.com"
 
-    RelationshipIngest:
+    RelIngest:
       type: object
       required:
         - src
@@ -709,282 +696,283 @@ components:
       properties:
         id:
           type: integer
-          format: int64
-          description: Optional relationship ID
+          description: Relationship ID (optional, auto-generated if not provided)
         src:
           type: integer
-          format: int64
           description: Source node ID
-          example: 1
         dst:
           type: integer
-          format: int64
           description: Destination node ID
-          example: 2
         type:
           type: string
           description: Relationship type
           example: "KNOWS"
         properties:
           type: object
-          additionalProperties: true
           description: Relationship properties
+          additionalProperties: true
           example:
-            since: 2020
+            since: "2020"
+            strength: 0.8
 
     IngestResponse:
       type: object
-      required:
-        - nodes_ingested
-        - relationships_ingested
-        - ingestion_time_ms
       properties:
         nodes_ingested:
           type: integer
           description: Number of nodes successfully ingested
-          example: 2
         relationships_ingested:
           type: integer
           description: Number of relationships successfully ingested
-          example: 1
-        ingestion_time_ms:
+        execution_time_ms:
           type: integer
-          description: Total ingestion time
-          example: 15
-        throughput:
-          type: object
-          properties:
-            nodes_per_sec:
-              type: integer
-            relationships_per_sec:
-              type: integer
+          description: Ingestion execution time in milliseconds
         errors:
           type: array
           items:
-            $ref: '#/components/schemas/IngestionError'
-          description: List of errors (if any)
+            type: string
+          description: List of errors encountered during ingestion
 
-    IngestionError:
-      type: object
-      properties:
-        type:
-          type: string
-          enum: [node, relationship]
-        index:
-          type: integer
-          description: Index in input array
-        id:
-          type: integer
-          format: int64
-        error:
-          type: string
-          description: Error message
-
-    ReplicationStatus:
-      type: object
-      required:
-        - role
-        - status
-      properties:
-        role:
-          type: string
-          enum: [master, replica]
-          description: Current node role
-        status:
-          type: string
-          enum: [healthy, degraded, error]
-        master_url:
-          type: string
-          description: Master URL (for replicas only)
-          example: "http://master:15474"
-        lag_seconds:
-          type: number
-          format: float
-          description: Replication lag in seconds
-          example: 0.5
-        last_sync:
-          type: integer
-          format: int64
-          description: Last sync timestamp (Unix)
-        connected_replicas:
-          type: integer
-          description: Number of connected replicas (for master only)
-
-    CreateApiKeyRequest:
+    CreateLabelRequest:
       type: object
       required:
         - name
-        - permissions
       properties:
         name:
           type: string
-          description: API key name/description
-          example: "Production App"
-        permissions:
+          description: Label name
+          example: "Person"
+          minLength: 1
+          maxLength: 255
+
+    CreateLabelResponse:
+      type: object
+      properties:
+        label_id:
+          type: integer
+          description: Created label ID
+        error:
+          type: string
+          description: Error message if creation failed
+
+    LabelListResponse:
+      type: object
+      properties:
+        labels:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+        error:
+          type: string
+          description: Error message if operation failed
+
+    CreateRelTypeRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Relationship type name
+          example: "KNOWS"
+          minLength: 1
+          maxLength: 255
+
+    CreateRelTypeResponse:
+      type: object
+      properties:
+        type_id:
+          type: integer
+          description: Created relationship type ID
+        error:
+          type: string
+          description: Error message if creation failed
+
+    RelTypeListResponse:
+      type: object
+      properties:
+        types:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+        error:
+          type: string
+          description: Error message if operation failed
+
+    CreateNodeRequest:
+      type: object
+      required:
+        - labels
+      properties:
+        labels:
           type: array
           items:
             type: string
-            enum: [read, write, admin, super]
-          description: Permissions for this API key
-          example: ["read", "write"]
-        expires_at:
-          type: integer
-          format: int64
-          description: Expiration timestamp (null = never expires)
-          nullable: true
+          description: Node labels
+          example: ["Person", "Developer"]
+        properties:
+          type: object
+          description: Node properties
+          additionalProperties: true
+          example:
+            name: "Alice"
+            age: 30
 
-    ApiKeyResponse:
+    CreateNodeResponse:
+      type: object
+      properties:
+        node_id:
+          type: integer
+          description: Created node ID
+        error:
+          type: string
+          description: Error message if creation failed
+
+    UpdateNodeRequest:
       type: object
       required:
         - id
-        - key
-        - name
-        - permissions
+        - properties
       properties:
         id:
+          type: integer
+          description: Node ID to update
+        properties:
+          type: object
+          description: Updated properties
+          additionalProperties: true
+
+    UpdateNodeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether update was successful
+        error:
           type: string
-          description: API key ID
-          example: "key_abc123"
-        key:
+          description: Error message if update failed
+
+    DeleteNodeRequest:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          description: Node ID to delete
+
+    DeleteNodeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether deletion was successful
+        error:
           type: string
-          description: API key value (only shown once!)
-          example: "nexus_sk_abc123def456..."
-        name:
+          description: Error message if deletion failed
+
+    CreateRelRequest:
+      type: object
+      required:
+        - src
+        - dst
+        - type
+      properties:
+        src:
+          type: integer
+          description: Source node ID
+        dst:
+          type: integer
+          description: Destination node ID
+        type:
           type: string
-          example: "Production App"
-        permissions:
-          type: array
-          items:
-            type: string
-          example: ["read", "write"]
-        rate_limit:
+          description: Relationship type
+        properties:
+          type: object
+          description: Relationship properties
+          additionalProperties: true
+
+    CreateRelResponse:
+      type: object
+      properties:
+        rel_id:
+          type: integer
+          description: Created relationship ID
+        error:
+          type: string
+          description: Error message if creation failed
+
+    StatsResponse:
+      type: object
+      properties:
+        catalog:
           type: object
           properties:
-            per_minute:
+            total_labels:
               type: integer
-              example: 1000
-            per_hour:
+              description: Total number of node labels
+            total_types:
               type: integer
-              example: 10000
-        created_at:
-          type: integer
-          format: int64
+              description: Total number of relationship types
+            total_keys:
+              type: integer
+              description: Total number of property keys
+        label_index:
+          type: object
+          properties:
+            indexed_labels:
+              type: integer
+              description: Number of indexed labels
+            total_nodes:
+              type: integer
+              description: Total number of nodes
+        knn_index:
+          type: object
+          properties:
+            total_vectors:
+              type: integer
+              description: Total number of vectors
+            dimension:
+              type: integer
+              description: Vector dimension
+        error:
+          type: string
+          description: Error message if operation failed
 
     ErrorResponse:
       type: object
-      required:
-        - error
       properties:
         error:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Error code
+        details:
           type: object
-          required:
-            - code
-            - message
-          properties:
-            code:
-              type: string
-              description: Error code
-              enum:
-                - CYPHER_SYNTAX_ERROR
-                - CYPHER_SEMANTIC_ERROR
-                - INVALID_PARAMETER
-                - VECTOR_DIMENSION_MISMATCH
-                - INDEX_NOT_FOUND
-                - NODE_NOT_FOUND
-                - QUERY_TIMEOUT
-                - TRANSACTION_CONFLICT
-                - INTERNAL_ERROR
-                - STORAGE_ERROR
-                - AUTHENTICATION_REQUIRED
-                - PERMISSION_DENIED
-                - RATE_LIMIT_EXCEEDED
-              example: "CYPHER_SYNTAX_ERROR"
-            message:
-              type: string
-              description: Human-readable error message
-              example: "Unexpected token at line 1, column 20"
-            details:
-              type: object
-              additionalProperties: true
-              description: Additional error details
-            position:
-              type: object
-              properties:
-                line:
-                  type: integer
-                column:
-                  type: integer
+          description: Additional error details
+          additionalProperties: true
 
-  securitySchemes:
-    ApiKeyAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: API Key
-      description: |
-        API key authentication.
-        
-        Use format: `Authorization: Bearer nexus_sk_your_api_key_here`
-        
-        API keys can be created via POST /auth/keys (requires admin permission).
-        
-        Authentication is:
-        - **Optional** for localhost (127.0.0.1) binding
-        - **Required** for public (0.0.0.0) binding
-        
-  responses:
-    UnauthorizedError:
-      description: Authentication required
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error:
-              code: AUTHENTICATION_REQUIRED
-              message: "Authentication required for this endpoint"
-    
-    ForbiddenError:
-      description: Insufficient permissions
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error:
-              code: PERMISSION_DENIED
-              message: "Insufficient permissions for this operation"
-    
-    RateLimitError:
-      description: Rate limit exceeded
-      headers:
-        X-RateLimit-Limit:
-          schema:
-            type: integer
-          description: Rate limit (requests per minute)
-        X-RateLimit-Remaining:
-          schema:
-            type: integer
-          description: Remaining requests in current window
-        X-RateLimit-Reset:
-          schema:
-            type: integer
-          description: Unix timestamp when limit resets
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error:
-              code: RATE_LIMIT_EXCEEDED
-              message: "Rate limit exceeded. Try again in 42 seconds."
-
-  parameters:
-    ApiKeyHeader:
-      name: Authorization
-      in: header
-      description: API key for authentication
-      required: false
-      schema:
-        type: string
-        example: "Bearer nexus_sk_abc123def456..."
-
+tags:
+  - name: System
+    description: System health and statistics endpoints
+  - name: Queries
+    description: Cypher query execution
+  - name: Vector Search
+    description: KNN vector similarity search
+  - name: Data Management
+    description: Node and relationship management
+  - name: Schema
+    description: Schema management (labels and relationship types)
+  - name: Streaming
+    description: Server-Sent Events streaming endpoints

@@ -1,0 +1,274 @@
+{
+  "name": "Cypher Query Test Suite",
+  "description": "Comprehensive test suite for Cypher query functionality",
+  "version": "1.0.0",
+  "created": "2025-10-25",
+  "test_categories": [
+    {
+      "name": "Basic Queries",
+      "description": "Fundamental Cypher operations",
+      "tests": [
+        {
+          "name": "simple_match",
+          "description": "Basic MATCH query",
+          "query": "MATCH (n) RETURN n LIMIT 5",
+          "expected_result_type": "nodes",
+          "min_results": 1
+        },
+        {
+          "name": "match_with_label",
+          "description": "MATCH with specific label",
+          "query": "MATCH (n:User) RETURN n.name, n.age",
+          "expected_result_type": "properties",
+          "min_results": 1
+        },
+        {
+          "name": "match_with_where",
+          "description": "MATCH with WHERE clause",
+          "query": "MATCH (n:User) WHERE n.age > 25 RETURN n.name, n.age",
+          "expected_result_type": "properties",
+          "min_results": 1
+        },
+        {
+          "name": "match_relationships",
+          "description": "MATCH with relationships",
+          "query": "MATCH (a:User)-[r:FOLLOWS]->(b:User) RETURN a.name, b.name",
+          "expected_result_type": "relationships",
+          "min_results": 1
+        },
+        {
+          "name": "match_pattern",
+          "description": "Complex pattern matching",
+          "query": "MATCH (a:User)-[:FOLLOWS]->(b:User)-[:FOLLOWS]->(c:User) RETURN a.name, b.name, c.name",
+          "expected_result_type": "paths",
+          "min_results": 0
+        }
+      ]
+    },
+    {
+      "name": "Aggregation Queries",
+      "description": "Aggregate functions and grouping",
+      "tests": [
+        {
+          "name": "count_nodes",
+          "description": "Count total nodes",
+          "query": "MATCH (n) RETURN COUNT(n) as total_nodes",
+          "expected_result_type": "aggregate",
+          "min_results": 1,
+          "expected_values": {
+            "total_nodes": 15
+          }
+        },
+        {
+          "name": "count_by_label",
+          "description": "Count nodes by label",
+          "query": "MATCH (n:User) RETURN COUNT(n) as user_count",
+          "expected_result_type": "aggregate",
+          "min_results": 1,
+          "expected_values": {
+            "user_count": 5
+          }
+        },
+        {
+          "name": "average_age",
+          "description": "Calculate average age",
+          "query": "MATCH (n:User) RETURN AVG(n.age) as avg_age",
+          "expected_result_type": "aggregate",
+          "min_results": 1
+        },
+        {
+          "name": "group_by_location",
+          "description": "Group users by location",
+          "query": "MATCH (n:User) RETURN n.location, COUNT(n) as count ORDER BY count DESC",
+          "expected_result_type": "grouped",
+          "min_results": 1
+        },
+        {
+          "name": "max_likes",
+          "description": "Find post with maximum likes",
+          "query": "MATCH (n:Post) RETURN MAX(n.likes) as max_likes",
+          "expected_result_type": "aggregate",
+          "min_results": 1
+        }
+      ]
+    },
+    {
+      "name": "Relationship Queries",
+      "description": "Relationship traversal and analysis",
+      "tests": [
+        {
+          "name": "find_followers",
+          "description": "Find followers of a user",
+          "query": "MATCH (follower:User)-[:FOLLOWS]->(user:User {name: 'Alice Johnson'}) RETURN follower.name",
+          "expected_result_type": "nodes",
+          "min_results": 1
+        },
+        {
+          "name": "find_following",
+          "description": "Find who a user follows",
+          "query": "MATCH (user:User {name: 'Alice Johnson'})-[:FOLLOWS]->(following:User) RETURN following.name",
+          "expected_result_type": "nodes",
+          "min_results": 1
+        },
+        {
+          "name": "mutual_follows",
+          "description": "Find mutual follows",
+          "query": "MATCH (a:User)-[:FOLLOWS]->(b:User), (b:User)-[:FOLLOWS]->(a:User) RETURN a.name, b.name",
+          "expected_result_type": "relationships",
+          "min_results": 0
+        },
+        {
+          "name": "post_creators",
+          "description": "Find users who created posts",
+          "query": "MATCH (user:User)-[:CREATED]->(post:Post) RETURN user.name, post.title",
+          "expected_result_type": "relationships",
+          "min_results": 1
+        },
+        {
+          "name": "comment_authors",
+          "description": "Find users who commented on posts",
+          "query": "MATCH (user:User)-[:COMMENTED_ON]->(post:Post) RETURN user.name, post.title",
+          "expected_result_type": "relationships",
+          "min_results": 1
+        }
+      ]
+    },
+    {
+      "name": "Knowledge Graph Queries",
+      "description": "Queries specific to knowledge graph dataset",
+      "tests": [
+        {
+          "name": "find_discoveries",
+          "description": "Find discoveries by person",
+          "query": "MATCH (person:Person)-[:DISCOVERED]->(concept:Concept) RETURN person.name, concept.name",
+          "expected_result_type": "relationships",
+          "min_results": 1
+        },
+        {
+          "name": "nobel_prize_winners",
+          "description": "Find Nobel Prize winners",
+          "query": "MATCH (person:Person)-[:WON]->(award:Award) WHERE award.name CONTAINS 'Nobel' RETURN person.name, award.name",
+          "expected_result_type": "relationships",
+          "min_results": 1
+        },
+        {
+          "name": "university_affiliations",
+          "description": "Find university affiliations",
+          "query": "MATCH (person:Person)-[:STUDIED_AT|WORKED_AT]->(institution:Institution) RETURN person.name, institution.name",
+          "expected_result_type": "relationships",
+          "min_results": 1
+        },
+        {
+          "name": "influences",
+          "description": "Find intellectual influences",
+          "query": "MATCH (influenced:Person)-[:INFLUENCED_BY]->(influencer:Person) RETURN influenced.name, influencer.name",
+          "expected_result_type": "relationships",
+          "min_results": 0
+        },
+        {
+          "name": "contemporaries",
+          "description": "Find contemporaries",
+          "query": "MATCH (a:Person)-[:CONTEMPORARY_OF]->(b:Person) RETURN a.name, b.name",
+          "expected_result_type": "relationships",
+          "min_results": 0
+        }
+      ]
+    },
+    {
+      "name": "KNN Vector Queries",
+      "description": "Vector similarity and KNN operations",
+      "tests": [
+        {
+          "name": "knn_similar_persons",
+          "description": "Find similar persons using KNN",
+          "query": "MATCH (n:Person) WHERE n.vector IS NOT NULL RETURN n.name, n.vector ORDER BY n.vector <-> [0.8, 0.6, 0.4, 0.9, 0.7, 0.3, 0.5, 0.8] LIMIT 3",
+          "expected_result_type": "knn",
+          "min_results": 1
+        },
+        {
+          "name": "knn_similar_concepts",
+          "description": "Find similar concepts using KNN",
+          "query": "MATCH (n:Concept) WHERE n.vector IS NOT NULL RETURN n.name, n.vector ORDER BY n.vector <-> [0.9, 0.4, 0.8, 0.9, 0.3, 0.2, 0.7, 0.8] LIMIT 3",
+          "expected_result_type": "knn",
+          "min_results": 1
+        },
+        {
+          "name": "knn_with_threshold",
+          "description": "KNN with similarity threshold",
+          "query": "MATCH (n:Person) WHERE n.vector IS NOT NULL AND n.vector <-> [0.8, 0.6, 0.4, 0.9, 0.7, 0.3, 0.5, 0.8] < 0.5 RETURN n.name",
+          "expected_result_type": "knn",
+          "min_results": 0
+        }
+      ]
+    },
+    {
+      "name": "Performance Queries",
+      "description": "Queries for performance testing",
+      "tests": [
+        {
+          "name": "large_result_set",
+          "description": "Query returning many results",
+          "query": "MATCH (n) RETURN n LIMIT 1000",
+          "expected_result_type": "nodes",
+          "min_results": 1,
+          "performance_target_ms": 100
+        },
+        {
+          "name": "complex_pattern",
+          "description": "Complex pattern with multiple hops",
+          "query": "MATCH (a:User)-[:FOLLOWS*2..3]->(b:User) RETURN a.name, b.name LIMIT 100",
+          "expected_result_type": "paths",
+          "min_results": 0,
+          "performance_target_ms": 200
+        },
+        {
+          "name": "aggregation_performance",
+          "description": "Heavy aggregation query",
+          "query": "MATCH (n:User) RETURN n.location, COUNT(n), AVG(n.age), MAX(n.age), MIN(n.age)",
+          "expected_result_type": "grouped",
+          "min_results": 1,
+          "performance_target_ms": 50
+        }
+      ]
+    },
+    {
+      "name": "Error Handling",
+      "description": "Queries that should return errors",
+      "tests": [
+        {
+          "name": "invalid_syntax",
+          "description": "Query with invalid syntax",
+          "query": "MATCH (n RETURN n",
+          "expected_result_type": "error",
+          "should_fail": true
+        },
+        {
+          "name": "nonexistent_label",
+          "description": "Query with nonexistent label",
+          "query": "MATCH (n:NonexistentLabel) RETURN n",
+          "expected_result_type": "empty",
+          "min_results": 0
+        },
+        {
+          "name": "invalid_property",
+          "description": "Query with invalid property access",
+          "query": "MATCH (n:User) RETURN n.nonexistent_property",
+          "expected_result_type": "properties",
+          "min_results": 0
+        }
+      ]
+    }
+  ],
+  "performance_benchmarks": {
+    "targets": {
+      "simple_match": "1000+ queries/sec",
+      "aggregation": "500+ queries/sec",
+      "knn_search": "100+ queries/sec",
+      "complex_pattern": "50+ queries/sec"
+    },
+    "memory_usage": {
+      "max_heap": "512MB",
+      "max_stack": "8MB"
+    }
+  }
+}
