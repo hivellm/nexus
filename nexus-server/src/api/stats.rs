@@ -236,7 +236,6 @@ mod tests {
         assert_eq!(response.label_index.total_nodes, 0);
         assert_eq!(response.knn_index.total_vectors, 0);
         // Note: dimension may be 0 if KNN_INDEX is not properly initialized in test environment
-        assert!(response.knn_index.dimension >= 0);
     }
 
     #[tokio::test]
@@ -266,7 +265,6 @@ mod tests {
         let response = get_stats().await;
         assert!(response.error.is_none());
         // Note: dimension may be 0 if KNN_INDEX is not properly initialized in test environment
-        assert!(response.knn_index.dimension >= 0);
     }
 
     #[tokio::test]

@@ -174,9 +174,8 @@ mod tests {
             limit: 10,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -190,9 +189,8 @@ mod tests {
             limit: 20,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -223,9 +221,8 @@ mod tests {
             limit: 10,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Should handle empty vector gracefully
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -239,9 +236,8 @@ mod tests {
             limit: 1,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -255,9 +251,8 @@ mod tests {
             limit: 10,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -271,9 +266,8 @@ mod tests {
             limit: 20,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -287,9 +281,8 @@ mod tests {
             limit: 15,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -304,9 +297,8 @@ mod tests {
             limit: 1,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -320,9 +312,8 @@ mod tests {
             limit: 10,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -336,9 +327,8 @@ mod tests {
             limit: 10000,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -352,9 +342,8 @@ mod tests {
             limit: 10,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -368,9 +357,8 @@ mod tests {
             limit: 5,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -384,8 +372,7 @@ mod tests {
             limit: 1,
         };
 
-        let response = knn_traverse(Json(request)).await;
+        let _response = knn_traverse(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 }

@@ -127,9 +127,8 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -142,9 +141,8 @@ mod tests {
             params,
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -154,9 +152,8 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Should handle invalid syntax gracefully
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -179,9 +176,8 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -191,9 +187,8 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs - executor may or may not be initialized
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -208,9 +203,8 @@ mod tests {
             params,
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -220,9 +214,8 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -232,9 +225,8 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -248,9 +240,8 @@ mod tests {
             params,
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -263,9 +254,8 @@ mod tests {
             params,
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -275,9 +265,8 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Should handle empty query gracefully
-        assert!(response.execution_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -288,8 +277,7 @@ mod tests {
             params: HashMap::new(),
         };
 
-        let response = execute_cypher(Json(request)).await;
+        let _response = execute_cypher(Json(request)).await;
         // Should handle long query gracefully
-        assert!(response.execution_time_ms >= 0);
     }
 }

@@ -289,14 +289,58 @@ pub struct GraphStatistics {
 
 /// Graph builder trait for different graph types
 pub trait GraphBuilder {
-    /// Build a correlation graph from source data
+    /// Build a correlation graph from source data (synchronous version for backward compatibility)
     fn build(&self, source_data: &GraphSourceData) -> Result<CorrelationGraph>;
+
+    /// Build a call graph from extracted data (synchronous version)
+    fn build_call_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        // Default implementation delegates to synchronous build method
+        self.build(data)
+    }
+
+    /// Build a dependency graph from extracted data (synchronous version)
+    fn build_dependency_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        // Default implementation delegates to synchronous build method
+        self.build(data)
+    }
+
+    /// Build a data flow graph from extracted data (synchronous version)
+    fn build_data_flow_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        // Default implementation delegates to synchronous build method
+        self.build(data)
+    }
+
+    /// Build a component graph from extracted data (synchronous version)
+    fn build_component_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        // Default implementation delegates to synchronous build method
+        self.build(data)
+    }
 
     /// Get the graph type this builder creates
     fn graph_type(&self) -> GraphType;
 
     /// Get builder name
     fn name(&self) -> &str;
+
+    /// Get builder capabilities
+    fn capabilities(&self) -> GraphBuilderCapabilities {
+        GraphBuilderCapabilities::default()
+    }
+
+    /// Validate source data before building
+    fn validate_source_data(&self, data: &GraphSourceData) -> Result<()> {
+        if data.files.is_empty() {
+            return Err(Error::GraphCorrelation(
+                "No source files provided".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Get builder configuration
+    fn config(&self) -> Option<&GraphBuilderConfig> {
+        None
+    }
 }
 
 /// Source data for graph building
@@ -409,12 +453,47 @@ impl GraphBuilder for CallGraphBuilder {
         Ok(graph)
     }
 
+    fn build_call_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        self.build(data)
+    }
+
+    fn build_dependency_graph(&self, _data: &GraphSourceData) -> Result<CorrelationGraph> {
+        Err(Error::GraphCorrelation(
+            "CallGraphBuilder does not support dependency graphs".to_string(),
+        ))
+    }
+
+    fn build_data_flow_graph(&self, _data: &GraphSourceData) -> Result<CorrelationGraph> {
+        Err(Error::GraphCorrelation(
+            "CallGraphBuilder does not support data flow graphs".to_string(),
+        ))
+    }
+
+    fn build_component_graph(&self, _data: &GraphSourceData) -> Result<CorrelationGraph> {
+        Err(Error::GraphCorrelation(
+            "CallGraphBuilder does not support component graphs".to_string(),
+        ))
+    }
+
     fn graph_type(&self) -> GraphType {
         GraphType::Call
     }
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn capabilities(&self) -> GraphBuilderCapabilities {
+        GraphBuilderCapabilities {
+            supports_call_graphs: true,
+            supports_dependency_graphs: false,
+            supports_data_flow_graphs: false,
+            supports_component_graphs: false,
+            supports_async: true,
+            supports_parallel: false,
+            supports_caching: false,
+            supports_validation: true,
+        }
     }
 }
 
@@ -475,6 +554,28 @@ impl GraphBuilder for DependencyGraphBuilder {
         Ok(graph)
     }
 
+    fn build_call_graph(&self, _data: &GraphSourceData) -> Result<CorrelationGraph> {
+        Err(Error::GraphCorrelation(
+            "DependencyGraphBuilder does not support call graphs".to_string(),
+        ))
+    }
+
+    fn build_dependency_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        self.build(data)
+    }
+
+    fn build_data_flow_graph(&self, _data: &GraphSourceData) -> Result<CorrelationGraph> {
+        Err(Error::GraphCorrelation(
+            "DependencyGraphBuilder does not support data flow graphs".to_string(),
+        ))
+    }
+
+    fn build_component_graph(&self, _data: &GraphSourceData) -> Result<CorrelationGraph> {
+        Err(Error::GraphCorrelation(
+            "DependencyGraphBuilder does not support component graphs".to_string(),
+        ))
+    }
+
     fn graph_type(&self) -> GraphType {
         GraphType::Dependency
     }
@@ -482,12 +583,494 @@ impl GraphBuilder for DependencyGraphBuilder {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn capabilities(&self) -> GraphBuilderCapabilities {
+        GraphBuilderCapabilities {
+            supports_call_graphs: false,
+            supports_dependency_graphs: true,
+            supports_data_flow_graphs: false,
+            supports_component_graphs: false,
+            supports_async: true,
+            supports_parallel: false,
+            supports_caching: false,
+            supports_validation: true,
+        }
+    }
+}
+
+/// Default graph builder that provides a base implementation
+/// for building all types of correlation graphs
+pub struct DefaultGraphBuilder {
+    /// Name of the builder
+    name: String,
+    /// Configuration for graph building
+    config: GraphBuilderConfig,
+}
+
+/// Configuration for graph building
+#[derive(Debug, Clone)]
+pub struct GraphBuilderConfig {
+    /// Maximum number of nodes to process
+    pub max_nodes: Option<usize>,
+    /// Maximum depth for recursive analysis
+    pub max_depth: Option<usize>,
+    /// Whether to include metadata in nodes
+    pub include_metadata: bool,
+    /// Whether to calculate positions for visualization
+    pub calculate_positions: bool,
+    /// Default node size for visualization
+    pub default_node_size: f32,
+    /// Default edge weight
+    pub default_edge_weight: f32,
+    /// Whether to enable parallel processing
+    pub parallel_processing: bool,
+    /// Whether to enable caching
+    pub enable_caching: bool,
+    /// Cache TTL in seconds
+    pub cache_ttl_seconds: u64,
+    /// Whether to validate graph integrity
+    pub validate_integrity: bool,
+    /// Whether to optimize for performance
+    pub performance_mode: bool,
+}
+
+/// Graph builder capabilities
+#[derive(Debug, Clone, Default)]
+pub struct GraphBuilderCapabilities {
+    /// Whether the builder supports call graphs
+    pub supports_call_graphs: bool,
+    /// Whether the builder supports dependency graphs
+    pub supports_dependency_graphs: bool,
+    /// Whether the builder supports data flow graphs
+    pub supports_data_flow_graphs: bool,
+    /// Whether the builder supports component graphs
+    pub supports_component_graphs: bool,
+    /// Whether the builder supports async operations
+    pub supports_async: bool,
+    /// Whether the builder supports parallel processing
+    pub supports_parallel: bool,
+    /// Whether the builder supports caching
+    pub supports_caching: bool,
+    /// Whether the builder supports validation
+    pub supports_validation: bool,
+}
+
+impl Default for GraphBuilderConfig {
+    fn default() -> Self {
+        Self {
+            max_nodes: Some(1000),
+            max_depth: Some(10),
+            include_metadata: true,
+            calculate_positions: true,
+            default_node_size: 1.0,
+            default_edge_weight: 1.0,
+            parallel_processing: true,
+            enable_caching: true,
+            cache_ttl_seconds: 3600, // 1 hour
+            validate_integrity: true,
+            performance_mode: false,
+        }
+    }
+}
+
+impl DefaultGraphBuilder {
+    /// Create a new default graph builder
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            config: GraphBuilderConfig::default(),
+        }
+    }
+
+    /// Create a new default graph builder with custom configuration
+    pub fn with_config(name: String, config: GraphBuilderConfig) -> Self {
+        Self { name, config }
+    }
+
+    /// Get the builder configuration
+    pub fn config(&self) -> &GraphBuilderConfig {
+        &self.config
+    }
+
+    /// Update the builder configuration
+    pub fn set_config(&mut self, config: GraphBuilderConfig) {
+        self.config = config;
+    }
+
+    /// Build a call graph using the default implementation
+    pub fn build_call_graph(&self, source_data: &GraphSourceData) -> Result<CorrelationGraph> {
+        let mut graph =
+            CorrelationGraph::new(GraphType::Call, format!("{} - Call Graph", self.name));
+
+        // Add nodes for each file
+        for file_path in source_data.files.keys() {
+            if let Some(max_nodes) = self.config.max_nodes {
+                if graph.nodes.len() >= max_nodes {
+                    break;
+                }
+            }
+
+            let node_id = format!("file:{}", file_path);
+            let mut metadata = HashMap::new();
+            if self.config.include_metadata {
+                metadata.insert(
+                    "file_path".to_string(),
+                    serde_json::Value::String(file_path.clone()),
+                );
+                metadata.insert(
+                    "node_type".to_string(),
+                    serde_json::Value::String("file".to_string()),
+                );
+            }
+
+            let node = GraphNode {
+                id: node_id.clone(),
+                node_type: NodeType::Module,
+                label: file_path.clone(),
+                metadata,
+                position: if self.config.calculate_positions {
+                    Some((0.0, 0.0)) // Will be calculated by layout engine
+                } else {
+                    None
+                },
+                size: Some(self.config.default_node_size),
+                color: Some("#3498db".to_string()),
+            };
+            graph.add_node(node)?;
+        }
+
+        // Add nodes for each function
+        for (file_path, functions) in &source_data.functions {
+            for function in functions {
+                if let Some(max_nodes) = self.config.max_nodes {
+                    if graph.nodes.len() >= max_nodes {
+                        break;
+                    }
+                }
+
+                let node_id = format!("func:{}:{}", file_path, function);
+                let mut metadata = HashMap::new();
+                if self.config.include_metadata {
+                    metadata.insert(
+                        "file_path".to_string(),
+                        serde_json::Value::String(file_path.clone()),
+                    );
+                    metadata.insert(
+                        "function_name".to_string(),
+                        serde_json::Value::String(function.clone()),
+                    );
+                    metadata.insert(
+                        "node_type".to_string(),
+                        serde_json::Value::String("function".to_string()),
+                    );
+                }
+
+                let node = GraphNode {
+                    id: node_id.clone(),
+                    node_type: NodeType::Function,
+                    label: function.clone(),
+                    metadata,
+                    position: if self.config.calculate_positions {
+                        Some((0.0, 0.0)) // Will be calculated by layout engine
+                    } else {
+                        None
+                    },
+                    size: Some(self.config.default_node_size * 0.8),
+                    color: Some("#e74c3c".to_string()),
+                };
+                graph.add_node(node)?;
+
+                // Add edge from file to function
+                let file_id = format!("file:{}", file_path);
+                let edge = GraphEdge {
+                    id: format!("edge:{}:{}", file_id, node_id),
+                    source: file_id,
+                    target: node_id,
+                    edge_type: EdgeType::Uses,
+                    weight: self.config.default_edge_weight,
+                    metadata: if self.config.include_metadata {
+                        let mut edge_metadata = HashMap::new();
+                        edge_metadata.insert(
+                            "relationship".to_string(),
+                            serde_json::Value::String("contains".to_string()),
+                        );
+                        edge_metadata
+                    } else {
+                        HashMap::new()
+                    },
+                    label: Some("contains".to_string()),
+                };
+                graph.add_edge(edge)?;
+            }
+        }
+
+        Ok(graph)
+    }
+
+    /// Build a dependency graph using the default implementation
+    pub fn build_dependency_graph(
+        &self,
+        source_data: &GraphSourceData,
+    ) -> Result<CorrelationGraph> {
+        let mut graph = CorrelationGraph::new(
+            GraphType::Dependency,
+            format!("{} - Dependency Graph", self.name),
+        );
+
+        // Add nodes for each file
+        for file_path in source_data.files.keys() {
+            if let Some(max_nodes) = self.config.max_nodes {
+                if graph.nodes.len() >= max_nodes {
+                    break;
+                }
+            }
+
+            let node_id = format!("file:{}", file_path);
+            let mut metadata = HashMap::new();
+            if self.config.include_metadata {
+                metadata.insert(
+                    "file_path".to_string(),
+                    serde_json::Value::String(file_path.clone()),
+                );
+                metadata.insert(
+                    "node_type".to_string(),
+                    serde_json::Value::String("file".to_string()),
+                );
+            }
+
+            let node = GraphNode {
+                id: node_id.clone(),
+                node_type: NodeType::Module,
+                label: file_path.clone(),
+                metadata,
+                position: if self.config.calculate_positions {
+                    Some((0.0, 0.0)) // Will be calculated by layout engine
+                } else {
+                    None
+                },
+                size: Some(self.config.default_node_size),
+                color: Some("#2ecc71".to_string()),
+            };
+            graph.add_node(node)?;
+        }
+
+        // Add edges for imports
+        for (file_path, imports) in &source_data.imports {
+            let source_id = format!("file:{}", file_path);
+
+            for import in imports {
+                let target_id = format!("file:{}", import);
+
+                // Only add edge if target file exists
+                if source_data.files.contains_key(import) {
+                    let edge = GraphEdge {
+                        id: format!("edge:{}:{}", source_id, target_id),
+                        source: source_id.clone(),
+                        target: target_id,
+                        edge_type: EdgeType::Imports,
+                        weight: self.config.default_edge_weight,
+                        metadata: if self.config.include_metadata {
+                            let mut edge_metadata = HashMap::new();
+                            edge_metadata.insert(
+                                "relationship".to_string(),
+                                serde_json::Value::String("imports".to_string()),
+                            );
+                            edge_metadata
+                        } else {
+                            HashMap::new()
+                        },
+                        label: Some("imports".to_string()),
+                    };
+                    graph.add_edge(edge)?;
+                }
+            }
+        }
+
+        Ok(graph)
+    }
+
+    /// Build a data flow graph using the default implementation
+    pub fn build_data_flow_graph(&self, source_data: &GraphSourceData) -> Result<CorrelationGraph> {
+        let mut graph = CorrelationGraph::new(
+            GraphType::DataFlow,
+            format!("{} - Data Flow Graph", self.name),
+        );
+
+        // For now, create a basic data flow graph based on file relationships
+        // This will be enhanced in future tasks
+        for file_path in source_data.files.keys() {
+            if let Some(max_nodes) = self.config.max_nodes {
+                if graph.nodes.len() >= max_nodes {
+                    break;
+                }
+            }
+
+            let node_id = format!("data:{}", file_path);
+            let mut metadata = HashMap::new();
+            if self.config.include_metadata {
+                metadata.insert(
+                    "file_path".to_string(),
+                    serde_json::Value::String(file_path.clone()),
+                );
+                metadata.insert(
+                    "node_type".to_string(),
+                    serde_json::Value::String("data_source".to_string()),
+                );
+            }
+
+            let node = GraphNode {
+                id: node_id.clone(),
+                node_type: NodeType::Variable,
+                label: format!("Data from {}", file_path),
+                metadata,
+                position: if self.config.calculate_positions {
+                    Some((0.0, 0.0)) // Will be calculated by layout engine
+                } else {
+                    None
+                },
+                size: Some(self.config.default_node_size * 0.6),
+                color: Some("#f39c12".to_string()),
+            };
+            graph.add_node(node)?;
+        }
+
+        Ok(graph)
+    }
+
+    /// Build a component graph using the default implementation
+    pub fn build_component_graph(&self, source_data: &GraphSourceData) -> Result<CorrelationGraph> {
+        let mut graph = CorrelationGraph::new(
+            GraphType::Component,
+            format!("{} - Component Graph", self.name),
+        );
+
+        // For now, create a basic component graph based on file structure
+        // This will be enhanced in future tasks
+        for file_path in source_data.files.keys() {
+            if let Some(max_nodes) = self.config.max_nodes {
+                if graph.nodes.len() >= max_nodes {
+                    break;
+                }
+            }
+
+            let node_id = format!("component:{}", file_path);
+            let mut metadata = HashMap::new();
+            if self.config.include_metadata {
+                metadata.insert(
+                    "file_path".to_string(),
+                    serde_json::Value::String(file_path.clone()),
+                );
+                metadata.insert(
+                    "node_type".to_string(),
+                    serde_json::Value::String("component".to_string()),
+                );
+            }
+
+            let node = GraphNode {
+                id: node_id.clone(),
+                node_type: NodeType::Class,
+                label: format!("Component {}", file_path),
+                metadata,
+                position: if self.config.calculate_positions {
+                    Some((0.0, 0.0)) // Will be calculated by layout engine
+                } else {
+                    None
+                },
+                size: Some(self.config.default_node_size),
+                color: Some("#9b59b6".to_string()),
+            };
+            graph.add_node(node)?;
+        }
+
+        Ok(graph)
+    }
+}
+
+impl GraphBuilder for DefaultGraphBuilder {
+    fn build(&self, source_data: &GraphSourceData) -> Result<CorrelationGraph> {
+        // Default implementation builds a call graph
+        // This can be overridden by specific graph type builders
+        self.build_call_graph(source_data)
+    }
+
+    fn build_call_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        self.build_call_graph(data)
+    }
+
+    fn build_dependency_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        self.build_dependency_graph(data)
+    }
+
+    fn build_data_flow_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        self.build_data_flow_graph(data)
+    }
+
+    fn build_component_graph(&self, data: &GraphSourceData) -> Result<CorrelationGraph> {
+        self.build_component_graph(data)
+    }
+
+    fn graph_type(&self) -> GraphType {
+        GraphType::Call
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn capabilities(&self) -> GraphBuilderCapabilities {
+        GraphBuilderCapabilities {
+            supports_call_graphs: true,
+            supports_dependency_graphs: true,
+            supports_data_flow_graphs: true,
+            supports_component_graphs: true,
+            supports_async: true,
+            supports_parallel: self.config.parallel_processing,
+            supports_caching: self.config.enable_caching,
+            supports_validation: self.config.validate_integrity,
+        }
+    }
+
+    fn validate_source_data(&self, data: &GraphSourceData) -> Result<()> {
+        // Enhanced validation
+        if data.files.is_empty() {
+            return Err(Error::GraphCorrelation(
+                "No source files provided".to_string(),
+            ));
+        }
+
+        // Check if we exceed max nodes limit
+        if let Some(max_nodes) = self.config.max_nodes {
+            let total_potential_nodes =
+                data.files.len() + data.functions.values().map(|v| v.len()).sum::<usize>();
+            if total_potential_nodes > max_nodes {
+                return Err(Error::GraphCorrelation(format!(
+                    "Too many potential nodes: {} (max: {})",
+                    total_potential_nodes, max_nodes
+                )));
+            }
+        }
+
+        // Validate file paths are not empty
+        for file_path in data.files.keys() {
+            if file_path.trim().is_empty() {
+                return Err(Error::GraphCorrelation("Empty file path found".to_string()));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn config(&self) -> Option<&GraphBuilderConfig> {
+        Some(&self.config)
+    }
 }
 
 /// Graph correlation manager
 pub struct GraphCorrelationManager {
     /// Available graph builders
     builders: HashMap<GraphType, Box<dyn GraphBuilder + Send + Sync>>,
+    /// Default graph builder
+    default_builder: Option<DefaultGraphBuilder>,
 }
 
 impl GraphCorrelationManager {
@@ -495,6 +1078,7 @@ impl GraphCorrelationManager {
     pub fn new() -> Self {
         let mut manager = Self {
             builders: HashMap::new(),
+            default_builder: None,
         };
 
         // Register default builders

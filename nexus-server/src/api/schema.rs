@@ -371,7 +371,6 @@ mod tests {
         // If catalog is initialized, should succeed
         // If not (because already initialized by another test), might fail
         if response.error.is_none() {
-            assert!(response.type_id >= 0); // Type ID is u32, always >= 0
             assert!(response.message.contains("KNOWS"));
         } else {
             // If error, it should be about catalog initialization
@@ -387,7 +386,6 @@ mod tests {
             assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
         }
         // If no error, the types list should be empty or contain existing types
-        assert!(response.types.len() >= 0);
     }
 
     #[tokio::test]

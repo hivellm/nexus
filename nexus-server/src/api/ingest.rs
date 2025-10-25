@@ -197,9 +197,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -215,9 +214,8 @@ mod tests {
             }],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -237,9 +235,8 @@ mod tests {
             }],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -249,9 +246,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs - empty request should be handled gracefully
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -282,9 +278,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -298,9 +293,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -323,9 +317,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -343,9 +336,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -359,9 +351,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -375,9 +366,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -391,9 +381,8 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -426,9 +415,8 @@ mod tests {
             relationships,
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -459,9 +447,8 @@ mod tests {
             }],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -488,9 +475,8 @@ mod tests {
             }],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -517,9 +503,8 @@ mod tests {
             }],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 
     #[tokio::test]
@@ -537,8 +522,7 @@ mod tests {
             relationships: vec![],
         };
 
-        let response = ingest_data(Json(request)).await;
+        let _response = ingest_data(Json(request)).await;
         // Test passes if no panic occurs
-        assert!(response.ingestion_time_ms >= 0);
     }
 }
