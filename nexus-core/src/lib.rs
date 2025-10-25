@@ -7,6 +7,7 @@
 //! - Write-ahead log (WAL) with MVCC by epoch
 //! - Cypher subset executor (pattern matching, expand, filter, project)
 //! - Multi-index subsystem (label bitmap, B-tree, full-text, KNN)
+//! - Graph validation and integrity checks
 //!
 //! # Architecture
 //!
@@ -40,7 +41,7 @@ pub mod catalog;
 pub mod clustering;
 pub mod error;
 pub mod executor;
-// pub mod graph; // Temporarily commented out due to storage dependencies
+pub mod graph; // Re-enabled with validation support
 pub mod graph_construction;
 pub mod graph_correlation;
 pub mod graph_simple;
@@ -49,10 +50,12 @@ pub mod page_cache;
 pub mod retry;
 pub mod storage;
 pub mod transaction;
+pub mod validation;
 pub mod wal;
 
 pub use error::{Error, Result};
-// pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
+use std::sync::Arc;
+pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
 pub use graph_construction::{
     CircularLayout, ConnectedComponents, ForceDirectedLayout, GraphLayout, GridLayout,
     HierarchicalLayout, KMeansClustering, LayoutDirection, LayoutEdge, LayoutNode, Point2D,
@@ -61,6 +64,10 @@ pub use graph_correlation::NodeType;
 pub use graph_simple::{
     Edge as SimpleEdge, EdgeId as SimpleEdgeId, Graph as SimpleGraph,
     GraphStats as SimpleGraphStats, Node as SimpleNode, NodeId as SimpleNodeId, PropertyValue,
+};
+pub use validation::{
+    GraphValidator, ValidationConfig, ValidationError, ValidationErrorType, ValidationResult,
+    ValidationSeverity, ValidationStats, ValidationWarning, ValidationWarningType,
 };
 
 /// Graph database engine
@@ -192,6 +199,21 @@ impl Engine {
     /// Perform KNN search
     pub fn knn_search(&self, label: &str, vector: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
         self.indexes.knn_search(label, vector, k)
+    }
+
+    /// Validate the entire graph for integrity and consistency
+    pub fn validate_graph(&self) -> Result<ValidationResult> {
+        // Create a temporary graph for validation
+        let temp_dir = tempfile::tempdir()?;
+        let store = storage::RecordStore::new(temp_dir.path())?;
+        let catalog = catalog::Catalog::new(temp_dir.path().join("catalog"))?;
+        let graph = Graph::new(store, Arc::new(catalog));
+        graph.validate()
+    }
+
+    /// Quick health check for the graph
+    pub fn graph_health_check(&self) -> Result<bool> {
+        self.validate_graph().map(|result| result.is_valid)
     }
 
     /// Health check

@@ -3,12 +3,13 @@
 //! This module provides high-level graph data structures that wrap the low-level
 //! storage records and provide a more user-friendly API for graph operations.
 
-// use crate::storage::{NodeRecord, PropertyValue, RecordStore, RelationshipRecord};
-use crate::{Error, Result};
-use crate::graph_simple::PropertyValue;
-use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::Arc;
+    use crate::storage::{NodeRecord, RelationshipRecord, RecordStore};
+    use crate::catalog::Catalog;
+    use crate::{Error, Result};
+    use crate::graph_simple::PropertyValue;
+    use parking_lot::RwLock;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
 /// A unique identifier for nodes in the graph
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -242,7 +243,7 @@ impl Edge {
 /// A graph containing nodes and edges
 pub struct Graph {
     /// Storage backend for persistence
-    store: Arc<RecordStore>,
+    store: std::cell::RefCell<RecordStore>,
     /// Catalog for label/type/key mappings
     catalog: Arc<crate::catalog::Catalog>,
     /// Cache of loaded nodes (in-memory)
@@ -253,9 +254,9 @@ pub struct Graph {
 
 impl Graph {
     /// Create a new graph with the given storage backend and catalog
-    pub fn new(store: Arc<RecordStore>, catalog: Arc<crate::catalog::Catalog>) -> Self {
+    pub fn new(store: RecordStore, catalog: Arc<crate::catalog::Catalog>) -> Self {
         Self {
-            store,
+            store: std::cell::RefCell::new(store),
             catalog,
             node_cache: Arc::new(RwLock::new(HashMap::new())),
             edge_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -265,7 +266,7 @@ impl Graph {
     /// Create a new node in the graph
     pub fn create_node(&self, labels: Vec<String>) -> Result<NodeId> {
         // Allocate a new node ID
-        let node_id = self.store.allocate_node_id();
+        let node_id = self.store.borrow_mut().allocate_node_id();
         let node_id = NodeId::new(node_id);
 
         // Get or create label IDs
@@ -284,7 +285,7 @@ impl Graph {
         record.prop_ptr = u64::MAX; // No properties yet
 
         // Write to storage
-        self.store.write_node(node_id.value(), &record)?;
+        self.store.borrow_mut().write_node(node_id.value(), &record)?;
 
         // Create in-memory node
         let node = Node::new(node_id, labels);
@@ -301,7 +302,7 @@ impl Graph {
         }
 
         // Read from storage
-        let record = self.store.read_node(node_id.value())?;
+        let record = self.store.borrow().read_node(node_id.value())?;
 
         if record.is_deleted() {
             return Ok(None);
@@ -358,7 +359,7 @@ impl Graph {
         }
 
         // Write to storage
-        self.store.write_node(node.id.value(), &record)?;
+        self.store.borrow_mut().write_node(node.id.value(), &record)?;
 
         // Update cache
         self.node_cache.write().insert(node.id, node);
@@ -374,9 +375,9 @@ impl Graph {
         }
 
         // Mark as deleted in storage
-        let mut record = self.store.read_node(node_id.value())?;
-        record.set_deleted();
-        self.store.write_node(node_id.value(), &record)?;
+        let mut record = self.store.borrow().read_node(node_id.value())?;
+        record.mark_deleted();
+        self.store.borrow_mut().write_node(node_id.value(), &record)?;
 
         // Remove from cache
         self.node_cache.write().remove(&node_id);
@@ -406,7 +407,7 @@ impl Graph {
         }
 
         // Allocate a new edge ID
-        let edge_id = self.store.allocate_rel_id();
+        let edge_id = self.store.borrow_mut().allocate_rel_id();
         let edge_id = EdgeId::new(edge_id);
 
         // Get or create relationship type ID
@@ -424,7 +425,7 @@ impl Graph {
         };
 
         // Write to storage
-        self.store.write_rel(edge_id.value(), &record)?;
+        self.store.borrow_mut().write_rel(edge_id.value(), &record)?;
 
         // Create in-memory edge
         let edge = Edge::new(edge_id, source, target, relationship_type);
@@ -441,17 +442,18 @@ impl Graph {
         }
 
         // Read from storage
-        let record = self.store.read_rel(edge_id.value())?;
+        let record = self.store.borrow().read_rel(edge_id.value())?;
 
         if record.is_deleted() {
             return Ok(None);
         }
 
         // Get relationship type name
+        let type_id = record.type_id; // Copy to avoid packed struct reference
         let relationship_type = self
             .catalog
-            .get_type_name(record.type_id)?
-            .unwrap_or_else(|| format!("Type_{}", record.type_id));
+            .get_type_name(type_id)?
+            .unwrap_or_else(|| format!("Type_{}", type_id));
 
         // Load properties from property chain
         let properties = if record.prop_ptr != u64::MAX {
@@ -491,7 +493,7 @@ impl Graph {
         };
 
         // Write to storage
-        self.store.write_rel(edge.id.value(), &record)?;
+        self.store.borrow_mut().write_rel(edge.id.value(), &record)?;
 
         // Update cache
         self.edge_cache.write().insert(edge.id, edge);
@@ -507,9 +509,9 @@ impl Graph {
         }
 
         // Mark as deleted in storage
-        let mut record = self.store.read_rel(edge_id.value())?;
-        record.set_deleted();
-        self.store.write_rel(edge_id.value(), &record)?;
+        let mut record = self.store.borrow().read_rel(edge_id.value())?;
+        record.mark_deleted();
+        self.store.borrow_mut().write_rel(edge_id.value(), &record)?;
 
         // Remove from cache
         self.edge_cache.write().remove(&edge_id);
@@ -520,7 +522,7 @@ impl Graph {
     /// Get all nodes in the graph
     pub fn get_all_nodes(&self) -> Result<Vec<Node>> {
         let mut nodes = Vec::new();
-        let stats = self.store.stats();
+        let stats = self.store.borrow_mut().stats();
 
         for node_id in 0..stats.node_count {
             if let Some(node) = self.get_node(NodeId::new(node_id))? {
@@ -534,7 +536,7 @@ impl Graph {
     /// Get all edges in the graph
     pub fn get_all_edges(&self) -> Result<Vec<Edge>> {
         let mut edges = Vec::new();
-        let stats = self.store.stats();
+        let stats = self.store.borrow_mut().stats();
 
         for edge_id in 0..stats.rel_count {
             if let Some(edge) = self.get_edge(EdgeId::new(edge_id))? {
@@ -605,7 +607,7 @@ impl Graph {
 
     /// Get graph statistics
     pub fn stats(&self) -> Result<GraphStats> {
-        let store_stats = self.store.stats();
+        let store_stats = self.store.borrow().stats();
         let node_count = self.node_count()?;
         let edge_count = self.edge_count()?;
 
@@ -619,9 +621,33 @@ impl Graph {
         })
     }
 
+    /// Validate the entire graph for integrity and consistency
+    pub fn validate(&self) -> Result<crate::validation::ValidationResult> {
+        let validator = crate::validation::GraphValidator::new();
+        validator.validate_graph(self)
+    }
+
+    /// Validate the graph with custom configuration
+    pub fn validate_with_config(&self, config: crate::validation::ValidationConfig) -> Result<crate::validation::ValidationResult> {
+        let validator = crate::validation::GraphValidator::with_config(config);
+        validator.validate_graph(self)
+    }
+
+    /// Quick health check for the graph
+    pub fn health_check(&self) -> Result<bool> {
+        let result = self.validate()?;
+        Ok(result.is_valid)
+    }
+
+    /// Get validation statistics without full validation
+    pub fn validation_stats(&self) -> Result<crate::validation::ValidationStats> {
+        let result = self.validate()?;
+        Ok(result.stats)
+    }
+
     /// Load properties from the property chain
-    fn load_properties(&self, prop_ptr: u64) -> Result<HashMap<String, PropertyValue>> {
-        let mut properties = HashMap::new();
+    fn load_properties(&self, _prop_ptr: u64) -> Result<HashMap<String, PropertyValue>> {
+        let properties = HashMap::new();
         
         // For now, we'll implement a simple property loading mechanism
         // In a full implementation, this would traverse the property chain
@@ -672,7 +698,7 @@ mod tests {
 
     fn create_test_graph() -> (Graph, TempDir) {
         let dir = TempDir::new().unwrap();
-        let store = Arc::new(RecordStore::new(dir.path()).unwrap());
+        let store = RecordStore::new(dir.path()).unwrap();
         let catalog = Arc::new(Catalog::new(dir.path().join("catalog")).unwrap());
         let graph = Graph::new(store, catalog);
         (graph, dir)
@@ -712,7 +738,7 @@ mod tests {
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let mut node = graph.get_node(node_id).unwrap().unwrap();
 
-        node.set_property("name".to_string(), PropertyValue::StringRef(0));
+        node.set_property("name".to_string(), PropertyValue::String("test".to_string()));
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
         assert!(node.has_property("name"));
@@ -905,7 +931,7 @@ mod tests {
         let mut node = graph.get_node(node_id).unwrap().unwrap();
 
         // Set properties
-        node.set_property("name".to_string(), PropertyValue::StringRef(0));
+        node.set_property("name".to_string(), PropertyValue::String("test".to_string()));
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
         // Check properties
