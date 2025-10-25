@@ -35,6 +35,13 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration
     let config = Config::default();
 
+    // Initialize executor
+    let executor = api::cypher::init_executor()?;
+    
+    // Share executor with other modules
+    api::knn::init_executor(executor.clone())?;
+    api::ingest::init_executor(executor)?;
+
     info!("Starting Nexus Server on {}", config.addr);
 
     // Build router

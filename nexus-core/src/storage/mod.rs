@@ -12,7 +12,6 @@
 //!
 //! - NodeRecord: 32 bytes (label_bits: 8, first_rel_ptr: 8, prop_ptr: 8, flags: 4, padding: 4)
 //! - RelationshipRecord: 48 bytes (src: 8, dst: 8, type: 4, next_src: 8, next_dst: 8, prop_ptr: 8, flags: 4)
-//! - PropertyRecord: Variable size with header (key_id: 4, type: 1, value: variable, next_ptr: 8)
 
 use crate::{Error, Result};
 use bytemuck::{Pod, Zeroable};

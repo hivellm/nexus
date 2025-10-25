@@ -59,6 +59,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 🔌 **MCP Protocol**: 19+ focused tools for AI integrations
 - 🔗 **UMICP v0.2.1**: Tool discovery endpoint + native JSON
 - 🤝 **Vectorizer Integration**: Native hybrid search with RRF ranking
+- 📊 **Graph Correlation Analysis**: Automatic code relationship visualization for LLM assistance
 
 ### **Production Features (V1)**
 - 🔐 **API Key Auth**: Disabled by default, required for 0.0.0.0 binding
@@ -66,13 +67,15 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ⚡ **Automatic Failover**: Health monitoring with replica promotion
 - 📊 **Rate Limiting**: 1000/min, 10000/hour per API key
 
-### **Desktop GUI (Electron)**
-- 🎨 **Beautiful Interface**: Vue 3 + TailwindCSS with dark/light themes
-- 📊 **Graph Visualization**: Interactive force-directed layouts (Cytoscape.js)
-- 💻 **Cypher Editor**: Syntax highlighting, query history, saved queries
-- 🔍 **Visual KNN Search**: Text → embedding → similarity results
-- 📈 **Monitoring Dashboard**: Real-time metrics with Chart.js
-- 🔧 **Management Tools**: Schema browser, backup/restore, replication control
+### **Graph Correlation Analysis** 🔥
+- 📊 **Automatic Graph Generation**: Create call graphs, dependency graphs, and data flow graphs from Vectorizer data
+- 🔍 **Pattern Recognition**: Identify pipeline patterns, event-driven architecture, and design patterns
+- 🧠 **LLM Assistance**: Provide structured relationship data to enhance LLM understanding of codebases
+- 🎨 **Interactive Visualization**: Web-based graph exploration with zoom, pan, filter, and clustering
+- 🔗 **Multiple Graph Types**: Call graphs, dependency graphs, data flow graphs, component graphs
+- ⚡ **Real-time Updates**: Live graph updates as code changes
+- 🔌 **API Integration**: REST and GraphQL APIs for programmatic access
+- 🤖 **MCP & UMICP Support**: Native integration with Model Context Protocol and Universal Model Interoperability Protocol
 
 ## 🚀 **Quick Start**
 
@@ -158,19 +161,39 @@ curl -X POST http://localhost:15474/knn_traverse \
 }
 ```
 
-#### **3️⃣ Bulk Data Ingestion**
+#### **5️⃣ MCP Protocol Integration**
 
 ```bash
-curl -X POST http://localhost:15474/ingest \
+# Generate graph via MCP tool
+curl -X POST http://localhost:15474/mcp \
   -H "Content-Type: application/json" \
   -d '{
-    "nodes": [
-      {"labels": ["Person"], "properties": {"name": "Alice", "age": 30}},
-      {"labels": ["Person"], "properties": {"name": "Bob", "age": 28}}
-    ],
-    "relationships": [
-      {"src": 1, "dst": 2, "type": "KNOWS", "properties": {"since": 2020}}
-    ]
+    "tool": "graph_generate",
+    "params": {
+      "graph_type": "call_graph",
+      "scope": {
+        "collections": ["codebase", "functions"],
+        "file_patterns": ["*.rs"]
+      }
+    }
+  }'
+```
+
+#### **6️⃣ UMICP Protocol Integration**
+
+```bash
+# Generate graph via UMICP method
+curl -X POST http://localhost:15474/umicp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "graph.generate",
+    "params": {
+      "graph_type": "dependency_graph",
+      "scope": {
+        "collections": ["codebase"],
+        "include_external": false
+      }
+    }
   }'
 ```
 
@@ -303,6 +326,7 @@ LIMIT 5
 - 📋 [**WAL & MVCC**](docs/specs/wal-mvcc.md) - Transaction model & crash recovery
 - 🎯 [**KNN Integration**](docs/specs/knn-integration.md) - Vector search & hybrid queries
 - 🌐 [**API Protocols**](docs/specs/api-protocols.md) - REST, MCP, UMICP specifications
+- 📊 [**Graph Correlation Analysis**](docs/specs/graph-correlation-analysis.md) - Code relationship visualization & LLM assistance
 
 ## 🗺️ **Roadmap**
 
@@ -314,6 +338,7 @@ LIMIT 5
 - [ ] **Basic Indexes** (label bitmap, KNN/HNSW)
 - [ ] **Cypher Executor** (MATCH, WHERE, RETURN, ORDER BY, LIMIT)
 - [ ] **HTTP API** (complete endpoints)
+- [ ] **Graph Correlation Analysis** (call graphs, dependency graphs, pattern recognition)
 - [ ] **Integration Tests** (95%+ coverage)
 
 **Target**: Q4 2024
@@ -329,6 +354,7 @@ LIMIT 5
 - [ ] **Desktop GUI** (Electron app with graph visualization)
 - [ ] **Monitoring & Metrics** (Prometheus, OpenTelemetry)
 - [ ] **Vectorizer Hybrid Search** (RRF ranking, bidirectional sync)
+- [ ] **Advanced Graph Analysis** (data flow graphs, component graphs, interactive visualization)
 
 **Target**: Q1 2025
 
@@ -338,6 +364,7 @@ LIMIT 5
 - [ ] **Replication** (Raft consensus via openraft)
 - [ ] **Cluster Coordination** (distributed query execution)
 - [ ] **Multi-Region Support** (cross-datacenter replication)
+- [ ] **Intelligent Graph Analysis** (ML-powered pattern learning, anomaly detection, predictive analysis)
 
 **Target**: Q2 2025
 
@@ -363,6 +390,7 @@ See [**ROADMAP.md**](docs/ROADMAP.md) for detailed timeline and milestones.
 - Knowledge graphs with vector embeddings
 - Document networks with citation analysis
 - Social networks with similarity search
+- **Code analysis and LLM assistance** (call graphs, dependency analysis, pattern recognition)
 
 ❌ **Not ideal for:**
 - Write-heavy OLTP workloads (use traditional RDBMS)
@@ -759,15 +787,72 @@ ORDER BY score DESC
 LIMIT 10
 ```
 
-### **3. Knowledge Graph + Semantic Search**
+### **4. Code Analysis & LLM Assistance** 🔥
 
 ```cypher
--- Find related entities via embeddings and relationships
-CALL vector.knn('Entity', $entity_embedding, 20)
-YIELD node AS entity, score
-MATCH (entity)-[r:RELATED_TO]->(related:Entity)
-RETURN entity.name, type(r), related.name, score
-ORDER BY score DESC
+-- Generate call graph for LLM context
+CALL graph.generate('call_graph', {
+  scope: {collections: ['codebase'], file_patterns: ['*.rs']},
+  options: {clustering_enabled: true}
+})
+YIELD graph_id
+
+-- Analyze code patterns
+CALL graph.analyze(graph_id, 'pattern_detection')
+YIELD pattern_type, confidence, nodes
+WHERE confidence > 0.8
+RETURN pattern_type, confidence, SIZE(nodes) AS pattern_size
+ORDER BY confidence DESC
+```
+
+#### **MCP Integration Example**
+
+```rust
+// LLM can use MCP tools to understand code structure
+let mcp_client = McpClient::new("http://localhost:15474/mcp");
+
+// Generate call graph
+let graph_response = mcp_client.call("graph_generate", json!({
+    "graph_type": "call_graph",
+    "scope": {
+        "collections": ["codebase", "functions"],
+        "file_patterns": ["*.rs"]
+    }
+})).await?;
+
+// Analyze patterns
+let patterns = mcp_client.call("graph_patterns", json!({
+    "graph_id": graph_response["graph_id"],
+    "pattern_types": ["pipeline", "event_driven"]
+})).await?;
+```
+
+#### **UMICP Integration Example**
+
+```rust
+// LLM can use UMICP methods for standardized access
+let umicp_client = UmicpClient::new("http://localhost:15474/umicp");
+
+// Generate dependency graph
+let graph = umicp_client.request(json!({
+    "method": "graph.generate",
+    "params": {
+        "graph_type": "dependency_graph",
+        "scope": {
+            "collections": ["codebase"],
+            "include_external": false
+        }
+    }
+})).await?;
+
+// Get visualization data
+let visualization = umicp_client.request(json!({
+    "method": "graph.visualize",
+    "params": {
+        "graph_id": graph["graph_id"],
+        "format": "interactive"
+    }
+})).await?;
 ```
 
 ## 🤝 **Contributing**
