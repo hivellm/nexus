@@ -39,6 +39,7 @@
 pub mod catalog;
 pub mod error;
 pub mod executor;
+pub mod graph_correlation;
 pub mod index;
 pub mod page_cache;
 pub mod storage;

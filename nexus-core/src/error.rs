@@ -44,6 +44,10 @@ pub enum Error {
     #[error("Executor error: {0}")]
     Executor(String),
 
+    /// Graph correlation analysis errors
+    #[error("Graph correlation error: {0}")]
+    GraphCorrelation(String),
+
     /// Cypher parsing errors
     #[error("Cypher syntax error: {0}")]
     CypherSyntax(String),
@@ -108,6 +112,11 @@ impl Error {
     /// Create an executor error
     pub fn executor(msg: impl Into<String>) -> Self {
         Self::Executor(msg.into())
+    }
+
+    /// Create a graph correlation error
+    pub fn graph_correlation(msg: impl Into<String>) -> Self {
+        Self::GraphCorrelation(msg.into())
     }
 
     /// Create an internal error
