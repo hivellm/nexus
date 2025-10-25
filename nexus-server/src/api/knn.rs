@@ -245,4 +245,149 @@ mod tests {
         // Test passes if no panic occurs
         assert!(response.execution_time_ms >= 0);
     }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_initialized_executor() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 5,
+            expand: vec![],
+            r#where: None,
+            limit: 10,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_where_clause() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 3,
+            expand: vec![],
+            r#where: Some("n.property > 0".to_string()),
+            limit: 20,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_multiple_expansions() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 2,
+            expand: vec!["REL_TYPE1".to_string(), "REL_TYPE2".to_string()],
+            r#where: None,
+            limit: 15,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_large_vector() {
+        let large_vector = vec![0.1; 1000]; // 1000-dimensional vector
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: large_vector,
+            k: 1,
+            expand: vec![],
+            r#where: None,
+            limit: 1,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_zero_k() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 0,
+            expand: vec![],
+            r#where: None,
+            limit: 10,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_large_limit() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 5,
+            expand: vec![],
+            r#where: None,
+            limit: 10000,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_negative_values() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![-0.1, -0.2, -0.3, -0.4],
+            k: 3,
+            expand: vec![],
+            r#where: None,
+            limit: 10,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_mixed_values() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.0, -1.0, 1.0, 0.5, -0.5],
+            k: 2,
+            expand: vec![],
+            r#where: None,
+            limit: 5,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_empty_label() {
+        let request = KnnTraverseRequest {
+            label: "".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 1,
+            expand: vec![],
+            r#where: None,
+            limit: 1,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
 }

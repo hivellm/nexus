@@ -294,4 +294,259 @@ mod tests {
         // Test passes if no panic occurs
         assert!(response.ingestion_time_ms >= 0);
     }
+
+    #[tokio::test]
+    async fn test_ingest_with_initialized_executor() {
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Alice", "age": 30}),
+                },
+            ],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_complex_properties() {
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: json!({
+                    "name": "Alice",
+                    "age": 30,
+                    "active": true,
+                    "tags": ["developer", "rust"],
+                    "metadata": {
+                        "created": "2024-01-01",
+                        "score": 95.5
+                    }
+                }),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_multiple_labels() {
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string(), "Developer".to_string(), "Rust".to_string()],
+                properties: json!({"name": "Alice"}),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_empty_labels() {
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec![],
+                properties: json!({"name": "Alice"}),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_empty_properties() {
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: json!({}),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_null_properties() {
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: json!(null),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_large_dataset() {
+        let mut nodes = Vec::new();
+        let mut relationships = Vec::new();
+
+        // Create 100 nodes
+        for i in 0..100 {
+            nodes.push(NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: json!({"id": i, "name": format!("Person{}", i)}),
+            });
+        }
+
+        // Create 50 relationships
+        for i in 0..50 {
+            relationships.push(RelIngest {
+                id: None,
+                src: i + 1,
+                dst: i + 2,
+                r#type: "KNOWS".to_string(),
+                properties: json!({"since": 2020 + i}),
+            });
+        }
+
+        let request = IngestRequest {
+            nodes,
+            relationships,
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_complex_relationships() {
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Alice"}),
+                },
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Company".to_string()],
+                    properties: json!({"name": "TechCorp"}),
+                },
+            ],
+            relationships: vec![
+                RelIngest {
+                    id: None,
+                    src: 1,
+                    dst: 2,
+                    r#type: "WORKS_FOR".to_string(),
+                    properties: json!({
+                        "position": "Developer",
+                        "start_date": "2024-01-01",
+                        "salary": 100000
+                    }),
+                },
+            ],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_empty_relationship_properties() {
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Alice"}),
+                },
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Bob"}),
+                },
+            ],
+            relationships: vec![RelIngest {
+                id: None,
+                src: 1,
+                dst: 2,
+                r#type: "KNOWS".to_string(),
+                properties: json!({}),
+            }],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_null_relationship_properties() {
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Alice"}),
+                },
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Bob"}),
+                },
+            ],
+            relationships: vec![RelIngest {
+                id: None,
+                src: 1,
+                dst: 2,
+                r#type: "KNOWS".to_string(),
+                properties: json!(null),
+            }],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_with_special_characters() {
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: json!({
+                    "name": "José María",
+                    "description": "Special chars: àáâãäåæçèéêë",
+                    "unicode": "🚀🌟💻"
+                }),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
 }

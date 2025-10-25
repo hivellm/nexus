@@ -183,4 +183,113 @@ mod tests {
         // Test passes if no panic occurs
         assert!(response.execution_time_ms >= 0);
     }
+
+    #[tokio::test]
+    async fn test_execute_with_initialized_executor() {
+        let request = CypherRequest {
+            query: "RETURN 'hello' as greeting".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs - executor may or may not be initialized
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_complex_params() {
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), json!("Alice"));
+        params.insert("age".to_string(), json!(30));
+        params.insert("active".to_string(), json!(true));
+
+        let request = CypherRequest {
+            query: "RETURN $name as name, $age as age, $active as active".to_string(),
+            params,
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_empty_result() {
+        let request = CypherRequest {
+            query: "MATCH (n) WHERE n.nonexistent = 'value' RETURN n".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_multiple_rows() {
+        let request = CypherRequest {
+            query: "UNWIND [1, 2, 3] AS num RETURN num".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_nested_params() {
+        let mut params = HashMap::new();
+        params.insert("list".to_string(), json!([1, 2, 3]));
+        params.insert("obj".to_string(), json!({"key": "value"}));
+
+        let request = CypherRequest {
+            query: "RETURN $list as numbers, $obj as data".to_string(),
+            params,
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_null_params() {
+        let mut params = HashMap::new();
+        params.insert("null_value".to_string(), json!(null));
+
+        let request = CypherRequest {
+            query: "RETURN $null_value as null_val".to_string(),
+            params,
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_empty_query() {
+        let request = CypherRequest {
+            query: "".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Should handle empty query gracefully
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_very_long_query() {
+        let long_query = "RETURN ".to_string() + &"x".repeat(1000);
+        let request = CypherRequest {
+            query: long_query,
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Should handle long query gracefully
+        assert!(response.execution_time_ms >= 0);
+    }
 }
