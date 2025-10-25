@@ -2002,12 +2002,12 @@ mod tests {
 
     #[test]
     fn test_parse_float_literals() {
-        let mut parser = CypherParser::new("3.14159".to_string());
+        let mut parser = CypherParser::new("3.141592653589793".to_string());
         let expr = parser.parse_expression().unwrap();
 
         match expr {
             Expression::Literal(Literal::Float(value)) => {
-                assert!((value - 3.14159).abs() < 1e-6);
+                assert!((value - std::f64::consts::PI).abs() < 1e-6);
             }
             _ => panic!("Expected float literal"),
         }

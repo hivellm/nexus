@@ -445,9 +445,9 @@ impl Graph {
             avg_clustering_coefficient: clustering_coefficient,
             avg_shortest_path_length: path_stats.0,
             diameter: path_stats.1 as usize,
-            isolated_nodes: 0, // TODO: Calculate isolated nodes
-            leaf_nodes: 0, // TODO: Calculate leaf nodes
-            self_loops: 0, // TODO: Calculate self loops
+            isolated_nodes: 0,      // TODO: Calculate isolated nodes
+            leaf_nodes: 0,          // TODO: Calculate leaf nodes
+            self_loops: 0,          // TODO: Calculate self loops
             bidirectional_edges: 0, // TODO: Calculate bidirectional edges
         })
     }
@@ -455,52 +455,54 @@ impl Graph {
     fn calculate_degree_statistics(&self) -> (f64, f64, f64) {
         let mut degrees = Vec::new();
         for node in self.nodes.values() {
-            let degree = self.edges.values()
+            let degree = self
+                .edges
+                .values()
                 .filter(|edge| edge.source == node.id || edge.target == node.id)
                 .count();
             degrees.push(degree as f64);
         }
-        
+
         if degrees.is_empty() {
             return (0.0, 0.0, 0.0);
         }
-        
+
         let avg_degree = degrees.iter().sum::<f64>() / degrees.len() as f64;
         let max_degree = degrees.iter().fold(0.0_f64, |a, &b| a.max(b));
         let min_degree = degrees.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        
+
         (avg_degree, max_degree, min_degree)
     }
-    
+
     /// Calculate graph density
     fn calculate_graph_density(&self, node_count: usize, edge_count: usize) -> f64 {
         if node_count <= 1 {
             return 0.0;
         }
-        
+
         let max_edges = node_count * (node_count - 1) / 2;
         edge_count as f64 / max_edges as f64
     }
-    
+
     /// Calculate connected components
     fn calculate_connected_components(&self) -> usize {
         let mut visited = std::collections::HashSet::new();
         let mut components = 0;
-        
+
         for node_id in self.nodes.keys() {
             if !visited.contains(node_id) {
                 self.dfs_visit(*node_id, &mut visited);
                 components += 1;
             }
         }
-        
+
         components
     }
-    
+
     /// DFS helper for connected components
     fn dfs_visit(&self, node_id: NodeId, visited: &mut std::collections::HashSet<NodeId>) {
         visited.insert(node_id);
-        
+
         for edge in self.edges.values() {
             if edge.source == node_id && !visited.contains(&edge.target) {
                 self.dfs_visit(edge.target, visited);
@@ -509,14 +511,16 @@ impl Graph {
             }
         }
     }
-    
+
     /// Calculate average clustering coefficient
     fn calculate_avg_clustering_coefficient(&self) -> f64 {
         let mut total_coefficient = 0.0;
         let mut node_count = 0;
-        
+
         for node in self.nodes.values() {
-            let neighbors: Vec<NodeId> = self.edges.values()
+            let neighbors: Vec<NodeId> = self
+                .edges
+                .values()
                 .filter_map(|edge| {
                     if edge.source == node.id {
                         Some(edge.target)
@@ -527,39 +531,43 @@ impl Graph {
                     }
                 })
                 .collect();
-            
+
             if neighbors.len() < 2 {
                 continue;
             }
-            
+
             let mut connections = 0;
             for i in 0..neighbors.len() {
-                for j in i+1..neighbors.len() {
+                for j in i + 1..neighbors.len() {
                     if self.edges.values().any(|edge| {
-                        (edge.source == neighbors[i] && edge.target == neighbors[j]) ||
-                        (edge.source == neighbors[j] && edge.target == neighbors[i])
+                        (edge.source == neighbors[i] && edge.target == neighbors[j])
+                            || (edge.source == neighbors[j] && edge.target == neighbors[i])
                     }) {
                         connections += 1;
                     }
                 }
             }
-            
+
             let possible_connections = neighbors.len() * (neighbors.len() - 1) / 2;
             if possible_connections > 0 {
                 total_coefficient += connections as f64 / possible_connections as f64;
                 node_count += 1;
             }
         }
-        
-        if node_count == 0 { 0.0 } else { total_coefficient / node_count as f64 }
+
+        if node_count == 0 {
+            0.0
+        } else {
+            total_coefficient / node_count as f64
+        }
     }
-    
+
     /// Calculate path statistics
     fn calculate_path_statistics(&self) -> (f64, f64) {
         let mut total_paths = 0;
         let mut total_length = 0.0;
         let mut max_length = 0.0_f64;
-        
+
         for source in self.nodes.keys() {
             for target in self.nodes.keys() {
                 if source != target {
@@ -571,52 +579,56 @@ impl Graph {
                 }
             }
         }
-        
-        let avg_length = if total_paths > 0 { total_length / total_paths as f64 } else { 0.0 };
+
+        let avg_length = if total_paths > 0 {
+            total_length / total_paths as f64
+        } else {
+            0.0
+        };
         (avg_length, max_length)
     }
-    
+
     /// Calculate node type statistics
     fn calculate_node_type_statistics(&self) -> std::collections::HashMap<String, usize> {
         let mut stats = std::collections::HashMap::new();
-        
+
         for node in self.nodes.values() {
             for label in &node.labels {
                 *stats.entry(label.clone()).or_insert(0) += 1;
             }
         }
-        
+
         stats
     }
-    
+
     /// Calculate edge type statistics
     fn calculate_edge_type_statistics(&self) -> std::collections::HashMap<String, usize> {
         let mut stats = std::collections::HashMap::new();
-        
+
         for edge in self.edges.values() {
             *stats.entry(edge.relationship_type.clone()).or_insert(0) += 1;
         }
-        
+
         stats
     }
-    
+
     /// Calculate shortest path length between two nodes using BFS
     fn shortest_path_length(&self, source: NodeId, target: NodeId) -> Option<usize> {
         if source == target {
             return Some(0);
         }
-        
+
         let mut queue = std::collections::VecDeque::new();
         let mut visited = std::collections::HashSet::new();
         let mut distances = std::collections::HashMap::new();
-        
+
         queue.push_back(source);
         visited.insert(source);
         distances.insert(source, 0);
-        
+
         while let Some(current) = queue.pop_front() {
             let current_distance = distances[&current];
-            
+
             for edge in self.edges.values() {
                 let next = if edge.source == current {
                     edge.target
@@ -625,11 +637,11 @@ impl Graph {
                 } else {
                     continue;
                 };
-                
+
                 if next == target {
                     return Some(current_distance + 1);
                 }
-                
+
                 if !visited.contains(&next) {
                     visited.insert(next);
                     distances.insert(next, current_distance + 1);
@@ -637,7 +649,7 @@ impl Graph {
                 }
             }
         }
-        
+
         None
     }
 }

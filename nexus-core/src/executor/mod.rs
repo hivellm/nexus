@@ -894,7 +894,9 @@ impl Executor {
                 target_var,
                 rel_var,
             } => {
-                self.execute_expand(context, *type_id, *direction, source_var, target_var, rel_var)?;
+                self.execute_expand(
+                    context, *type_id, *direction, source_var, target_var, rel_var,
+                )?;
             }
             Operator::Project { columns } => {
                 let rows = self.execute_project(context, columns)?;
@@ -907,7 +909,10 @@ impl Executor {
             Operator::Sort { columns, ascending } => {
                 self.execute_sort(context, columns, ascending)?;
             }
-            Operator::Aggregate { group_by, aggregations } => {
+            Operator::Aggregate {
+                group_by,
+                aggregations,
+            } => {
                 self.execute_aggregate(context, group_by, aggregations)?;
             }
             Operator::Union { left, right } => {
