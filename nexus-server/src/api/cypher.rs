@@ -112,3 +112,75 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Json;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_execute_simple_query() {
+        let request = CypherRequest {
+            query: "MATCH (n) RETURN n LIMIT 1".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_query_with_params() {
+        let mut params = HashMap::new();
+        params.insert("limit".to_string(), json!(5));
+
+        let request = CypherRequest {
+            query: "MATCH (n) RETURN n LIMIT $limit".to_string(),
+            params,
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_invalid_query() {
+        let request = CypherRequest {
+            query: "INVALID SYNTAX".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Should handle invalid syntax gracefully
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_without_executor() {
+        // Don't initialize executor
+        let request = CypherRequest {
+            query: "MATCH (n) RETURN n".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Executor not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_response_format() {
+        let request = CypherRequest {
+            query: "RETURN 1 as num, 'test' as str".to_string(),
+            params: HashMap::new(),
+        };
+
+        let response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+}

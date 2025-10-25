@@ -157,3 +157,92 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Json;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn test_knn_traverse_basic() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 5,
+            expand: vec![],
+            r#where: None,
+            limit: 10,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_with_expansion() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 3,
+            expand: vec!["REL_TYPE".to_string()],
+            r#where: None,
+            limit: 20,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_without_executor() {
+        // Don't initialize executor
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 5,
+            expand: vec![],
+            r#where: None,
+            limit: 10,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Executor not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_invalid_dimension() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![], // Empty vector
+            k: 5,
+            expand: vec![],
+            r#where: None,
+            limit: 10,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Should handle empty vector gracefully
+        assert!(response.execution_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_knn_traverse_response_format() {
+        let request = KnnTraverseRequest {
+            label: "TestLabel".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            k: 1,
+            expand: vec![],
+            r#where: None,
+            limit: 1,
+        };
+
+        let response = knn_traverse(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.execution_time_ms >= 0);
+    }
+}

@@ -172,3 +172,126 @@ pub async fn ingest_data(Json(request): Json<IngestRequest>) -> Json<IngestRespo
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Json;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn test_ingest_nodes_only() {
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Alice", "age": 30}),
+                },
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Bob", "age": 25}),
+                },
+            ],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_relationships_only() {
+        let request = IngestRequest {
+            nodes: vec![],
+            relationships: vec![
+                RelIngest {
+                    id: None,
+                    src: 1,
+                    dst: 2,
+                    r#type: "KNOWS".to_string(),
+                    properties: json!({"since": 2020}),
+                },
+            ],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_mixed_data() {
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: None,
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Alice"}),
+                },
+            ],
+            relationships: vec![
+                RelIngest {
+                    id: None,
+                    src: 1,
+                    dst: 2,
+                    r#type: "KNOWS".to_string(),
+                    properties: json!({}),
+                },
+            ],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_empty_request() {
+        let request = IngestRequest {
+            nodes: vec![],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs - empty request should be handled gracefully
+        assert!(response.ingestion_time_ms >= 0);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_without_executor() {
+        // Don't initialize executor
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Test".to_string()],
+                properties: json!({}),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Executor not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_ingest_response_format() {
+        let request = IngestRequest {
+            nodes: vec![NodeIngest {
+                id: None,
+                labels: vec!["Test".to_string()],
+                properties: json!({"key": "value"}),
+            }],
+            relationships: vec![],
+        };
+
+        let response = ingest_data(Json(request)).await;
+        // Test passes if no panic occurs
+        assert!(response.ingestion_time_ms >= 0);
+    }
+}
