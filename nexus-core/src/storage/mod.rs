@@ -657,4 +657,171 @@ mod tests {
             assert_eq!(record.prop_ptr, 999);
         }
     }
+
+    #[test]
+    fn test_rel_deleted_flag() {
+        let mut record = RelationshipRecord::default();
+        assert!(!record.is_deleted());
+
+        record.set_deleted();
+        assert!(record.is_deleted());
+    }
+
+    #[test]
+    fn test_multiple_labels_on_node() {
+        let (store, _dir) = create_test_store();
+
+        let node_id = store.allocate_node_id();
+        let mut record = NodeRecord::default();
+
+        // Add multiple labels
+        for label_id in 0..10 {
+            record.add_label(label_id);
+        }
+
+        store.write_node(node_id, &record).unwrap();
+        let read_record = store.read_node(node_id).unwrap();
+
+        for label_id in 0..10 {
+            assert!(read_record.has_label(label_id));
+        }
+    }
+
+    #[test]
+    fn test_relationship_persistence() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        {
+            let store = RecordStore::new(&path).unwrap();
+            let rel_id = store.allocate_rel_id();
+
+            let mut record = RelationshipRecord::default();
+            record.src_id = 100;
+            record.dst_id = 200;
+            record.type_id = 5;
+            record.next_src_ptr = 999;
+
+            store.write_rel(rel_id, &record).unwrap();
+            store.flush().unwrap();
+        }
+
+        {
+            let store = RecordStore::new(&path).unwrap();
+            let record = store.read_rel(0).unwrap();
+
+            assert_eq!(record.src_id, 100);
+            assert_eq!(record.dst_id, 200);
+            assert_eq!(record.type_id, 5);
+            assert_eq!(record.next_src_ptr, 999);
+        }
+    }
+
+    #[test]
+    fn test_default_pointers() {
+        let node = NodeRecord::default();
+        assert_eq!(node.first_rel_ptr, u64::MAX);
+        assert_eq!(node.prop_ptr, u64::MAX);
+
+        let rel = RelationshipRecord::default();
+        assert_eq!(rel.next_src_ptr, u64::MAX);
+        assert_eq!(rel.next_dst_ptr, u64::MAX);
+        assert_eq!(rel.prop_ptr, u64::MAX);
+    }
+
+    #[test]
+    fn test_stats_reporting() {
+        let (store, _dir) = create_test_store();
+
+        for _ in 0..10 {
+            store.allocate_node_id();
+        }
+
+        for _ in 0..5 {
+            store.allocate_rel_id();
+        }
+
+        let stats = store.stats();
+        assert_eq!(stats.node_count, 10);
+        assert_eq!(stats.rel_count, 5);
+        assert_eq!(stats.nodes_file_size, 1024 * 1024);
+        assert_eq!(stats.rels_file_size, 1024 * 1024);
+    }
+
+    #[test]
+    fn test_boundary_label_ids() {
+        let mut record = NodeRecord::default();
+
+        // Test boundary cases
+        record.add_label(0); // First valid
+        record.add_label(63); // Last valid
+        record.add_label(64); // Invalid (out of range)
+
+        assert!(record.has_label(0));
+        assert!(record.has_label(63));
+        assert!(!record.has_label(64));
+
+        // Test removal
+        record.remove_label(63);
+        assert!(!record.has_label(63));
+
+        record.remove_label(64); // Should not panic
+    }
+
+    #[test]
+    fn test_large_graph_simulation() {
+        let (store, _dir) = create_test_store();
+
+        // Simulate small graph: 100 nodes, 200 relationships
+        for i in 0..100 {
+            let node_id = store.allocate_node_id();
+            let mut record = NodeRecord::default();
+            record.add_label((i % 5) as u32); // 5 different labels
+            store.write_node(node_id, &record).unwrap();
+        }
+
+        for i in 0..200 {
+            let rel_id = store.allocate_rel_id();
+            let mut record = RelationshipRecord::default();
+            record.src_id = (i % 100) as u64;
+            record.dst_id = ((i + 1) % 100) as u64;
+            record.type_id = (i % 3) as u32; // 3 relationship types
+            store.write_rel(rel_id, &record).unwrap();
+        }
+
+        let stats = store.stats();
+        assert_eq!(stats.node_count, 100);
+        assert_eq!(stats.rel_count, 200);
+    }
+
+    #[test]
+    fn test_concurrent_writes() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(RecordStore::new(dir.path()).unwrap());
+
+        let mut handles = vec![];
+
+        // Spawn threads writing nodes
+        for _ in 0..10 {
+            let s = store.clone();
+            let handle = thread::spawn(move || {
+                for _ in 0..100 {
+                    let node_id = s.allocate_node_id();
+                    let record = NodeRecord::default();
+                    s.write_node(node_id, &record).unwrap();
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let stats = store.stats();
+        assert_eq!(stats.node_count, 1000);
+    }
 }

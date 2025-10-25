@@ -572,4 +572,338 @@ mod tests {
             assert!(id < 10);
         }
     }
+
+    #[test]
+    fn test_type_name_lookup() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let id = catalog.get_or_create_type("KNOWS").unwrap();
+        let name = catalog.get_type_name(id).unwrap();
+
+        assert_eq!(name, Some("KNOWS".to_string()));
+    }
+
+    #[test]
+    fn test_key_name_lookup() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let id = catalog.get_or_create_key("name").unwrap();
+        let name = catalog.get_key_name(id).unwrap();
+
+        assert_eq!(name, Some("name".to_string()));
+    }
+
+    #[test]
+    fn test_nonexistent_label_lookup() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let name = catalog.get_label_name(999).unwrap();
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn test_nonexistent_type_lookup() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let name = catalog.get_type_name(999).unwrap();
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn test_nonexistent_key_lookup() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let name = catalog.get_key_name(999).unwrap();
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn test_metadata_update() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let mut metadata = catalog.get_metadata().unwrap();
+        assert_eq!(metadata.epoch, 0);
+
+        metadata.epoch = 100;
+        catalog.update_metadata(&metadata).unwrap();
+
+        let updated = catalog.get_metadata().unwrap();
+        assert_eq!(updated.epoch, 100);
+    }
+
+    #[test]
+    fn test_rel_count_tracking() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let type_id = catalog.get_or_create_type("KNOWS").unwrap();
+
+        catalog.increment_rel_count(type_id).unwrap();
+        catalog.increment_rel_count(type_id).unwrap();
+        catalog.increment_rel_count(type_id).unwrap();
+
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.rel_counts.get(&type_id), Some(&3));
+
+        catalog.decrement_rel_count(type_id).unwrap();
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.rel_counts.get(&type_id), Some(&2));
+    }
+
+    #[test]
+    fn test_decrement_nonexistent_count() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Decrementing non-existent count should not panic
+        catalog.decrement_node_count(999).unwrap();
+        catalog.decrement_rel_count(999).unwrap();
+
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.node_counts.get(&999), None);
+    }
+
+    #[test]
+    fn test_decrement_to_zero() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let label_id = catalog.get_or_create_label("Person").unwrap();
+
+        catalog.increment_node_count(label_id).unwrap();
+
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.node_counts.get(&label_id), Some(&1));
+
+        catalog.decrement_node_count(label_id).unwrap();
+
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.node_counts.get(&label_id), Some(&0));
+    }
+
+    #[test]
+    fn test_multiple_labels_and_types() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Create multiple labels
+        let labels = vec!["Person", "Company", "Product", "Location"];
+        for label in &labels {
+            catalog.get_or_create_label(label).unwrap();
+        }
+
+        // Create multiple types
+        let types = vec!["KNOWS", "WORKS_AT", "BOUGHT", "LOCATED_IN"];
+        for type_name in &types {
+            catalog.get_or_create_type(type_name).unwrap();
+        }
+
+        // Verify all can be looked up
+        for label in &labels {
+            let id = catalog.get_or_create_label(label).unwrap();
+            let name = catalog.get_label_name(id).unwrap();
+            assert_eq!(name.as_deref(), Some(*label));
+        }
+
+        for type_name in &types {
+            let id = catalog.get_or_create_type(type_name).unwrap();
+            let name = catalog.get_type_name(id).unwrap();
+            assert_eq!(name.as_deref(), Some(*type_name));
+        }
+    }
+
+    #[test]
+    fn test_concurrent_types_and_keys() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
+
+        let mut handles = vec![];
+
+        // Concurrently create types
+        for i in 0..5 {
+            let cat = catalog.clone();
+            let handle = thread::spawn(move || {
+                let type_name = format!("TYPE_{}", i);
+                cat.get_or_create_type(&type_name).unwrap();
+            });
+            handles.push(handle);
+        }
+
+        // Concurrently create keys
+        for i in 0..5 {
+            let cat = catalog.clone();
+            let handle = thread::spawn(move || {
+                let key = format!("key_{}", i);
+                cat.get_or_create_key(&key).unwrap();
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify all created
+        for i in 0..5 {
+            let type_name = format!("TYPE_{}", i);
+            catalog.get_or_create_type(&type_name).unwrap();
+
+            let key = format!("key_{}", i);
+            catalog.get_or_create_key(&key).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_sync_operation() {
+        let (catalog, _dir) = create_test_catalog();
+
+        catalog.get_or_create_label("Person").unwrap();
+        catalog.sync().unwrap();
+
+        // Should not fail
+        catalog.sync().unwrap();
+    }
+
+    #[test]
+    fn test_statistics_initialization() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.label_count, 0);
+        assert_eq!(stats.type_count, 0);
+        assert_eq!(stats.key_count, 0);
+        assert!(stats.node_counts.is_empty());
+        assert!(stats.rel_counts.is_empty());
+    }
+
+    #[test]
+    fn test_metadata_initialization() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let metadata = catalog.get_metadata().unwrap();
+        assert_eq!(metadata.version, 1);
+        assert_eq!(metadata.epoch, 0);
+        assert_eq!(metadata.page_size, 8192);
+    }
+
+    #[test]
+    fn test_reopen_with_existing_data() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        // Create catalog with data
+        {
+            let catalog = Catalog::new(&path).unwrap();
+            catalog.get_or_create_label("Person").unwrap();
+            catalog.get_or_create_label("Company").unwrap();
+            catalog.get_or_create_type("KNOWS").unwrap();
+            catalog.get_or_create_key("name").unwrap();
+
+            let person_id = catalog.get_or_create_label("Person").unwrap();
+            catalog.increment_node_count(person_id).unwrap();
+
+            catalog.sync().unwrap();
+        }
+
+        // Reopen and verify counters are correct
+        {
+            let catalog = Catalog::new(&path).unwrap();
+
+            // Should allocate next IDs correctly
+            let location_id = catalog.get_or_create_label("Location").unwrap();
+            assert_eq!(location_id, 2); // After Person(0) and Company(1)
+
+            let works_at_id = catalog.get_or_create_type("WORKS_AT").unwrap();
+            assert_eq!(works_at_id, 1); // After KNOWS(0)
+
+            let age_id = catalog.get_or_create_key("age").unwrap();
+            assert_eq!(age_id, 1); // After name(0)
+        }
+    }
+
+    #[test]
+    fn test_concurrent_label_same_name() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
+
+        let mut handles = vec![];
+
+        // Multiple threads trying to create same label
+        for _ in 0..5 {
+            let cat = catalog.clone();
+            let handle = thread::spawn(move || cat.get_or_create_label("Person").unwrap());
+            handles.push(handle);
+        }
+
+        let ids: Vec<u32> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // All should get same ID
+        assert!(ids.iter().all(|&id| id == ids[0]));
+    }
+
+    #[test]
+    fn test_mixed_operations() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Mix labels, types, and keys
+        let p1 = catalog.get_or_create_label("Person").unwrap();
+        let k1 = catalog.get_or_create_type("KNOWS").unwrap();
+        let n1 = catalog.get_or_create_key("name").unwrap();
+        let p2 = catalog.get_or_create_label("Company").unwrap();
+        let k2 = catalog.get_or_create_type("WORKS_AT").unwrap();
+        let n2 = catalog.get_or_create_key("age").unwrap();
+
+        // Verify all unique
+        assert_ne!(p1, p2);
+        assert_ne!(k1, k2);
+        assert_ne!(n1, n2);
+
+        // Verify lookups work
+        assert_eq!(
+            catalog.get_label_name(p1).unwrap(),
+            Some("Person".to_string())
+        );
+        assert_eq!(
+            catalog.get_type_name(k1).unwrap(),
+            Some("KNOWS".to_string())
+        );
+        assert_eq!(catalog.get_key_name(n1).unwrap(), Some("name".to_string()));
+    }
+
+    #[test]
+    fn test_saturating_decrement() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let label_id = catalog.get_or_create_label("Person").unwrap();
+
+        // Increment once
+        catalog.increment_node_count(label_id).unwrap();
+
+        // Decrement twice (should saturate at 0, not underflow)
+        catalog.decrement_node_count(label_id).unwrap();
+        catalog.decrement_node_count(label_id).unwrap();
+
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.node_counts.get(&label_id), Some(&0));
+    }
+
+    #[test]
+    fn test_multiple_increments() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let label_id = catalog.get_or_create_label("Person").unwrap();
+        let type_id = catalog.get_or_create_type("KNOWS").unwrap();
+
+        // Multiple increments
+        for _ in 0..100 {
+            catalog.increment_node_count(label_id).unwrap();
+            catalog.increment_rel_count(type_id).unwrap();
+        }
+
+        let stats = catalog.get_statistics().unwrap();
+        assert_eq!(stats.node_counts.get(&label_id), Some(&100));
+        assert_eq!(stats.rel_counts.get(&type_id), Some(&100));
+    }
 }
