@@ -160,10 +160,11 @@ fn is_retryable(error: &Error) -> bool {
             )
         }
         Error::Database(db_error) => {
-            // Check for transient LMDB errors
-            format!("{:?}", db_error).contains("MDB_MAP_FULL")
-                || format!("{:?}", db_error).contains("MDB_TXN_FULL")
-                || format!("{:?}", db_error).contains("MDB_READERS_FULL")
+            // Check for transient LMDB errors by string matching
+            let error_str = format!("{:?}", db_error);
+            error_str.contains("MDB_MAP_FULL")
+                || error_str.contains("MDB_TXN_FULL")
+                || error_str.contains("MDB_READERS_FULL")
         }
         _ => false,
     }
@@ -212,4 +213,385 @@ where
     Fut: std::future::Future<Output = Result<T>>,
 {
     retry(RetryConfig::slow(), operation).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_retry_config_default() {
+        let config = RetryConfig::default();
+        assert_eq!(config.max_attempts, 3);
+        assert_eq!(config.initial_delay, Duration::from_millis(100));
+        assert_eq!(config.max_delay, Duration::from_secs(5));
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(config.jitter_factor, 0.1);
+    }
+
+    #[test]
+    fn test_retry_config_new() {
+        let config = RetryConfig::new(5, Duration::from_millis(200));
+        assert_eq!(config.max_attempts, 5);
+        assert_eq!(config.initial_delay, Duration::from_millis(200));
+        assert_eq!(config.max_delay, Duration::from_secs(30));
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(config.jitter_factor, 0.1);
+    }
+
+    #[test]
+    fn test_retry_config_quick() {
+        let config = RetryConfig::quick();
+        assert_eq!(config.max_attempts, 3);
+        assert_eq!(config.initial_delay, Duration::from_millis(50));
+        assert_eq!(config.max_delay, Duration::from_secs(1));
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(config.jitter_factor, 0.1);
+    }
+
+    #[test]
+    fn test_retry_config_slow() {
+        let config = RetryConfig::slow();
+        assert_eq!(config.max_attempts, 5);
+        assert_eq!(config.initial_delay, Duration::from_millis(500));
+        assert_eq!(config.max_delay, Duration::from_secs(30));
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(config.jitter_factor, 0.2);
+    }
+
+    #[test]
+    fn test_retry_stats_default() {
+        let stats = RetryStats::default();
+        assert_eq!(stats.total_attempts, 0);
+        assert_eq!(stats.successful_retries, 0);
+        assert_eq!(stats.failed_retries, 0);
+        assert_eq!(stats.total_retry_time, Duration::from_secs(0));
+    }
+
+    #[test]
+    fn test_retry_stats_clone() {
+        let mut stats = RetryStats::default();
+        stats.total_attempts = 5;
+        stats.successful_retries = 3;
+        stats.failed_retries = 2;
+        stats.total_retry_time = Duration::from_millis(1000);
+        
+        let cloned = stats.clone();
+        assert_eq!(cloned.total_attempts, 5);
+        assert_eq!(cloned.successful_retries, 3);
+        assert_eq!(cloned.failed_retries, 2);
+        assert_eq!(cloned.total_retry_time, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_retry_context_new() {
+        let config = RetryConfig::default();
+        let context = RetryContext::new(config.clone());
+        
+        assert_eq!(context.config.max_attempts, config.max_attempts);
+        assert_eq!(context.stats.total_attempts, 0);
+    }
+
+    #[test]
+    fn test_retry_context_stats() {
+        let config = RetryConfig::default();
+        let context = RetryContext::new(config);
+        
+        let stats = context.stats();
+        assert_eq!(stats.total_attempts, 0);
+        assert_eq!(stats.successful_retries, 0);
+        assert_eq!(stats.failed_retries, 0);
+        assert!(stats.total_retry_time >= Duration::from_secs(0));
+    }
+
+    #[test]
+    fn test_is_retryable_retryable_error() {
+        let error = Error::Retryable("Test error".to_string());
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_timeout() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Timeout"
+        ));
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_interrupted() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "Interrupted"
+        ));
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_connection_refused() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "Connection refused"
+        ));
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_connection_reset() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "Connection reset"
+        ));
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_connection_aborted() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "Connection aborted"
+        ));
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_not_connected() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            "Not connected"
+        ));
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_would_block() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "Would block"
+        ));
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_io_not_retryable() {
+        let error = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Not found"
+        ));
+        assert!(!is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_database_retryable() {
+        // Test that database errors with retryable patterns are detected
+        // We'll use a simple approach by creating a heed::Error from a string
+        let heed_error = heed::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "MDB_MAP_FULL"
+        ));
+        let error = Error::Database(heed_error);
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_database_not_retryable() {
+        // Test that database errors without retryable patterns are not retryable
+        let heed_error = heed::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "MDB_INVALID"
+        ));
+        let error = Error::Database(heed_error);
+        assert!(!is_retryable(&error));
+    }
+
+    #[test]
+    fn test_is_retryable_other_error() {
+        let error = Error::Internal("Internal error".to_string());
+        assert!(!is_retryable(&error));
+    }
+
+    #[test]
+    fn test_calculate_delay_first_attempt() {
+        let config = RetryConfig::default();
+        let delay = calculate_delay(&config, 1);
+        
+        // First attempt should be close to initial delay (with jitter)
+        assert!(delay >= Duration::from_millis(90)); // 100ms - 10% jitter
+        assert!(delay <= Duration::from_millis(110)); // 100ms + 10% jitter
+    }
+
+    #[test]
+    fn test_calculate_delay_second_attempt() {
+        let config = RetryConfig::default();
+        let delay = calculate_delay(&config, 2);
+        
+        // Second attempt should be around 200ms (with jitter)
+        assert!(delay >= Duration::from_millis(180)); // 200ms - 10% jitter
+        assert!(delay <= Duration::from_millis(220)); // 200ms + 10% jitter
+    }
+
+    #[test]
+    fn test_calculate_delay_respects_max_delay() {
+        let config = RetryConfig {
+            max_attempts: 3,
+            initial_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(150),
+            backoff_multiplier: 2.0,
+            jitter_factor: 0.1,
+        };
+        
+        let delay = calculate_delay(&config, 10); // High attempt number
+        assert!(delay <= Duration::from_millis(165)); // 150ms + 10% jitter
+    }
+
+    #[test]
+    fn test_calculate_delay_never_negative() {
+        let config = RetryConfig {
+            max_attempts: 3,
+            initial_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(150),
+            backoff_multiplier: 2.0,
+            jitter_factor: 1.0, // High jitter factor
+        };
+        
+        let delay = calculate_delay(&config, 1);
+        assert!(delay >= Duration::from_nanos(0));
+    }
+
+    #[tokio::test]
+    async fn test_retry_success_first_attempt() {
+        let config = RetryConfig::quick();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+        
+        let result = retry(config, move || {
+            let call_count = call_count_clone.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::SeqCst);
+                Ok::<i32, Error>(42)
+            }
+        }).await;
+        
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_success_after_retries() {
+        let config = RetryConfig::quick();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+        
+        let result = retry(config, || {
+            let call_count = call_count_clone.clone();
+            async move {
+                let count = call_count.fetch_add(1, Ordering::SeqCst);
+                if count < 2 {
+                    Err(Error::Retryable("Temporary failure".to_string()))
+                } else {
+                    Ok::<i32, Error>(42)
+                }
+            }
+        }).await;
+        
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_retry_max_attempts_exceeded() {
+        let config = RetryConfig {
+            max_attempts: 2,
+            initial_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(1),
+            backoff_multiplier: 1.0,
+            jitter_factor: 0.0,
+        };
+        
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+        
+        let result: Result<i32> = retry(config, move || {
+            let call_count = call_count_clone.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::SeqCst);
+                Err(Error::Retryable("Always fails".to_string()))
+            }
+        }).await;
+        
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_retry_non_retryable_error() {
+        let config = RetryConfig::quick();
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+        
+        let result: Result<i32> = retry(config, move || {
+            let call_count = call_count_clone.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::SeqCst);
+                Err(Error::Internal("Non-retryable error".to_string()))
+            }
+        }).await;
+        
+        assert!(result.is_err());
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_storage() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+        
+        let result = retry_storage(move || {
+            let call_count = call_count_clone.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::SeqCst);
+                Ok::<i32, Error>(42)
+            }
+        }).await;
+        
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_network() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+        
+        let result = retry_network(move || {
+            let call_count = call_count_clone.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::SeqCst);
+                Ok::<i32, Error>(42)
+            }
+        }).await;
+        
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_database() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+        
+        let result = retry_database(move || {
+            let call_count = call_count_clone.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::SeqCst);
+                Ok::<i32, Error>(42)
+            }
+        }).await;
+        
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
 }

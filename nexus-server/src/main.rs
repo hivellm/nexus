@@ -191,10 +191,229 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn test_config_default() {
         let config = Config::default();
         assert_eq!(config.addr.port(), 15474);
+        assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    }
+
+    #[tokio::test]
+    async fn test_nexus_server_creation() {
+        let temp_dir = tempdir().unwrap();
+        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
+        let catalog_arc = Arc::new(RwLock::new(catalog));
+        
+        let label_index = nexus_core::index::LabelIndex::new();
+        let label_index_arc = Arc::new(RwLock::new(label_index));
+        
+        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
+        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        
+        let executor = nexus_core::executor::Executor::default();
+        let executor_arc = Arc::new(RwLock::new(executor));
+        
+        let server = NexusServer {
+            executor: executor_arc,
+            catalog: catalog_arc,
+            label_index: label_index_arc,
+            knn_index: knn_index_arc,
+        };
+        
+        // Test that the server can be created
+        let _executor_guard = Arc::new(server).executor.read().await;
+        let _catalog_guard = Arc::new(server).catalog.read().await;
+        let _label_index_guard = Arc::new(server).label_index.read().await;
+        let _knn_index_guard = Arc::new(server).knn_index.read().await;
+        
+        // If we get here, the locks were acquired successfully
+        assert!(true);
+    }
+
+    #[test]
+    fn test_nexus_server_clone() {
+        let temp_dir = tempdir().unwrap();
+        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
+        let catalog_arc = Arc::new(RwLock::new(catalog));
+        
+        let label_index = nexus_core::index::LabelIndex::new();
+        let label_index_arc = Arc::new(RwLock::new(label_index));
+        
+        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
+        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        
+        let executor = nexus_core::executor::Executor::default();
+        let executor_arc = Arc::new(RwLock::new(executor));
+        
+        let server = NexusServer {
+            executor: executor_arc,
+            catalog: catalog_arc,
+            label_index: label_index_arc,
+            knn_index: knn_index_arc,
+        };
+        
+        let cloned = server.clone();
+        
+        // Test that clone works and references the same underlying data
+        assert!(Arc::ptr_eq(&server.executor, &cloned.executor));
+        assert!(Arc::ptr_eq(&server.catalog, &cloned.catalog));
+        assert!(Arc::ptr_eq(&server.label_index, &cloned.label_index));
+        assert!(Arc::ptr_eq(&server.knn_index, &cloned.knn_index));
+    }
+
+    #[tokio::test]
+    async fn test_create_mcp_router() {
+        let temp_dir = tempdir().unwrap();
+        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
+        let catalog_arc = Arc::new(RwLock::new(catalog));
+        
+        let label_index = nexus_core::index::LabelIndex::new();
+        let label_index_arc = Arc::new(RwLock::new(label_index));
+        
+        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
+        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        
+        let executor = nexus_core::executor::Executor::default();
+        let executor_arc = Arc::new(RwLock::new(executor));
+        
+        let server = Arc::new(NexusServer {
+            executor: executor_arc,
+            catalog: catalog_arc,
+            label_index: label_index_arc,
+            knn_index: knn_index_arc,
+        });
+        
+        // Test that MCP router can be created
+        let result = create_mcp_router(server).await;
+        assert!(result.is_ok());
+        
+        let _router = result.unwrap();
+        // Router should be created successfully
+        // Note: axum::Router doesn't have a routes() method, so we just verify it was created
+        assert!(true); // Router created successfully
+    }
+
+    #[test]
+    fn test_config_parsing() {
+        let config = Config::default();
+        
+        // Test that default config has expected values
+        assert_eq!(config.addr.port(), 15474);
+        assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(config.data_dir, "./data");
+    }
+
+    #[test]
+    fn test_config_from_env() {
+        // Test with environment variables
+        unsafe {
+            std::env::set_var("NEXUS_ADDR", "192.168.1.100:8080");
+            std::env::set_var("NEXUS_DATA_DIR", "/custom/data");
+        }
+        
+        let config = Config::from_env();
+        assert_eq!(config.addr.port(), 8080);
+        assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)));
+        assert_eq!(config.data_dir, "/custom/data");
+        
+        // Clean up
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
+    }
+
+    #[test]
+    fn test_config_from_env_defaults() {
+        // Clear environment variables to test defaults
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
+        
+        let config = Config::from_env();
+        assert_eq!(config.addr.port(), 15474);
+        assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(config.data_dir, "./data");
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid NEXUS_ADDR")]
+    fn test_config_from_env_invalid_addr() {
+        unsafe {
+            std::env::set_var("NEXUS_ADDR", "invalid-address");
+        }
+        
+        let _config = Config::from_env();
+        
+        // Clean up
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_router_creation() {
+        // This test verifies that the router can be created without panicking
+        let temp_dir = tempdir().unwrap();
+        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
+        let catalog_arc = Arc::new(RwLock::new(catalog));
+        
+        let label_index = nexus_core::index::LabelIndex::new();
+        let label_index_arc = Arc::new(RwLock::new(label_index));
+        
+        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
+        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        
+        let executor = nexus_core::executor::Executor::default();
+        let executor_arc = Arc::new(RwLock::new(executor));
+        
+        let server = Arc::new(NexusServer {
+            executor: executor_arc,
+            catalog: catalog_arc,
+            label_index: label_index_arc,
+            knn_index: knn_index_arc,
+        });
+        
+        // Test that we can create the MCP router
+        let mcp_router_result = create_mcp_router(server.clone()).await;
+        assert!(mcp_router_result.is_ok());
+        
+        let _mcp_router = mcp_router_result.unwrap();
+        
+        // Test that the router has routes
+        // Note: axum::Router doesn't have a routes() method, so we just verify it was created
+        assert!(true); // Router created successfully
+    }
+
+    #[test]
+    fn test_nexus_server_fields() {
+        let temp_dir = tempdir().unwrap();
+        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
+        let catalog_arc = Arc::new(RwLock::new(catalog));
+        
+        let label_index = nexus_core::index::LabelIndex::new();
+        let label_index_arc = Arc::new(RwLock::new(label_index));
+        
+        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
+        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        
+        let executor = nexus_core::executor::Executor::default();
+        let executor_arc = Arc::new(RwLock::new(executor));
+        
+        let server = NexusServer {
+            executor: executor_arc.clone(),
+            catalog: catalog_arc.clone(),
+            label_index: label_index_arc.clone(),
+            knn_index: knn_index_arc.clone(),
+        };
+        
+        // Test that all fields are accessible
+        assert!(Arc::ptr_eq(&server.executor, &executor_arc));
+        assert!(Arc::ptr_eq(&server.catalog, &catalog_arc));
+        assert!(Arc::ptr_eq(&server.label_index, &label_index_arc));
+        assert!(Arc::ptr_eq(&server.knn_index, &knn_index_arc));
     }
 }
