@@ -347,14 +347,24 @@ impl Graph {
             }
         }
 
-        // Create updated record
-        // For now, we'll create a simple record with the new label bits
-        // In a full implementation, we'd need to preserve existing relationships and properties
+        // Read existing record to preserve relationships and properties
+        let existing_record = self
+            .store
+            .borrow()
+            .read_node(node.id.value())
+            .unwrap_or_else(|_| NodeRecord::new());
+
+        // Create updated record preserving existing relationships and properties
         let record = NodeRecord {
             label_bits,
-            first_rel_ptr: u64::MAX, // TODO: Implement proper relationship preservation
-            prop_ptr: u64::MAX,      // TODO: Implement proper property preservation
-            ..Default::default()
+            first_rel_ptr: existing_record.first_rel_ptr, // Preserve existing relationships
+            prop_ptr: if node.properties.is_empty() {
+                existing_record.prop_ptr // Keep existing properties if no new ones
+            } else {
+                // For now, use a simple approach - in full implementation would store properties
+                node.id.value() * 1000 // Placeholder for new property pointer
+            },
+            ..existing_record
         };
 
         // Write to storage
@@ -486,15 +496,27 @@ impl Graph {
         // Get or create relationship type ID
         let type_id = self.catalog.get_or_create_type(&edge.relationship_type)?;
 
-        // Create updated record
+        // Read existing record to preserve relationship chain pointers
+        let existing_record = self
+            .store
+            .borrow()
+            .read_rel(edge.id.value())
+            .unwrap_or_else(|_| RelationshipRecord::new(0, 0, 0));
+
+        // Create updated record preserving relationship chain pointers
         let record = RelationshipRecord {
             src_id: edge.source.value(),
             dst_id: edge.target.value(),
             type_id,
-            next_src_ptr: u64::MAX, // TODO: Implement proper relationship preservation
-            next_dst_ptr: u64::MAX, // TODO: Implement proper relationship preservation
-            prop_ptr: u64::MAX,     // TODO: Implement proper property handling
-            ..Default::default()
+            next_src_ptr: existing_record.next_src_ptr, // Preserve existing relationship chain
+            next_dst_ptr: existing_record.next_dst_ptr, // Preserve existing relationship chain
+            prop_ptr: if edge.properties.is_empty() {
+                existing_record.prop_ptr // Keep existing properties if no new ones
+            } else {
+                // For now, use a simple approach - in full implementation would store properties
+                edge.id.value() * 1000 // Placeholder for new property pointer
+            },
+            ..existing_record
         };
 
         // Write to storage
@@ -620,6 +642,15 @@ impl Graph {
         let node_count = self.node_count()?;
         let edge_count = self.edge_count()?;
 
+        // Calculate advanced statistics
+        let degree_stats = self.calculate_degree_statistics()?;
+        let density = self.calculate_graph_density(node_count, edge_count)?;
+        let connected_components = self.calculate_connected_components()?;
+        let clustering_coefficient = self.calculate_avg_clustering_coefficient()?;
+        let path_stats = self.calculate_path_statistics()?;
+        let node_type_stats = self.calculate_node_type_statistics()?;
+        let edge_type_stats = self.calculate_edge_type_statistics()?;
+
         Ok(GraphStats {
             total_nodes: node_count,
             total_edges: edge_count,
@@ -627,6 +658,18 @@ impl Graph {
             storage_edges: store_stats.rel_count as usize,
             cached_nodes: self.node_cache.read().len(),
             cached_edges: self.edge_cache.read().len(),
+            avg_degree: degree_stats.avg_degree,
+            max_degree: degree_stats.max_degree,
+            min_degree: degree_stats.min_degree,
+            graph_density: density,
+            connected_components,
+            avg_clustering_coefficient: clustering_coefficient,
+            avg_shortest_path_length: path_stats.avg_shortest_path_length,
+            diameter: path_stats.diameter,
+            isolated_nodes: node_type_stats.isolated_nodes,
+            leaf_nodes: node_type_stats.leaf_nodes,
+            self_loops: edge_type_stats.self_loops,
+            bidirectional_edges: edge_type_stats.bidirectional_edges,
         })
     }
 
@@ -634,6 +677,286 @@ impl Graph {
     pub fn validate(&self) -> Result<crate::validation::ValidationResult> {
         let validator = crate::validation::GraphValidator::new();
         validator.validate_graph(self)
+    }
+
+    /// Calculate degree statistics for all nodes
+    fn calculate_degree_statistics(&self) -> Result<DegreeStats> {
+        let nodes = self.get_all_nodes()?;
+        let edges = self.get_all_edges()?;
+
+        if nodes.is_empty() {
+            return Ok(DegreeStats {
+                avg_degree: 0.0,
+                max_degree: 0,
+                min_degree: 0,
+            });
+        }
+
+        let mut degrees = Vec::new();
+        for node in &nodes {
+            let degree = edges
+                .iter()
+                .filter(|edge| edge.source == node.id || edge.target == node.id)
+                .count();
+            degrees.push(degree);
+        }
+
+        let total_degree: usize = degrees.iter().sum();
+        let avg_degree = total_degree as f64 / nodes.len() as f64;
+        let max_degree = degrees.iter().max().copied().unwrap_or(0);
+        let min_degree = degrees.iter().min().copied().unwrap_or(0);
+
+        Ok(DegreeStats {
+            avg_degree,
+            max_degree,
+            min_degree,
+        })
+    }
+
+    /// Calculate graph density
+    fn calculate_graph_density(&self, node_count: usize, edge_count: usize) -> Result<f64> {
+        if node_count <= 1 {
+            return Ok(0.0);
+        }
+
+        // For undirected graph: max edges = n * (n-1) / 2
+        // For directed graph: max edges = n * (n-1)
+        // We'll assume undirected for now
+        let max_edges = node_count * (node_count - 1) / 2;
+        Ok(edge_count as f64 / max_edges as f64)
+    }
+
+    /// Calculate number of connected components using DFS
+    fn calculate_connected_components(&self) -> Result<usize> {
+        let nodes = self.get_all_nodes()?;
+        if nodes.is_empty() {
+            return Ok(0);
+        }
+
+        let mut visited = std::collections::HashSet::new();
+        let mut components = 0;
+
+        for node in &nodes {
+            if !visited.contains(&node.id) {
+                self.dfs_component(node.id, &mut visited)?;
+                components += 1;
+            }
+        }
+
+        Ok(components)
+    }
+
+    /// DFS helper for connected components
+    fn dfs_component(
+        &self,
+        node_id: NodeId,
+        visited: &mut std::collections::HashSet<NodeId>,
+    ) -> Result<()> {
+        visited.insert(node_id);
+        let edges = self.get_edges_for_node(node_id)?;
+
+        for edge in &edges {
+            let neighbor = if edge.source == node_id {
+                edge.target
+            } else {
+                edge.source
+            };
+            if !visited.contains(&neighbor) {
+                self.dfs_component(neighbor, visited)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Calculate average clustering coefficient
+    fn calculate_avg_clustering_coefficient(&self) -> Result<f64> {
+        let nodes = self.get_all_nodes()?;
+        if nodes.is_empty() {
+            return Ok(0.0);
+        }
+
+        let mut total_coefficient = 0.0;
+        let mut valid_nodes = 0;
+
+        for node in &nodes {
+            let edges = self.get_edges_for_node(node.id)?;
+            let degree = edges.len();
+
+            if degree < 2 {
+                continue; // Skip nodes with degree < 2
+            }
+
+            // Find neighbors
+            let neighbors: Vec<NodeId> = edges
+                .iter()
+                .map(|edge| {
+                    if edge.source == node.id {
+                        edge.target
+                    } else {
+                        edge.source
+                    }
+                })
+                .collect();
+
+            // Count edges between neighbors
+            let mut neighbor_edges = 0;
+            for i in 0..neighbors.len() {
+                for j in (i + 1)..neighbors.len() {
+                    let neighbor_edges_list = self.get_edges_for_node(neighbors[i])?;
+                    if neighbor_edges_list.iter().any(|e| {
+                        (e.source == neighbors[i] && e.target == neighbors[j])
+                            || (e.source == neighbors[j] && e.target == neighbors[i])
+                    }) {
+                        neighbor_edges += 1;
+                    }
+                }
+            }
+
+            let max_possible_edges = degree * (degree - 1) / 2;
+            let coefficient = if max_possible_edges > 0 {
+                neighbor_edges as f64 / max_possible_edges as f64
+            } else {
+                0.0
+            };
+
+            total_coefficient += coefficient;
+            valid_nodes += 1;
+        }
+
+        Ok(if valid_nodes > 0 {
+            total_coefficient / valid_nodes as f64
+        } else {
+            0.0
+        })
+    }
+
+    /// Calculate path statistics (average shortest path length and diameter)
+    fn calculate_path_statistics(&self) -> Result<PathStats> {
+        let nodes = self.get_all_nodes()?;
+        if nodes.is_empty() {
+            return Ok(PathStats {
+                avg_shortest_path_length: 0.0,
+                diameter: 0,
+            });
+        }
+
+        let mut total_path_length = 0.0;
+        let mut path_count = 0;
+        let mut max_path_length = 0;
+
+        // Use BFS to find shortest paths from each node
+        for start_node in &nodes {
+            let distances = self.bfs_shortest_paths(start_node.id)?;
+
+            for (_, distance) in distances {
+                if distance > 0 {
+                    // Exclude distance to self
+                    total_path_length += distance as f64;
+                    path_count += 1;
+                    max_path_length = max_path_length.max(distance);
+                }
+            }
+        }
+
+        let avg_shortest_path_length = if path_count > 0 {
+            total_path_length / path_count as f64
+        } else {
+            0.0
+        };
+
+        Ok(PathStats {
+            avg_shortest_path_length,
+            diameter: max_path_length,
+        })
+    }
+
+    /// BFS helper for shortest paths
+    fn bfs_shortest_paths(
+        &self,
+        start: NodeId,
+    ) -> Result<std::collections::HashMap<NodeId, usize>> {
+        let mut distances = std::collections::HashMap::new();
+        let mut queue = std::collections::VecDeque::new();
+
+        distances.insert(start, 0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_distance = distances[&current];
+            let edges = self.get_edges_for_node(current)?;
+
+            for edge in &edges {
+                let neighbor = if edge.source == current {
+                    edge.target
+                } else {
+                    edge.source
+                };
+
+                if let std::collections::hash_map::Entry::Vacant(e) = distances.entry(neighbor) {
+                    e.insert(current_distance + 1);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        Ok(distances)
+    }
+
+    /// Calculate node type statistics
+    fn calculate_node_type_statistics(&self) -> Result<NodeTypeStats> {
+        let nodes = self.get_all_nodes()?;
+        let edges = self.get_all_edges()?;
+
+        let mut isolated_nodes = 0;
+        let mut leaf_nodes = 0;
+
+        for node in &nodes {
+            let degree = edges
+                .iter()
+                .filter(|edge| edge.source == node.id || edge.target == node.id)
+                .count();
+
+            if degree == 0 {
+                isolated_nodes += 1;
+            } else if degree == 1 {
+                leaf_nodes += 1;
+            }
+        }
+
+        Ok(NodeTypeStats {
+            isolated_nodes,
+            leaf_nodes,
+        })
+    }
+
+    /// Calculate edge type statistics
+    fn calculate_edge_type_statistics(&self) -> Result<EdgeTypeStats> {
+        let edges = self.get_all_edges()?;
+
+        let mut self_loops = 0;
+        let mut bidirectional_edges = 0;
+
+        for edge in &edges {
+            if edge.source == edge.target {
+                self_loops += 1;
+            } else {
+                // Check if there's a reverse edge
+                let has_reverse = edges
+                    .iter()
+                    .any(|e| e.source == edge.target && e.target == edge.source);
+                if has_reverse {
+                    bidirectional_edges += 1;
+                }
+            }
+        }
+
+        // Divide by 2 since we count each bidirectional pair twice
+        bidirectional_edges /= 2;
+
+        Ok(EdgeTypeStats {
+            self_loops,
+            bidirectional_edges,
+        })
     }
 
     /// Validate the graph with custom configuration
@@ -685,6 +1008,32 @@ impl std::fmt::Debug for Graph {
     }
 }
 
+/// Helper structures for statistics calculation
+#[derive(Debug, Clone)]
+struct DegreeStats {
+    avg_degree: f64,
+    max_degree: usize,
+    min_degree: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PathStats {
+    avg_shortest_path_length: f64,
+    diameter: usize,
+}
+
+#[derive(Debug, Clone)]
+struct NodeTypeStats {
+    isolated_nodes: usize,
+    leaf_nodes: usize,
+}
+
+#[derive(Debug, Clone)]
+struct EdgeTypeStats {
+    self_loops: usize,
+    bidirectional_edges: usize,
+}
+
 /// Statistics about the graph
 #[derive(Debug, Clone)]
 pub struct GraphStats {
@@ -700,6 +1049,30 @@ pub struct GraphStats {
     pub cached_nodes: usize,
     /// Number of edges in cache
     pub cached_edges: usize,
+    /// Average degree (connections per node)
+    pub avg_degree: f64,
+    /// Maximum degree of any node
+    pub max_degree: usize,
+    /// Minimum degree of any node
+    pub min_degree: usize,
+    /// Graph density (actual edges / possible edges)
+    pub graph_density: f64,
+    /// Number of connected components
+    pub connected_components: usize,
+    /// Average clustering coefficient
+    pub avg_clustering_coefficient: f64,
+    /// Average shortest path length
+    pub avg_shortest_path_length: f64,
+    /// Graph diameter (longest shortest path)
+    pub diameter: usize,
+    /// Number of isolated nodes (degree 0)
+    pub isolated_nodes: usize,
+    /// Number of leaf nodes (degree 1)
+    pub leaf_nodes: usize,
+    /// Number of self-loops
+    pub self_loops: usize,
+    /// Number of bidirectional edges
+    pub bidirectional_edges: usize,
 }
 
 #[cfg(test)]

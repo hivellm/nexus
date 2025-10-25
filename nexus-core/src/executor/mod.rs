@@ -847,43 +847,391 @@ impl Executor {
     /// Execute Union operator
     fn execute_union(
         &self,
-        _context: &mut ExecutionContext,
-        _left: &Operator,
-        _right: &Operator,
+        context: &mut ExecutionContext,
+        left: &Operator,
+        right: &Operator,
     ) -> Result<()> {
-        // MVP: No union implemented yet
+        // Execute left operator and collect its results
+        let mut left_context = ExecutionContext::new(context.params.clone());
+        self.execute_operator(&mut left_context, left)?;
+
+        // Execute right operator and collect its results
+        let mut right_context = ExecutionContext::new(context.params.clone());
+        self.execute_operator(&mut right_context, right)?;
+
+        // Combine results from both sides
+        let mut combined_rows = Vec::new();
+        combined_rows.extend(left_context.result_set.rows);
+        combined_rows.extend(right_context.result_set.rows);
+
+        // Update the main context with combined results
+        context.result_set.rows = combined_rows;
+
+        // Ensure columns are consistent (use left side columns as base)
+        if !left_context.result_set.columns.is_empty() {
+            context.result_set.columns = left_context.result_set.columns.clone();
+        } else if !right_context.result_set.columns.is_empty() {
+            context.result_set.columns = right_context.result_set.columns.clone();
+        }
+
+        Ok(())
+    }
+
+    /// Execute a single operator and return results
+    fn execute_operator(&self, context: &mut ExecutionContext, operator: &Operator) -> Result<()> {
+        match operator {
+            Operator::NodeByLabel { label_id, variable } => {
+                let nodes = self.execute_node_by_label(*label_id)?;
+                context.set_variable(variable, Value::Array(nodes));
+            }
+            Operator::Filter { predicate } => {
+                self.execute_filter(context, predicate)?;
+            }
+            Operator::Expand {
+                type_id,
+                direction,
+                source_var,
+                target_var,
+                rel_var,
+            } => {
+                self.execute_expand(context, *type_id, *direction, source_var, target_var, rel_var)?;
+            }
+            Operator::Project { columns } => {
+                let rows = self.execute_project(context, columns)?;
+                context.result_set.rows = rows;
+                context.result_set.columns = columns.clone();
+            }
+            Operator::Limit { count: _ } => {
+                // TODO: Implement limit functionality
+            }
+            Operator::Sort { columns, ascending } => {
+                self.execute_sort(context, columns, ascending)?;
+            }
+            Operator::Aggregate { group_by, aggregations } => {
+                self.execute_aggregate(context, group_by, aggregations)?;
+            }
+            Operator::Union { left, right } => {
+                self.execute_union(context, left, right)?;
+            }
+            Operator::Join {
+                left,
+                right,
+                join_type,
+                condition,
+            } => {
+                self.execute_join(context, left, right, *join_type, condition.as_deref())?;
+            }
+            Operator::IndexScan {
+                index_type,
+                key,
+                variable,
+            } => {
+                self.execute_index_scan(context, *index_type, key, variable)?;
+            }
+            Operator::Distinct { columns } => {
+                self.execute_distinct(context, columns)?;
+            }
+        }
         Ok(())
     }
 
     /// Execute Join operator
     fn execute_join(
         &self,
-        _context: &mut ExecutionContext,
-        _left: &Operator,
-        _right: &Operator,
-        _join_type: JoinType,
-        _condition: Option<&str>,
+        context: &mut ExecutionContext,
+        left: &Operator,
+        right: &Operator,
+        join_type: JoinType,
+        condition: Option<&str>,
     ) -> Result<()> {
-        // MVP: No join implemented yet
+        // Execute left operator and collect its results
+        let mut left_context = ExecutionContext::new(context.params.clone());
+        self.execute_operator(&mut left_context, left)?;
+
+        // Execute right operator and collect its results
+        let mut right_context = ExecutionContext::new(context.params.clone());
+        self.execute_operator(&mut right_context, right)?;
+
+        let mut result_rows = Vec::new();
+
+        // Perform the join based on type
+        match join_type {
+            JoinType::Inner => {
+                // Inner join: only rows that match in both sides
+                for left_row in &left_context.result_set.rows {
+                    for right_row in &right_context.result_set.rows {
+                        if self.rows_match(left_row, right_row, condition)? {
+                            let mut combined_row = left_row.values.clone();
+                            combined_row.extend(right_row.values.clone());
+                            result_rows.push(Row {
+                                values: combined_row,
+                            });
+                        }
+                    }
+                }
+            }
+            JoinType::LeftOuter => {
+                // Left outer join: all left rows, matched right rows where possible
+                for left_row in &left_context.result_set.rows {
+                    let mut matched = false;
+                    for right_row in &right_context.result_set.rows {
+                        if self.rows_match(left_row, right_row, condition)? {
+                            let mut combined_row = left_row.values.clone();
+                            combined_row.extend(right_row.values.clone());
+                            result_rows.push(Row {
+                                values: combined_row,
+                            });
+                            matched = true;
+                        }
+                    }
+                    if !matched {
+                        // Add left row with null values for right side
+                        let mut combined_row = left_row.values.clone();
+                        combined_row.extend(vec![
+                            serde_json::Value::Null;
+                            right_context.result_set.columns.len()
+                        ]);
+                        result_rows.push(Row {
+                            values: combined_row,
+                        });
+                    }
+                }
+            }
+            JoinType::RightOuter => {
+                // Right outer join: all right rows, matched left rows where possible
+                for right_row in &right_context.result_set.rows {
+                    let mut matched = false;
+                    for left_row in &left_context.result_set.rows {
+                        if self.rows_match(left_row, right_row, condition)? {
+                            let mut combined_row = left_row.values.clone();
+                            combined_row.extend(right_row.values.clone());
+                            result_rows.push(Row {
+                                values: combined_row,
+                            });
+                            matched = true;
+                        }
+                    }
+                    if !matched {
+                        // Add right row with null values for left side
+                        let mut combined_row =
+                            vec![serde_json::Value::Null; left_context.result_set.columns.len()];
+                        combined_row.extend(right_row.values.clone());
+                        result_rows.push(Row {
+                            values: combined_row,
+                        });
+                    }
+                }
+            }
+            JoinType::FullOuter => {
+                // Full outer join: all rows from both sides
+                let mut left_matched = vec![false; left_context.result_set.rows.len()];
+                let mut right_matched = vec![false; right_context.result_set.rows.len()];
+
+                for (i, left_row) in left_context.result_set.rows.iter().enumerate() {
+                    for (j, right_row) in right_context.result_set.rows.iter().enumerate() {
+                        if self.rows_match(left_row, right_row, condition)? {
+                            let mut combined_row = left_row.values.clone();
+                            combined_row.extend(right_row.values.clone());
+                            result_rows.push(Row {
+                                values: combined_row,
+                            });
+                            left_matched[i] = true;
+                            right_matched[j] = true;
+                        }
+                    }
+                }
+
+                // Add unmatched left rows
+                for (i, left_row) in left_context.result_set.rows.iter().enumerate() {
+                    if !left_matched[i] {
+                        let mut combined_row = left_row.values.clone();
+                        combined_row.extend(vec![
+                            serde_json::Value::Null;
+                            right_context.result_set.columns.len()
+                        ]);
+                        result_rows.push(Row {
+                            values: combined_row,
+                        });
+                    }
+                }
+
+                // Add unmatched right rows
+                for (j, right_row) in right_context.result_set.rows.iter().enumerate() {
+                    if !right_matched[j] {
+                        let mut combined_row =
+                            vec![serde_json::Value::Null; left_context.result_set.columns.len()];
+                        combined_row.extend(right_row.values.clone());
+                        result_rows.push(Row {
+                            values: combined_row,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Update context with joined results
+        context.result_set.rows = result_rows;
+
+        // Combine column names
+        let mut combined_columns = left_context.result_set.columns.clone();
+        combined_columns.extend(right_context.result_set.columns.clone());
+        context.result_set.columns = combined_columns;
+
         Ok(())
+    }
+
+    /// Check if two rows match based on join condition
+    fn rows_match(&self, left_row: &Row, right_row: &Row, condition: Option<&str>) -> Result<bool> {
+        match condition {
+            Some(_cond) => {
+                // For now, implement simple equality matching
+                // In a full implementation, this would parse and evaluate the condition
+                if left_row.values.len() != right_row.values.len() {
+                    return Ok(false);
+                }
+
+                for (left_val, right_val) in left_row.values.iter().zip(right_row.values.iter()) {
+                    if left_val != right_val {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            None => {
+                // No condition means all rows match (Cartesian product)
+                Ok(true)
+            }
+        }
     }
 
     /// Execute IndexScan operator
     fn execute_index_scan(
         &self,
-        _context: &mut ExecutionContext,
-        _index_type: IndexType,
-        _key: &str,
-        _variable: &str,
+        context: &mut ExecutionContext,
+        index_type: IndexType,
+        key: &str,
+        variable: &str,
     ) -> Result<()> {
-        // MVP: No index scan implemented yet
+        let mut results = Vec::new();
+
+        match index_type {
+            IndexType::Label => {
+                // Scan label index for nodes with the given label
+                if let Ok(label_id) = self.catalog.get_or_create_label(key) {
+                    let nodes = self.execute_node_by_label(label_id)?;
+                    results.extend(nodes);
+                }
+            }
+            IndexType::Property => {
+                // Scan property index for nodes with the given property value
+                // For now, implement a simple property lookup
+                // In a full implementation, this would use the property index
+                let nodes = self.execute_node_by_label(0)?; // Get all nodes
+                for node in nodes {
+                    if let Some(properties) = node.get("properties") {
+                        if properties.is_object() {
+                            let mut found = false;
+                            for (prop_key, prop_value) in properties.as_object().unwrap() {
+                                if prop_key == key || (prop_value.as_str() == Some(key)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if found {
+                                results.push(node);
+                            }
+                        }
+                    }
+                }
+            }
+            IndexType::Vector => {
+                // Scan vector index for similar vectors
+                // For now, return empty results as vector search requires specific implementation
+                // In a full implementation, this would use the KNN index
+                results = Vec::new();
+            }
+            IndexType::FullText => {
+                // Scan full-text index for text matches
+                // For now, implement a simple text search in properties
+                let nodes = self.execute_node_by_label(0)?; // Get all nodes
+                for node in nodes {
+                    if let Some(properties) = node.get("properties") {
+                        if properties.is_object() {
+                            let mut found = false;
+                            for (_, prop_value) in properties.as_object().unwrap() {
+                                if prop_value.is_string() {
+                                    let text = prop_value.as_str().unwrap().to_lowercase();
+                                    if text.contains(&key.to_lowercase()) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if found {
+                                results.push(node);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Set the results in the context
+        context.set_variable(variable, Value::Array(results));
+
         Ok(())
     }
 
     /// Execute Distinct operator
-    fn execute_distinct(&self, _context: &mut ExecutionContext, _columns: &[String]) -> Result<()> {
-        // MVP: No distinct implemented yet
+    fn execute_distinct(&self, context: &mut ExecutionContext, columns: &[String]) -> Result<()> {
+        if context.result_set.rows.is_empty() {
+            return Ok(());
+        }
+
+        // Create a set to track unique combinations of values
+        let mut seen = std::collections::HashSet::new();
+        let mut distinct_rows = Vec::new();
+
+        for row in &context.result_set.rows {
+            // Extract values for the specified columns
+            let mut key_values = Vec::new();
+
+            if columns.is_empty() {
+                // If no columns specified, use all values
+                key_values = row.values.clone();
+            } else {
+                // Extract values for specified columns
+                for column in columns {
+                    if let Some(index) = self.get_column_index(column, &context.result_set.columns)
+                    {
+                        if index < row.values.len() {
+                            key_values.push(row.values[index].clone());
+                        } else {
+                            key_values.push(serde_json::Value::Null);
+                        }
+                    } else {
+                        key_values.push(serde_json::Value::Null);
+                    }
+                }
+            }
+
+            // Create a key for uniqueness checking
+            let key = serde_json::to_string(&key_values).unwrap_or_default();
+
+            if seen.insert(key) {
+                distinct_rows.push(row.clone());
+            }
+        }
+
+        // Update context with distinct results
+        context.result_set.rows = distinct_rows;
+
         Ok(())
+    }
+
+    /// Get the index of a column by name
+    fn get_column_index(&self, column_name: &str, columns: &[String]) -> Option<usize> {
+        columns.iter().position(|col| col == column_name)
     }
 
     /// Evaluate a predicate expression against a node

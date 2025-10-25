@@ -800,10 +800,10 @@ impl CypherParser {
 
         // Check for unary operators first
         let unary_op = self.parse_unary_operator();
-        
+
         // Try to parse a simple expression
         let mut left = self.parse_simple_expression()?;
-        
+
         // Apply unary operator if present
         if let Some(op) = unary_op {
             left = Expression::UnaryOp {
@@ -1025,18 +1025,18 @@ impl CypherParser {
         if self.peek_char() == Some('(') {
             self.consume_char(); // consume '('
             let mut args = Vec::new();
-            
+
             // Parse arguments
             while self.peek_char() != Some(')') {
                 let arg = self.parse_expression()?;
                 args.push(arg);
-                
+
                 if self.peek_char() == Some(',') {
                     self.consume_char();
                     self.skip_whitespace();
                 }
             }
-            
+
             self.expect_char(')')?;
             Ok(Expression::FunctionCall {
                 name: identifier,
@@ -1768,14 +1768,12 @@ mod tests {
         let mut parser = CypherParser::new("MATCH (a)-[r]->(b) RETURN a".to_string());
         let query = parser.parse().unwrap();
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[1] {
-                    PatternElement::Relationship(rel) => {
-                        assert_eq!(rel.direction, RelationshipDirection::Outgoing);
-                    }
-                    _ => panic!("Expected relationship"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.direction, RelationshipDirection::Outgoing);
                 }
-            }
+                _ => panic!("Expected relationship"),
+            },
             _ => panic!("Expected match clause"),
         }
 
@@ -1783,14 +1781,12 @@ mod tests {
         let mut parser = CypherParser::new("MATCH (a)<-[r]-(b) RETURN a".to_string());
         let query = parser.parse().unwrap();
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[1] {
-                    PatternElement::Relationship(rel) => {
-                        assert_eq!(rel.direction, RelationshipDirection::Incoming);
-                    }
-                    _ => panic!("Expected relationship"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.direction, RelationshipDirection::Incoming);
                 }
-            }
+                _ => panic!("Expected relationship"),
+            },
             _ => panic!("Expected match clause"),
         }
 
@@ -1798,14 +1794,12 @@ mod tests {
         let mut parser = CypherParser::new("MATCH (a)-[r]-(b) RETURN a".to_string());
         let query = parser.parse().unwrap();
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[1] {
-                    PatternElement::Relationship(rel) => {
-                        assert_eq!(rel.direction, RelationshipDirection::Both);
-                    }
-                    _ => panic!("Expected relationship"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.direction, RelationshipDirection::Both);
                 }
-            }
+                _ => panic!("Expected relationship"),
+            },
             _ => panic!("Expected match clause"),
         }
     }
@@ -1816,14 +1810,12 @@ mod tests {
         let mut parser = CypherParser::new("MATCH (a)-[r]->(b) RETURN a".to_string());
         let query = parser.parse().unwrap();
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[1] {
-                    PatternElement::Relationship(rel) => {
-                        assert_eq!(rel.quantifier, None);
-                    }
-                    _ => panic!("Expected relationship"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.quantifier, None);
                 }
-            }
+                _ => panic!("Expected relationship"),
+            },
             _ => panic!("Expected match clause"),
         }
     }
@@ -1835,14 +1827,12 @@ mod tests {
         let query = parser.parse().unwrap();
 
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[0] {
-                    PatternElement::Node(node) => {
-                        assert_eq!(node.labels, vec!["Person"]);
-                    }
-                    _ => panic!("Expected node pattern"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[0] {
+                PatternElement::Node(node) => {
+                    assert_eq!(node.labels, vec!["Person"]);
                 }
-            }
+                _ => panic!("Expected node pattern"),
+            },
             _ => panic!("Expected match clause"),
         }
     }
@@ -1854,51 +1844,47 @@ mod tests {
         let query = parser.parse().unwrap();
 
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[1] {
-                    PatternElement::Relationship(rel) => {
-                        assert_eq!(rel.types, vec!["KNOWS"]);
-                        assert_eq!(rel.direction, RelationshipDirection::Outgoing);
-                    }
-                    _ => panic!("Expected relationship pattern"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.types, vec!["KNOWS"]);
+                    assert_eq!(rel.direction, RelationshipDirection::Outgoing);
                 }
-            }
+                _ => panic!("Expected relationship pattern"),
+            },
             _ => panic!("Expected match clause"),
         }
     }
 
     #[test]
     fn test_parse_multiple_labels() {
-        let mut parser = CypherParser::new("MATCH (n:Person:Employee:Manager) RETURN n".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (n:Person:Employee:Manager) RETURN n".to_string());
         let query = parser.parse().unwrap();
 
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[0] {
-                    PatternElement::Node(node) => {
-                        assert_eq!(node.labels, vec!["Person", "Employee", "Manager"]);
-                    }
-                    _ => panic!("Expected node pattern"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[0] {
+                PatternElement::Node(node) => {
+                    assert_eq!(node.labels, vec!["Person", "Employee", "Manager"]);
                 }
-            }
+                _ => panic!("Expected node pattern"),
+            },
             _ => panic!("Expected match clause"),
         }
     }
 
     #[test]
     fn test_parse_multiple_relationship_types() {
-        let mut parser = CypherParser::new("MATCH (a)-[r:KNOWS:WORKS_WITH]->(b) RETURN a".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (a)-[r:KNOWS:WORKS_WITH]->(b) RETURN a".to_string());
         let query = parser.parse().unwrap();
 
         match &query.clauses[0] {
-            Clause::Match(match_clause) => {
-                match &match_clause.pattern.elements[1] {
-                    PatternElement::Relationship(rel) => {
-                        assert_eq!(rel.types, vec!["KNOWS", "WORKS_WITH"]);
-                    }
-                    _ => panic!("Expected relationship pattern"),
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.types, vec!["KNOWS", "WORKS_WITH"]);
                 }
-            }
+                _ => panic!("Expected relationship pattern"),
+            },
             _ => panic!("Expected match clause"),
         }
     }
@@ -1918,7 +1904,8 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_return_items() {
-        let mut parser = CypherParser::new("MATCH (n:Person) RETURN n.name, n.age, n.city".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (n:Person) RETURN n.name, n.age, n.city".to_string());
         let query = parser.parse().unwrap();
 
         match &query.clauses[1] {
@@ -1931,7 +1918,8 @@ mod tests {
 
     #[test]
     fn test_parse_order_by_ascending() {
-        let mut parser = CypherParser::new("MATCH (n:Person) RETURN n ORDER BY n.age ASC".to_string());
+        let mut parser =
+            CypherParser::new("MATCH (n:Person) RETURN n ORDER BY n.age ASC".to_string());
         let query = parser.parse().unwrap();
 
         match &query.clauses[2] {
@@ -1944,7 +1932,9 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_order_by() {
-        let mut parser = CypherParser::new("MATCH (n:Person) RETURN n ORDER BY n.age DESC, n.name ASC".to_string());
+        let mut parser = CypherParser::new(
+            "MATCH (n:Person) RETURN n ORDER BY n.age DESC, n.name ASC".to_string(),
+        );
         let query = parser.parse().unwrap();
 
         match &query.clauses[2] {
@@ -1963,12 +1953,10 @@ mod tests {
         let query = parser.parse().unwrap();
 
         match &query.clauses[2] {
-            Clause::Skip(skip_clause) => {
-                match &skip_clause.count {
-                    Expression::Literal(Literal::Integer(5)) => {}
-                    _ => panic!("Expected integer literal"),
-                }
-            }
+            Clause::Skip(skip_clause) => match &skip_clause.count {
+                Expression::Literal(Literal::Integer(5)) => {}
+                _ => panic!("Expected integer literal"),
+            },
             _ => panic!("Expected skip clause"),
         }
     }
@@ -2268,7 +2256,11 @@ mod tests {
         let expr = parser.parse_expression().unwrap();
 
         match expr {
-            Expression::Case { input, when_clauses, else_clause } => {
+            Expression::Case {
+                input,
+                when_clauses,
+                else_clause,
+            } => {
                 assert!(input.is_some());
                 assert_eq!(when_clauses.len(), 2);
                 assert!(else_clause.is_some());
@@ -2279,11 +2271,18 @@ mod tests {
 
     #[test]
     fn test_parse_case_expression_without_input() {
-        let mut parser = CypherParser::new("CASE WHEN n.age < 18 THEN 'minor' WHEN n.age < 65 THEN 'adult' ELSE 'senior' END".to_string());
+        let mut parser = CypherParser::new(
+            "CASE WHEN n.age < 18 THEN 'minor' WHEN n.age < 65 THEN 'adult' ELSE 'senior' END"
+                .to_string(),
+        );
         let expr = parser.parse_expression().unwrap();
 
         match expr {
-            Expression::Case { input, when_clauses, else_clause } => {
+            Expression::Case {
+                input,
+                when_clauses,
+                else_clause,
+            } => {
                 assert!(input.is_none());
                 assert_eq!(when_clauses.len(), 2);
                 assert!(else_clause.is_some());
@@ -2512,7 +2511,7 @@ mod tests {
     #[test]
     fn test_parse_consume_char() {
         let mut parser = CypherParser::new("abc".to_string());
-        
+
         assert_eq!(parser.consume_char(), Some('a'));
         assert_eq!(parser.pos, 1);
         assert_eq!(parser.line, 1);
@@ -2534,7 +2533,7 @@ mod tests {
     #[test]
     fn test_parse_consume_char_newline() {
         let mut parser = CypherParser::new("a\nb".to_string());
-        
+
         assert_eq!(parser.consume_char(), Some('a'));
         assert_eq!(parser.line, 1);
         assert_eq!(parser.column, 2);
@@ -2551,7 +2550,7 @@ mod tests {
     #[test]
     fn test_parse_expect_char() {
         let mut parser = CypherParser::new("abc".to_string());
-        
+
         assert!(parser.expect_char('a').is_ok());
         assert!(parser.expect_char('b').is_ok());
         assert!(parser.expect_char('c').is_ok());
@@ -2561,7 +2560,7 @@ mod tests {
     #[test]
     fn test_parse_expect_keyword() {
         let mut parser = CypherParser::new("MATCH (n) RETURN n".to_string());
-        
+
         assert!(parser.expect_keyword("MATCH").is_ok());
         assert!(parser.expect_keyword("WHERE").is_err());
     }
@@ -2569,7 +2568,7 @@ mod tests {
     #[test]
     fn test_parse_skip_whitespace() {
         let mut parser = CypherParser::new("   \t\n  abc".to_string());
-        
+
         parser.skip_whitespace();
         assert_eq!(parser.pos, 7); // Should skip all whitespace (3 spaces + tab + newline + 2 spaces)
         assert_eq!(parser.peek_char(), Some('a'));
@@ -2578,9 +2577,9 @@ mod tests {
     #[test]
     fn test_parse_peek_char() {
         let parser = CypherParser::new("abc".to_string());
-        
+
         assert_eq!(parser.peek_char(), Some('a'));
-        
+
         let parser = CypherParser::new("".to_string());
         assert_eq!(parser.peek_char(), None);
     }
@@ -2588,7 +2587,7 @@ mod tests {
     #[test]
     fn test_parse_peek_char_at() {
         let parser = CypherParser::new("abc".to_string());
-        
+
         assert_eq!(parser.peek_char_at(0), Some('a'));
         assert_eq!(parser.peek_char_at(1), Some('b'));
         assert_eq!(parser.peek_char_at(2), Some('c'));

@@ -427,12 +427,38 @@ impl RecordStore {
     pub fn create_node(
         &mut self,
         _tx: &mut crate::transaction::Transaction,
-        _labels: Vec<String>,
-        _properties: serde_json::Value,
+        labels: Vec<String>,
+        properties: serde_json::Value,
     ) -> Result<u64> {
-        // For MVP, just return the next node ID
         let node_id = self.next_node_id;
         self.next_node_id += 1;
+
+        // Create node record
+        let mut record = NodeRecord::new();
+
+        // Set label bits (for now, just use simple bit setting)
+        // In a full implementation, this would map label names to IDs
+        for (i, _label) in labels.iter().enumerate() {
+            if i < 64 {
+                record.label_bits |= 1u64 << i;
+            }
+        }
+
+        // Set property pointer (for now, use a placeholder)
+        // In a full implementation, this would store properties and return the pointer
+        record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+            // Placeholder: use node_id as property pointer for now
+            node_id * 1000
+        } else {
+            0
+        };
+
+        // Set first relationship pointer to 0 (no relationships yet)
+        record.first_rel_ptr = 0;
+
+        // Write the record to storage
+        self.write_node(node_id, &record)?;
+
         Ok(node_id)
     }
 
@@ -440,14 +466,42 @@ impl RecordStore {
     pub fn create_relationship(
         &mut self,
         _tx: &mut crate::transaction::Transaction,
-        _from: u64,
-        _to: u64,
-        _rel_type: String,
-        _properties: serde_json::Value,
+        from: u64,
+        to: u64,
+        rel_type: String,
+        properties: serde_json::Value,
     ) -> Result<u64> {
-        // For MVP, just return the next relationship ID
         let rel_id = self.next_rel_id;
         self.next_rel_id += 1;
+
+        // Create relationship record
+        let mut record = RelationshipRecord::new(from, to, 0);
+
+        // Set source and destination node IDs
+        record.src_id = from;
+        record.dst_id = to;
+
+        // Set relationship type ID (for now, use a simple hash)
+        // In a full implementation, this would map type names to IDs via catalog
+        record.type_id = rel_type.len() as u32; // Simple placeholder
+
+        // Set property pointer (for now, use a placeholder)
+        // In a full implementation, this would store properties and return the pointer
+        record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+            // Placeholder: use rel_id as property pointer for now
+            rel_id * 1000
+        } else {
+            0
+        };
+
+        // Set relationship chain pointers to 0 (for now)
+        // In a full implementation, this would link to existing relationships
+        record.next_src_ptr = 0;
+        record.next_dst_ptr = 0;
+
+        // Write the record to storage
+        self.write_rel(rel_id, &record)?;
+
         Ok(rel_id)
     }
 
@@ -455,20 +509,50 @@ impl RecordStore {
     pub fn get_node(
         &self,
         _tx: &crate::transaction::Transaction,
-        _id: u64,
+        id: u64,
     ) -> Result<Option<NodeRecord>> {
-        // For MVP, return None
-        Ok(None)
+        // Check if node ID is valid
+        if id >= self.next_node_id {
+            return Ok(None);
+        }
+
+        // Read the node record from storage
+        match self.read_node(id) {
+            Ok(record) => {
+                // Check if the node is deleted
+                if record.is_deleted() {
+                    Ok(None)
+                } else {
+                    Ok(Some(record))
+                }
+            }
+            Err(_) => Ok(None),
+        }
     }
 
     /// Get a relationship by ID
     pub fn get_relationship(
         &self,
         _tx: &crate::transaction::Transaction,
-        _id: u64,
+        id: u64,
     ) -> Result<Option<RelationshipRecord>> {
-        // For MVP, return None
-        Ok(None)
+        // Check if relationship ID is valid
+        if id >= self.next_rel_id {
+            return Ok(None);
+        }
+
+        // Read the relationship record from storage
+        match self.read_rel(id) {
+            Ok(record) => {
+                // Check if the relationship is deleted
+                if record.is_deleted() {
+                    Ok(None)
+                } else {
+                    Ok(Some(record))
+                }
+            }
+            Err(_) => Ok(None),
+        }
     }
 }
 
