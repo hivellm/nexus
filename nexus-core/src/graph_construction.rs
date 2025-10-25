@@ -437,7 +437,10 @@ impl ForceDirectedLayout {
             }
 
             // Update velocity with damping
-            node.velocity = node.velocity.scale(self.damping).add(&node.force.scale(1.0 / node.mass));
+            node.velocity = node
+                .velocity
+                .scale(self.damping)
+                .add(&node.force.scale(1.0 / node.mass));
 
             // Limit velocity by temperature
             let velocity_magnitude = node.velocity.magnitude();
@@ -556,7 +559,11 @@ impl HierarchicalLayout {
             .collect()
     }
 
-    fn assign_levels(&self, adjacency: &HashMap<String, Vec<String>>, roots: &[String]) -> HashMap<String, usize> {
+    fn assign_levels(
+        &self,
+        adjacency: &HashMap<String, Vec<String>>,
+        roots: &[String],
+    ) -> HashMap<String, usize> {
         let mut levels = HashMap::new();
         let mut queue = VecDeque::new();
 
@@ -586,7 +593,10 @@ impl HierarchicalLayout {
         // Group nodes by level
         let mut level_groups: HashMap<usize, Vec<String>> = HashMap::new();
         for (node_id, level) in levels {
-            level_groups.entry(*level).or_default().push(node_id.clone());
+            level_groups
+                .entry(*level)
+                .or_default()
+                .push(node_id.clone());
         }
 
         let max_level = level_groups.keys().max().copied().unwrap_or(0);
@@ -719,7 +729,7 @@ impl GridLayout {
         }
 
         let cols = (graph.nodes.len() as f64).sqrt().ceil() as usize;
-        let _rows = (graph.nodes.len() + cols - 1) / cols;
+        let _rows = graph.nodes.len().div_ceil(cols);
 
         for (i, node) in graph.nodes.iter_mut().enumerate() {
             let row = i / cols;
@@ -810,7 +820,6 @@ impl KMeansClustering {
     }
 
     fn initialize_centroids(&self, graph: &GraphLayout, k: usize) -> Vec<Point2D> {
-
         let mut centroids = Vec::new();
         let mut used_indices = HashSet::new();
 
@@ -829,7 +838,12 @@ impl KMeansClustering {
         centroids
     }
 
-    fn update_centroids(&self, graph: &GraphLayout, assignments: &[usize], centroids: &mut Vec<Point2D>) {
+    fn update_centroids(
+        &self,
+        graph: &GraphLayout,
+        assignments: &[usize],
+        centroids: &mut [Point2D],
+    ) {
         let mut counts = vec![0; centroids.len()];
         let mut sums = vec![Point2D::new(0.0, 0.0); centroids.len()];
 
@@ -840,24 +854,17 @@ impl KMeansClustering {
 
         for (i, centroid) in centroids.iter_mut().enumerate() {
             if counts[i] > 0 {
-                *centroid = Point2D::new(
-                    sums[i].x / counts[i] as f64,
-                    sums[i].y / counts[i] as f64,
-                );
+                *centroid =
+                    Point2D::new(sums[i].x / counts[i] as f64, sums[i].y / counts[i] as f64);
             }
         }
     }
 }
 
 /// Connected components algorithm
+#[derive(Default)]
 pub struct ConnectedComponents {
     pub directed: bool,
-}
-
-impl Default for ConnectedComponents {
-    fn default() -> Self {
-        Self { directed: false }
-    }
 }
 
 impl ConnectedComponents {
@@ -911,7 +918,13 @@ impl ConnectedComponents {
         adjacency
     }
 
-    fn dfs(&self, adjacency: &[Vec<usize>], node: usize, component_id: usize, components: &mut [usize]) {
+    fn dfs(
+        &self,
+        adjacency: &[Vec<usize>],
+        node: usize,
+        component_id: usize,
+        components: &mut [usize],
+    ) {
         components[node] = component_id;
 
         for &neighbor in &adjacency[node] {
@@ -936,10 +949,26 @@ mod tests {
         graph.add_node(LayoutNode::new("D".to_string(), Point2D::new(0.0, 0.0)));
 
         // Add edges
-        graph.add_edge(LayoutEdge::new("AB".to_string(), "A".to_string(), "B".to_string()));
-        graph.add_edge(LayoutEdge::new("BC".to_string(), "B".to_string(), "C".to_string()));
-        graph.add_edge(LayoutEdge::new("CD".to_string(), "C".to_string(), "D".to_string()));
-        graph.add_edge(LayoutEdge::new("DA".to_string(), "D".to_string(), "A".to_string()));
+        graph.add_edge(LayoutEdge::new(
+            "AB".to_string(),
+            "A".to_string(),
+            "B".to_string(),
+        ));
+        graph.add_edge(LayoutEdge::new(
+            "BC".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+        ));
+        graph.add_edge(LayoutEdge::new(
+            "CD".to_string(),
+            "C".to_string(),
+            "D".to_string(),
+        ));
+        graph.add_edge(LayoutEdge::new(
+            "DA".to_string(),
+            "D".to_string(),
+            "A".to_string(),
+        ));
 
         graph
     }

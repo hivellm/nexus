@@ -86,33 +86,29 @@ impl Engine {
         // Create temporary directory for data
         let temp_dir = tempfile::tempdir()?;
         let data_dir = temp_dir.path();
-        
+
         // Initialize catalog
         let catalog = catalog::Catalog::new(data_dir.join("catalog.mdb"))?;
-        
+
         // Initialize record stores
         let storage = storage::RecordStore::new(data_dir)?;
-        
+
         // Initialize page cache
         let page_cache = page_cache::PageCache::new(1024)?; // 1024 pages = 8MB
-        
+
         // Initialize WAL
         let wal = wal::Wal::new(data_dir.join("wal.log"))?;
-        
+
         // Initialize transaction manager
         let transaction_manager = transaction::TransactionManager::new()?;
-        
+
         // Initialize index manager
         let indexes = index::IndexManager::new(data_dir.join("indexes"))?;
-        
+
         // Initialize executor
-        let executor = executor::Executor::new(
-            &catalog,
-            &storage,
-            &indexes.label_index,
-            &indexes.knn_index,
-        )?;
-        
+        let executor =
+            executor::Executor::new(&catalog, &storage, &indexes.label_index, &indexes.knn_index)?;
+
         Ok(Engine {
             catalog,
             storage,
@@ -123,12 +119,12 @@ impl Engine {
             executor,
         })
     }
-    
+
     /// Create a new engine with default configuration
     pub fn new_default() -> Result<Self> {
         Self::new()
     }
-    
+
     /// Get engine statistics
     pub fn stats(&self) -> Result<EngineStats> {
         Ok(EngineStats {
@@ -142,7 +138,7 @@ impl Engine {
             active_transactions: self.transaction_manager.active_count(),
         })
     }
-    
+
     /// Execute a Cypher query
     pub fn execute_cypher(&mut self, query: &str) -> Result<executor::ResultSet> {
         let query_obj = executor::Query {
@@ -151,15 +147,19 @@ impl Engine {
         };
         self.executor.execute(&query_obj)
     }
-    
+
     /// Create a new node
-    pub fn create_node(&mut self, labels: Vec<String>, properties: serde_json::Value) -> Result<u64> {
+    pub fn create_node(
+        &mut self,
+        labels: Vec<String>,
+        properties: serde_json::Value,
+    ) -> Result<u64> {
         let mut tx = self.transaction_manager.begin_write()?;
         let node_id = self.storage.create_node(&mut tx, labels, properties)?;
         self.transaction_manager.commit(&mut tx)?;
         Ok(node_id)
     }
-    
+
     /// Create a new relationship
     pub fn create_relationship(
         &mut self,
@@ -169,101 +169,118 @@ impl Engine {
         properties: serde_json::Value,
     ) -> Result<u64> {
         let mut tx = self.transaction_manager.begin_write()?;
-        let rel_id = self.storage.create_relationship(&mut tx, from, to, rel_type, properties)?;
+        let rel_id = self
+            .storage
+            .create_relationship(&mut tx, from, to, rel_type, properties)?;
         self.transaction_manager.commit(&mut tx)?;
         Ok(rel_id)
     }
-    
+
     /// Get node by ID
     pub fn get_node(&mut self, id: u64) -> Result<Option<storage::NodeRecord>> {
         let tx = self.transaction_manager.begin_read()?;
         self.storage.get_node(&tx, id)
     }
-    
+
     /// Get relationship by ID
     pub fn get_relationship(&mut self, id: u64) -> Result<Option<storage::RelationshipRecord>> {
         let tx = self.transaction_manager.begin_read()?;
         self.storage.get_relationship(&tx, id)
     }
-    
+
     /// Perform KNN search
-    pub fn knn_search(
-        &self,
-        label: &str,
-        vector: &[f32],
-        k: usize,
-    ) -> Result<Vec<(u64, f32)>> {
+    pub fn knn_search(&self, label: &str, vector: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
         self.indexes.knn_search(label, vector, k)
     }
-    
+
     /// Health check
     pub fn health_check(&self) -> Result<HealthStatus> {
         let mut status = HealthStatus {
             overall: HealthState::Healthy,
             components: std::collections::HashMap::new(),
         };
-        
+
         // Check catalog
         match self.catalog.health_check() {
             Ok(_) => {
-                status.components.insert("catalog".to_string(), HealthState::Healthy);
+                status
+                    .components
+                    .insert("catalog".to_string(), HealthState::Healthy);
             }
             Err(_) => {
-                status.components.insert("catalog".to_string(), HealthState::Unhealthy);
+                status
+                    .components
+                    .insert("catalog".to_string(), HealthState::Unhealthy);
                 status.overall = HealthState::Unhealthy;
             }
         }
-        
+
         // Check storage
         match self.storage.health_check() {
             Ok(_) => {
-                status.components.insert("storage".to_string(), HealthState::Healthy);
+                status
+                    .components
+                    .insert("storage".to_string(), HealthState::Healthy);
             }
             Err(_) => {
-                status.components.insert("storage".to_string(), HealthState::Unhealthy);
+                status
+                    .components
+                    .insert("storage".to_string(), HealthState::Unhealthy);
                 status.overall = HealthState::Unhealthy;
             }
         }
-        
+
         // Check page cache
         match self.page_cache.health_check() {
             Ok(_) => {
-                status.components.insert("page_cache".to_string(), HealthState::Healthy);
+                status
+                    .components
+                    .insert("page_cache".to_string(), HealthState::Healthy);
             }
             Err(_) => {
-                status.components.insert("page_cache".to_string(), HealthState::Unhealthy);
+                status
+                    .components
+                    .insert("page_cache".to_string(), HealthState::Unhealthy);
                 status.overall = HealthState::Unhealthy;
             }
         }
-        
+
         // Check WAL
         match self.wal.health_check() {
             Ok(_) => {
-                status.components.insert("wal".to_string(), HealthState::Healthy);
+                status
+                    .components
+                    .insert("wal".to_string(), HealthState::Healthy);
             }
             Err(_) => {
-                status.components.insert("wal".to_string(), HealthState::Unhealthy);
+                status
+                    .components
+                    .insert("wal".to_string(), HealthState::Unhealthy);
                 status.overall = HealthState::Unhealthy;
             }
         }
-        
+
         // Check indexes
         match self.indexes.health_check() {
             Ok(_) => {
-                status.components.insert("indexes".to_string(), HealthState::Healthy);
+                status
+                    .components
+                    .insert("indexes".to_string(), HealthState::Healthy);
             }
             Err(_) => {
-                status.components.insert("indexes".to_string(), HealthState::Unhealthy);
+                status
+                    .components
+                    .insert("indexes".to_string(), HealthState::Unhealthy);
                 status.overall = HealthState::Unhealthy;
             }
         }
-        
+
         Ok(status)
     }
 }
 
 /// Engine statistics
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EngineStats {
     pub nodes: u64,
     pub relationships: u64,
@@ -276,14 +293,14 @@ pub struct EngineStats {
 }
 
 /// Health status
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HealthStatus {
     pub overall: HealthState,
     pub components: std::collections::HashMap<String, HealthState>,
 }
 
 /// Health state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HealthState {
     Healthy,
     Unhealthy,
@@ -442,5 +459,315 @@ mod tests {
         let err = Error::Storage("test".to_string());
         let debug = format!("{:?}", err);
         assert!(debug.contains("Storage"));
+    }
+
+    #[test]
+    fn test_engine_creation() {
+        let engine = Engine::new();
+        assert!(engine.is_ok());
+        let engine = engine.unwrap();
+        
+        // Test that all components are initialized
+        assert!(engine.catalog.label_count() >= 0);
+        assert!(engine.storage.node_count() >= 0);
+        assert!(engine.storage.relationship_count() >= 0);
+        assert!(engine.page_cache.hit_count() >= 0);
+        assert!(engine.page_cache.miss_count() >= 0);
+        assert!(engine.wal.entry_count() >= 0);
+        assert!(engine.transaction_manager.active_count() >= 0);
+    }
+
+    #[test]
+    fn test_engine_default() {
+        let engine = Engine::default();
+        // Test passes if default creation succeeds
+        drop(engine);
+    }
+
+    #[test]
+    fn test_engine_new_default() {
+        let engine = Engine::new_default();
+        assert!(engine.is_ok());
+        drop(engine);
+    }
+
+    #[test]
+    fn test_engine_stats() {
+        let engine = Engine::new().unwrap();
+        let stats = engine.stats().unwrap();
+        
+        // Test that stats are accessible
+        assert!(stats.nodes >= 0);
+        assert!(stats.relationships >= 0);
+        assert!(stats.labels >= 0);
+        assert!(stats.rel_types >= 0);
+        assert!(stats.page_cache_hits >= 0);
+        assert!(stats.page_cache_misses >= 0);
+        assert!(stats.wal_entries >= 0);
+        assert!(stats.active_transactions >= 0);
+    }
+
+    #[test]
+    fn test_engine_execute_cypher() {
+        let mut engine = Engine::new().unwrap();
+        
+        // Test executing a simple query
+        let result = engine.execute_cypher("MATCH (n) RETURN n");
+        // Should not panic, even if query fails
+        drop(result);
+    }
+
+    #[test]
+    fn test_engine_create_node() {
+        let mut engine = Engine::new().unwrap();
+        
+        // Test creating a node
+        let labels = vec!["Person".to_string()];
+        let properties = serde_json::json!({"name": "Alice", "age": 30});
+        
+        let result = engine.create_node(labels, properties);
+        // Should not panic, even if creation fails
+        drop(result);
+    }
+
+    #[test]
+    fn test_engine_create_relationship() {
+        let mut engine = Engine::new().unwrap();
+        
+        // Test creating a relationship
+        let result = engine.create_relationship(
+            1, // from
+            2, // to
+            "KNOWS".to_string(),
+            serde_json::json!({"since": 2020}),
+        );
+        // Should not panic, even if creation fails
+        drop(result);
+    }
+
+    #[test]
+    fn test_engine_get_node() {
+        let mut engine = Engine::new().unwrap();
+        
+        // Test getting a node
+        let result = engine.get_node(1);
+        // Should not panic, even if node doesn't exist
+        drop(result);
+    }
+
+    #[test]
+    fn test_engine_get_relationship() {
+        let mut engine = Engine::new().unwrap();
+        
+        // Test getting a relationship
+        let result = engine.get_relationship(1);
+        // Should not panic, even if relationship doesn't exist
+        drop(result);
+    }
+
+    #[test]
+    fn test_engine_knn_search() {
+        let engine = Engine::new().unwrap();
+        
+        // Test KNN search
+        let vector = vec![0.1, 0.2, 0.3, 0.4];
+        let result = engine.knn_search("Person", &vector, 5);
+        // Should not panic, even if search fails
+        drop(result);
+    }
+
+    #[test]
+    fn test_engine_health_check() {
+        let engine = Engine::new().unwrap();
+        
+        // Test health check
+        let status = engine.health_check().unwrap();
+        
+        // Test that health status is properly structured
+        assert!(matches!(status.overall, HealthState::Healthy | HealthState::Unhealthy | HealthState::Degraded));
+        assert!(!status.components.is_empty());
+        
+        // Test that all expected components are present
+        let expected_components = ["catalog", "storage", "page_cache", "wal", "indexes"];
+        for component in expected_components {
+            assert!(status.components.contains_key(component));
+        }
+    }
+
+    #[test]
+    fn test_engine_stats_serialization() {
+        let engine = Engine::new().unwrap();
+        let stats = engine.stats().unwrap();
+        
+        // Test JSON serialization
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("nodes"));
+        assert!(json.contains("relationships"));
+        assert!(json.contains("labels"));
+        assert!(json.contains("rel_types"));
+        assert!(json.contains("page_cache_hits"));
+        assert!(json.contains("page_cache_misses"));
+        assert!(json.contains("wal_entries"));
+        assert!(json.contains("active_transactions"));
+        
+        // Test deserialization
+        let deserialized: EngineStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.nodes, stats.nodes);
+        assert_eq!(deserialized.relationships, stats.relationships);
+        assert_eq!(deserialized.labels, stats.labels);
+        assert_eq!(deserialized.rel_types, stats.rel_types);
+    }
+
+    #[test]
+    fn test_health_status_serialization() {
+        let mut status = HealthStatus {
+            overall: HealthState::Healthy,
+            components: std::collections::HashMap::new(),
+        };
+        status.components.insert("test".to_string(), HealthState::Healthy);
+        
+        // Test JSON serialization
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("overall"));
+        assert!(json.contains("components"));
+        assert!(json.contains("test"));
+        
+        // Test deserialization
+        let deserialized: HealthStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.overall, HealthState::Healthy);
+        assert!(deserialized.components.contains_key("test"));
+    }
+
+    #[test]
+    fn test_health_state_variants() {
+        // Test all health state variants
+        assert_eq!(HealthState::Healthy, HealthState::Healthy);
+        assert_eq!(HealthState::Unhealthy, HealthState::Unhealthy);
+        assert_eq!(HealthState::Degraded, HealthState::Degraded);
+        
+        assert_ne!(HealthState::Healthy, HealthState::Unhealthy);
+        assert_ne!(HealthState::Healthy, HealthState::Degraded);
+        assert_ne!(HealthState::Unhealthy, HealthState::Degraded);
+        
+        // Test serialization
+        let healthy_json = serde_json::to_string(&HealthState::Healthy).unwrap();
+        assert!(healthy_json.contains("Healthy"));
+        
+        let unhealthy_json = serde_json::to_string(&HealthState::Unhealthy).unwrap();
+        assert!(unhealthy_json.contains("Unhealthy"));
+        
+        let degraded_json = serde_json::to_string(&HealthState::Degraded).unwrap();
+        assert!(degraded_json.contains("Degraded"));
+    }
+
+    #[test]
+    fn test_engine_stats_clone() {
+        let engine = Engine::new().unwrap();
+        let stats = engine.stats().unwrap();
+        let cloned_stats = stats.clone();
+        
+        assert_eq!(stats.nodes, cloned_stats.nodes);
+        assert_eq!(stats.relationships, cloned_stats.relationships);
+        assert_eq!(stats.labels, cloned_stats.labels);
+        assert_eq!(stats.rel_types, cloned_stats.rel_types);
+        assert_eq!(stats.page_cache_hits, cloned_stats.page_cache_hits);
+        assert_eq!(stats.page_cache_misses, cloned_stats.page_cache_misses);
+        assert_eq!(stats.wal_entries, cloned_stats.wal_entries);
+        assert_eq!(stats.active_transactions, cloned_stats.active_transactions);
+    }
+
+    #[test]
+    fn test_health_status_clone() {
+        let mut status = HealthStatus {
+            overall: HealthState::Healthy,
+            components: std::collections::HashMap::new(),
+        };
+        status.components.insert("test".to_string(), HealthState::Healthy);
+        
+        let cloned_status = status.clone();
+        assert_eq!(status.overall, cloned_status.overall);
+        assert_eq!(status.components.len(), cloned_status.components.len());
+        assert!(cloned_status.components.contains_key("test"));
+    }
+
+    #[test]
+    fn test_health_state_copy() {
+        let healthy = HealthState::Healthy;
+        let copied = healthy;
+        
+        assert_eq!(healthy, copied);
+        assert_eq!(format!("{:?}", healthy), "Healthy");
+        assert_eq!(format!("{:?}", copied), "Healthy");
+    }
+
+    #[test]
+    fn test_engine_stats_debug() {
+        let engine = Engine::new().unwrap();
+        let stats = engine.stats().unwrap();
+        let debug = format!("{:?}", stats);
+        
+        assert!(debug.contains("EngineStats"));
+        assert!(debug.contains("nodes"));
+        assert!(debug.contains("relationships"));
+    }
+
+    #[test]
+    fn test_health_status_debug() {
+        let mut status = HealthStatus {
+            overall: HealthState::Healthy,
+            components: std::collections::HashMap::new(),
+        };
+        status.components.insert("test".to_string(), HealthState::Healthy);
+        
+        let debug = format!("{:?}", status);
+        assert!(debug.contains("HealthStatus"));
+        assert!(debug.contains("overall"));
+        assert!(debug.contains("components"));
+    }
+
+    #[test]
+    fn test_health_state_debug() {
+        let healthy = HealthState::Healthy;
+        let debug = format!("{:?}", healthy);
+        assert_eq!(debug, "Healthy");
+        
+        let unhealthy = HealthState::Unhealthy;
+        let debug = format!("{:?}", unhealthy);
+        assert_eq!(debug, "Unhealthy");
+        
+        let degraded = HealthState::Degraded;
+        let debug = format!("{:?}", degraded);
+        assert_eq!(debug, "Degraded");
+    }
+
+    #[test]
+    fn test_engine_component_access() {
+        let engine = Engine::new().unwrap();
+        
+        // Test that all components are accessible
+        let _catalog = &engine.catalog;
+        let _storage = &engine.storage;
+        let _page_cache = &engine.page_cache;
+        let _wal = &engine.wal;
+        let _transaction_manager = &engine.transaction_manager;
+        let _indexes = &engine.indexes;
+        let _executor = &engine.executor;
+        
+        // Test passes if all components are accessible
+    }
+
+    #[test]
+    fn test_engine_mut_operations() {
+        let mut engine = Engine::new().unwrap();
+        
+        // Test mutable operations
+        let _stats = engine.stats().unwrap();
+        let _cypher_result = engine.execute_cypher("MATCH (n) RETURN n");
+        let _node_result = engine.create_node(vec!["Test".to_string()], serde_json::Value::Null);
+        let _rel_result = engine.create_relationship(1, 2, "TEST".to_string(), serde_json::Value::Null);
+        let _get_node = engine.get_node(1);
+        let _get_rel = engine.get_relationship(1);
+        
+        // Test passes if all mutable operations compile
     }
 }

@@ -32,40 +32,40 @@ impl IndexManager {
     pub fn new<P: AsRef<std::path::Path>>(index_dir: P) -> Result<Self> {
         let index_dir = index_dir.as_ref();
         std::fs::create_dir_all(index_dir)?;
-        
+
         Ok(Self {
             label_index: LabelIndex::new(),
             knn_index: KnnIndex::new(128)?,
             property_index: PropertyIndex::new(),
         })
     }
-    
+
     /// Perform KNN search
     pub fn knn_search(&self, _label: &str, vector: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
         self.knn_index.search_knn(vector, k)
     }
-    
+
     /// Add a node to the label index
     pub fn add_node_to_label(&self, node_id: u64, label_id: u32) -> Result<()> {
         self.label_index.add_node(node_id, &[label_id])
     }
-    
+
     /// Remove a node from the label index
     pub fn remove_node_from_label(&self, node_id: u64, _label_id: u32) -> Result<()> {
         self.label_index.remove_node(node_id)
     }
-    
+
     /// Health check for the index manager
     pub fn health_check(&self) -> Result<()> {
         // Check label index
         self.label_index.health_check()?;
-        
+
         // Check KNN index
         // KNN index health check is already implemented
-        
+
         // Check property index
         self.property_index.health_check()?;
-        
+
         Ok(())
     }
 }
@@ -215,22 +215,24 @@ impl LabelIndex {
 
         Ok(())
     }
-    
+
     /// Health check for the label index
     pub fn health_check(&self) -> Result<()> {
         let bitmaps = self.label_bitmaps.read();
         let stats = self.stats.read();
-        
+
         // Check if the number of labels is reasonable
-        if bitmaps.len() > 1_000_000 { // 1 million max
+        if bitmaps.len() > 1_000_000 {
+            // 1 million max
             return Err(Error::index("Too many labels"));
         }
-        
+
         // Check if the total nodes count is reasonable
-        if stats.total_nodes > 1_000_000_000 { // 1 billion max
+        if stats.total_nodes > 1_000_000_000 {
+            // 1 billion max
             return Err(Error::index("Too many nodes in label index"));
         }
-        
+
         Ok(())
     }
 }
@@ -454,12 +456,11 @@ impl KnnIndex {
     pub fn normalize_vector(&self, vector: &mut [f32]) {
         let norm: f32 = vector.iter().map(|&x| x * x).sum::<f32>().sqrt();
         if norm > 0.0 {
-        for x in vector.iter_mut() {
-            *x /= norm;
+            for x in vector.iter_mut() {
+                *x /= norm;
+            }
         }
     }
-    
-}
 }
 
 impl Default for KnnIndex {
@@ -734,22 +735,24 @@ impl PropertyIndex {
 
         total_size
     }
-    
+
     /// Health check for the property index
     pub fn health_check(&self) -> Result<()> {
         let trees = self.property_trees.read();
         let stats = self.stats.read();
-        
+
         // Check if the number of indexed properties is reasonable
-        if trees.len() > 1_000_000 { // 1 million max
+        if trees.len() > 1_000_000 {
+            // 1 million max
             return Err(Error::index("Too many indexed properties"));
         }
-        
+
         // Check if the total entries count is reasonable
-        if stats.total_entries > 1_000_000_000 { // 1 billion max
+        if stats.total_entries > 1_000_000_000 {
+            // 1 billion max
             return Err(Error::index("Too many entries in property index"));
         }
-        
+
         Ok(())
     }
 }

@@ -395,17 +395,17 @@ impl RecordStore {
         self.rels_file_size = new_size;
         Ok(())
     }
-    
+
     /// Get the number of nodes
     pub fn node_count(&self) -> u64 {
         self.next_node_id
     }
-    
+
     /// Get the number of relationships
     pub fn relationship_count(&self) -> u64 {
         self.next_rel_id
     }
-    
+
     /// Health check for the record store
     pub fn health_check(&self) -> Result<()> {
         // Check if files are accessible and readable
@@ -415,14 +415,14 @@ impl RecordStore {
         if !self.path.join("rels.store").exists() {
             return Err(Error::storage("Relationships file does not exist"));
         }
-        
+
         // Try to read from the memory-mapped files
         let _ = self.nodes_mmap.len();
         let _ = self.rels_mmap.len();
-        
+
         Ok(())
     }
-    
+
     /// Create a new node
     pub fn create_node(
         &mut self,
@@ -435,7 +435,7 @@ impl RecordStore {
         self.next_node_id += 1;
         Ok(node_id)
     }
-    
+
     /// Create a new relationship
     pub fn create_relationship(
         &mut self,
@@ -450,7 +450,7 @@ impl RecordStore {
         self.next_rel_id += 1;
         Ok(rel_id)
     }
-    
+
     /// Get a node by ID
     pub fn get_node(
         &self,
@@ -460,7 +460,7 @@ impl RecordStore {
         // For MVP, return None
         Ok(None)
     }
-    
+
     /// Get a relationship by ID
     pub fn get_relationship(
         &self,

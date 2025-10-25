@@ -1239,7 +1239,6 @@ impl Default for Executor {
         Self::new(&catalog, &store, &label_index, &knn_index)
             .expect("Failed to create default executor")
     }
-    
 }
 
 #[cfg(test)]
@@ -1701,5 +1700,547 @@ mod tests {
         } else {
             panic!("Expected number for IT total");
         }
+    }
+
+    #[test]
+    fn test_execute_node_by_label() {
+        let (executor, _dir) = create_test_executor();
+
+        // Create a label and add some nodes to the index
+        let catalog = Catalog::new("./test_data").unwrap();
+        let label_id = catalog.get_or_create_label("Person").unwrap();
+        
+        // Add some test nodes to the label index
+        let mut label_index = LabelIndex::new();
+        label_index.add_node(1, &[label_id]).unwrap();
+        label_index.add_node(2, &[label_id]).unwrap();
+        label_index.add_node(3, &[label_id]).unwrap();
+
+        // Create executor with the populated index
+        let temp_dir = TempDir::new().unwrap();
+        let store = RecordStore::new(temp_dir.path()).unwrap();
+        let knn_index = KnnIndex::new_default(128).unwrap();
+        let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
+
+        // Test executing node by label
+        let results = executor.execute_node_by_label(label_id).unwrap();
+        assert_eq!(results.len(), 3);
+
+        // Check that all results are valid node objects
+        for result in results {
+            if let Value::Object(node_obj) = result {
+                assert!(node_obj.contains_key("id"));
+                assert!(node_obj.contains_key("labels"));
+                assert!(node_obj.contains_key("properties"));
+            } else {
+                panic!("Expected object");
+            }
+        }
+    }
+
+    #[test]
+    fn test_execute_filter() {
+        let (executor, _dir) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new());
+        
+        // Create test nodes
+        let mut node1 = Map::new();
+        node1.insert("id".to_string(), Value::Number(1.into()));
+        node1.insert("name".to_string(), Value::String("Alice".to_string()));
+        node1.insert("age".to_string(), Value::Number(25.into()));
+
+        let mut node2 = Map::new();
+        node2.insert("id".to_string(), Value::Number(2.into()));
+        node2.insert("name".to_string(), Value::String("Bob".to_string()));
+        node2.insert("age".to_string(), Value::Number(30.into()));
+
+        context.set_variable("n", Value::Array(vec![
+            Value::Object(node1),
+            Value::Object(node2),
+        ]));
+
+        // Test filter with age > 25
+        executor.execute_filter(&mut context, "n.age > 25").unwrap();
+
+        // Should only have Bob's node
+        if let Some(Value::Array(nodes)) = context.get_variable("n") {
+            assert_eq!(nodes.len(), 1);
+            if let Value::Object(node_obj) = &nodes[0] {
+                assert_eq!(node_obj.get("name"), Some(&Value::String("Bob".to_string())));
+            }
+        } else {
+            panic!("Expected array of nodes");
+        }
+    }
+
+    #[test]
+    fn test_execute_expand() {
+        let (executor, _dir) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new());
+        
+        // Create test source nodes
+        let mut source_node = Map::new();
+        source_node.insert("id".to_string(), Value::Number(1.into()));
+        context.set_variable("source", Value::Array(vec![Value::Object(source_node)]));
+
+        // Test expand operation
+        executor.execute_expand(
+            &mut context,
+            None, // any type
+            Direction::Outgoing,
+            "source",
+            "target",
+            "rel",
+        ).unwrap();
+
+        // Should have target nodes and relationships
+        assert!(context.get_variable("target").is_some());
+        assert!(context.get_variable("rel").is_some());
+    }
+
+    #[test]
+    fn test_execute_project() {
+        let (executor, _dir) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new());
+        
+        // Create test nodes
+        let mut node = Map::new();
+        node.insert("id".to_string(), Value::Number(1.into()));
+        node.insert("name".to_string(), Value::String("Alice".to_string()));
+        
+        context.set_variable("n", Value::Array(vec![Value::Object(node)]));
+
+        // Test project operation
+        let results = executor.execute_project(&context, &["n".to_string()]).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].values.len(), 1);
+    }
+
+    #[test]
+    fn test_execute_sort() {
+        let (executor, _dir) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new());
+        
+        // Create test nodes with different ages
+        let mut node1 = Map::new();
+        node1.insert("id".to_string(), Value::Number(1.into()));
+        node1.insert("age".to_string(), Value::Number(30.into()));
+
+        let mut node2 = Map::new();
+        node2.insert("id".to_string(), Value::Number(2.into()));
+        node2.insert("age".to_string(), Value::Number(20.into()));
+
+        let mut node3 = Map::new();
+        node3.insert("id".to_string(), Value::Number(3.into()));
+        node3.insert("age".to_string(), Value::Number(25.into()));
+
+        context.set_variable("n", Value::Array(vec![
+            Value::Object(node1),
+            Value::Object(node2),
+            Value::Object(node3),
+        ]));
+
+        // Test sort by age ascending
+        executor.execute_sort(&mut context, &["age".to_string()], &[true]).unwrap();
+
+        // Check that nodes are sorted by age
+        if let Some(Value::Array(nodes)) = context.get_variable("n") {
+            assert_eq!(nodes.len(), 3);
+            // First node should be youngest (age 20)
+            if let Value::Object(first_node) = &nodes[0] {
+                assert_eq!(first_node.get("age"), Some(&Value::Number(20.into())));
+            }
+            // Middle node should be age 25
+            if let Value::Object(middle_node) = &nodes[1] {
+                assert_eq!(middle_node.get("age"), Some(&Value::Number(25.into())));
+            }
+            // Last node should be oldest (age 30)
+            if let Value::Object(last_node) = &nodes[2] {
+                assert_eq!(last_node.get("age"), Some(&Value::Number(30.into())));
+            }
+        } else {
+            panic!("Expected array of nodes");
+        }
+    }
+
+    #[test]
+    fn test_evaluate_predicate() {
+        let (executor, _dir) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new());
+        context.params.insert("min_age".to_string(), Value::Number(25.into()));
+
+        // Create test node
+        let mut node = Map::new();
+        node.insert("id".to_string(), Value::Number(1.into()));
+        node.insert("age".to_string(), Value::Number(30.into()));
+        let node_value = Value::Object(node);
+
+        // Test various predicates
+        let mut parser = parser::CypherParser::new("n.age > $min_age".to_string());
+        let expr = parser.parse_expression().unwrap();
+        let result = executor.evaluate_predicate(&node_value, &expr, &context).unwrap();
+        assert!(result); // 30 > 25
+
+        let mut parser = parser::CypherParser::new("n.age < 20".to_string());
+        let expr = parser.parse_expression().unwrap();
+        let result = executor.evaluate_predicate(&node_value, &expr, &context).unwrap();
+        assert!(!result); // 30 < 20 is false
+
+        let mut parser = parser::CypherParser::new("n.age = 30".to_string());
+        let expr = parser.parse_expression().unwrap();
+        let result = executor.evaluate_predicate(&node_value, &expr, &context).unwrap();
+        assert!(result); // 30 = 30
+    }
+
+    #[test]
+    fn test_evaluate_expression() {
+        let (executor, _dir) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new());
+        context.params.insert("param1".to_string(), Value::String("test".to_string()));
+
+        // Create test node
+        let mut node = Map::new();
+        node.insert("id".to_string(), Value::Number(1.into()));
+        node.insert("name".to_string(), Value::String("Alice".to_string()));
+        let node_value = Value::Object(node);
+
+        // Test variable access
+        let mut parser = parser::CypherParser::new("n.name".to_string());
+        let expr = parser.parse_expression().unwrap();
+        let result = executor.evaluate_expression(&node_value, &expr, &context).unwrap();
+        assert_eq!(result, Value::String("Alice".to_string()));
+
+        // Test parameter access
+        let mut parser = parser::CypherParser::new("$param1".to_string());
+        let expr = parser.parse_expression().unwrap();
+        let result = executor.evaluate_expression(&node_value, &expr, &context).unwrap();
+        assert_eq!(result, Value::String("test".to_string()));
+
+        // Test literal
+        let mut parser = parser::CypherParser::new("42".to_string());
+        let expr = parser.parse_expression().unwrap();
+        let result = executor.evaluate_expression(&node_value, &expr, &context).unwrap();
+        assert_eq!(result, Value::Number(42.into()));
+    }
+
+    #[test]
+    fn test_value_conversion() {
+        let (executor, _dir) = create_test_executor();
+
+        // Test value_to_number
+        assert_eq!(executor.value_to_number(&Value::Number(42.into())).unwrap(), 42.0);
+        assert_eq!(executor.value_to_number(&Value::String("123".to_string())).unwrap(), 123.0);
+        assert_eq!(executor.value_to_number(&Value::Bool(true)).unwrap(), 1.0);
+        assert_eq!(executor.value_to_number(&Value::Bool(false)).unwrap(), 0.0);
+        assert_eq!(executor.value_to_number(&Value::Null).unwrap(), 0.0);
+
+        // Test value_to_bool
+        assert!(executor.value_to_bool(&Value::Bool(true)).unwrap());
+        assert!(!executor.value_to_bool(&Value::Bool(false)).unwrap());
+        assert!(executor.value_to_bool(&Value::Number(1.into())).unwrap());
+        assert!(!executor.value_to_bool(&Value::Number(0.into())).unwrap());
+        assert!(executor.value_to_bool(&Value::String("hello".to_string())).unwrap());
+        assert!(!executor.value_to_bool(&Value::String("".to_string())).unwrap());
+        assert!(!executor.value_to_bool(&Value::Null).unwrap());
+    }
+
+    #[test]
+    fn test_compare_values_for_sort() {
+        let (executor, _dir) = create_test_executor();
+
+        use std::cmp::Ordering;
+
+        // Test null comparisons
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::Null, &Value::Null),
+            Ordering::Equal
+        );
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::Null, &Value::Number(1.into())),
+            Ordering::Less
+        );
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::Number(1.into()), &Value::Null),
+            Ordering::Greater
+        );
+
+        // Test number comparisons
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::Number(1.into()), &Value::Number(2.into())),
+            Ordering::Less
+        );
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::Number(2.into()), &Value::Number(1.into())),
+            Ordering::Greater
+        );
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::Number(1.into()), &Value::Number(1.into())),
+            Ordering::Equal
+        );
+
+        // Test string comparisons
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::String("a".to_string()), &Value::String("b".to_string())),
+            Ordering::Less
+        );
+        assert_eq!(
+            executor.compare_values_for_sort(&Value::String("b".to_string()), &Value::String("a".to_string())),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn test_operator_variants() {
+        // Test all operator variants for coverage
+        let node_op = Operator::NodeByLabel {
+            label_id: 1,
+            variable: "n".to_string(),
+        };
+        assert!(matches!(node_op, Operator::NodeByLabel { .. }));
+
+        let filter_op = Operator::Filter {
+            predicate: "n.age > 25".to_string(),
+        };
+        assert!(matches!(filter_op, Operator::Filter { .. }));
+
+        let expand_op = Operator::Expand {
+            type_id: Some(1),
+            direction: Direction::Outgoing,
+            source_var: "n".to_string(),
+            target_var: "m".to_string(),
+            rel_var: "r".to_string(),
+        };
+        assert!(matches!(expand_op, Operator::Expand { .. }));
+
+        let project_op = Operator::Project {
+            columns: vec!["n".to_string()],
+        };
+        assert!(matches!(project_op, Operator::Project { .. }));
+
+        let limit_op = Operator::Limit { count: 10 };
+        assert!(matches!(limit_op, Operator::Limit { .. }));
+
+        let sort_op = Operator::Sort {
+            columns: vec!["n.age".to_string()],
+            ascending: vec![true],
+        };
+        assert!(matches!(sort_op, Operator::Sort { .. }));
+
+        let aggregate_op = Operator::Aggregate {
+            group_by: vec!["dept".to_string()],
+            aggregations: vec![Aggregation::Count {
+                column: None,
+                alias: "count".to_string(),
+            }],
+        };
+        assert!(matches!(aggregate_op, Operator::Aggregate { .. }));
+
+        let union_op = Operator::Union {
+            left: Box::new(node_op.clone()),
+            right: Box::new(node_op.clone()),
+        };
+        assert!(matches!(union_op, Operator::Union { .. }));
+
+        let join_op = Operator::Join {
+            left: Box::new(node_op.clone()),
+            right: Box::new(node_op.clone()),
+            join_type: JoinType::Inner,
+            condition: Some("n.id = m.id".to_string()),
+        };
+        assert!(matches!(join_op, Operator::Join { .. }));
+
+        let index_scan_op = Operator::IndexScan {
+            index_type: IndexType::Label,
+            key: "Person".to_string(),
+            variable: "n".to_string(),
+        };
+        assert!(matches!(index_scan_op, Operator::IndexScan { .. }));
+
+        let distinct_op = Operator::Distinct {
+            columns: vec!["n.id".to_string()],
+        };
+        assert!(matches!(distinct_op, Operator::Distinct { .. }));
+    }
+
+    #[test]
+    fn test_enum_variants() {
+        // Test Direction enum
+        assert_eq!(Direction::Outgoing, Direction::Outgoing);
+        assert_ne!(Direction::Outgoing, Direction::Incoming);
+        assert_ne!(Direction::Outgoing, Direction::Both);
+
+        // Test JoinType enum
+        assert_eq!(JoinType::Inner, JoinType::Inner);
+        assert_ne!(JoinType::Inner, JoinType::LeftOuter);
+        assert_ne!(JoinType::Inner, JoinType::RightOuter);
+        assert_ne!(JoinType::Inner, JoinType::FullOuter);
+
+        // Test IndexType enum
+        assert_eq!(IndexType::Label, IndexType::Label);
+        assert_ne!(IndexType::Label, IndexType::Property);
+        assert_ne!(IndexType::Label, IndexType::Vector);
+        assert_ne!(IndexType::Label, IndexType::FullText);
+
+        // Test Aggregation enum variants
+        let count_agg = Aggregation::Count {
+            column: None,
+            alias: "count".to_string(),
+        };
+        assert!(matches!(count_agg, Aggregation::Count { .. }));
+
+        let sum_agg = Aggregation::Sum {
+            column: "age".to_string(),
+            alias: "total_age".to_string(),
+        };
+        assert!(matches!(sum_agg, Aggregation::Sum { .. }));
+
+        let avg_agg = Aggregation::Avg {
+            column: "score".to_string(),
+            alias: "avg_score".to_string(),
+        };
+        assert!(matches!(avg_agg, Aggregation::Avg { .. }));
+
+        let min_agg = Aggregation::Min {
+            column: "price".to_string(),
+            alias: "min_price".to_string(),
+        };
+        assert!(matches!(min_agg, Aggregation::Min { .. }));
+
+        let max_agg = Aggregation::Max {
+            column: "price".to_string(),
+            alias: "max_price".to_string(),
+        };
+        assert!(matches!(max_agg, Aggregation::Max { .. }));
+    }
+
+    #[test]
+    fn test_expression_to_string() {
+        let (executor, _dir) = create_test_executor();
+
+        // Test variable
+        let mut parser = parser::CypherParser::new("n".to_string());
+        let expr = parser.parse_expression().unwrap();
+        assert_eq!(executor.expression_to_string(&expr).unwrap(), "n");
+
+        // Test property access
+        let mut parser = parser::CypherParser::new("n.name".to_string());
+        let expr = parser.parse_expression().unwrap();
+        assert_eq!(executor.expression_to_string(&expr).unwrap(), "n.name");
+
+        // Test literals
+        let mut parser = parser::CypherParser::new("\"hello\"".to_string());
+        let expr = parser.parse_expression().unwrap();
+        assert_eq!(executor.expression_to_string(&expr).unwrap(), "\"hello\"");
+
+        let mut parser = parser::CypherParser::new("42".to_string());
+        let expr = parser.parse_expression().unwrap();
+        assert_eq!(executor.expression_to_string(&expr).unwrap(), "42");
+
+        let mut parser = parser::CypherParser::new("true".to_string());
+        let expr = parser.parse_expression().unwrap();
+        assert_eq!(executor.expression_to_string(&expr).unwrap(), "true");
+
+        // Test binary operations
+        let mut parser = parser::CypherParser::new("n.age = 25".to_string());
+        let expr = parser.parse_expression().unwrap();
+        assert_eq!(executor.expression_to_string(&expr).unwrap(), "n.age = 25");
+
+        // Test parameters
+        let mut parser = parser::CypherParser::new("$param1".to_string());
+        let expr = parser.parse_expression().unwrap();
+        assert_eq!(executor.expression_to_string(&expr).unwrap(), "$param1");
+    }
+
+    #[test]
+    fn test_ast_to_operators() {
+        let (executor, _dir) = create_test_executor();
+
+        // Create a catalog with a label
+        let catalog = Catalog::new("./test_data").unwrap();
+        let label_id = catalog.get_or_create_label("Person").unwrap();
+
+        // Test AST to operators conversion
+        let mut parser = parser::CypherParser::new("MATCH (n:Person) WHERE n.age > 25 RETURN n LIMIT 10".to_string());
+        let ast = parser.parse().unwrap();
+        let operators = executor.ast_to_operators(&ast).unwrap();
+
+        assert_eq!(operators.len(), 4); // NodeByLabel, Filter, Project, Limit
+
+        match &operators[0] {
+            Operator::NodeByLabel { label_id: parsed_label_id, variable } => {
+                assert_eq!(*parsed_label_id, label_id);
+                assert_eq!(variable, "n");
+            }
+            _ => panic!("Expected NodeByLabel operator"),
+        }
+
+        match &operators[1] {
+            Operator::Filter { predicate } => {
+                assert!(predicate.contains("n.age > 25"));
+            }
+            _ => panic!("Expected Filter operator"),
+        }
+
+        match &operators[2] {
+            Operator::Project { columns } => {
+                assert_eq!(columns, &vec!["n".to_string()]);
+            }
+            _ => panic!("Expected Project operator"),
+        }
+
+        match &operators[3] {
+            Operator::Limit { count } => {
+                assert_eq!(*count, 10);
+            }
+            _ => panic!("Expected Limit operator"),
+        }
+    }
+
+    #[test]
+    fn test_mvp_operators() {
+        let (executor, _dir) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new());
+
+        // Test Union operator (MVP implementation)
+        let left_op = Operator::NodeByLabel {
+            label_id: 1,
+            variable: "n".to_string(),
+        };
+        let right_op = Operator::NodeByLabel {
+            label_id: 2,
+            variable: "m".to_string(),
+        };
+        executor.execute_union(&mut context, &left_op, &right_op).unwrap();
+        // Should not panic (MVP implementation does nothing)
+
+        // Test Join operator (MVP implementation)
+        executor.execute_join(
+            &mut context,
+            &left_op,
+            &right_op,
+            JoinType::Inner,
+            Some("n.id = m.id"),
+        ).unwrap();
+        // Should not panic (MVP implementation does nothing)
+
+        // Test IndexScan operator (MVP implementation)
+        executor.execute_index_scan(
+            &mut context,
+            IndexType::Label,
+            "Person",
+            "n",
+        ).unwrap();
+        // Should not panic (MVP implementation does nothing)
+
+        // Test Distinct operator (MVP implementation)
+        executor.execute_distinct(&mut context, &["n.id".to_string()]).unwrap();
+        // Should not panic (MVP implementation does nothing)
     }
 }

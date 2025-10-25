@@ -26,7 +26,7 @@ impl UmicpClient {
 
     /// Check if the client is configured for a specific protocol
     pub fn is_protocol(&self, protocol: &str) -> bool {
-        self.endpoint.starts_with(protocol)
+        self.endpoint.starts_with(&format!("{}://", protocol))
     }
 }
 
@@ -90,16 +90,14 @@ mod tests {
     async fn test_umicp_client_request_todo() {
         let client = UmicpClient::new("http://localhost:8080");
         let payload = serde_json::json!({"test": "value"});
-        
+
         // This should panic with todo! macro
         let result = std::panic::catch_unwind(|| {
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    client.request(payload)
-                )
+                tokio::runtime::Handle::current().block_on(client.request(payload))
             })
         });
-        
+
         assert!(result.is_err());
     }
 }

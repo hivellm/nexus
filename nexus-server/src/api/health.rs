@@ -66,9 +66,7 @@ static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 /// Initialize the health check system
 pub fn init() {
-    START_TIME
-        .set(Instant::now())
-        .expect("Failed to set start time");
+    let _ = START_TIME.set(Instant::now());
 }
 
 /// Get health status
@@ -361,7 +359,6 @@ fn get_cpu_usage() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::Json;
     use std::time::Duration;
 
     #[test]
@@ -369,7 +366,7 @@ mod tests {
         let healthy = HealthStatus::Healthy;
         let degraded = HealthStatus::Degraded;
         let unhealthy = HealthStatus::Unhealthy;
-        
+
         // Test that all variants can be created
         assert!(matches!(healthy, HealthStatus::Healthy));
         assert!(matches!(degraded, HealthStatus::Degraded));
@@ -383,7 +380,7 @@ mod tests {
             response_time_ms: Some(100.0),
             error: None,
         };
-        
+
         assert!(matches!(status.status, HealthStatus::Healthy));
         assert_eq!(status.response_time_ms, Some(100.0));
         assert_eq!(status.error, None);
@@ -396,7 +393,7 @@ mod tests {
             response_time_ms: Some(500.0),
             error: Some("Connection failed".to_string()),
         };
-        
+
         assert!(matches!(status.status, HealthStatus::Unhealthy));
         assert_eq!(status.response_time_ms, Some(500.0));
         assert_eq!(status.error, Some("Connection failed".to_string()));
@@ -431,12 +428,15 @@ mod tests {
                 error: None,
             },
         };
-        
+
         assert!(matches!(components.database.status, HealthStatus::Healthy));
         assert!(matches!(components.storage.status, HealthStatus::Healthy));
         assert!(matches!(components.indexes.status, HealthStatus::Healthy));
         assert!(matches!(components.wal.status, HealthStatus::Healthy));
-        assert!(matches!(components.page_cache.status, HealthStatus::Healthy));
+        assert!(matches!(
+            components.page_cache.status,
+            HealthStatus::Healthy
+        ));
     }
 
     #[test]
@@ -468,7 +468,7 @@ mod tests {
                 error: None,
             },
         };
-        
+
         let overall_status = determine_overall_status(&components);
         assert!(matches!(overall_status, HealthStatus::Healthy));
     }
@@ -502,7 +502,7 @@ mod tests {
                 error: None,
             },
         };
-        
+
         let overall_status = determine_overall_status(&components);
         assert!(matches!(overall_status, HealthStatus::Degraded));
     }
@@ -536,7 +536,7 @@ mod tests {
                 error: None,
             },
         };
-        
+
         let overall_status = determine_overall_status(&components);
         assert!(matches!(overall_status, HealthStatus::Unhealthy));
     }
@@ -592,20 +592,37 @@ mod tests {
     async fn test_health_check_initialized() {
         // Initialize the health check system
         init();
-        
+
         let response = health_check().await;
         let health_response = response.0;
-        
+
         // Check that the response has the expected structure
-        assert!(matches!(health_response.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            health_response.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
         assert!(!health_response.timestamp.is_empty());
-        assert!(health_response.uptime_seconds >= 0);
         assert!(!health_response.version.is_empty());
-        assert!(matches!(health_response.components.database.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(health_response.components.storage.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(health_response.components.indexes.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(health_response.components.wal.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(health_response.components.page_cache.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            health_response.components.database.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            health_response.components.storage.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            health_response.components.indexes.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            health_response.components.wal.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            health_response.components.page_cache.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
     }
 
     #[tokio::test]
@@ -613,21 +630,23 @@ mod tests {
         // Don't initialize - test fallback behavior
         let response = health_check().await;
         let health_response = response.0;
-        
+
         // Should still work with fallback
-        assert!(matches!(health_response.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            health_response.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
         assert!(!health_response.timestamp.is_empty());
-        assert!(health_response.uptime_seconds >= 0);
     }
 
     #[tokio::test]
     async fn test_metrics() {
         // Initialize the health check system
         init();
-        
+
         let response = metrics().await;
         let metrics_value = response.0;
-        
+
         // Check that metrics has the expected structure
         assert!(metrics_value.is_object());
         assert!(metrics_value.get("uptime_seconds").is_some());
@@ -636,12 +655,12 @@ mod tests {
         assert!(metrics_value.get("timestamp").is_some());
         assert!(metrics_value.get("system").is_some());
         assert!(metrics_value.get("database").is_some());
-        
+
         // Check system metrics
         let system = metrics_value.get("system").unwrap();
         assert!(system.get("memory_usage_mb").is_some());
         assert!(system.get("cpu_usage_percent").is_some());
-        
+
         // Check database metrics
         let database = metrics_value.get("database").unwrap();
         assert!(database.get("connections").is_some());
@@ -652,57 +671,87 @@ mod tests {
     #[tokio::test]
     async fn test_check_components() {
         let components = check_components().await;
-        
+
         // All components should have some status
-        assert!(matches!(components.database.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(components.storage.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(components.indexes.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(components.wal.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
-        assert!(matches!(components.page_cache.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            components.database.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            components.storage.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            components.indexes.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            components.wal.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
+        assert!(matches!(
+            components.page_cache.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
     }
 
     #[tokio::test]
     async fn test_check_database() {
         let status = check_database().await;
-        
+
         // Should have some status and response time
-        assert!(matches!(status.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            status.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
         assert!(status.response_time_ms.is_some());
     }
 
     #[tokio::test]
     async fn test_check_storage() {
         let status = check_storage().await;
-        
+
         // Should have some status and response time
-        assert!(matches!(status.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            status.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
         assert!(status.response_time_ms.is_some());
     }
 
     #[tokio::test]
     async fn test_check_indexes() {
         let status = check_indexes().await;
-        
+
         // Should have some status and response time
-        assert!(matches!(status.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            status.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
         assert!(status.response_time_ms.is_some());
     }
 
     #[tokio::test]
     async fn test_check_wal() {
         let status = check_wal().await;
-        
+
         // Should have some status and response time
-        assert!(matches!(status.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            status.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
         assert!(status.response_time_ms.is_some());
     }
 
     #[tokio::test]
     async fn test_check_page_cache() {
         let status = check_page_cache().await;
-        
+
         // Should have some status and response time
-        assert!(matches!(status.status, HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy));
+        assert!(matches!(
+            status.status,
+            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
+        ));
         assert!(status.response_time_ms.is_some());
     }
 }

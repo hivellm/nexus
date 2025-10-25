@@ -424,12 +424,12 @@ impl Catalog {
         self.env.force_sync()?;
         Ok(())
     }
-    
+
     /// Health check for the catalog
     pub fn health_check(&self) -> Result<()> {
         // Try to read from the catalog to verify it's accessible
         let rtxn = self.env.read_txn()?;
-        
+
         // Check if we can read from all databases
         let _ = self.label_name_to_id.len(&rtxn)?;
         let _ = self.label_id_to_name.len(&rtxn)?;
@@ -439,17 +439,17 @@ impl Catalog {
         let _ = self.key_id_to_name.len(&rtxn)?;
         let _ = self.metadata_db.len(&rtxn)?;
         let _ = self.stats_db.len(&rtxn)?;
-        
+
         drop(rtxn);
         Ok(())
     }
-    
+
     /// Get the number of labels
     pub fn label_count(&self) -> u64 {
         let next_id = self.next_label_id.read();
         *next_id as u64
     }
-    
+
     /// Get the number of relationship types
     pub fn rel_type_count(&self) -> u64 {
         let next_id = self.next_type_id.read();

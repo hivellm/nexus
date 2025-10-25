@@ -57,16 +57,14 @@ mod tests {
     async fn test_mcp_client_call_todo() {
         let client = McpClient::new("http://localhost:8080");
         let params = serde_json::json!({"test": "value"});
-        
+
         // This should panic with todo! macro
         let result = std::panic::catch_unwind(|| {
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    client.call("test_method", params)
-                )
+                tokio::runtime::Handle::current().block_on(client.call("test_method", params))
             })
         });
-        
+
         assert!(result.is_err());
     }
 }

@@ -265,30 +265,31 @@ impl TransactionManager {
 
         true
     }
-    
+
     /// Health check for the transaction manager
     pub fn health_check(&self) -> Result<()> {
         // Check if the current epoch is reasonable
         let current_epoch = self.epoch_manager.current_epoch.load(Ordering::Acquire);
-        if current_epoch > 1_000_000_000 { // 1 billion max
+        if current_epoch > 1_000_000_000 {
+            // 1 billion max
             return Err(Error::transaction("Epoch counter too large"));
         }
-        
+
         // Check if the next transaction ID is reasonable
         let next_tx_id = self.epoch_manager.next_tx_id.load(Ordering::Acquire);
-        if next_tx_id > 1_000_000_000 { // 1 billion max
+        if next_tx_id > 1_000_000_000 {
+            // 1 billion max
             return Err(Error::transaction("Transaction ID counter too large"));
         }
-        
+
         Ok(())
     }
-    
+
     /// Get the number of active transactions
     pub fn active_count(&self) -> u64 {
         // For MVP, we'll return 0 as we don't track active transactions yet
         0
     }
-    
 }
 
 impl Default for TransactionManager {

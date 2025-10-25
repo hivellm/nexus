@@ -92,48 +92,43 @@ mod tests {
     async fn test_rest_client_post_todo() {
         let client = RestClient::new("http://localhost:8080");
         let body = serde_json::json!({"test": "value"});
-        
+
         // This should panic with todo! macro
         let result = std::panic::catch_unwind(|| {
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    client.post::<serde_json::Value, serde_json::Value>("/test", &body)
-                )
+                tokio::runtime::Handle::current()
+                    .block_on(client.post::<serde_json::Value, serde_json::Value>("/test", &body))
             })
         });
-        
+
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_rest_client_get_todo() {
         let client = RestClient::new("http://localhost:8080");
-        
+
         // This should panic with todo! macro
         let result = std::panic::catch_unwind(|| {
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    client.get::<serde_json::Value>("/test")
-                )
+                tokio::runtime::Handle::current().block_on(client.get::<serde_json::Value>("/test"))
             })
         });
-        
+
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_rest_client_stream_todo() {
         let client = RestClient::new("http://localhost:8080");
-        
+
         // This should panic with todo! macro
         let result = std::panic::catch_unwind(|| {
             tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(
-                    client.stream("/stream")
-                )
+                tokio::runtime::Handle::current().block_on(client.stream("/stream"))
             })
         });
-        
+
         assert!(result.is_err());
     }
 }

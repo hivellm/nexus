@@ -36,22 +36,26 @@ impl Config {
     }
 
     /// Get the bind address
+    #[allow(dead_code)]
     pub fn addr(&self) -> &SocketAddr {
         &self.addr
     }
 
     /// Get the data directory
+    #[allow(dead_code)]
     pub fn data_dir(&self) -> &str {
         &self.data_dir
     }
 
     /// Set a new data directory
+    #[allow(dead_code)]
     pub fn with_data_dir(mut self, data_dir: impl Into<String>) -> Self {
         self.data_dir = data_dir.into();
         self
     }
 
     /// Set a new bind address
+    #[allow(dead_code)]
     pub fn with_addr(mut self, addr: SocketAddr) -> Self {
         self.addr = addr;
         self
@@ -97,7 +101,7 @@ mod tests {
         let config = Config::default()
             .with_data_dir("/tmp/nexus")
             .with_addr(new_addr);
-        
+
         assert_eq!(config.data_dir, "/tmp/nexus");
         assert_eq!(config.addr, new_addr);
     }
@@ -109,7 +113,7 @@ mod tests {
             std::env::remove_var("NEXUS_ADDR");
             std::env::remove_var("NEXUS_DATA_DIR");
         }
-        
+
         let config = Config::from_env();
         assert_eq!(config.addr.port(), 15474);
         assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
@@ -123,12 +127,12 @@ mod tests {
             std::env::set_var("NEXUS_ADDR", "192.168.1.50:3000");
             std::env::set_var("NEXUS_DATA_DIR", "/var/lib/nexus");
         }
-        
+
         let config = Config::from_env();
         assert_eq!(config.addr.port(), 3000);
         assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)));
         assert_eq!(config.data_dir, "/var/lib/nexus");
-        
+
         // Clean up
         unsafe {
             std::env::remove_var("NEXUS_ADDR");
@@ -143,11 +147,11 @@ mod tests {
             std::env::set_var("NEXUS_DATA_DIR", "/custom/data");
             std::env::remove_var("NEXUS_ADDR");
         }
-        
+
         let config = Config::from_env();
         assert_eq!(config.addr.port(), 15474); // Default
         assert_eq!(config.data_dir, "/custom/data"); // From env
-        
+
         // Clean up
         unsafe {
             std::env::remove_var("NEXUS_DATA_DIR");
@@ -160,9 +164,9 @@ mod tests {
         unsafe {
             std::env::set_var("NEXUS_ADDR", "invalid-address");
         }
-        
+
         let _config = Config::from_env();
-        
+
         // Clean up
         unsafe {
             std::env::remove_var("NEXUS_ADDR");
@@ -173,7 +177,7 @@ mod tests {
     fn test_config_clone() {
         let config1 = Config::default();
         let config2 = config1.clone();
-        
+
         assert_eq!(config1.addr, config2.addr);
         assert_eq!(config1.data_dir, config2.data_dir);
     }
@@ -182,7 +186,7 @@ mod tests {
     fn test_config_debug() {
         let config = Config::default();
         let debug_str = format!("{:?}", config);
-        
+
         assert!(debug_str.contains("127.0.0.1:15474"));
         assert!(debug_str.contains("./data"));
     }

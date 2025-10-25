@@ -379,27 +379,28 @@ impl Wal {
         self.stats.entries_since_checkpoint = 0;
         Ok(())
     }
-    
+
     /// Health check for the WAL
     pub fn health_check(&self) -> Result<()> {
         // Check if the WAL file is accessible
         if !self.path.exists() {
             return Err(Error::wal("WAL file does not exist"));
         }
-        
+
         // Check if we can read from the file
         let mut file = File::open(&self.path)?;
         let _ = file.seek(SeekFrom::Start(0))?;
-        
+
         // Check if the file size is reasonable
         let metadata = file.metadata()?;
-        if metadata.len() > 1024 * 1024 * 1024 { // 1GB max
+        if metadata.len() > 1024 * 1024 * 1024 {
+            // 1GB max
             return Err(Error::wal("WAL file too large"));
         }
-        
+
         Ok(())
     }
-    
+
     /// Get the number of WAL entries
     pub fn entry_count(&self) -> u64 {
         self.stats.entries_written
