@@ -291,9 +291,11 @@ mod tests {
     use super::*;
     use crate::catalog::Catalog;
     use crate::executor::parser::{
-        Clause, CypherQuery, Expression, MatchClause, NodePattern, Pattern, PatternElement,
-        ReturnClause, ReturnItem,
+        BinaryOperator, Clause, CypherQuery, Expression, Literal, MatchClause, NodePattern, 
+        Pattern, PatternElement, RelationshipDirection, RelationshipPattern, ReturnClause, 
+        ReturnItem, WhereClause, LimitClause,
     };
+    use crate::executor::{JoinType, IndexType};
     use crate::index::{KnnIndex, LabelIndex};
 
     #[test]
@@ -367,5 +369,418 @@ mod tests {
 
         let cost = planner.estimate_cost(&operators).unwrap();
         assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn test_plan_query_with_where_clause() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    pattern: Pattern {
+                        elements: vec![PatternElement::Node(NodePattern {
+                            variable: Some("n".to_string()),
+                            labels: vec!["Person".to_string()],
+                            properties: None,
+                        })],
+                    },
+                    where_clause: Some(WhereClause {
+                        expression: Expression::BinaryOp {
+                            left: Box::new(Expression::PropertyAccess {
+                                variable: "n".to_string(),
+                                property: "age".to_string(),
+                            }),
+                            op: BinaryOperator::GreaterThan,
+                            right: Box::new(Expression::Literal(Literal::Integer(18))),
+                        },
+                    }),
+                }),
+                Clause::Return(ReturnClause {
+                    items: vec![ReturnItem {
+                        expression: Expression::Variable("n".to_string()),
+                        alias: None,
+                    }],
+                    distinct: false,
+                }),
+            ],
+            params: std::collections::HashMap::new(),
+        };
+
+        let operators = planner.plan_query(&query).unwrap();
+        assert_eq!(operators.len(), 3); // NodeByLabel, Filter, Project
+
+        match &operators[0] {
+            Operator::NodeByLabel { variable, .. } => {
+                assert_eq!(variable, "n");
+            }
+            _ => panic!("Expected NodeByLabel operator"),
+        }
+
+        match &operators[1] {
+            Operator::Filter { predicate } => {
+                assert!(predicate.contains("n.age"));
+                assert!(predicate.contains(">"));
+                assert!(predicate.contains("18"));
+            }
+            _ => panic!("Expected Filter operator"),
+        }
+
+        match &operators[2] {
+            Operator::Project { columns } => {
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0], "n");
+            }
+            _ => panic!("Expected Project operator"),
+        }
+    }
+
+    #[test]
+    fn test_plan_query_with_limit() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    pattern: Pattern {
+                        elements: vec![PatternElement::Node(NodePattern {
+                            variable: Some("n".to_string()),
+                            labels: vec!["Person".to_string()],
+                            properties: None,
+                        })],
+                    },
+                    where_clause: None,
+                }),
+                Clause::Return(ReturnClause {
+                    items: vec![ReturnItem {
+                        expression: Expression::Variable("n".to_string()),
+                        alias: None,
+                    }],
+                    distinct: false,
+                }),
+                Clause::Limit(LimitClause {
+                    count: Expression::Literal(Literal::Integer(10)),
+                }),
+            ],
+            params: std::collections::HashMap::new(),
+        };
+
+        let operators = planner.plan_query(&query).unwrap();
+        assert_eq!(operators.len(), 3); // NodeByLabel, Project, Limit
+
+        match &operators[2] {
+            Operator::Limit { count } => {
+                assert_eq!(*count, 10);
+            }
+            _ => panic!("Expected Limit operator"),
+        }
+    }
+
+    #[test]
+    fn test_plan_query_with_relationship() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    pattern: Pattern {
+                        elements: vec![
+                            PatternElement::Node(NodePattern {
+                                variable: Some("a".to_string()),
+                                labels: vec!["Person".to_string()],
+                                properties: None,
+                            }),
+                            PatternElement::Relationship(RelationshipPattern {
+                                variable: Some("r".to_string()),
+                                types: vec!["KNOWS".to_string()],
+                                direction: RelationshipDirection::Outgoing,
+                                properties: None,
+                                quantifier: None,
+                            }),
+                            PatternElement::Node(NodePattern {
+                                variable: Some("b".to_string()),
+                                labels: vec!["Person".to_string()],
+                                properties: None,
+                            }),
+                        ],
+                    },
+                    where_clause: None,
+                }),
+                Clause::Return(ReturnClause {
+                    items: vec![ReturnItem {
+                        expression: Expression::Variable("a".to_string()),
+                        alias: None,
+                    }],
+                    distinct: false,
+                }),
+            ],
+            params: std::collections::HashMap::new(),
+        };
+
+        let operators = planner.plan_query(&query).unwrap();
+        assert!(operators.len() >= 2); // At least NodeByLabel and Project
+
+        // Check for Expand operator
+        let has_expand = operators.iter().any(|op| matches!(op, Operator::Expand { .. }));
+        assert!(has_expand, "Expected Expand operator for relationship");
+    }
+
+    #[test]
+    fn test_plan_query_empty_patterns() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![],
+            params: std::collections::HashMap::new(),
+        };
+
+        let result = planner.plan_query(&query);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_expression_to_string_variable() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let expr = Expression::Variable("test_var".to_string());
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "test_var");
+    }
+
+    #[test]
+    fn test_expression_to_string_property_access() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let expr = Expression::PropertyAccess {
+            variable: "n".to_string(),
+            property: "age".to_string(),
+        };
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "n.age");
+    }
+
+    #[test]
+    fn test_expression_to_string_literals() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        // Test string literal
+        let expr = Expression::Literal(Literal::String("hello".to_string()));
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "\"hello\"");
+
+        // Test integer literal
+        let expr = Expression::Literal(Literal::Integer(42));
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "42");
+
+        // Test float literal
+        let expr = Expression::Literal(Literal::Float(3.14));
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "3.14");
+
+        // Test boolean literal
+        let expr = Expression::Literal(Literal::Boolean(true));
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "true");
+
+        // Test null literal
+        let expr = Expression::Literal(Literal::Null);
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "NULL");
+    }
+
+    #[test]
+    fn test_expression_to_string_binary_operators() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let expr = Expression::BinaryOp {
+            left: Box::new(Expression::Variable("a".to_string())),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expression::Variable("b".to_string())),
+        };
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "a = b");
+
+        let expr = Expression::BinaryOp {
+            left: Box::new(Expression::Variable("x".to_string())),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(Literal::Integer(10))),
+        };
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "x > 10");
+    }
+
+    #[test]
+    fn test_expression_to_string_parameter() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let expr = Expression::Parameter("param1".to_string());
+        let result = planner.expression_to_string(&expr).unwrap();
+        assert_eq!(result, "$param1");
+    }
+
+    #[test]
+    fn test_estimate_cost_all_operators() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let operators = vec![
+            Operator::NodeByLabel {
+                label_id: 1,
+                variable: "n".to_string(),
+            },
+            Operator::Filter {
+                predicate: "n.age > 18".to_string(),
+            },
+            Operator::Expand {
+                type_id: Some(1),
+                source_var: "n".to_string(),
+                target_var: "m".to_string(),
+                rel_var: "r".to_string(),
+                direction: Direction::Outgoing,
+            },
+            Operator::Project {
+                columns: vec!["n".to_string()],
+            },
+            Operator::Limit { count: 10 },
+            Operator::Sort {
+                columns: vec!["n.name".to_string()],
+                ascending: vec![true],
+            },
+            Operator::Aggregate {
+                group_by: vec!["n".to_string()],
+                aggregations: vec![],
+            },
+            Operator::Union {
+                left: Box::new(Operator::NodeByLabel {
+                    label_id: 1,
+                    variable: "a".to_string(),
+                }),
+                right: Box::new(Operator::NodeByLabel {
+                    label_id: 2,
+                    variable: "b".to_string(),
+                }),
+            },
+            Operator::Join {
+                left: Box::new(Operator::NodeByLabel {
+                    label_id: 1,
+                    variable: "a".to_string(),
+                }),
+                right: Box::new(Operator::NodeByLabel {
+                    label_id: 2,
+                    variable: "b".to_string(),
+                }),
+                join_type: JoinType::Inner,
+                condition: Some("a.id = b.id".to_string()),
+            },
+            Operator::IndexScan {
+                index_type: IndexType::Label,
+                key: "Person".to_string(),
+                variable: "n".to_string(),
+            },
+            Operator::Distinct {
+                columns: vec!["n".to_string()],
+            },
+        ];
+
+        let cost = planner.estimate_cost(&operators).unwrap();
+        assert!(cost > 0.0);
+        // Should be substantial with all operators (adjusted threshold)
+        assert!(cost > 100.0);
+    }
+
+    #[test]
+    fn test_optimize_operator_order() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let operators = vec![
+            Operator::NodeByLabel {
+                label_id: 1,
+                variable: "n".to_string(),
+            },
+            Operator::Filter {
+                predicate: "n.age > 18".to_string(),
+            },
+        ];
+
+        let optimized = planner.optimize_operator_order(operators.clone()).unwrap();
+        assert_eq!(optimized.len(), operators.len());
+        // For MVP, should return same order
+        // For MVP, should return same order
+        assert_eq!(optimized.len(), operators.len());
+    }
+
+    #[test]
+    fn test_plan_query_with_return_alias() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    pattern: Pattern {
+                        elements: vec![PatternElement::Node(NodePattern {
+                            variable: Some("n".to_string()),
+                            labels: vec!["Person".to_string()],
+                            properties: None,
+                        })],
+                    },
+                    where_clause: None,
+                }),
+                Clause::Return(ReturnClause {
+                    items: vec![ReturnItem {
+                        expression: Expression::Variable("n".to_string()),
+                        alias: Some("person".to_string()),
+                    }],
+                    distinct: false,
+                }),
+            ],
+            params: std::collections::HashMap::new(),
+        };
+
+        let operators = planner.plan_query(&query).unwrap();
+        assert_eq!(operators.len(), 2);
+
+        match &operators[1] {
+            Operator::Project { columns } => {
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0], "person");
+            }
+            _ => panic!("Expected Project operator with alias"),
+        }
     }
 }

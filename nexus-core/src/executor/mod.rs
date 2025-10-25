@@ -2654,4 +2654,89 @@ mod tests {
             .unwrap();
         // Should not panic (MVP implementation does nothing)
     }
+
+    #[test]
+    fn test_row_creation() {
+        let row = Row {
+            values: vec![Value::String("test".to_string()), Value::Number(42.into())],
+        };
+        assert_eq!(row.values.len(), 2);
+    }
+
+    #[test]
+    fn test_result_set_creation() {
+        let result_set = ResultSet {
+            columns: vec!["name".to_string(), "age".to_string()],
+            rows: vec![
+                Row {
+                    values: vec![Value::String("Alice".to_string()), Value::Number(25.into())],
+                },
+                Row {
+                    values: vec![Value::String("Bob".to_string()), Value::Number(30.into())],
+                },
+            ],
+        };
+        assert_eq!(result_set.columns.len(), 2);
+        assert_eq!(result_set.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_join_type_enum() {
+        assert_eq!(JoinType::Inner, JoinType::Inner);
+        assert_ne!(JoinType::Inner, JoinType::LeftOuter);
+        assert_ne!(JoinType::Inner, JoinType::RightOuter);
+        assert_ne!(JoinType::Inner, JoinType::FullOuter);
+    }
+
+    #[test]
+    fn test_index_type_enum() {
+        assert_eq!(IndexType::Label, IndexType::Label);
+        assert_ne!(IndexType::Label, IndexType::Property);
+        assert_ne!(IndexType::Label, IndexType::Vector);
+        assert_ne!(IndexType::Label, IndexType::FullText);
+    }
+
+    #[test]
+    fn test_execution_context_creation() {
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), Value::String("Alice".to_string()));
+        let context = ExecutionContext::new(params);
+        assert!(context.params.get("name").is_some());
+    }
+
+    #[test]
+    fn test_execution_context_variable_operations() {
+        let mut context = ExecutionContext::new(HashMap::new());
+        
+        // Set and get variable
+        context.set_variable("test", Value::String("value".to_string()));
+        assert_eq!(context.get_variable("test"), Some(&Value::String("value".to_string())));
+        
+        // Get non-existent variable
+        assert!(context.get_variable("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_execution_context_parameter_operations() {
+        let mut params = HashMap::new();
+        params.insert("param1".to_string(), Value::String("value1".to_string()));
+        let mut context = ExecutionContext::new(params);
+        
+        // Get parameter
+        assert_eq!(context.params.get("param1"), Some(&Value::String("value1".to_string())));
+        
+        // Get non-existent parameter
+        assert!(context.params.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_execution_context_clear() {
+        let mut context = ExecutionContext::new(HashMap::new());
+        context.set_variable("test", Value::String("value".to_string()));
+        assert!(context.get_variable("test").is_some());
+        
+        context.variables.clear();
+        assert!(context.get_variable("test").is_none());
+    }
+
 }
