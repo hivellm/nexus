@@ -75,17 +75,21 @@ fn test_relationship_traversal_integration() {
     let rel1_id = store.allocate_rel_id();
     let rel2_id = store.allocate_rel_id();
 
-    let mut rel1 = nexus_core::storage::RelationshipRecord::default();
-    rel1.src_id = node1_id;
-    rel1.dst_id = node2_id;
-    rel1.type_id = knows_type;
-    rel1.next_src_ptr = rel2_id; // Points to next rel from node1
+    let rel1 = nexus_core::storage::RelationshipRecord {
+        src_id: node1_id,
+        dst_id: node2_id,
+        type_id: knows_type,
+        next_src_ptr: rel2_id, // Points to next rel from node1
+        ..Default::default()
+    };
 
-    let mut rel2 = nexus_core::storage::RelationshipRecord::default();
-    rel2.src_id = node1_id;
-    rel2.dst_id = node3_id;
-    rel2.type_id = knows_type;
-    rel2.next_src_ptr = u64::MAX; // End of list
+    let rel2 = nexus_core::storage::RelationshipRecord {
+        src_id: node1_id,
+        dst_id: node3_id,
+        type_id: knows_type,
+        next_src_ptr: u64::MAX, // End of list
+        ..Default::default()
+    };
 
     store.write_rel(rel1_id, &rel1).unwrap();
     store.write_rel(rel2_id, &rel2).unwrap();
@@ -280,9 +284,8 @@ fn test_wal_crash_recovery() {
         // Verify entry sequence
         let mut node_count = 0;
         for entry in entries {
-            match entry {
-                nexus_core::wal::WalEntry::CreateNode { .. } => node_count += 1,
-                _ => {}
+            if let nexus_core::wal::WalEntry::CreateNode { .. } = entry {
+                node_count += 1;
             }
         }
         assert_eq!(node_count, 5);
@@ -339,10 +342,12 @@ fn test_multi_module_transaction() {
 
     // Create relationship
     let rel_id = store.allocate_rel_id();
-    let mut rel = nexus_core::storage::RelationshipRecord::default();
-    rel.src_id = node1_id;
-    rel.dst_id = node2_id;
-    rel.type_id = knows_type;
+    let rel = nexus_core::storage::RelationshipRecord {
+        src_id: node1_id,
+        dst_id: node2_id,
+        type_id: knows_type,
+        ..Default::default()
+    };
     store.write_rel(rel_id, &rel).unwrap();
 
     // Write to WAL

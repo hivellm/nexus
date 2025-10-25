@@ -432,14 +432,18 @@ impl Ord for PropertyValue {
         match (self, other) {
             (PropertyValue::String(a), PropertyValue::String(b)) => a.cmp(b),
             (PropertyValue::Integer(a), PropertyValue::Integer(b)) => a.cmp(b),
-            (PropertyValue::Float(a), PropertyValue::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (PropertyValue::Float(a), PropertyValue::Float(b)) => {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            }
             (PropertyValue::Boolean(a), PropertyValue::Boolean(b)) => a.cmp(b),
             (PropertyValue::Null, PropertyValue::Null) => std::cmp::Ordering::Equal,
             // Different types are ordered by variant order
             (PropertyValue::String(_), _) => std::cmp::Ordering::Less,
             (PropertyValue::Integer(_), PropertyValue::String(_)) => std::cmp::Ordering::Greater,
             (PropertyValue::Integer(_), _) => std::cmp::Ordering::Less,
-            (PropertyValue::Float(_), PropertyValue::String(_) | PropertyValue::Integer(_)) => std::cmp::Ordering::Greater,
+            (PropertyValue::Float(_), PropertyValue::String(_) | PropertyValue::Integer(_)) => {
+                std::cmp::Ordering::Greater
+            }
             (PropertyValue::Float(_), _) => std::cmp::Ordering::Less,
             (PropertyValue::Boolean(_), PropertyValue::Null) => std::cmp::Ordering::Less,
             (PropertyValue::Boolean(_), _) => std::cmp::Ordering::Greater,
@@ -496,9 +500,7 @@ impl PropertyIndex {
         let mut trees = self.property_trees.write();
         let mut stats = self.stats.write();
 
-        let tree = trees
-            .entry((label_id, key_id))
-            .or_default();
+        let tree = trees.entry((label_id, key_id)).or_default();
         let bitmap = tree.entry(value).or_default();
         bitmap.insert(node_id as u32);
 

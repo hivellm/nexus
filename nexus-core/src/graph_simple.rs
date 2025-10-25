@@ -1,14 +1,8 @@
-//! Core graph data structures - Graph, Node, Edge
-//!
-//! This module provides high-level graph data structures that wrap the low-level
-//! storage records and provide a more user-friendly API for graph operations.
+//! Simplified graph data structures for testing
+//! This module provides the core graph data structures without storage dependencies
 
-// use crate::storage::{NodeRecord, PropertyValue, RecordStore, RelationshipRecord};
-use crate::{Error, Result};
-use crate::graph_simple::PropertyValue;
-use parking_lot::RwLock;
+use crate::error::{Error, Result};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// A unique identifier for nodes in the graph
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -64,6 +58,23 @@ impl From<EdgeId> for u64 {
     fn from(edge_id: EdgeId) -> Self {
         edge_id.0
     }
+}
+
+/// Property value types for simplified testing
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyValue {
+    /// Null value
+    Null,
+    /// Boolean value
+    Bool(bool),
+    /// 64-bit integer value
+    Int64(i64),
+    /// 64-bit floating point value
+    Float64(f64),
+    /// String value
+    String(String),
+    /// Bytes value
+    Bytes(Vec<u8>),
 }
 
 /// A node in the graph with labels and properties
@@ -239,377 +250,195 @@ impl Edge {
     }
 }
 
-/// A graph containing nodes and edges
+/// A simple in-memory graph containing nodes and edges
 pub struct Graph {
-    /// Storage backend for persistence
-    store: Arc<RecordStore>,
-    /// Catalog for label/type/key mappings
-    catalog: Arc<crate::catalog::Catalog>,
     /// Cache of loaded nodes (in-memory)
-    node_cache: Arc<RwLock<HashMap<NodeId, Node>>>,
+    nodes: HashMap<NodeId, Node>,
     /// Cache of loaded edges (in-memory)
-    edge_cache: Arc<RwLock<HashMap<EdgeId, Edge>>>,
+    edges: HashMap<EdgeId, Edge>,
+    /// Next node ID counter
+    next_node_id: u64,
+    /// Next edge ID counter
+    next_edge_id: u64,
 }
 
 impl Graph {
-    /// Create a new graph with the given storage backend and catalog
-    pub fn new(store: Arc<RecordStore>, catalog: Arc<crate::catalog::Catalog>) -> Self {
+    /// Create a new empty graph
+    pub fn new() -> Self {
         Self {
-            store,
-            catalog,
-            node_cache: Arc::new(RwLock::new(HashMap::new())),
-            edge_cache: Arc::new(RwLock::new(HashMap::new())),
+            nodes: HashMap::new(),
+            edges: HashMap::new(),
+            next_node_id: 0,
+            next_edge_id: 0,
         }
     }
 
     /// Create a new node in the graph
-    pub fn create_node(&self, labels: Vec<String>) -> Result<NodeId> {
-        // Allocate a new node ID
-        let node_id = self.store.allocate_node_id();
-        let node_id = NodeId::new(node_id);
+    pub fn create_node(&mut self, labels: Vec<String>) -> Result<NodeId> {
+        let node_id = NodeId::new(self.next_node_id);
+        self.next_node_id += 1;
 
-        // Get or create label IDs
-        let mut label_bits = 0u64;
-        for label in &labels {
-            let label_id = self.catalog.get_or_create_label(label)?;
-            if label_id < 64 {
-                label_bits |= 1u64 << label_id;
-            }
-        }
-
-        // Create node record
-        let mut record = NodeRecord::default();
-        record.label_bits = label_bits;
-        record.first_rel_ptr = u64::MAX; // No relationships yet
-        record.prop_ptr = u64::MAX; // No properties yet
-
-        // Write to storage
-        self.store.write_node(node_id.value(), &record)?;
-
-        // Create in-memory node
         let node = Node::new(node_id, labels);
-        self.node_cache.write().insert(node_id, node);
+        self.nodes.insert(node_id, node);
 
         Ok(node_id)
     }
 
     /// Get a node by ID
-    pub fn get_node(&self, node_id: NodeId) -> Result<Option<Node>> {
-        // Check cache first
-        if let Some(node) = self.node_cache.read().get(&node_id).cloned() {
-            return Ok(Some(node));
-        }
+    pub fn get_node(&self, node_id: NodeId) -> Result<Option<&Node>> {
+        Ok(self.nodes.get(&node_id))
+    }
 
-        // Read from storage
-        let record = self.store.read_node(node_id.value())?;
-
-        if record.is_deleted() {
-            return Ok(None);
-        }
-
-        // Convert label bits to label names
-        let mut labels = Vec::new();
-        for i in 0..64 {
-            if record.has_label(i) {
-                if let Some(label_name) = self.catalog.get_label_name(i)? {
-                    labels.push(label_name);
-                }
-            }
-        }
-
-        // TODO: Load properties from property chain
-        // This would require implementing property loading from the storage layer
-        let properties = HashMap::new();
-
-        let node = Node::with_properties(node_id, labels, properties);
-
-        // Cache the node
-        self.node_cache.write().insert(node_id, node.clone());
-
-        Ok(Some(node))
+    /// Get a mutable reference to a node by ID
+    pub fn get_node_mut(&mut self, node_id: NodeId) -> Result<Option<&mut Node>> {
+        Ok(self.nodes.get_mut(&node_id))
     }
 
     /// Update a node in the graph
-    pub fn update_node(&self, node: Node) -> Result<()> {
-        // Get or create label IDs
-        let mut label_bits = 0u64;
-        for label in &node.labels {
-            let label_id = self.catalog.get_or_create_label(label)?;
-            if label_id < 64 {
-                label_bits |= 1u64 << label_id;
-            }
-        }
-
-        // Create updated record
-        let mut record = NodeRecord::default();
-        record.label_bits = label_bits;
-        record.first_rel_ptr = u64::MAX; // TODO: Preserve existing relationships
-        record.prop_ptr = u64::MAX; // TODO: Handle properties
-
-        // Write to storage
-        self.store.write_node(node.id.value(), &record)?;
-
-        // Update cache
-        self.node_cache.write().insert(node.id, node);
-
+    pub fn update_node(&mut self, node: Node) -> Result<()> {
+        self.nodes.insert(node.id, node);
         Ok(())
     }
 
     /// Delete a node from the graph
-    pub fn delete_node(&self, node_id: NodeId) -> Result<bool> {
-        // Check if node exists
-        if self.get_node(node_id)?.is_none() {
-            return Ok(false);
+    pub fn delete_node(&mut self, node_id: NodeId) -> Result<bool> {
+        if self.nodes.remove(&node_id).is_some() {
+            // Also remove all edges connected to this node
+            self.edges.retain(|_, edge| edge.source != node_id && edge.target != node_id);
+            Ok(true)
+        } else {
+            Ok(false)
         }
-
-        // Mark as deleted in storage
-        let mut record = self.store.read_node(node_id.value())?;
-        record.set_deleted();
-        self.store.write_node(node_id.value(), &record)?;
-
-        // Remove from cache
-        self.node_cache.write().remove(&node_id);
-
-        Ok(true)
     }
 
     /// Create a new edge in the graph
     pub fn create_edge(
-        &self,
+        &mut self,
         source: NodeId,
         target: NodeId,
         relationship_type: String,
     ) -> Result<EdgeId> {
         // Verify both nodes exist
-        if self.get_node(source)?.is_none() {
+        if !self.nodes.contains_key(&source) {
             return Err(Error::NotFound(format!(
                 "Source node {} not found",
                 source.value()
             )));
         }
-        if self.get_node(target)?.is_none() {
+        if !self.nodes.contains_key(&target) {
             return Err(Error::NotFound(format!(
                 "Target node {} not found",
                 target.value()
             )));
         }
 
-        // Allocate a new edge ID
-        let edge_id = self.store.allocate_rel_id();
-        let edge_id = EdgeId::new(edge_id);
+        let edge_id = EdgeId::new(self.next_edge_id);
+        self.next_edge_id += 1;
 
-        // Get or create relationship type ID
-        let type_id = self.catalog.get_or_create_type(&relationship_type)?;
-
-        // Create relationship record
-        let record = RelationshipRecord {
-            src_id: source.value(),
-            dst_id: target.value(),
-            type_id,
-            next_src_ptr: u64::MAX, // TODO: Link to existing relationships
-            next_dst_ptr: u64::MAX, // TODO: Link to existing relationships
-            prop_ptr: u64::MAX,     // No properties yet
-            ..Default::default()
-        };
-
-        // Write to storage
-        self.store.write_rel(edge_id.value(), &record)?;
-
-        // Create in-memory edge
         let edge = Edge::new(edge_id, source, target, relationship_type);
-        self.edge_cache.write().insert(edge_id, edge);
+        self.edges.insert(edge_id, edge);
 
         Ok(edge_id)
     }
 
     /// Get an edge by ID
-    pub fn get_edge(&self, edge_id: EdgeId) -> Result<Option<Edge>> {
-        // Check cache first
-        if let Some(edge) = self.edge_cache.read().get(&edge_id).cloned() {
-            return Ok(Some(edge));
-        }
+    pub fn get_edge(&self, edge_id: EdgeId) -> Result<Option<&Edge>> {
+        Ok(self.edges.get(&edge_id))
+    }
 
-        // Read from storage
-        let record = self.store.read_rel(edge_id.value())?;
-
-        if record.is_deleted() {
-            return Ok(None);
-        }
-
-        // Get relationship type name
-        let relationship_type = self
-            .catalog
-            .get_type_name(record.type_id)?
-            .unwrap_or_else(|| format!("Type_{}", record.type_id));
-
-        // TODO: Load properties from property chain
-        let properties = HashMap::new();
-
-        let edge = Edge::with_properties(
-            edge_id,
-            NodeId::new(record.src_id),
-            NodeId::new(record.dst_id),
-            relationship_type,
-            properties,
-        );
-
-        // Cache the edge
-        self.edge_cache.write().insert(edge_id, edge.clone());
-
-        Ok(Some(edge))
+    /// Get a mutable reference to an edge by ID
+    pub fn get_edge_mut(&mut self, edge_id: EdgeId) -> Result<Option<&mut Edge>> {
+        Ok(self.edges.get_mut(&edge_id))
     }
 
     /// Update an edge in the graph
-    pub fn update_edge(&self, edge: Edge) -> Result<()> {
-        // Get or create relationship type ID
-        let type_id = self.catalog.get_or_create_type(&edge.relationship_type)?;
-
-        // Create updated record
-        let record = RelationshipRecord {
-            src_id: edge.source.value(),
-            dst_id: edge.target.value(),
-            type_id,
-            next_src_ptr: u64::MAX, // TODO: Preserve existing relationships
-            next_dst_ptr: u64::MAX, // TODO: Preserve existing relationships
-            prop_ptr: u64::MAX,     // TODO: Handle properties
-            ..Default::default()
-        };
-
-        // Write to storage
-        self.store.write_rel(edge.id.value(), &record)?;
-
-        // Update cache
-        self.edge_cache.write().insert(edge.id, edge);
-
+    pub fn update_edge(&mut self, edge: Edge) -> Result<()> {
+        self.edges.insert(edge.id, edge);
         Ok(())
     }
 
     /// Delete an edge from the graph
-    pub fn delete_edge(&self, edge_id: EdgeId) -> Result<bool> {
-        // Check if edge exists
-        if self.get_edge(edge_id)?.is_none() {
-            return Ok(false);
-        }
-
-        // Mark as deleted in storage
-        let mut record = self.store.read_rel(edge_id.value())?;
-        record.set_deleted();
-        self.store.write_rel(edge_id.value(), &record)?;
-
-        // Remove from cache
-        self.edge_cache.write().remove(&edge_id);
-
-        Ok(true)
+    pub fn delete_edge(&mut self, edge_id: EdgeId) -> Result<bool> {
+        Ok(self.edges.remove(&edge_id).is_some())
     }
 
     /// Get all nodes in the graph
-    pub fn get_all_nodes(&self) -> Result<Vec<Node>> {
-        let mut nodes = Vec::new();
-        let stats = self.store.stats();
-
-        for node_id in 0..stats.node_count {
-            if let Some(node) = self.get_node(NodeId::new(node_id))? {
-                nodes.push(node);
-            }
-        }
-
-        Ok(nodes)
+    pub fn get_all_nodes(&self) -> Result<Vec<&Node>> {
+        Ok(self.nodes.values().collect())
     }
 
     /// Get all edges in the graph
-    pub fn get_all_edges(&self) -> Result<Vec<Edge>> {
-        let mut edges = Vec::new();
-        let stats = self.store.stats();
-
-        for edge_id in 0..stats.rel_count {
-            if let Some(edge) = self.get_edge(EdgeId::new(edge_id))? {
-                edges.push(edge);
-            }
-        }
-
-        Ok(edges)
+    pub fn get_all_edges(&self) -> Result<Vec<&Edge>> {
+        Ok(self.edges.values().collect())
     }
 
     /// Get nodes with a specific label
-    pub fn get_nodes_by_label(&self, label: &str) -> Result<Vec<Node>> {
-        let mut nodes = Vec::new();
-        let all_nodes = self.get_all_nodes()?;
-
-        for node in all_nodes {
-            if node.has_label(label) {
-                nodes.push(node);
-            }
-        }
-
-        Ok(nodes)
+    pub fn get_nodes_by_label(&self, label: &str) -> Result<Vec<&Node>> {
+        Ok(self
+            .nodes
+            .values()
+            .filter(|node| node.has_label(label))
+            .collect())
     }
 
     /// Get edges of a specific type
-    pub fn get_edges_by_type(&self, relationship_type: &str) -> Result<Vec<Edge>> {
-        let mut edges = Vec::new();
-        let all_edges = self.get_all_edges()?;
-
-        for edge in all_edges {
-            if edge.relationship_type == relationship_type {
-                edges.push(edge);
-            }
-        }
-
-        Ok(edges)
+    pub fn get_edges_by_type(&self, relationship_type: &str) -> Result<Vec<&Edge>> {
+        Ok(self
+            .edges
+            .values()
+            .filter(|edge| edge.relationship_type == relationship_type)
+            .collect())
     }
 
     /// Get edges connected to a specific node
-    pub fn get_edges_for_node(&self, node_id: NodeId) -> Result<Vec<Edge>> {
-        let mut edges = Vec::new();
-        let all_edges = self.get_all_edges()?;
-
-        for edge in all_edges {
-            if edge.source == node_id || edge.target == node_id {
-                edges.push(edge);
-            }
-        }
-
-        Ok(edges)
+    pub fn get_edges_for_node(&self, node_id: NodeId) -> Result<Vec<&Edge>> {
+        Ok(self
+            .edges
+            .values()
+            .filter(|edge| edge.source == node_id || edge.target == node_id)
+            .collect())
     }
 
     /// Get the number of nodes in the graph
     pub fn node_count(&self) -> Result<usize> {
-        Ok(self.get_all_nodes()?.len())
+        Ok(self.nodes.len())
     }
 
     /// Get the number of edges in the graph
     pub fn edge_count(&self) -> Result<usize> {
-        Ok(self.get_all_edges()?.len())
+        Ok(self.edges.len())
     }
 
-    /// Clear all caches
-    pub fn clear_cache(&self) {
-        self.node_cache.write().clear();
-        self.edge_cache.write().clear();
+    /// Clear all data
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.edges.clear();
+        self.next_node_id = 0;
+        self.next_edge_id = 0;
     }
 
     /// Get graph statistics
     pub fn stats(&self) -> Result<GraphStats> {
-        let store_stats = self.store.stats();
-        let node_count = self.node_count()?;
-        let edge_count = self.edge_count()?;
-
         Ok(GraphStats {
-            total_nodes: node_count,
-            total_edges: edge_count,
-            storage_nodes: store_stats.node_count as usize,
-            storage_edges: store_stats.rel_count as usize,
-            cached_nodes: self.node_cache.read().len(),
-            cached_edges: self.edge_cache.read().len(),
+            total_nodes: self.nodes.len(),
+            total_edges: self.edges.len(),
+            cached_nodes: self.nodes.len(),
+            cached_edges: self.edges.len(),
         })
+    }
+}
+
+impl Default for Graph {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl std::fmt::Debug for Graph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Graph")
-            .field("node_cache", &self.node_cache.read().len())
-            .field("edge_cache", &self.edge_cache.read().len())
+            .field("node_count", &self.nodes.len())
+            .field("edge_count", &self.edges.len())
             .finish()
     }
 }
@@ -621,10 +450,6 @@ pub struct GraphStats {
     pub total_nodes: usize,
     /// Number of active edges in the graph
     pub total_edges: usize,
-    /// Number of nodes in storage (including deleted)
-    pub storage_nodes: usize,
-    /// Number of edges in storage (including deleted)
-    pub storage_edges: usize,
     /// Number of nodes in cache
     pub cached_nodes: usize,
     /// Number of edges in cache
@@ -634,20 +459,10 @@ pub struct GraphStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // use crate::catalog::Catalog;
-    use tempfile::TempDir;
-
-    fn create_test_graph() -> (Graph, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = Arc::new(RecordStore::new(dir.path()).unwrap());
-        let catalog = Arc::new(Catalog::new(dir.path().join("catalog")).unwrap());
-        let graph = Graph::new(store, catalog);
-        (graph, dir)
-    }
 
     #[test]
     fn test_node_creation() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         assert_eq!(node_id.value(), 0);
@@ -660,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_node_with_multiple_labels() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let node_id = graph
             .create_node(vec!["Person".to_string(), "Employee".to_string()])
@@ -674,22 +489,25 @@ mod tests {
 
     #[test]
     fn test_node_properties() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
-        let mut node = graph.get_node(node_id).unwrap().unwrap();
+        let mut node = graph.get_node_mut(node_id).unwrap().unwrap().clone();
 
-        node.set_property("name".to_string(), PropertyValue::StringRef(0));
+        node.set_property("name".to_string(), PropertyValue::String("John".to_string()));
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
-        assert!(node.has_property("name"));
-        assert!(node.has_property("age"));
-        assert_eq!(node.property_keys().len(), 2);
+        graph.update_node(node).unwrap();
+
+        let updated_node = graph.get_node(node_id).unwrap().unwrap();
+        assert!(updated_node.has_property("name"));
+        assert!(updated_node.has_property("age"));
+        assert_eq!(updated_node.property_keys().len(), 2);
     }
 
     #[test]
     fn test_edge_creation() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -708,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_edge_properties() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -716,16 +534,19 @@ mod tests {
             .create_edge(source_id, target_id, "KNOWS".to_string())
             .unwrap();
 
-        let mut edge = graph.get_edge(edge_id).unwrap().unwrap();
+        let mut edge = graph.get_edge_mut(edge_id).unwrap().unwrap().clone();
         edge.set_property("since".to_string(), PropertyValue::Int64(2020));
 
-        assert!(edge.has_property("since"));
-        assert_eq!(edge.property_keys().len(), 1);
+        graph.update_edge(edge).unwrap();
+
+        let updated_edge = graph.get_edge(edge_id).unwrap().unwrap();
+        assert!(updated_edge.has_property("since"));
+        assert_eq!(updated_edge.property_keys().len(), 1);
     }
 
     #[test]
     fn test_node_deletion() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         assert!(graph.get_node(node_id).unwrap().is_some());
@@ -737,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_edge_deletion() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -754,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_get_nodes_by_label() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let _person1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let _person2 = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -769,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_get_edges_by_type() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let person1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let person2 = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -791,7 +612,7 @@ mod tests {
 
     #[test]
     fn test_get_edges_for_node() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let person1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let person2 = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -810,7 +631,7 @@ mod tests {
 
     #[test]
     fn test_graph_stats() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let _person1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let _person2 = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -825,10 +646,10 @@ mod tests {
 
     #[test]
     fn test_node_label_operations() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
-        let mut node = graph.get_node(node_id).unwrap().unwrap();
+        let mut node = graph.get_node_mut(node_id).unwrap().unwrap().clone();
 
         // Add label
         node.add_label("Employee".to_string());
@@ -845,11 +666,13 @@ mod tests {
         // Try to remove non-existent label
         let not_removed = node.remove_label("NonExistent");
         assert!(!not_removed);
+
+        graph.update_node(node).unwrap();
     }
 
     #[test]
     fn test_edge_other_end() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -866,13 +689,13 @@ mod tests {
 
     #[test]
     fn test_node_property_operations() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
-        let mut node = graph.get_node(node_id).unwrap().unwrap();
+        let mut node = graph.get_node_mut(node_id).unwrap().unwrap().clone();
 
         // Set properties
-        node.set_property("name".to_string(), PropertyValue::StringRef(0));
+        node.set_property("name".to_string(), PropertyValue::String("John".to_string()));
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
         // Check properties
@@ -889,11 +712,13 @@ mod tests {
         assert_eq!(removed, Some(PropertyValue::Int64(30)));
         assert!(!node.has_property("age"));
         assert!(node.has_property("name"));
+
+        graph.update_node(node).unwrap();
     }
 
     #[test]
     fn test_edge_property_operations() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -901,7 +726,7 @@ mod tests {
             .create_edge(source_id, target_id, "KNOWS".to_string())
             .unwrap();
 
-        let mut edge = graph.get_edge(edge_id).unwrap().unwrap();
+        let mut edge = graph.get_edge_mut(edge_id).unwrap().unwrap().clone();
 
         // Set properties
         edge.set_property("since".to_string(), PropertyValue::Int64(2020));
@@ -921,24 +746,28 @@ mod tests {
         assert_eq!(removed, Some(PropertyValue::Float64(0.8)));
         assert!(!edge.has_property("strength"));
         assert!(edge.has_property("since"));
+
+        graph.update_edge(edge).unwrap();
     }
 
     #[test]
     fn test_node_is_empty() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let node_id = graph.create_node(vec![]).unwrap();
         let node = graph.get_node(node_id).unwrap().unwrap();
         assert!(node.is_empty());
 
-        let mut node_with_label = graph.get_node(node_id).unwrap().unwrap();
+        let mut node_with_label = graph.get_node_mut(node_id).unwrap().unwrap().clone();
         node_with_label.add_label("Person".to_string());
         assert!(!node_with_label.is_empty());
+
+        graph.update_node(node_with_label).unwrap();
     }
 
     #[test]
     fn test_edge_is_empty() {
-        let (graph, _dir) = create_test_graph();
+        let mut graph = Graph::new();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -949,29 +778,76 @@ mod tests {
         let edge = graph.get_edge(edge_id).unwrap().unwrap();
         assert!(edge.is_empty());
 
-        let mut edge_with_props = graph.get_edge(edge_id).unwrap().unwrap();
+        let mut edge_with_props = graph.get_edge_mut(edge_id).unwrap().unwrap().clone();
         edge_with_props.set_property("since".to_string(), PropertyValue::Int64(2020));
         assert!(!edge_with_props.is_empty());
+
+        graph.update_edge(edge_with_props).unwrap();
     }
 
     #[test]
-    fn test_clear_cache() {
-        let (graph, _dir) = create_test_graph();
+    fn test_clear_graph() {
+        let mut graph = Graph::new();
 
-        let _node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
+        let node1_id = graph.create_node(vec!["Person".to_string()]).unwrap();
+        let node2_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let _edge_id = graph
-            .create_edge(NodeId::new(0), NodeId::new(1), "KNOWS".to_string())
+            .create_edge(node1_id, node2_id, "KNOWS".to_string())
             .unwrap();
 
-        // Verify cache has entries
-        assert!(!graph.node_cache.read().is_empty());
-        assert!(!graph.edge_cache.read().is_empty());
+        // Verify graph has data
+        assert!(!graph.nodes.is_empty());
+        assert!(!graph.edges.is_empty());
 
-        // Clear cache
-        graph.clear_cache();
+        // Clear graph
+        graph.clear();
 
-        // Verify cache is empty
-        assert!(graph.node_cache.read().is_empty());
-        assert!(graph.edge_cache.read().is_empty());
+        // Verify graph is empty
+        assert!(graph.nodes.is_empty());
+        assert!(graph.edges.is_empty());
+        assert_eq!(graph.next_node_id, 0);
+        assert_eq!(graph.next_edge_id, 0);
+    }
+
+    #[test]
+    fn test_edge_creation_with_nonexistent_nodes() {
+        let mut graph = Graph::new();
+
+        // Try to create edge with non-existent nodes
+        let result = graph.create_edge(
+            NodeId::new(999),
+            NodeId::new(1000),
+            "KNOWS".to_string(),
+        );
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::NotFound(_)));
+    }
+
+    #[test]
+    fn test_node_deletion_removes_connected_edges() {
+        let mut graph = Graph::new();
+
+        let node1 = graph.create_node(vec!["Person".to_string()]).unwrap();
+        let node2 = graph.create_node(vec!["Person".to_string()]).unwrap();
+        let node3 = graph.create_node(vec!["Person".to_string()]).unwrap();
+
+        let edge1 = graph
+            .create_edge(node1, node2, "KNOWS".to_string())
+            .unwrap();
+        let edge2 = graph
+            .create_edge(node1, node3, "KNOWS".to_string())
+            .unwrap();
+
+        // Verify edges exist
+        assert!(graph.get_edge(edge1).unwrap().is_some());
+        assert!(graph.get_edge(edge2).unwrap().is_some());
+
+        // Delete node1
+        graph.delete_node(node1).unwrap();
+
+        // Verify edges are removed
+        assert!(graph.get_edge(edge1).unwrap().is_none());
+        assert!(graph.get_edge(edge2).unwrap().is_none());
     }
 }

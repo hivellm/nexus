@@ -456,41 +456,7 @@ pub struct RecordStoreStats {
     /// Total number of relationships
     pub rel_count: u64,
     /// Size of nodes.store file in bytes
-    pub nodes_file_size: usize,
-    /// Size of rels.store file in bytes
-    pub rels_file_size: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn create_test_store() -> (RecordStore, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = RecordStore::new(dir.path()).unwrap();
-        (store, dir)
-    }
-
-    #[test]
-    fn test_node_record_size() {
-        assert_eq!(std::mem::size_of::<NodeRecord>(), NODE_RECORD_SIZE);
-    }
-
-    #[test]
-    fn test_rel_record_size() {
-        assert_eq!(std::mem::size_of::<RelationshipRecord>(), REL_RECORD_SIZE);
-    }
-
-    #[test]
-    fn test_create_store() {
-        let (store, _dir) = create_test_store();
-        let stats = store.stats();
-        assert_eq!(stats.node_count, 0);
-        assert_eq!(stats.rel_count, 0);
-    }
-
-    #[test]
+    pub nodes_file_size: usize    #[test]
     fn test_node_crud() {
         let (store, _dir) = create_test_store();
 
@@ -505,9 +471,40 @@ mod tests {
         // Write
         store.write_node(node_id, &record).unwrap();
 
+        // Read        let store = RecordStore::new(dir.path()).unwrap();
+        (store, dir)
+    }
+
+    #[test]
+    fn test_node_record_size() {
+        assert_eq!(std::mem::size_of::<NodeRecord>(), NODE_RECORD_SIZE);
+    }
+
+    #[test]
+    fn test_rel_recor        // Create node record
+        let mut record = NodeRecord::default();
+        record.add_label(5);
+        record.prop_ptr = 123;
+
+        // Write
+        store.write_node(node_id, &record).unwrap();
+
         // Read
         let read_record = store.read_node(node_id).unwrap();
         assert_eq!(read_record.label_bits, record.label_bits);
+        assert_eq!(read_record.prop_ptr, 123);
+        assert!(read_record.has_label(5));        assert_eq!(node_id, 0);
+
+        // Create node record
+        let mut record = NodeRecord::default();
+        record.add_label(5);
+        reco        // Create relationship record
+        let record = RelationshipRecord {
+            src_id: 10,
+            dst_id: 20,
+            type_id: 1,
+            ..Default::default()
+        };      assert_eq!(read_record.label_bits, record.label_bits);
         assert_eq!(read_record.prop_ptr, 123);
         assert!(read_record.has_label(5));
     }
@@ -566,39 +563,36 @@ mod tests {
 
         assert!(record.has_label(0));
         assert!(record.has_label(5));
-        assert!(record.has_label(63));
-        assert!(!record.has_label(1));
-        assert!(!record.has_label(64)); // Out of range
-
-        // Remove label
-        record.remove_label(5);
-        assert!(!record.has_label(5));
-        assert!(record.has_label(0));
-        assert!(record.has_label(63));
-    }
-
-    #[test]
-    fn test_node_deleted_flag() {
-        let mut record = NodeRecord::default();
-        assert!(!record.is_deleted());
-
-        record.set_deleted();
-        assert!(record.is_deleted());
-    }
-
-    #[test]
-    fn test_linked_list_pointers() {
+        ass    #[test]
+    fn test_linked_list_traversal() {
         let (store, _dir) = create_test_store();
 
-        // Create chain of nodes
+        // Create nodes
         let node1_id = store.allocate_node_id();
         let node2_id = store.allocate_node_id();
         let node3_id = store.allocate_node_id();
 
         // Node 1 points to first relationship
-        let mut node1 = NodeRecord::default();
-        node1.first_rel_ptr = 100;
-        store.write_node(node1_id, &node1).unwrap();
+        let node1 = NodeRecord {
+            first_rel_ptr: 100,
+            ..Default::default()
+        };
+        store.write_node(node1_id, &node1).unwrap();assert!(record.is_deleted());
+    }
+
+    #[test]
+         let rel1 = RelationshipRecord {
+            src_id: node1_id,
+            dst_id: node2_id,
+            next_src_ptr: rel2_id, // Points to next relationship from src
+            ..Default::default()
+        };= store.allocate_node_id();
+        let node3_id = store        let rel2 = RelationshipRecord {
+            src_id: node1_id,
+            dst_id: node3_id,
+            next_src_ptr: u64::MAX, // End of list
+            ..Default::default()
+        };write_node(node1_id, &node1).unwrap();
 
         // Create relationships
         let rel1_id = store.allocate_rel_id();
@@ -641,28 +635,25 @@ mod tests {
 
             let mut record = NodeRecord::default();
             record.add_label(42);
-            record.prop_ptr = 999;
+            record.pro    #[test]
+    fn test_multiple_labels_on_node() {
+        let (store, _dir) = create_test_store();
 
-            store.write_node(node_id, &record).unwrap();
-            store.flush().unwrap();
+        let node_id = store.allocate_node_id();
+        let mut record = NodeRecord::default();
+        
+        // Add multiple labels
+        for label_id in 0..10 {
+            record.add_label(label_id);
         }
+        
+        store.write_node(node_id, &record).unwrap();
+        let read_record = store.read_node(node_id).unwrap();
 
-        // Reopen and verify
-        {
-            let store = RecordStore::new(&path).unwrap();
-            let record = store.read_node(0).unwrap();
-
-            assert!(record.has_label(42));
-            assert_eq!(record.prop_ptr, 999);
+        for label_id in 0..10 {
+            assert!(read_record.has_label(label_id));
         }
-    }
-
-    #[test]
-    fn test_rel_deleted_flag() {
-        let mut record = RelationshipRecord::default();
-        assert!(!record.is_deleted());
-
-        record.set_deleted();
+    }leted();
         assert!(record.is_deleted());
     }
 
@@ -670,15 +661,13 @@ mod tests {
     fn test_multiple_labels_on_node() {
         let (store, _dir) = create_test_store();
 
-        let node_id = store.allocate_node_id();
-        let mut record = NodeRecord::default();
-
-        // Add multiple labels
-        for label_id in 0..10 {
-            record.add_label(label_id);
-        }
-
-        store.write_node(node_id, &record).unwrap();
+        let node_id = store.allocate_nod            let record = RelationshipRecord {
+                src_id: 100,
+                dst_id: 200,
+                type_id: 5,
+                next_src_ptr: 999,
+                ..Default::default()
+            };te_node(node_id, &record).unwrap();
         let read_record = store.read_node(node_id).unwrap();
 
         for label_id in 0..10 {

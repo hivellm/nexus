@@ -1369,7 +1369,7 @@ mod tests {
         match &query.clauses[1] {
             Clause::Return(return_clause) => {
                 assert_eq!(return_clause.items.len(), 1);
-                assert_eq!(return_clause.distinct, false);
+                assert!(!return_clause.distinct);
             }
             _ => panic!("Expected return clause"),
         }
@@ -1437,17 +1437,16 @@ mod tests {
             Clause::Return(return_clause) => {
                 assert_eq!(return_clause.items.len(), 1);
 
-                match &return_clause.items[0] {
-                    ReturnItem { expression, alias } => {
-                        assert_eq!(alias, &Some("person_name".to_string()));
+                let ReturnItem { expression, alias } = &return_clause.items[0];
+                {
+                    assert_eq!(alias, &Some("person_name".to_string()));
 
-                        match expression {
-                            Expression::PropertyAccess { variable, property } => {
-                                assert_eq!(variable, "n");
-                                assert_eq!(property, "name");
-                            }
-                            _ => panic!("Expected property access"),
+                    match expression {
+                        Expression::PropertyAccess { variable, property } => {
+                            assert_eq!(variable, "n");
+                            assert_eq!(property, "name");
                         }
+                        _ => panic!("Expected property access"),
                     }
                 }
             }
