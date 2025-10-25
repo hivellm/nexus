@@ -106,10 +106,7 @@ impl RetryContext {
 }
 
 /// Execute a function with retry logic
-pub async fn retry<F, Fut, T>(
-    config: RetryConfig,
-    mut operation: F,
-) -> Result<T>
+pub async fn retry<F, Fut, T>(config: RetryConfig, mut operation: F) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
@@ -123,9 +120,6 @@ where
 
         match operation().await {
             Ok(result) => {
-                if attempt > 1 {
-                    context.stats.successful_retries = attempt - 1;
-                }
                 return Ok(result);
             }
             Err(error) => {
@@ -141,7 +135,7 @@ where
 
                 // Calculate delay with exponential backoff and jitter
                 let delay = calculate_delay(&context.config, attempt);
-                
+
                 // Wait before retrying
                 sleep(delay).await;
             }
@@ -178,18 +172,18 @@ fn is_retryable(error: &Error) -> bool {
 /// Calculate delay with exponential backoff and jitter
 fn calculate_delay(config: &RetryConfig, attempt: u32) -> Duration {
     // Calculate base delay with exponential backoff
-    let base_delay = config.initial_delay.as_nanos() as f64
-        * config.backoff_multiplier.powi(attempt as i32 - 1);
-    
+    let base_delay =
+        config.initial_delay.as_nanos() as f64 * config.backoff_multiplier.powi(attempt as i32 - 1);
+
     // Apply maximum delay limit
     let base_delay = base_delay.min(config.max_delay.as_nanos() as f64);
-    
+
     // Add jitter to prevent thundering herd
     let jitter_range = base_delay * config.jitter_factor;
     let jitter = (rand::random::<f64>() - 0.5) * 2.0 * jitter_range;
-    
+
     let final_delay = (base_delay + jitter).max(0.0) as u64;
-    
+
     Duration::from_nanos(final_delay)
 }
 

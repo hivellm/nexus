@@ -17,11 +17,9 @@
 
 use axum::{
     Router,
-    extract::{Json, Request},
-    response::IntoResponse,
+    extract::Request,
     routing::{any, delete, get, post, put},
 };
-use serde::Serialize;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::RwLock;
@@ -189,7 +187,6 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
 
     Ok(router)
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -66,30 +66,32 @@ static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 /// Initialize the health check system
 pub fn init() {
-    START_TIME.set(Instant::now()).expect("Failed to set start time");
+    START_TIME
+        .set(Instant::now())
+        .expect("Failed to set start time");
 }
 
 /// Get health status
 pub async fn health_check() -> Json<HealthResponse> {
     let start_time = START_TIME.get().copied().unwrap_or_else(Instant::now);
     let uptime = start_time.elapsed();
-    
+
     let timestamp = chrono::Utc::now().to_rfc3339();
     let version = env!("CARGO_PKG_VERSION").to_string();
-    
+
     // Check component health
     let components = check_components().await;
-    
+
     // Determine overall status
     let overall_status = determine_overall_status(&components);
-    
+
     tracing::info!(
         "Health check - Status: {:?}, Uptime: {}s, Components: {:?}",
         overall_status,
         uptime.as_secs(),
         components
     );
-    
+
     Json(HealthResponse {
         status: overall_status,
         timestamp,
@@ -107,7 +109,7 @@ async fn check_components() -> ComponentHealth {
     let indexes = check_indexes().await;
     let wal = check_wal().await;
     let page_cache = check_page_cache().await;
-    
+
     ComponentHealth {
         database,
         storage,
@@ -120,13 +122,15 @@ async fn check_components() -> ComponentHealth {
 /// Check database connectivity
 async fn check_database() -> ComponentStatus {
     let start = Instant::now();
-    
+
     // Simulate database check (in real implementation, would check actual database)
     match timeout(Duration::from_secs(5), async {
         // TODO: Implement actual database health check
         tokio::time::sleep(Duration::from_millis(10)).await;
         Ok::<(), String>(())
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(_)) => ComponentStatus {
             status: HealthStatus::Healthy,
             response_time_ms: Some(start.elapsed().as_millis() as f64),
@@ -148,13 +152,15 @@ async fn check_database() -> ComponentStatus {
 /// Check storage layer
 async fn check_storage() -> ComponentStatus {
     let start = Instant::now();
-    
+
     // Simulate storage check
     match timeout(Duration::from_secs(3), async {
         // TODO: Implement actual storage health check
         tokio::time::sleep(Duration::from_millis(5)).await;
         Ok::<(), String>(())
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(_)) => ComponentStatus {
             status: HealthStatus::Healthy,
             response_time_ms: Some(start.elapsed().as_millis() as f64),
@@ -176,13 +182,15 @@ async fn check_storage() -> ComponentStatus {
 /// Check index layer
 async fn check_indexes() -> ComponentStatus {
     let start = Instant::now();
-    
+
     // Simulate index check
     match timeout(Duration::from_secs(2), async {
         // TODO: Implement actual index health check
         tokio::time::sleep(Duration::from_millis(3)).await;
         Ok::<(), String>(())
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(_)) => ComponentStatus {
             status: HealthStatus::Healthy,
             response_time_ms: Some(start.elapsed().as_millis() as f64),
@@ -204,13 +212,15 @@ async fn check_indexes() -> ComponentStatus {
 /// Check WAL (Write-Ahead Log)
 async fn check_wal() -> ComponentStatus {
     let start = Instant::now();
-    
+
     // Simulate WAL check
     match timeout(Duration::from_secs(1), async {
         // TODO: Implement actual WAL health check
         tokio::time::sleep(Duration::from_millis(2)).await;
         Ok::<(), String>(())
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(_)) => ComponentStatus {
             status: HealthStatus::Healthy,
             response_time_ms: Some(start.elapsed().as_millis() as f64),
@@ -232,13 +242,15 @@ async fn check_wal() -> ComponentStatus {
 /// Check page cache
 async fn check_page_cache() -> ComponentStatus {
     let start = Instant::now();
-    
+
     // Simulate page cache check
     match timeout(Duration::from_millis(500), async {
         // TODO: Implement actual page cache health check
         tokio::time::sleep(Duration::from_millis(1)).await;
         Ok::<(), String>(())
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(_)) => ComponentStatus {
             status: HealthStatus::Healthy,
             response_time_ms: Some(start.elapsed().as_millis() as f64),
@@ -266,17 +278,20 @@ fn determine_overall_status(components: &ComponentHealth) -> HealthStatus {
         &components.wal.status,
         &components.page_cache.status,
     ];
-    
+
     // If any component is unhealthy, overall status is unhealthy
-    if statuses.iter().any(|s| matches!(s, HealthStatus::Unhealthy)) {
+    if statuses
+        .iter()
+        .any(|s| matches!(s, HealthStatus::Unhealthy))
+    {
         return HealthStatus::Unhealthy;
     }
-    
+
     // If any component is degraded, overall status is degraded
     if statuses.iter().any(|s| matches!(s, HealthStatus::Degraded)) {
         return HealthStatus::Degraded;
     }
-    
+
     // All components are healthy
     HealthStatus::Healthy
 }
@@ -285,7 +300,7 @@ fn determine_overall_status(components: &ComponentHealth) -> HealthStatus {
 pub async fn metrics() -> Json<serde_json::Value> {
     let start_time = START_TIME.get().copied().unwrap_or_else(Instant::now);
     let uptime = start_time.elapsed();
-    
+
     let metrics = serde_json::json!({
         "uptime_seconds": uptime.as_secs(),
         "uptime_human": format_duration(uptime),
@@ -301,9 +316,12 @@ pub async fn metrics() -> Json<serde_json::Value> {
             "cache_hit_rate": 0.0, // TODO: Implement actual cache hit rate
         }
     });
-    
-    tracing::debug!("Metrics requested: {}", serde_json::to_string_pretty(&metrics).unwrap_or_default());
-    
+
+    tracing::debug!(
+        "Metrics requested: {}",
+        serde_json::to_string_pretty(&metrics).unwrap_or_default()
+    );
+
     Json(metrics)
 }
 
@@ -314,7 +332,7 @@ fn format_duration(duration: Duration) -> String {
     let hours = (total_seconds % 86400) / 3600;
     let minutes = (total_seconds % 3600) / 60;
     let seconds = total_seconds % 60;
-    
+
     if days > 0 {
         format!("{}d {}h {}m {}s", days, hours, minutes, seconds)
     } else if hours > 0 {
