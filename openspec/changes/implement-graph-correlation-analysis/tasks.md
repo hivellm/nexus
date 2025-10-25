@@ -74,6 +74,38 @@
 - [ ] 6.9 Create OpenAPI/Swagger documentation
 - [ ] 6.10 Add comprehensive API tests
 
+### 6.1 MCP Protocol Integration
+
+- [ ] 6.1.1 Implement GraphMcpTools struct with all MCP tools
+- [ ] 6.1.2 Create graph_generate MCP tool
+- [ ] 6.1.3 Create graph_get MCP tool
+- [ ] 6.1.4 Create graph_analyze MCP tool
+- [ ] 6.1.5 Create graph_search MCP tool
+- [ ] 6.1.6 Create graph_visualize MCP tool
+- [ ] 6.1.7 Create graph_patterns MCP tool
+- [ ] 6.1.8 Create graph_statistics MCP tool
+- [ ] 6.1.9 Create graph_export MCP tool
+- [ ] 6.1.10 Add MCP tool registration and discovery
+- [ ] 6.1.11 Implement MCP error handling and validation
+- [ ] 6.1.12 Add comprehensive MCP tool tests
+- [ ] 6.1.13 Create MCP tool documentation and examples
+
+### 6.2 UMICP Protocol Integration
+
+- [ ] 6.2.1 Implement GraphUmicpHandler struct
+- [ ] 6.2.2 Create graph.generate UMICP method
+- [ ] 6.2.3 Create graph.get UMICP method
+- [ ] 6.2.4 Create graph.analyze UMICP method
+- [ ] 6.2.5 Create graph.search UMICP method
+- [ ] 6.2.6 Create graph.visualize UMICP method
+- [ ] 6.2.7 Create graph.patterns UMICP method
+- [ ] 6.2.8 Create graph.export UMICP method
+- [ ] 6.2.9 Add UMICP method registration and discovery
+- [ ] 6.2.10 Implement UMICP request/response handling
+- [ ] 6.2.11 Add UMICP error handling and validation
+- [ ] 6.2.12 Add comprehensive UMICP method tests
+- [ ] 6.2.13 Create UMICP method documentation and examples
+
 ### 7. Basic Visualization
 
 - [ ] 7.1 Implement GraphRenderer trait

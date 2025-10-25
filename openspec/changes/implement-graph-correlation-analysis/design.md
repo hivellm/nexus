@@ -59,6 +59,8 @@ pub struct GraphService {
     renderer: Arc<VisualizationEngine>,
     cache: Arc<GraphCache>,
     vectorizer: Arc<VectorizerClient>,
+    mcp_tools: Arc<GraphMcpTools>,
+    umicp_handler: Arc<GraphUmicpHandler>,
 }
 
 impl GraphService {
@@ -78,6 +80,16 @@ impl GraphService {
     
     pub async fn analyze_graph(&self, graph_id: &str, analysis: AnalysisRequest) -> Result<AnalysisResult> {
         // Perform analysis on existing graph
+    }
+    
+    pub async fn handle_mcp_call(&self, tool: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        // Route MCP tool calls to appropriate handlers
+        self.mcp_tools.handle_call(tool, params).await
+    }
+    
+    pub async fn handle_umicp_request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        // Route UMICP method calls to appropriate handlers
+        self.umicp_handler.handle_request(method, params).await
     }
 }
 ```
@@ -187,6 +199,153 @@ pub struct DefaultVisualizationEngine {
     static_renderer: Arc<StaticRenderer>,
     layout_engine: Arc<LayoutEngine>,
     export_engine: Arc<ExportEngine>,
+}
+```
+
+### 6. MCP Protocol Integration
+
+Provides MCP tools for LLM integration with graph correlation analysis.
+
+```rust
+pub struct GraphMcpTools {
+    graph_service: Arc<GraphService>,
+    vectorizer_client: Arc<VectorizerClient>,
+}
+
+impl GraphMcpTools {
+    pub async fn handle_call(&self, tool: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        match tool {
+            "graph_generate" => {
+                let request: GraphRequest = serde_json::from_value(params)?;
+                let response = self.graph_service.generate_graph(request).await?;
+                Ok(serde_json::to_value(response)?)
+            }
+            "graph_get" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let graph = self.graph_service.get_graph(graph_id).await?;
+                Ok(serde_json::to_value(graph)?)
+            }
+            "graph_analyze" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let analysis: AnalysisRequest = serde_json::from_value(params["analysis"].clone())?;
+                let result = self.graph_service.analyze_graph(graph_id, analysis).await?;
+                Ok(serde_json::to_value(result)?)
+            }
+            "graph_search" => {
+                let query: GraphSearchQuery = serde_json::from_value(params)?;
+                let graphs = self.graph_service.search_graphs(query).await?;
+                Ok(serde_json::to_value(graphs)?)
+            }
+            "graph_visualize" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let format: VisualizationFormat = serde_json::from_value(params["format"].clone())?;
+                let visualization = self.graph_service.get_visualization(graph_id, format).await?;
+                Ok(serde_json::to_value(visualization)?)
+            }
+            "graph_patterns" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let pattern_types: Option<Vec<PatternType>> = params.get("pattern_types")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?;
+                let patterns = self.graph_service.get_patterns(graph_id, pattern_types).await?;
+                Ok(serde_json::to_value(patterns)?)
+            }
+            "graph_statistics" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let stats = self.graph_service.get_statistics(graph_id).await?;
+                Ok(serde_json::to_value(stats)?)
+            }
+            "graph_export" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let format: ExportFormat = serde_json::from_value(params["format"].clone())?;
+                let options: Option<ExportOptions> = params.get("options")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?;
+                let export_data = self.graph_service.export_graph(graph_id, format, options).await?;
+                Ok(serde_json::to_value(export_data)?)
+            }
+            _ => Err(anyhow::anyhow!("Unknown MCP tool: {}", tool))
+        }
+    }
+}
+```
+
+### 7. UMICP Protocol Integration
+
+Provides UMICP methods for standardized access to graph correlation analysis.
+
+```rust
+pub struct GraphUmicpHandler {
+    graph_service: Arc<GraphService>,
+    mcp_tools: Arc<GraphMcpTools>,
+}
+
+impl GraphUmicpHandler {
+    pub async fn handle_request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        match method {
+            "graph.generate" => {
+                let request: GraphRequest = serde_json::from_value(params)?;
+                let response = self.graph_service.generate_graph(request).await?;
+                Ok(serde_json::to_value(response)?)
+            }
+            "graph.get" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let graph = self.graph_service.get_graph(graph_id).await?;
+                Ok(serde_json::to_value(graph)?)
+            }
+            "graph.analyze" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let analysis_type = params["analysis_type"].as_str().ok_or_else(|| anyhow::anyhow!("Missing analysis_type"))?;
+                let analysis_params: Option<serde_json::Value> = params.get("parameters").cloned();
+                let analysis = AnalysisRequest {
+                    analysis_type: analysis_type.to_string(),
+                    parameters: analysis_params,
+                };
+                let result = self.graph_service.analyze_graph(graph_id, analysis).await?;
+                Ok(serde_json::to_value(result)?)
+            }
+            "graph.search" => {
+                let query = params["query"].as_str().ok_or_else(|| anyhow::anyhow!("Missing query"))?;
+                let filters: Option<GraphFilters> = params.get("filters")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?;
+                let search_query = GraphSearchQuery {
+                    query: query.to_string(),
+                    filters,
+                    limit: params.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize),
+                };
+                let graphs = self.graph_service.search_graphs(search_query).await?;
+                Ok(serde_json::to_value(graphs)?)
+            }
+            "graph.visualize" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let format = params["format"].as_str().unwrap_or("interactive");
+                let visualization_format = VisualizationFormat::from_str(format)?;
+                let visualization = self.graph_service.get_visualization(graph_id, visualization_format).await?;
+                Ok(serde_json::to_value(visualization)?)
+            }
+            "graph.patterns" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let types: Option<Vec<String>> = params.get("types")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?;
+                let pattern_types = types.map(|t| t.into_iter().map(|s| PatternType::from_str(&s)).collect::<Result<Vec<_>, _>>()).transpose()?;
+                let patterns = self.graph_service.get_patterns(graph_id, pattern_types).await?;
+                Ok(serde_json::to_value(patterns)?)
+            }
+            "graph.export" => {
+                let graph_id = params["graph_id"].as_str().ok_or_else(|| anyhow::anyhow!("Missing graph_id"))?;
+                let format = params["format"].as_str().unwrap_or("json");
+                let export_format = ExportFormat::from_str(format)?;
+                let options: Option<ExportOptions> = params.get("options")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?;
+                let export_data = self.graph_service.export_graph(graph_id, export_format, options).await?;
+                Ok(serde_json::to_value(export_data)?)
+            }
+            _ => Err(anyhow::anyhow!("Unknown UMICP method: {}", method))
+        }
+    }
 }
 ```
 
