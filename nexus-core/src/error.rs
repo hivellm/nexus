@@ -12,6 +12,10 @@ pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// LMDB/heed database errors
+    #[error("Database error: {0}")]
+    Database(#[from] heed::Error),
+
     /// Storage-related errors
     #[error("Storage error: {0}")]
     Storage(String),
