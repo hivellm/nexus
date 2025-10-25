@@ -10,8 +10,11 @@ use crate::{Error, Result};
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
 use roaring::RoaringBitmap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+/// Type alias for property index trees
+type PropertyIndexTree = BTreeMap<PropertyValue, RoaringBitmap>;
 
 /// Label bitmap index using roaring bitmaps
 ///
@@ -387,6 +390,277 @@ impl KnnIndex {
 impl Default for KnnIndex {
     fn default() -> Self {
         Self::new(128).expect("Failed to create default KNN index")
+    }
+}
+
+/// Property B-tree index for range queries and unique constraints
+///
+/// Maps (label_id, key_id, value) → set of node_ids for fast property-based queries.
+/// Uses BTreeMap for efficient range queries and ordered iteration.
+pub struct PropertyIndex {
+    /// Mapping from (label_id, key_id) to value → set of node_ids
+    property_trees: Arc<RwLock<HashMap<(u32, u32), PropertyIndexTree>>>,
+    /// Statistics
+    stats: Arc<RwLock<PropertyIndexStats>>,
+}
+
+/// Property value for indexing
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyValue {
+    /// String property value
+    String(String),
+    /// Integer property value
+    Integer(i64),
+    /// Floating point property value
+    Float(f64),
+    /// Boolean property value
+    Boolean(bool),
+    /// Null property value
+    Null,
+}
+
+impl Eq for PropertyValue {}
+
+impl PartialOrd for PropertyValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PropertyValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (PropertyValue::String(a), PropertyValue::String(b)) => a.cmp(b),
+            (PropertyValue::Integer(a), PropertyValue::Integer(b)) => a.cmp(b),
+            (PropertyValue::Float(a), PropertyValue::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
+            (PropertyValue::Boolean(a), PropertyValue::Boolean(b)) => a.cmp(b),
+            (PropertyValue::Null, PropertyValue::Null) => std::cmp::Ordering::Equal,
+            // Different types are ordered by variant order
+            (PropertyValue::String(_), _) => std::cmp::Ordering::Less,
+            (PropertyValue::Integer(_), PropertyValue::String(_)) => std::cmp::Ordering::Greater,
+            (PropertyValue::Integer(_), _) => std::cmp::Ordering::Less,
+            (PropertyValue::Float(_), PropertyValue::String(_) | PropertyValue::Integer(_)) => std::cmp::Ordering::Greater,
+            (PropertyValue::Float(_), _) => std::cmp::Ordering::Less,
+            (PropertyValue::Boolean(_), PropertyValue::Null) => std::cmp::Ordering::Less,
+            (PropertyValue::Boolean(_), _) => std::cmp::Ordering::Greater,
+            (PropertyValue::Null, _) => std::cmp::Ordering::Greater,
+        }
+    }
+}
+
+impl std::hash::Hash for PropertyValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            PropertyValue::String(s) => s.hash(state),
+            PropertyValue::Integer(i) => i.hash(state),
+            PropertyValue::Float(f) => {
+                // Convert f64 to bits for hashing
+                f.to_bits().hash(state);
+            }
+            PropertyValue::Boolean(b) => b.hash(state),
+            PropertyValue::Null => 0.hash(state),
+        }
+    }
+}
+
+/// Statistics for property index
+#[derive(Debug, Clone, Default)]
+pub struct PropertyIndexStats {
+    /// Total number of property entries indexed
+    pub total_entries: u64,
+    /// Number of unique (label_id, key_id) combinations
+    pub indexed_properties: u32,
+    /// Average entries per property
+    pub avg_entries_per_property: f64,
+    /// Memory usage in bytes
+    pub memory_usage_bytes: u64,
+}
+
+impl PropertyIndex {
+    /// Create a new property index
+    pub fn new() -> Self {
+        Self {
+            property_trees: Arc::new(RwLock::new(HashMap::new())),
+            stats: Arc::new(RwLock::new(PropertyIndexStats::default())),
+        }
+    }
+
+    /// Add a property value for a node
+    pub fn add_property(
+        &self,
+        node_id: u64,
+        label_id: u32,
+        key_id: u32,
+        value: PropertyValue,
+    ) -> Result<()> {
+        let mut trees = self.property_trees.write();
+        let mut stats = self.stats.write();
+
+        let tree = trees
+            .entry((label_id, key_id))
+            .or_default();
+        let bitmap = tree.entry(value).or_default();
+        bitmap.insert(node_id as u32);
+
+        stats.total_entries += 1;
+        stats.indexed_properties = trees.len() as u32;
+        stats.avg_entries_per_property = if stats.indexed_properties > 0 {
+            stats.total_entries as f64 / stats.indexed_properties as f64
+        } else {
+            0.0
+        };
+
+        Ok(())
+    }
+
+    /// Remove a property value for a node
+    pub fn remove_property(
+        &self,
+        node_id: u64,
+        label_id: u32,
+        key_id: u32,
+        value: PropertyValue,
+    ) -> Result<()> {
+        let mut trees = self.property_trees.write();
+        let mut stats = self.stats.write();
+
+        if let Some(tree) = trees.get_mut(&(label_id, key_id)) {
+            if let Some(bitmap) = tree.get_mut(&value) {
+                bitmap.remove(node_id as u32);
+
+                // Remove empty entries
+                if bitmap.is_empty() {
+                    tree.remove(&value);
+                }
+
+                stats.total_entries = stats.total_entries.saturating_sub(1);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Find nodes with exact property value
+    pub fn find_exact(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        value: PropertyValue,
+    ) -> Result<RoaringBitmap> {
+        let trees = self.property_trees.read();
+
+        if let Some(tree) = trees.get(&(label_id, key_id)) {
+            if let Some(bitmap) = tree.get(&value) {
+                return Ok(bitmap.clone());
+            }
+        }
+
+        Ok(RoaringBitmap::new())
+    }
+
+    /// Find nodes with property value in range
+    pub fn find_range(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        min_value: Option<PropertyValue>,
+        max_value: Option<PropertyValue>,
+    ) -> Result<RoaringBitmap> {
+        let trees = self.property_trees.read();
+        let mut result = RoaringBitmap::new();
+
+        if let Some(tree) = trees.get(&(label_id, key_id)) {
+            let range = match (min_value, max_value) {
+                (Some(min), Some(max)) => tree.range(min..=max),
+                (Some(min), None) => tree.range(min..),
+                (None, Some(max)) => tree.range(..=max),
+                (None, None) => tree.range(..),
+            };
+
+            for (_, bitmap) in range {
+                result |= bitmap;
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Find nodes with property value greater than threshold
+    pub fn find_greater_than(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        threshold: PropertyValue,
+    ) -> Result<RoaringBitmap> {
+        self.find_range(label_id, key_id, Some(threshold), None)
+    }
+
+    /// Find nodes with property value less than threshold
+    pub fn find_less_than(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        threshold: PropertyValue,
+    ) -> Result<RoaringBitmap> {
+        self.find_range(label_id, key_id, None, Some(threshold))
+    }
+
+    /// Check if a property value exists (for unique constraints)
+    pub fn has_value(&self, label_id: u32, key_id: u32, value: PropertyValue) -> Result<bool> {
+        let trees = self.property_trees.read();
+
+        if let Some(tree) = trees.get(&(label_id, key_id)) {
+            Ok(tree.contains_key(&value))
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Get all unique values for a property
+    pub fn get_unique_values(&self, label_id: u32, key_id: u32) -> Result<Vec<PropertyValue>> {
+        let trees = self.property_trees.read();
+
+        if let Some(tree) = trees.get(&(label_id, key_id)) {
+            Ok(tree.keys().cloned().collect())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Get statistics
+    pub fn get_stats(&self) -> PropertyIndexStats {
+        self.stats.read().clone()
+    }
+
+    /// Clear all data
+    pub fn clear(&self) -> Result<()> {
+        let mut trees = self.property_trees.write();
+        let mut stats = self.stats.write();
+
+        trees.clear();
+        *stats = PropertyIndexStats::default();
+
+        Ok(())
+    }
+
+    /// Get memory usage estimate
+    pub fn estimate_memory_usage(&self) -> u64 {
+        let trees = self.property_trees.read();
+        let mut total_size = 0;
+
+        for tree in trees.values() {
+            for bitmap in tree.values() {
+                total_size += bitmap.serialized_size() as u64;
+            }
+        }
+
+        total_size
+    }
+}
+
+impl Default for PropertyIndex {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

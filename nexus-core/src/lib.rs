@@ -39,6 +39,7 @@
 pub mod catalog;
 pub mod error;
 pub mod executor;
+pub mod graph;
 pub mod graph_correlation;
 pub mod index;
 pub mod page_cache;
@@ -47,6 +48,7 @@ pub mod transaction;
 pub mod wal;
 
 pub use error::{Error, Result};
+pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
 
 /// Graph database engine
 pub struct Engine {

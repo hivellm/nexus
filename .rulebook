@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "installedAt": "2025-10-25T19:33:26.630Z",
+  "updatedAt": "2025-10-25T19:33:26.630Z",
+  "projectId": "6bd666e3-3c08-4dad-8dbd-408e4b4f37c9",
+  "features": {
+    "openspec": true,
+    "watcher": true,
+    "agent": true,
+    "logging": true,
+    "telemetry": true,
+    "notifications": false,
+    "dryRun": false,
+    "gitHooks": false,
+    "repl": false,
+    "templates": false,
+    "context": false,
+    "health": false,
+    "plugins": false,
+    "parallel": false,
+    "smartContinue": false
+  },
+  "coverageThreshold": 95,
+  "language": "en",
+  "outputLanguage": "en",
+  "cliTools": [],
+  "maxParallelTasks": 1,
+  "timeouts": {
+    "taskExecution": 300000,
+    "cliResponse": 60000,
+    "testRun": 120000
+  }
+}
