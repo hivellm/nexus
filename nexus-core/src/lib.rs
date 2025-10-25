@@ -38,19 +38,23 @@
 
 pub mod catalog;
 pub mod error;
-// pub mod executor; // Temporarily commented out due to storage dependencies
+pub mod executor;
 // pub mod graph; // Temporarily commented out due to storage dependencies
-pub mod graph_simple;
 pub mod graph_correlation;
+pub mod graph_simple;
 pub mod index;
 pub mod page_cache;
-// pub mod storage; // Temporarily commented out due to syntax errors
+pub mod storage;
 pub mod transaction;
 pub mod wal;
 
 pub use error::{Error, Result};
 // pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
-pub use graph_simple::{Edge as SimpleEdge, EdgeId as SimpleEdgeId, Graph as SimpleGraph, GraphStats as SimpleGraphStats, Node as SimpleNode, NodeId as SimpleNodeId, PropertyValue};
+pub use graph_correlation::NodeType;
+pub use graph_simple::{
+    Edge as SimpleEdge, EdgeId as SimpleEdgeId, Graph as SimpleGraph,
+    GraphStats as SimpleGraphStats, Node as SimpleNode, NodeId as SimpleNodeId, PropertyValue,
+};
 
 /// Graph database engine
 pub struct Engine {
@@ -134,6 +138,32 @@ mod tests {
         let err: Error = io_err.into();
         assert!(matches!(err, Error::Io(_)));
         assert!(err.to_string().contains("I/O error"));
+    }
+
+    #[test]
+    fn test_node_type_export() {
+        // Test that NodeType is properly exported from the main library
+        use crate::NodeType;
+        
+        let function = NodeType::Function;
+        let module = NodeType::Module;
+        let class = NodeType::Class;
+        let variable = NodeType::Variable;
+        let api = NodeType::API;
+        
+        // Test that all variants are accessible
+        assert_eq!(format!("{:?}", function), "Function");
+        assert_eq!(format!("{:?}", module), "Module");
+        assert_eq!(format!("{:?}", class), "Class");
+        assert_eq!(format!("{:?}", variable), "Variable");
+        assert_eq!(format!("{:?}", api), "API");
+        
+        // Test serialization
+        let json = serde_json::to_string(&api).unwrap();
+        assert!(json.contains("API"));
+        
+        let deserialized: NodeType = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, NodeType::API);
     }
 
     #[test]

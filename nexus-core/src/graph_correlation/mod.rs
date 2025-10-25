@@ -48,11 +48,7 @@ pub enum NodeType {
     /// Variable or parameter
     Variable,
     /// API endpoint or service
-    Api,
-    /// Database table or collection
-    Database,
-    /// Configuration or constant
-    Config,
+    API,
 }
 
 /// Edge types representing relationships
@@ -774,5 +770,154 @@ mod tests {
         assert!(graphml.contains("<?xml"));
         assert!(graphml.contains("node1"));
         assert!(graphml.contains("test_function"));
+    }
+
+    #[test]
+    fn test_node_type_enum_variants() {
+        // Test all NodeType variants exist
+        let function = NodeType::Function;
+        let module = NodeType::Module;
+        let class = NodeType::Class;
+        let variable = NodeType::Variable;
+        let api = NodeType::API;
+
+        // Test debug formatting
+        assert_eq!(format!("{:?}", function), "Function");
+        assert_eq!(format!("{:?}", module), "Module");
+        assert_eq!(format!("{:?}", class), "Class");
+        assert_eq!(format!("{:?}", variable), "Variable");
+        assert_eq!(format!("{:?}", api), "API");
+    }
+
+    #[test]
+    fn test_node_type_equality() {
+        // Test equality between same variants
+        assert_eq!(NodeType::Function, NodeType::Function);
+        assert_eq!(NodeType::Module, NodeType::Module);
+        assert_eq!(NodeType::Class, NodeType::Class);
+        assert_eq!(NodeType::Variable, NodeType::Variable);
+        assert_eq!(NodeType::API, NodeType::API);
+
+        // Test inequality between different variants
+        assert_ne!(NodeType::Function, NodeType::Module);
+        assert_ne!(NodeType::Module, NodeType::Class);
+        assert_ne!(NodeType::Class, NodeType::Variable);
+        assert_ne!(NodeType::Variable, NodeType::API);
+        assert_ne!(NodeType::API, NodeType::Function);
+    }
+
+    #[test]
+    fn test_node_type_clone() {
+        let original = NodeType::Function;
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn test_node_type_copy() {
+        let original = NodeType::Module;
+        let copied = original; // This should work because NodeType implements Copy
+        assert_eq!(original, copied);
+        assert_eq!(original, NodeType::Module); // original should still be valid
+    }
+
+    #[test]
+    fn test_node_type_serialization() {
+        let node_types = vec![
+            NodeType::Function,
+            NodeType::Module,
+            NodeType::Class,
+            NodeType::Variable,
+            NodeType::API,
+        ];
+
+        for node_type in node_types {
+            // Test JSON serialization
+            let json = serde_json::to_string(&node_type).unwrap();
+            let deserialized: NodeType = serde_json::from_str(&json).unwrap();
+            assert_eq!(node_type, deserialized);
+
+            // Test that serialized JSON contains expected strings
+            match node_type {
+                NodeType::Function => assert!(json.contains("Function")),
+                NodeType::Module => assert!(json.contains("Module")),
+                NodeType::Class => assert!(json.contains("Class")),
+                NodeType::Variable => assert!(json.contains("Variable")),
+                NodeType::API => assert!(json.contains("API")),
+            }
+        }
+    }
+
+    #[test]
+    fn test_node_type_deserialization() {
+        // Test deserialization from JSON strings
+        let test_cases = vec![
+            ("Function", NodeType::Function),
+            ("Module", NodeType::Module),
+            ("Class", NodeType::Class),
+            ("Variable", NodeType::Variable),
+            ("API", NodeType::API),
+        ];
+
+        for (json_str, expected) in test_cases {
+            let deserialized: NodeType =
+                serde_json::from_str(&format!("\"{}\"", json_str)).unwrap();
+            assert_eq!(deserialized, expected);
+        }
+    }
+
+    #[test]
+    fn test_node_type_in_graph_node() {
+        // Test NodeType usage in GraphNode
+        let node = GraphNode {
+            id: "test_node".to_string(),
+            node_type: NodeType::Function,
+            label: "test_function".to_string(),
+            metadata: HashMap::new(),
+            position: None,
+            size: None,
+            color: None,
+        };
+
+        assert_eq!(node.node_type, NodeType::Function);
+        assert_eq!(node.label, "test_function");
+    }
+
+    #[test]
+    fn test_node_type_pattern_matching() {
+        let node_type = NodeType::API;
+
+        let description = match node_type {
+            NodeType::Function => "A function or method",
+            NodeType::Module => "A module or file",
+            NodeType::Class => "A class or struct",
+            NodeType::Variable => "A variable or parameter",
+            NodeType::API => "An API endpoint or service",
+        };
+
+        assert_eq!(description, "An API endpoint or service");
+    }
+
+    #[test]
+    fn test_node_type_all_variants() {
+        // Test that we can iterate through all variants
+        let all_variants = vec![
+            NodeType::Function,
+            NodeType::Module,
+            NodeType::Class,
+            NodeType::Variable,
+            NodeType::API,
+        ];
+
+        assert_eq!(all_variants.len(), 5);
+
+        // Test that all variants are unique
+        for (i, variant1) in all_variants.iter().enumerate() {
+            for (j, variant2) in all_variants.iter().enumerate() {
+                if i != j {
+                    assert_ne!(variant1, variant2);
+                }
+            }
+        }
     }
 }

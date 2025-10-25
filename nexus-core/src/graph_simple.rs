@@ -304,7 +304,8 @@ impl Graph {
     pub fn delete_node(&mut self, node_id: NodeId) -> Result<bool> {
         if self.nodes.remove(&node_id).is_some() {
             // Also remove all edges connected to this node
-            self.edges.retain(|_, edge| edge.source != node_id && edge.target != node_id);
+            self.edges
+                .retain(|_, edge| edge.source != node_id && edge.target != node_id);
             Ok(true)
         } else {
             Ok(false)
@@ -494,7 +495,10 @@ mod tests {
         let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let mut node = graph.get_node_mut(node_id).unwrap().unwrap().clone();
 
-        node.set_property("name".to_string(), PropertyValue::String("John".to_string()));
+        node.set_property(
+            "name".to_string(),
+            PropertyValue::String("John".to_string()),
+        );
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
         graph.update_node(node).unwrap();
@@ -695,7 +699,10 @@ mod tests {
         let mut node = graph.get_node_mut(node_id).unwrap().unwrap().clone();
 
         // Set properties
-        node.set_property("name".to_string(), PropertyValue::String("John".to_string()));
+        node.set_property(
+            "name".to_string(),
+            PropertyValue::String("John".to_string()),
+        );
         node.set_property("age".to_string(), PropertyValue::Int64(30));
 
         // Check properties
@@ -814,11 +821,7 @@ mod tests {
         let mut graph = Graph::new();
 
         // Try to create edge with non-existent nodes
-        let result = graph.create_edge(
-            NodeId::new(999),
-            NodeId::new(1000),
-            "KNOWS".to_string(),
-        );
+        let result = graph.create_edge(NodeId::new(999), NodeId::new(1000), "KNOWS".to_string());
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::NotFound(_)));

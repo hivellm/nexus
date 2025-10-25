@@ -32,7 +32,7 @@ fn test_catalog_storage_integration() {
 
     // Create catalog and storage
     let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
 
     // Create label and node
     let person_label = catalog.get_or_create_label("Person").unwrap();
@@ -58,7 +58,7 @@ fn test_catalog_storage_integration() {
 fn test_relationship_traversal_integration() {
     let dir = TempDir::new().unwrap();
     let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
 
     // Create nodes
     let person_label = catalog.get_or_create_label("Person").unwrap();
@@ -103,12 +103,18 @@ fn test_relationship_traversal_integration() {
     assert_eq!(node.first_rel_ptr, rel1_id);
 
     let first_rel = store.read_rel(rel1_id).unwrap();
-    assert_eq!(first_rel.dst_id, node2_id);
-    assert_eq!(first_rel.next_src_ptr, rel2_id);
+    // Copy packed fields to avoid unaligned reference errors
+    let first_rel_dst_id = first_rel.dst_id;
+    let first_rel_next_src_ptr = first_rel.next_src_ptr;
+    assert_eq!(first_rel_dst_id, node2_id);
+    assert_eq!(first_rel_next_src_ptr, rel2_id);
 
     let second_rel = store.read_rel(rel2_id).unwrap();
-    assert_eq!(second_rel.dst_id, node3_id);
-    assert_eq!(second_rel.next_src_ptr, u64::MAX);
+    // Copy packed fields to avoid unaligned reference errors
+    let second_rel_dst_id = second_rel.dst_id;
+    let second_rel_next_src_ptr = second_rel.next_src_ptr;
+    assert_eq!(second_rel_dst_id, node3_id);
+    assert_eq!(second_rel_next_src_ptr, u64::MAX);
 }
 
 // Integration Test 3: Transaction + WAL
@@ -154,7 +160,7 @@ fn test_transaction_wal_integration() {
 fn test_page_cache_storage_integration() {
     let dir = TempDir::new().unwrap();
 
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
     let mut cache = PageCache::new(100).unwrap();
 
     // Simulate page-based storage access
@@ -179,7 +185,7 @@ fn test_full_transaction_lifecycle() {
     let dir = TempDir::new().unwrap();
 
     let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
     let mut wal = Wal::new(dir.path().join("wal.log")).unwrap();
 
@@ -316,7 +322,7 @@ fn test_multi_module_transaction() {
     let dir = TempDir::new().unwrap();
 
     let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
     let mut cache = PageCache::new(100).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
     let mut wal = Wal::new(dir.path().join("wal.log")).unwrap();
@@ -390,7 +396,7 @@ fn test_multi_module_transaction() {
 #[test]
 fn test_mvcc_snapshot_isolation() {
     let dir = TempDir::new().unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
 
     // Create initial node at epoch 0
@@ -420,7 +426,7 @@ fn test_mvcc_snapshot_isolation() {
 #[test]
 fn test_node_insert_performance() {
     let dir = TempDir::new().unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
     let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
 
     let person_label = catalog.get_or_create_label("Person").unwrap();
@@ -450,7 +456,7 @@ fn test_node_insert_performance() {
 #[test]
 fn test_node_read_performance() {
     let dir = TempDir::new().unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir.path()).unwrap();
 
     // Pre-create nodes
     let count = 10_000;
@@ -516,7 +522,7 @@ fn test_concurrent_transactions() {
     use std::thread;
 
     let dir = TempDir::new().unwrap();
-    let store = Arc::new(RecordStore::new(dir.path()).unwrap());
+    let store = Arc::new(parking_lot::Mutex::new(RecordStore::new(dir.path()).unwrap()));
     let tx_mgr = Arc::new(parking_lot::Mutex::new(TransactionManager::new().unwrap()));
 
     let mut handles = vec![];
@@ -529,7 +535,7 @@ fn test_concurrent_transactions() {
             let _tx = mgr.lock().begin_read().unwrap();
             // Read some nodes
             for i in 0..10 {
-                if s.read_node(i).is_ok() {
+                if s.lock().read_node(i).is_ok() {
                     // Successfully read
                 }
             }
@@ -543,10 +549,10 @@ fn test_concurrent_transactions() {
         let s = store.clone();
         let handle = thread::spawn(move || {
             let mut tx = mgr.lock().begin_write().unwrap();
-            let node_id = s.allocate_node_id();
+            let node_id = s.lock().allocate_node_id();
             let mut node = nexus_core::storage::NodeRecord::default();
             node.add_label(i);
-            s.write_node(node_id, &node).unwrap();
+            s.lock().write_node(node_id, &node).unwrap();
             mgr.lock().commit(&mut tx).unwrap();
         });
         handles.push(handle);
