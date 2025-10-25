@@ -13,12 +13,13 @@
 //! - PUT /data/nodes - Update nodes
 //! - DELETE /data/nodes - Delete nodes
 //! - GET /stats - Database statistics
+//! - POST /mcp - MCP StreamableHTTP endpoint
 
 use axum::{
     Router,
-    extract::Json,
+    extract::{Json, Request},
     response::IntoResponse,
-    routing::{delete, get, post, put},
+    routing::{any, delete, get, post, put},
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -32,6 +33,19 @@ mod api;
 mod config;
 
 use config::Config;
+
+/// Nexus server state
+#[derive(Clone)]
+pub struct NexusServer {
+    /// Executor for Cypher queries
+    pub executor: Arc<RwLock<nexus_core::executor::Executor>>,
+    /// Catalog for metadata
+    pub catalog: Arc<RwLock<nexus_core::catalog::Catalog>>,
+    /// Label index
+    pub label_index: Arc<RwLock<nexus_core::index::LabelIndex>>,
+    /// KNN index
+    pub knn_index: Arc<RwLock<nexus_core::index::KnnIndex>>,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -67,11 +81,26 @@ async fn main() -> anyhow::Result<()> {
     // Initialize new API modules
     api::schema::init_catalog(catalog_arc.clone())?;
     api::data::init_catalog(catalog_arc.clone())?;
-    api::stats::init_instances(catalog_arc, label_index_arc, knn_index_arc)?;
+    api::stats::init_instances(
+        catalog_arc.clone(),
+        label_index_arc.clone(),
+        knn_index_arc.clone(),
+    )?;
+
+    // Create Nexus server state
+    let nexus_server = Arc::new(NexusServer {
+        executor: api::cypher::get_executor(),
+        catalog: catalog_arc,
+        label_index: label_index_arc,
+        knn_index: knn_index_arc,
+    });
 
     info!("Starting Nexus Server on {}", config.addr);
 
-    // Build router
+    // Create MCP router with StreamableHTTP transport
+    let mcp_router = create_mcp_router(nexus_server.clone()).await?;
+
+    // Build main router
     let app = Router::new()
         .route("/", get(health_check))
         .route("/health", get(health_check))
@@ -90,6 +119,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/data/nodes", delete(api::data::delete_node))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
+        // MCP StreamableHTTP endpoint
+        .nest("/mcp", mcp_router)
         .layer(TraceLayer::new_for_http());
 
     // Start server
@@ -99,6 +130,44 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Create MCP router with StreamableHTTP transport
+async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Router> {
+    use hyper::service::Service;
+    use hyper_util::service::TowerToHyperService;
+    use rmcp::transport::streamable_http_server::StreamableHttpService;
+    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+
+    // Create MCP service handler
+    let server = nexus_server.clone();
+
+    // Create StreamableHTTP service
+    let streamable_service = StreamableHttpService::new(
+        move || Ok(api::streaming::NexusMcpService::new(server.clone())),
+        LocalSessionManager::default().into(),
+        Default::default(),
+    );
+
+    // Convert to axum service and create router
+    let hyper_service = TowerToHyperService::new(streamable_service);
+
+    // Create router with the MCP endpoint
+    let router = Router::new().route(
+        "/",
+        any(move |req: Request| {
+            let service = hyper_service.clone();
+            async move {
+                // Forward request to hyper service
+                match service.call(req).await {
+                    Ok(response) => Ok(response),
+                    Err(_) => Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                }
+            }
+        }),
+    );
+
+    Ok(router)
 }
 
 /// Health check endpoint

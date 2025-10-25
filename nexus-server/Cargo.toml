@@ -22,6 +22,13 @@ axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 hyper.workspace = true
+hyper-util.workspace = true
+
+# MCP (Model Context Protocol) dependencies
+rmcp.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
 
 # Async runtime
 tokio.workspace = true

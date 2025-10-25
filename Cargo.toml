@@ -36,6 +36,13 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 hyper = "1.5"
+hyper-util = "0.1"
+
+# MCP dependencies
+rmcp = { version = "0.8.1", features = ["server", "macros", "transport-streamable-http-server"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7"
+async-trait = "0.1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

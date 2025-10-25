@@ -6,3 +6,4 @@ pub mod ingest;
 pub mod knn;
 pub mod schema;
 pub mod stats;
+pub mod streaming;

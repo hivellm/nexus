@@ -20,6 +20,11 @@ pub fn init_executor() -> anyhow::Result<Arc<RwLock<Executor>>> {
     Ok(executor_arc)
 }
 
+/// Get the executor instance
+pub fn get_executor() -> Arc<RwLock<Executor>> {
+    EXECUTOR.get().expect("Executor not initialized").clone()
+}
+
 /// Cypher query request
 #[derive(Debug, Deserialize)]
 pub struct CypherRequest {
