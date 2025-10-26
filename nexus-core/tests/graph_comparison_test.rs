@@ -4,7 +4,7 @@ use nexus_core::catalog::Catalog;
 use nexus_core::graph::{Edge, EdgeId, Graph, Node, NodeId};
 use nexus_core::graph_comparison::{
     ComparisonOptions, DiffSummary, EdgeChanges, GraphComparator, GraphDiff, NodeChanges,
-    PropertyValueChange,
+    PropertyValueChange, TopologyAnalysis, ComponentChange, GraphMetrics, MetricsComparison,
 };
 use nexus_core::graph_simple::PropertyValue;
 use nexus_core::storage::RecordStore;
@@ -365,6 +365,11 @@ fn test_diff_summary_creation() {
         edges_added: 3,
         edges_removed: 0,
         edges_modified: 2,
+        overall_similarity: 0.85,
+        structural_similarity: 0.80,
+        content_similarity: 0.90,
+        topology_analysis: None,
+        metrics_comparison: None,
     };
 
     assert_eq!(summary.nodes_count_original, 10);
@@ -517,6 +522,12 @@ fn test_comparison_options_custom() {
         include_structural_changes: false,
         ignore_property_order: false,
         treat_missing_as_null: true,
+        use_fuzzy_matching: false,
+        fuzzy_threshold: 0.8,
+        include_topology_analysis: false,
+        calculate_metrics: false,
+        max_comparison_depth: None,
+        include_temporal_analysis: false,
     };
 
     assert!(!options.include_property_changes);
@@ -537,6 +548,10 @@ fn test_comparison_options_serialization() {
     assert!(json.contains("include_structural_changes"));
     assert!(json.contains("ignore_property_order"));
     assert!(json.contains("treat_missing_as_null"));
+    assert!(json.contains("use_fuzzy_matching"));
+    assert!(json.contains("fuzzy_threshold"));
+    assert!(json.contains("include_topology_analysis"));
+    assert!(json.contains("calculate_metrics"));
 
     // Test deserialization
     let deserialized: ComparisonOptions = serde_json::from_str(&json).unwrap();
@@ -560,7 +575,292 @@ fn test_comparison_options_serialization() {
         deserialized.treat_missing_as_null,
         options.treat_missing_as_null
     );
+    assert_eq!(deserialized.use_fuzzy_matching, options.use_fuzzy_matching);
+    assert_eq!(deserialized.fuzzy_threshold, options.fuzzy_threshold);
+    assert_eq!(
+        deserialized.include_topology_analysis,
+        options.include_topology_analysis
+    );
+    assert_eq!(deserialized.calculate_metrics, options.calculate_metrics);
 }
+
+#[test]
+fn test_enhanced_comparison_options() {
+    let options = ComparisonOptions {
+        use_fuzzy_matching: true,
+        fuzzy_threshold: 0.7,
+        include_topology_analysis: true,
+        calculate_metrics: true,
+        max_comparison_depth: Some(5),
+        include_temporal_analysis: true,
+        ..Default::default()
+    };
+
+    assert!(options.use_fuzzy_matching);
+    assert_eq!(options.fuzzy_threshold, 0.7);
+    assert!(options.include_topology_analysis);
+    assert!(options.calculate_metrics);
+    assert_eq!(options.max_comparison_depth, Some(5));
+    assert!(options.include_temporal_analysis);
+}
+
+#[test]
+fn test_node_similarity_calculation() {
+    let mut props1 = HashMap::new();
+    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props1.insert("age".to_string(), PropertyValue::Int64(30));
+    let node1 = create_test_node(1, vec!["Person".to_string()], props1);
+
+    let mut props2 = HashMap::new();
+    props2.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props2.insert("age".to_string(), PropertyValue::Int64(30));
+    let node2 = create_test_node(2, vec!["Person".to_string()], props2);
+
+    let similarity = GraphComparator::calculate_node_similarity(&node1, &node2);
+    assert!(similarity > 0.9); // Should be very similar
+}
+
+#[test]
+fn test_node_similarity_different_labels() {
+    let mut props1 = HashMap::new();
+    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    let node1 = create_test_node(1, vec!["Person".to_string()], props1);
+
+    let mut props2 = HashMap::new();
+    props2.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    let node2 = create_test_node(2, vec!["Employee".to_string()], props2);
+
+    let similarity = GraphComparator::calculate_node_similarity(&node1, &node2);
+    assert!(similarity < 0.9); // Should be less similar due to different labels
+}
+
+#[test]
+fn test_label_similarity_calculation() {
+    let labels1 = vec!["Person".to_string(), "Employee".to_string()];
+    let labels2 = vec!["Person".to_string(), "Manager".to_string()];
+
+    let similarity = GraphComparator::calculate_label_similarity(&labels1, &labels2);
+    assert!(similarity > 0.0 && similarity < 1.0); // Partial similarity
+}
+
+#[test]
+fn test_label_similarity_identical() {
+    let labels1 = vec!["Person".to_string(), "Employee".to_string()];
+    let labels2 = vec!["Person".to_string(), "Employee".to_string()];
+
+    let similarity = GraphComparator::calculate_label_similarity(&labels1, &labels2);
+    assert_eq!(similarity, 1.0); // Perfect similarity
+}
+
+#[test]
+fn test_label_similarity_empty() {
+    let labels1 = vec![];
+    let labels2 = vec![];
+
+    let similarity = GraphComparator::calculate_label_similarity(&labels1, &labels2);
+    assert_eq!(similarity, 1.0); // Empty sets are considered identical
+}
+
+#[test]
+fn test_property_similarity_calculation() {
+    let mut props1 = HashMap::new();
+    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props1.insert("age".to_string(), PropertyValue::Int64(30));
+
+    let mut props2 = HashMap::new();
+    props2.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props2.insert("age".to_string(), PropertyValue::Int64(30));
+
+    let similarity = GraphComparator::calculate_property_similarity(&props1, &props2);
+    assert_eq!(similarity, 1.0); // Perfect similarity
+}
+
+#[test]
+fn test_property_similarity_different_values() {
+    let mut props1 = HashMap::new();
+    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props1.insert("age".to_string(), PropertyValue::Int64(30));
+
+    let mut props2 = HashMap::new();
+    props2.insert("name".to_string(), PropertyValue::String("Bob".to_string()));
+    props2.insert("age".to_string(), PropertyValue::Int64(25));
+
+    let similarity = GraphComparator::calculate_property_similarity(&props1, &props2);
+    assert!(similarity > 0.0 && similarity < 1.0); // Partial similarity
+}
+
+#[test]
+fn test_property_similarity_empty() {
+    let props1 = HashMap::new();
+    let props2 = HashMap::new();
+
+    let similarity = GraphComparator::calculate_property_similarity(&props1, &props2);
+    assert_eq!(similarity, 1.0); // Empty maps are considered identical
+}
+
+#[test]
+fn test_enhanced_diff_summary() {
+    let summary = DiffSummary {
+        nodes_count_original: 10,
+        nodes_count_modified: 12,
+        edges_count_original: 15,
+        edges_count_modified: 18,
+        nodes_added: 2,
+        nodes_removed: 0,
+        nodes_modified: 1,
+        edges_added: 3,
+        edges_removed: 0,
+        edges_modified: 2,
+        overall_similarity: 0.85,
+        structural_similarity: 0.80,
+        content_similarity: 0.90,
+        topology_analysis: None,
+        metrics_comparison: None,
+    };
+
+    assert_eq!(summary.overall_similarity, 0.85);
+    assert_eq!(summary.structural_similarity, 0.80);
+    assert_eq!(summary.content_similarity, 0.90);
+    assert!(summary.topology_analysis.is_none());
+    assert!(summary.metrics_comparison.is_none());
+}
+
+#[test]
+fn test_topology_analysis() {
+    let analysis = TopologyAnalysis {
+        original_components: 2,
+        modified_components: 3,
+        component_changes: vec![ComponentChange {
+            change_type: "added".to_string(),
+            size: 5,
+            nodes: vec![NodeId::new(1), NodeId::new(2), NodeId::new(3)],
+        }],
+        diameter_change: Some(2.0),
+        avg_path_length_change: Some(1.5),
+        clustering_coefficient_change: Some(0.1),
+    };
+
+    assert_eq!(analysis.original_components, 2);
+    assert_eq!(analysis.modified_components, 3);
+    assert_eq!(analysis.component_changes.len(), 1);
+    assert_eq!(analysis.component_changes[0].change_type, "added");
+    assert_eq!(analysis.component_changes[0].size, 5);
+    assert_eq!(analysis.diameter_change, Some(2.0));
+}
+
+#[test]
+fn test_graph_metrics() {
+    let metrics = GraphMetrics {
+        node_count: 100,
+        edge_count: 200,
+        density: 0.04,
+        avg_degree: 4.0,
+        max_degree: 10,
+        min_degree: 1,
+        triangle_count: 50,
+        clustering_coefficient: 0.3,
+        assortativity: 0.2,
+        diameter: 8,
+        avg_shortest_path: 4.5,
+    };
+
+    assert_eq!(metrics.node_count, 100);
+    assert_eq!(metrics.edge_count, 200);
+    assert_eq!(metrics.density, 0.04);
+    assert_eq!(metrics.avg_degree, 4.0);
+    assert_eq!(metrics.max_degree, 10);
+    assert_eq!(metrics.min_degree, 1);
+    assert_eq!(metrics.triangle_count, 50);
+    assert_eq!(metrics.clustering_coefficient, 0.3);
+    assert_eq!(metrics.assortativity, 0.2);
+    assert_eq!(metrics.diameter, 8);
+    assert_eq!(metrics.avg_shortest_path, 4.5);
+}
+
+#[test]
+fn test_metrics_comparison() {
+    let original_metrics = GraphMetrics {
+        node_count: 100,
+        edge_count: 200,
+        density: 0.04,
+        avg_degree: 4.0,
+        max_degree: 10,
+        min_degree: 1,
+        triangle_count: 50,
+        clustering_coefficient: 0.3,
+        assortativity: 0.2,
+        diameter: 8,
+        avg_shortest_path: 4.5,
+    };
+
+    let modified_metrics = GraphMetrics {
+        node_count: 120,
+        edge_count: 240,
+        density: 0.05,
+        avg_degree: 4.0,
+        max_degree: 12,
+        min_degree: 1,
+        triangle_count: 60,
+        clustering_coefficient: 0.35,
+        assortativity: 0.25,
+        diameter: 9,
+        avg_shortest_path: 4.8,
+    };
+
+    let mut percentage_changes = HashMap::new();
+    percentage_changes.insert("node_count".to_string(), 20.0);
+    percentage_changes.insert("edge_count".to_string(), 20.0);
+
+    let comparison = MetricsComparison {
+        original_metrics,
+        modified_metrics,
+        percentage_changes,
+    };
+
+    assert_eq!(comparison.original_metrics.node_count, 100);
+    assert_eq!(comparison.modified_metrics.node_count, 120);
+    assert_eq!(comparison.percentage_changes.get("node_count"), Some(&20.0));
+}
+
+#[test]
+fn test_enhanced_comparison_with_options() {
+    let options = ComparisonOptions {
+        include_topology_analysis: true,
+        calculate_metrics: true,
+        use_fuzzy_matching: true,
+        fuzzy_threshold: 0.8,
+        ..Default::default()
+    };
+
+    // Test that options are properly configured
+    assert!(options.include_topology_analysis);
+    assert!(options.calculate_metrics);
+    assert!(options.use_fuzzy_matching);
+    assert_eq!(options.fuzzy_threshold, 0.8);
+}
+
+#[test]
+fn test_component_change() {
+    let change = ComponentChange {
+        change_type: "merged".to_string(),
+        size: 10,
+        nodes: vec![
+            NodeId::new(1),
+            NodeId::new(2),
+            NodeId::new(3),
+            NodeId::new(4),
+            NodeId::new(5),
+        ],
+    };
+
+    assert_eq!(change.change_type, "merged");
+    assert_eq!(change.size, 10);
+    assert_eq!(change.nodes.len(), 5);
+    assert_eq!(change.nodes[0], NodeId::new(1));
+}
+
+// Note: StructuralChangesSummary is defined in the API module, not core
+// This test is commented out as it's not available in the core module
 
 #[test]
 fn test_graph_diff_creation() {
@@ -642,6 +942,11 @@ fn test_graph_diff_creation() {
         edges_added: 1,
         edges_removed: 1,
         edges_modified: 1,
+        overall_similarity: 0.5,
+        structural_similarity: 0.5,
+        content_similarity: 0.5,
+        topology_analysis: None,
+        metrics_comparison: None,
     };
 
     let diff = GraphDiff {
@@ -689,6 +994,11 @@ fn test_graph_diff_serialization() {
             edges_added: 0,
             edges_removed: 0,
             edges_modified: 0,
+            overall_similarity: 1.0,
+            structural_similarity: 1.0,
+            content_similarity: 1.0,
+            topology_analysis: None,
+            metrics_comparison: None,
         },
     };
 

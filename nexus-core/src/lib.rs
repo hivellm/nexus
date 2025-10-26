@@ -58,12 +58,12 @@ pub mod transaction;
 pub mod validation;
 pub mod wal;
 
-pub use error::{Error, Result};
-pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
 pub use clustering::{
     Cluster, ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, ClusteringMetrics,
     ClusteringResult, DistanceMetric, FeatureStrategy, LinkageType,
 };
+pub use error::{Error, Result};
+pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
 pub use graph_comparison::{
     ComparisonOptions, DiffSummary, EdgeChanges, EdgeModification, GraphComparator, GraphDiff,
     NodeChanges, NodeModification, PropertyValueChange,
@@ -82,6 +82,19 @@ pub use validation::{
     GraphValidator, ValidationConfig, ValidationError, ValidationErrorType, ValidationResult,
     ValidationSeverity, ValidationStats, ValidationWarning, ValidationWarningType,
 };
+
+/// Graph statistics for analysis and monitoring
+#[derive(Debug, Clone, Default)]
+pub struct GraphStatistics {
+    /// Total number of nodes
+    pub node_count: u64,
+    /// Total number of relationships
+    pub relationship_count: u64,
+    /// Count of nodes per label
+    pub label_counts: std::collections::HashMap<String, u64>,
+    /// Count of relationships per type
+    pub relationship_type_counts: std::collections::HashMap<String, u64>,
+}
 
 /// Graph database engine
 pub struct Engine {
@@ -176,7 +189,19 @@ impl Engine {
         properties: serde_json::Value,
     ) -> Result<u64> {
         let mut tx = self.transaction_manager.begin_write()?;
-        let node_id = self.storage.create_node(&mut tx, labels, properties)?;
+
+        // Create labels in catalog and get their IDs
+        let mut label_bits = 0u64;
+        for label in &labels {
+            let label_id = self.catalog.get_or_create_label(label)?;
+            if label_id < 64 {
+                label_bits |= 1u64 << label_id;
+            }
+        }
+
+        let node_id = self
+            .storage
+            .create_node_with_label_bits(&mut tx, label_bits, properties)?;
         self.transaction_manager.commit(&mut tx)?;
         Ok(node_id)
     }
@@ -214,7 +239,7 @@ impl Engine {
         &mut self,
         id: u64,
         labels: Vec<String>,
-        properties: serde_json::Value,
+        _properties: serde_json::Value,
     ) -> Result<()> {
         // Check if node exists
         if self.get_node(id)?.is_none() {
@@ -258,7 +283,7 @@ impl Engine {
             // Mark node as deleted
             let mut deleted_record = node_record;
             deleted_record.mark_deleted();
-            
+
             let mut tx = self.transaction_manager.begin_write()?;
             self.storage.write_node(id, &deleted_record)?;
             self.transaction_manager.commit(&mut tx)?;
@@ -294,42 +319,46 @@ impl Engine {
     /// Convert the storage to a simple graph for clustering and analysis
     pub fn convert_to_simple_graph(&mut self) -> Result<graph_simple::Graph> {
         let mut simple_graph = graph_simple::Graph::new();
-        
+
         // Scan all nodes and add them to the simple graph
         for node_id in 0..self.storage.node_count() {
             if let Ok(Some(node_record)) = self.get_node(node_id) {
                 // Convert labels from bitmap to vector
-                let labels = self.catalog.get_labels_from_bitmap(node_record.label_bits)?;
-                
+                let labels = self
+                    .catalog
+                    .get_labels_from_bitmap(node_record.label_bits)?;
+
                 // Create node in simple graph
                 let simple_node_id = graph_simple::NodeId::new(node_id);
                 let node = graph_simple::Node::new(simple_node_id, labels);
-                
+
                 // TODO: Add properties when property store is implemented
                 // if node_record.prop_ptr != 0 {
                 //     // Load properties from property store
                 // }
-                
+
                 simple_graph.update_node(node)?;
             }
         }
-        
+
         // Scan all relationships and add them to the simple graph
         for rel_id in 0..self.storage.relationship_count() {
             if let Ok(Some(rel_record)) = self.get_relationship(rel_id) {
                 // Get relationship type name
-                let rel_type = self.catalog.get_type_name(rel_record.type_id)
+                let rel_type = self
+                    .catalog
+                    .get_type_name(rel_record.type_id)
                     .unwrap_or_else(|_| Some("UNKNOWN".to_string()))
                     .unwrap_or_else(|| "UNKNOWN".to_string());
-                
+
                 // Create edge in simple graph
                 let source_id = graph_simple::NodeId::new(rel_record.src_id);
                 let target_id = graph_simple::NodeId::new(rel_record.dst_id);
-                
+
                 simple_graph.create_edge(source_id, target_id, rel_type)?;
             }
         }
-        
+
         Ok(simple_graph)
     }
 
@@ -360,12 +389,13 @@ impl Engine {
     }
 
     /// Perform K-means clustering on nodes
-    pub fn kmeans_cluster_nodes(&mut self, k: usize, max_iterations: usize) -> Result<ClusteringResult> {
+    pub fn kmeans_cluster_nodes(
+        &mut self,
+        k: usize,
+        max_iterations: usize,
+    ) -> Result<ClusteringResult> {
         let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::KMeans {
-                k,
-                max_iterations,
-            },
+            algorithm: ClusteringAlgorithm::KMeans { k, max_iterations },
             feature_strategy: FeatureStrategy::Structural,
             distance_metric: DistanceMetric::Euclidean,
             random_seed: Some(42),
@@ -382,6 +412,114 @@ impl Engine {
             random_seed: None,
         };
         self.cluster_nodes(config)
+    }
+
+    /// Export graph data to JSON format
+    pub fn export_to_json(&mut self) -> Result<serde_json::Value> {
+        let mut export_data = serde_json::Map::new();
+
+        // Export nodes
+        let mut nodes = Vec::new();
+        for node_id in 0..self.storage.node_count() {
+            if let Ok(Some(node_record)) = self.get_node(node_id) {
+                let labels = self
+                    .catalog
+                    .get_labels_from_bitmap(node_record.label_bits)?;
+                let node_data = serde_json::json!({
+                    "id": node_id,
+                    "labels": labels,
+                    "properties": {} // TODO: Add property loading when property store is implemented
+                });
+                nodes.push(node_data);
+            }
+        }
+        export_data.insert("nodes".to_string(), serde_json::Value::Array(nodes));
+
+        // Export relationships
+        let mut relationships = Vec::new();
+        for rel_id in 0..self.storage.relationship_count() {
+            if let Ok(Some(rel_record)) = self.get_relationship(rel_id) {
+                let rel_type = self
+                    .catalog
+                    .get_type_name(rel_record.type_id)
+                    .unwrap_or_else(|_| Some("UNKNOWN".to_string()))
+                    .unwrap_or_else(|| "UNKNOWN".to_string());
+
+                // Copy values to avoid alignment issues with packed structs
+                let src_id = rel_record.src_id;
+                let dst_id = rel_record.dst_id;
+
+                let rel_data = serde_json::json!({
+                    "id": rel_id,
+                    "source": src_id,
+                    "target": dst_id,
+                    "type": rel_type,
+                    "properties": {} // TODO: Add property loading when property store is implemented
+                });
+                relationships.push(rel_data);
+            }
+        }
+        export_data.insert(
+            "relationships".to_string(),
+            serde_json::Value::Array(relationships),
+        );
+
+        Ok(serde_json::Value::Object(export_data))
+    }
+
+    /// Get graph statistics
+    pub fn get_graph_statistics(&mut self) -> Result<GraphStatistics> {
+        let mut stats = GraphStatistics::default();
+
+        // Count nodes
+        for node_id in 0..self.storage.node_count() {
+            if let Ok(Some(node_record)) = self.get_node(node_id) {
+                if !node_record.is_deleted() {
+                    stats.node_count += 1;
+
+                    // Count labels
+                    let labels = self
+                        .catalog
+                        .get_labels_from_bitmap(node_record.label_bits)?;
+                    for label in labels {
+                        *stats.label_counts.entry(label).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // Count relationships
+        for rel_id in 0..self.storage.relationship_count() {
+            if let Ok(Some(rel_record)) = self.get_relationship(rel_id) {
+                if !rel_record.is_deleted() {
+                    stats.relationship_count += 1;
+
+                    // Count relationship types
+                    let rel_type = self
+                        .catalog
+                        .get_type_name(rel_record.type_id)
+                        .unwrap_or_else(|_| Some("UNKNOWN".to_string()))
+                        .unwrap_or_else(|| "UNKNOWN".to_string());
+                    *stats.relationship_type_counts.entry(rel_type).or_insert(0) += 1;
+                }
+            }
+        }
+
+        Ok(stats)
+    }
+
+    /// Clear all data from the graph
+    pub fn clear_all_data(&mut self) -> Result<()> {
+        // Clear storage
+        self.storage.clear_all()?;
+
+        // Reset catalog statistics
+        let mut stats = self.catalog.get_statistics()?;
+        stats.node_counts.clear();
+        stats.rel_counts.clear();
+        self.catalog.update_statistics(&stats)?;
+
+        Ok(())
     }
 
     /// Validate the entire graph for integrity and consistency
@@ -989,5 +1127,374 @@ mod tests {
         let _get_rel = engine.get_relationship(1);
 
         // Test passes if all mutable operations compile
+    }
+
+    #[test]
+    fn test_update_node() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create a node first
+        let node_id = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Update the node
+        let mut properties = serde_json::Map::new();
+        properties.insert(
+            "name".to_string(),
+            serde_json::Value::String("Alice".to_string()),
+        );
+        properties.insert("age".to_string(), serde_json::Value::Number(30.into()));
+
+        let result = engine.update_node(
+            node_id,
+            vec!["Person".to_string(), "Updated".to_string()],
+            serde_json::Value::Object(properties),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_nonexistent_node() {
+        let mut engine = Engine::new().unwrap();
+
+        // Try to update a non-existent node
+        let result = engine.update_node(
+            999,
+            vec!["Person".to_string()],
+            serde_json::Value::Object(serde_json::Map::new()),
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_delete_node() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create a node first
+        let node_id = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Delete the node
+        let result = engine.delete_node(node_id);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_node() {
+        let mut engine = Engine::new().unwrap();
+
+        // Try to delete a non-existent node
+        let result = engine.delete_node(999);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_convert_to_simple_graph() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes and relationships
+        let node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let node2 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _rel_id = engine
+            .create_relationship(
+                node1,
+                node2,
+                "KNOWS".to_string(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Convert to simple graph
+        let simple_graph = engine.convert_to_simple_graph().unwrap();
+
+        // Check that the simple graph has the expected structure
+        let stats = simple_graph.stats().unwrap();
+        assert!(stats.total_nodes >= 2);
+        assert!(stats.total_edges >= 1);
+    }
+
+    #[test]
+    fn test_cluster_nodes() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes
+        let _node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _node2 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Test clustering
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::LabelBased,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: None,
+        };
+
+        let result = engine.cluster_nodes(config);
+        assert!(result.is_ok());
+
+        let _clustering_result = result.unwrap();
+    }
+
+    #[test]
+    fn test_group_nodes_by_labels() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes with different labels
+        let _node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _node2 = engine
+            .create_node(
+                vec!["Company".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Test label-based grouping
+        let result = engine.group_nodes_by_labels();
+        assert!(result.is_ok());
+
+        let _clustering_result = result.unwrap();
+    }
+
+    #[test]
+    fn test_group_nodes_by_property() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes with properties
+        let mut properties1 = serde_json::Map::new();
+        properties1.insert("age".to_string(), serde_json::Value::Number(25.into()));
+        let _node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(properties1),
+            )
+            .unwrap();
+
+        let mut properties2 = serde_json::Map::new();
+        properties2.insert("age".to_string(), serde_json::Value::Number(30.into()));
+        let _node2 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(properties2),
+            )
+            .unwrap();
+
+        // Test property-based grouping
+        let result = engine.group_nodes_by_property("age");
+        assert!(result.is_ok());
+
+        let _clustering_result = result.unwrap();
+    }
+
+    #[test]
+    fn test_kmeans_cluster_nodes() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes
+        let _node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _node2 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Test K-means clustering
+        let result = engine.kmeans_cluster_nodes(2, 10);
+        assert!(result.is_ok());
+
+        let _clustering_result = result.unwrap();
+    }
+
+    #[test]
+    fn test_detect_communities() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes and relationships
+        let node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let node2 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _rel_id = engine
+            .create_relationship(
+                node1,
+                node2,
+                "KNOWS".to_string(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Test community detection
+        let result = engine.detect_communities();
+        assert!(result.is_ok());
+
+        let _clustering_result = result.unwrap();
+    }
+
+    #[test]
+    fn test_export_to_json() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes and relationships
+        let node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let node2 = engine
+            .create_node(
+                vec!["Company".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _rel_id = engine
+            .create_relationship(
+                node1,
+                node2,
+                "WORKS_AT".to_string(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Export to JSON
+        let json_data = engine.export_to_json().unwrap();
+
+        // Check that the JSON contains the expected structure
+        assert!(json_data.is_object());
+        assert!(json_data.get("nodes").is_some());
+        assert!(json_data.get("relationships").is_some());
+
+        let nodes = json_data.get("nodes").unwrap().as_array().unwrap();
+        let relationships = json_data.get("relationships").unwrap().as_array().unwrap();
+
+        assert!(nodes.len() >= 2);
+        assert!(!relationships.is_empty());
+    }
+
+    #[test]
+    fn test_get_graph_statistics() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some nodes with different labels
+        let _node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _node2 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _node3 = engine
+            .create_node(
+                vec!["Company".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Get statistics
+        let stats = engine.get_graph_statistics().unwrap();
+
+        assert_eq!(stats.node_count, 3);
+        assert_eq!(stats.relationship_count, 0);
+        assert_eq!(stats.label_counts.get("Person"), Some(&2));
+        assert_eq!(stats.label_counts.get("Company"), Some(&1));
+    }
+
+    #[test]
+    fn test_clear_all_data() {
+        let mut engine = Engine::new().unwrap();
+
+        // Create some data
+        let _node1 = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        let _node2 = engine
+            .create_node(
+                vec!["Company".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+
+        // Verify data exists
+        let stats_before = engine.get_graph_statistics().unwrap();
+        assert_eq!(stats_before.node_count, 2);
+
+        // Clear all data
+        engine.clear_all_data().unwrap();
+
+        // Verify data is cleared
+        let stats_after = engine.get_graph_statistics().unwrap();
+        assert_eq!(stats_after.node_count, 0);
+        assert_eq!(stats_after.relationship_count, 0);
     }
 }

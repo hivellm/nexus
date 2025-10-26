@@ -459,7 +459,7 @@ impl Catalog {
     /// Convert a label bitmap to a vector of label names
     pub fn get_labels_from_bitmap(&self, bitmap: u64) -> Result<Vec<String>> {
         let mut labels = Vec::new();
-        
+
         // Check each bit in the bitmap (up to 64 labels)
         for bit in 0..64 {
             if (bitmap & (1u64 << bit)) != 0 {
@@ -469,7 +469,7 @@ impl Catalog {
                 }
             }
         }
-        
+
         Ok(labels)
     }
 
@@ -970,5 +970,64 @@ mod tests {
         let stats = catalog.get_statistics().unwrap();
         assert_eq!(stats.node_counts.get(&label_id), Some(&100));
         assert_eq!(stats.rel_counts.get(&type_id), Some(&100));
+    }
+
+    #[test]
+    fn test_get_labels_from_bitmap() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Create some labels
+        let person_id = catalog.get_or_create_label("Person").unwrap();
+        let company_id = catalog.get_or_create_label("Company").unwrap();
+
+        // Create a bitmap with both labels
+        let bitmap = (1u64 << person_id) | (1u64 << company_id);
+
+        // Test conversion
+        let labels = catalog.get_labels_from_bitmap(bitmap).unwrap();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&"Person".to_string()));
+        assert!(labels.contains(&"Company".to_string()));
+    }
+
+    #[test]
+    fn test_get_labels_from_empty_bitmap() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Test with empty bitmap
+        let labels = catalog.get_labels_from_bitmap(0).unwrap();
+        assert_eq!(labels.len(), 0);
+    }
+
+    #[test]
+    fn test_get_label_id() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Create a label
+        let person_id = catalog.get_or_create_label("Person").unwrap();
+
+        // Test getting the ID
+        let retrieved_id = catalog.get_label_id("Person").unwrap();
+        assert_eq!(retrieved_id, person_id);
+    }
+
+    #[test]
+    fn test_get_label_id_nonexistent() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Test getting ID for non-existent label
+        let result = catalog.get_label_id("Nonexistent");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_get_label_id_by_id() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Test the identity function
+        let test_id = 5;
+        let result = catalog.get_label_id_by_id(test_id).unwrap();
+        assert_eq!(result, test_id);
     }
 }

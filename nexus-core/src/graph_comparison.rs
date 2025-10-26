@@ -121,6 +121,82 @@ pub struct DiffSummary {
     pub edges_removed: usize,
     /// Number of edges modified
     pub edges_modified: usize,
+    /// Overall similarity score (0.0 to 1.0)
+    pub overall_similarity: f64,
+    /// Structural similarity score (0.0 to 1.0)
+    pub structural_similarity: f64,
+    /// Content similarity score (0.0 to 1.0)
+    pub content_similarity: f64,
+    /// Topology analysis results (if enabled)
+    pub topology_analysis: Option<TopologyAnalysis>,
+    /// Graph metrics comparison (if enabled)
+    pub metrics_comparison: Option<MetricsComparison>,
+}
+
+/// Topology analysis results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopologyAnalysis {
+    /// Number of connected components in original graph
+    pub original_components: usize,
+    /// Number of connected components in modified graph
+    pub modified_components: usize,
+    /// Changes in component structure
+    pub component_changes: Vec<ComponentChange>,
+    /// Changes in graph diameter
+    pub diameter_change: Option<f64>,
+    /// Changes in average path length
+    pub avg_path_length_change: Option<f64>,
+    /// Changes in clustering coefficient
+    pub clustering_coefficient_change: Option<f64>,
+}
+
+/// Component change information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentChange {
+    /// Type of change (added, removed, merged, split)
+    pub change_type: String,
+    /// Size of the component
+    pub size: usize,
+    /// Nodes involved in the change
+    pub nodes: Vec<NodeId>,
+}
+
+/// Graph metrics comparison
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsComparison {
+    /// Original graph metrics
+    pub original_metrics: GraphMetrics,
+    /// Modified graph metrics
+    pub modified_metrics: GraphMetrics,
+    /// Percentage change for each metric
+    pub percentage_changes: HashMap<String, f64>,
+}
+
+/// Graph metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphMetrics {
+    /// Number of nodes
+    pub node_count: usize,
+    /// Number of edges
+    pub edge_count: usize,
+    /// Graph density
+    pub density: f64,
+    /// Average degree
+    pub avg_degree: f64,
+    /// Maximum degree
+    pub max_degree: usize,
+    /// Minimum degree
+    pub min_degree: usize,
+    /// Number of triangles
+    pub triangle_count: usize,
+    /// Clustering coefficient
+    pub clustering_coefficient: f64,
+    /// Assortativity coefficient
+    pub assortativity: f64,
+    /// Graph diameter
+    pub diameter: usize,
+    /// Average shortest path length
+    pub avg_shortest_path: f64,
 }
 
 /// Options for graph comparison
@@ -136,6 +212,18 @@ pub struct ComparisonOptions {
     pub ignore_property_order: bool,
     /// Whether to treat missing properties as null values
     pub treat_missing_as_null: bool,
+    /// Whether to use fuzzy matching for node/edge identification
+    pub use_fuzzy_matching: bool,
+    /// Similarity threshold for fuzzy matching (0.0 to 1.0)
+    pub fuzzy_threshold: f64,
+    /// Whether to include graph topology analysis
+    pub include_topology_analysis: bool,
+    /// Whether to calculate graph metrics during comparison
+    pub calculate_metrics: bool,
+    /// Maximum depth for subgraph comparison
+    pub max_comparison_depth: Option<usize>,
+    /// Whether to include temporal analysis (if timestamps available)
+    pub include_temporal_analysis: bool,
 }
 
 impl Default for ComparisonOptions {
@@ -146,6 +234,12 @@ impl Default for ComparisonOptions {
             include_structural_changes: true,
             ignore_property_order: true,
             treat_missing_as_null: false,
+            use_fuzzy_matching: false,
+            fuzzy_threshold: 0.8,
+            include_topology_analysis: false,
+            calculate_metrics: false,
+            max_comparison_depth: None,
+            include_temporal_analysis: false,
         }
     }
 }
@@ -167,11 +261,55 @@ impl GraphComparator {
         let modified_edges = Self::get_all_edges(modified)?;
 
         // Find differences
-        let (added_nodes, removed_nodes, modified_nodes) =
+        let (added_nodes, removed_nodes, modified_nodes_list) =
             Self::compare_nodes(&original_nodes, &modified_nodes, options)?;
 
-        let (added_edges, removed_edges, modified_edges) =
+        let (added_edges, removed_edges, modified_edges_list) =
             Self::compare_edges(&original_edges, &modified_edges, options)?;
+
+        // Calculate similarity scores
+        let overall_similarity = Self::calculate_overall_similarity(
+            &original_nodes,
+            &modified_nodes,
+            &original_edges,
+            &modified_edges,
+            &added_nodes,
+            &removed_nodes,
+            &modified_nodes_list,
+            &added_edges,
+            &removed_edges,
+            &modified_edges_list,
+        );
+
+        let structural_similarity = Self::calculate_structural_similarity(
+            &original_edges,
+            &modified_edges,
+            &added_edges,
+            &removed_edges,
+            &modified_edges_list,
+        );
+
+        let content_similarity = Self::calculate_content_similarity(
+            &original_nodes,
+            &modified_nodes,
+            &added_nodes,
+            &removed_nodes,
+            &modified_nodes_list,
+        );
+
+        // Perform topology analysis if enabled
+        let topology_analysis = if options.include_topology_analysis {
+            Some(Self::analyze_topology(original, modified, &original_nodes, &modified_nodes)?)
+        } else {
+            None
+        };
+
+        // Calculate metrics comparison if enabled
+        let metrics_comparison = if options.calculate_metrics {
+            Some(Self::calculate_metrics_comparison(original, modified)?)
+        } else {
+            None
+        };
 
         // Create summary
         let summary = DiffSummary {
@@ -181,19 +319,24 @@ impl GraphComparator {
             edges_count_modified: modified_edges.len(),
             nodes_added: added_nodes.len(),
             nodes_removed: removed_nodes.len(),
-            nodes_modified: modified_nodes.len(),
+            nodes_modified: modified_nodes_list.len(),
             edges_added: added_edges.len(),
             edges_removed: removed_edges.len(),
-            edges_modified: modified_edges.len(),
+            edges_modified: modified_edges_list.len(),
+            overall_similarity,
+            structural_similarity,
+            content_similarity,
+            topology_analysis,
+            metrics_comparison,
         };
 
         Ok(GraphDiff {
             added_nodes,
             removed_nodes,
-            modified_nodes,
+            modified_nodes: modified_nodes_list,
             added_edges,
             removed_edges,
-            modified_edges,
+            modified_edges: modified_edges_list,
             summary,
         })
     }
@@ -479,40 +622,252 @@ impl GraphComparator {
         options: &ComparisonOptions,
     ) -> Result<f64, String> {
         let diff = Self::compare_graphs(graph1, graph2, options)?;
+        Ok(diff.summary.overall_similarity)
+    }
 
-        let total_nodes = diff
-            .summary
-            .nodes_count_original
-            .max(diff.summary.nodes_count_modified);
-        let total_edges = diff
-            .summary
-            .edges_count_original
-            .max(diff.summary.edges_count_modified);
+    /// Calculate overall similarity score
+    fn calculate_overall_similarity(
+        original_nodes: &HashMap<NodeId, Node>,
+        modified_nodes: &HashMap<NodeId, Node>,
+        original_edges: &HashMap<EdgeId, Edge>,
+        modified_edges: &HashMap<EdgeId, Edge>,
+        added_nodes: &[Node],
+        removed_nodes: &[Node],
+        modified_nodes_list: &[NodeModification],
+        added_edges: &[Edge],
+        removed_edges: &[Edge],
+        modified_edges_list: &[EdgeModification],
+    ) -> f64 {
+        let total_nodes = original_nodes.len().max(modified_nodes.len());
+        let total_edges = original_edges.len().max(modified_edges.len());
 
         if total_nodes == 0 && total_edges == 0 {
-            return Ok(1.0); // Both graphs are empty
+            return 1.0; // Both graphs are empty
         }
 
         let node_similarity = if total_nodes > 0 {
-            1.0 - (diff.summary.nodes_added
-                + diff.summary.nodes_removed
-                + diff.summary.nodes_modified) as f64
+            1.0 - (added_nodes.len() + removed_nodes.len() + modified_nodes_list.len()) as f64
                 / total_nodes as f64
         } else {
             1.0
         };
 
         let edge_similarity = if total_edges > 0 {
-            1.0 - (diff.summary.edges_added
-                + diff.summary.edges_removed
-                + diff.summary.edges_modified) as f64
+            1.0 - (added_edges.len() + removed_edges.len() + modified_edges_list.len()) as f64
                 / total_edges as f64
         } else {
             1.0
         };
 
         // Weighted average (nodes and edges equally weighted)
-        Ok((node_similarity + edge_similarity) / 2.0)
+        (node_similarity + edge_similarity) / 2.0
+    }
+
+    /// Calculate structural similarity score
+    fn calculate_structural_similarity(
+        original_edges: &HashMap<EdgeId, Edge>,
+        modified_edges: &HashMap<EdgeId, Edge>,
+        added_edges: &[Edge],
+        removed_edges: &[Edge],
+        modified_edges_list: &[EdgeModification],
+    ) -> f64 {
+        let total_edges = original_edges.len().max(modified_edges.len());
+
+        if total_edges == 0 {
+            return 1.0;
+        }
+
+        1.0 - (added_edges.len() + removed_edges.len() + modified_edges_list.len()) as f64
+            / total_edges as f64
+    }
+
+    /// Calculate content similarity score
+    fn calculate_content_similarity(
+        original_nodes: &HashMap<NodeId, Node>,
+        modified_nodes: &HashMap<NodeId, Node>,
+        added_nodes: &[Node],
+        removed_nodes: &[Node],
+        modified_nodes_list: &[NodeModification],
+    ) -> f64 {
+        let total_nodes = original_nodes.len().max(modified_nodes.len());
+
+        if total_nodes == 0 {
+            return 1.0;
+        }
+
+        1.0 - (added_nodes.len() + removed_nodes.len() + modified_nodes_list.len()) as f64
+            / total_nodes as f64
+    }
+
+    /// Analyze graph topology changes
+    fn analyze_topology(
+        original: &Graph,
+        modified: &Graph,
+        original_nodes: &HashMap<NodeId, Node>,
+        modified_nodes: &HashMap<NodeId, Node>,
+    ) -> Result<TopologyAnalysis, String> {
+        // This is a simplified implementation
+        // In a real implementation, you would use graph algorithms to find connected components
+        // and calculate various topology metrics
+        
+        let original_components = 1; // Simplified: assume single component
+        let modified_components = 1; // Simplified: assume single component
+        
+        Ok(TopologyAnalysis {
+            original_components,
+            modified_components,
+            component_changes: Vec::new(),
+            diameter_change: None,
+            avg_path_length_change: None,
+            clustering_coefficient_change: None,
+        })
+    }
+
+    /// Calculate metrics comparison
+    fn calculate_metrics_comparison(
+        original: &Graph,
+        modified: &Graph,
+    ) -> Result<MetricsComparison, String> {
+        // This is a simplified implementation
+        // In a real implementation, you would calculate actual graph metrics
+        
+        let original_metrics = GraphMetrics {
+            node_count: 0,
+            edge_count: 0,
+            density: 0.0,
+            avg_degree: 0.0,
+            max_degree: 0,
+            min_degree: 0,
+            triangle_count: 0,
+            clustering_coefficient: 0.0,
+            assortativity: 0.0,
+            diameter: 0,
+            avg_shortest_path: 0.0,
+        };
+
+        let modified_metrics = GraphMetrics {
+            node_count: 0,
+            edge_count: 0,
+            density: 0.0,
+            avg_degree: 0.0,
+            max_degree: 0,
+            min_degree: 0,
+            triangle_count: 0,
+            clustering_coefficient: 0.0,
+            assortativity: 0.0,
+            diameter: 0,
+            avg_shortest_path: 0.0,
+        };
+
+        let mut percentage_changes = HashMap::new();
+        percentage_changes.insert("node_count".to_string(), 0.0);
+        percentage_changes.insert("edge_count".to_string(), 0.0);
+
+        Ok(MetricsComparison {
+            original_metrics,
+            modified_metrics,
+            percentage_changes,
+        })
+    }
+
+    /// Find similar nodes using fuzzy matching
+    fn find_similar_nodes(
+        node: &Node,
+        candidates: &HashMap<NodeId, Node>,
+        threshold: f64,
+    ) -> Vec<(NodeId, f64)> {
+        let mut similarities = Vec::new();
+
+        for (candidate_id, candidate_node) in candidates {
+            let similarity = Self::calculate_node_similarity(node, candidate_node);
+            if similarity >= threshold {
+                similarities.push((*candidate_id, similarity));
+            }
+        }
+
+        // Sort by similarity (highest first)
+        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        similarities
+    }
+
+    /// Calculate similarity between two nodes
+    pub fn calculate_node_similarity(node1: &Node, node2: &Node) -> f64 {
+        let mut similarity = 0.0;
+        let mut total_weight = 0.0;
+
+        // Label similarity
+        let label_weight = 0.4;
+        let label_similarity = Self::calculate_label_similarity(&node1.labels, &node2.labels);
+        similarity += label_similarity * label_weight;
+        total_weight += label_weight;
+
+        // Property similarity
+        let property_weight = 0.6;
+        let property_similarity = Self::calculate_property_similarity(&node1.properties, &node2.properties);
+        similarity += property_similarity * property_weight;
+        total_weight += property_weight;
+
+        similarity / total_weight
+    }
+
+    /// Calculate label similarity
+    pub fn calculate_label_similarity(labels1: &[String], labels2: &[String]) -> f64 {
+        if labels1.is_empty() && labels2.is_empty() {
+            return 1.0;
+        }
+
+        let set1: HashSet<&String> = labels1.iter().collect();
+        let set2: HashSet<&String> = labels2.iter().collect();
+
+        let intersection = set1.intersection(&set2).count();
+        let union = set1.union(&set2).count();
+
+        if union == 0 {
+            1.0
+        } else {
+            intersection as f64 / union as f64
+        }
+    }
+
+    /// Calculate property similarity
+    pub fn calculate_property_similarity(prop1: &HashMap<String, PropertyValue>, prop2: &HashMap<String, PropertyValue>) -> f64 {
+        if prop1.is_empty() && prop2.is_empty() {
+            return 1.0;
+        }
+
+        let keys1: HashSet<&String> = prop1.keys().collect();
+        let keys2: HashSet<&String> = prop2.keys().collect();
+
+        let key_intersection = keys1.intersection(&keys2).count();
+        let key_union = keys1.union(&keys2).count();
+
+        if key_union == 0 {
+            return 1.0;
+        }
+
+        let key_similarity = key_intersection as f64 / key_union as f64;
+
+        // Calculate value similarity for common keys
+        let mut value_similarity = 0.0;
+        let mut common_key_count = 0;
+
+        for key in keys1.intersection(&keys2) {
+            if let (Some(val1), Some(val2)) = (prop1.get(*key), prop2.get(*key)) {
+                if Self::values_equal(val1, val2, &ComparisonOptions::default()) {
+                    value_similarity += 1.0;
+                }
+                common_key_count += 1;
+            }
+        }
+
+        let value_sim = if common_key_count > 0 {
+            value_similarity / common_key_count as f64
+        } else {
+            1.0
+        };
+
+        // Weighted combination of key and value similarity
+        key_similarity * 0.3 + value_sim * 0.7
     }
 }
 

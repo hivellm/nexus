@@ -34,6 +34,54 @@ fn log_error(operation: &str, error: &str, context: &str) {
     );
 }
 
+/// Validate node labels
+#[allow(dead_code)]
+fn validate_labels(labels: &[String]) -> Result<(), String> {
+    if labels.is_empty() {
+        return Err("At least one label is required".to_string());
+    }
+
+    for label in labels {
+        if label.is_empty() {
+            return Err("Label cannot be empty".to_string());
+        }
+        if label.len() > 255 {
+            return Err("Label too long (max 255 characters)".to_string());
+        }
+        if !label.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(
+                "Label contains invalid characters (only alphanumeric and underscore allowed)"
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate node ID
+fn validate_node_id(node_id: u64) -> Result<(), String> {
+    if node_id == 0 {
+        return Err("Node ID cannot be 0".to_string());
+    }
+    Ok(())
+}
+
+/// Validate relationship type
+#[allow(dead_code)]
+fn validate_relationship_type(rel_type: &str) -> Result<(), String> {
+    if rel_type.is_empty() {
+        return Err("Relationship type cannot be empty".to_string());
+    }
+    if rel_type.len() > 255 {
+        return Err("Relationship type too long (max 255 characters)".to_string());
+    }
+    if !rel_type.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err("Relationship type contains invalid characters (only alphanumeric and underscore allowed)".to_string());
+    }
+    Ok(())
+}
+
 /// Initialize the catalog
 pub fn init_catalog(catalog: Arc<RwLock<Catalog>>) -> anyhow::Result<()> {
     CATALOG
@@ -380,6 +428,15 @@ pub async fn create_rel(Json(request): Json<CreateRelRequest>) -> Json<CreateRel
 pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateNodeResponse> {
     tracing::info!("Updating node: {}", request.node_id);
 
+    // Validate input
+    if let Err(validation_error) = validate_node_id(request.node_id) {
+        tracing::error!("Validation failed: {}", validation_error);
+        return Json(UpdateNodeResponse {
+            message: "".to_string(),
+            error: Some(format!("Validation failed: {}", validation_error)),
+        });
+    }
+
     let _catalog_guard = match CATALOG.get() {
         Some(catalog) => catalog,
         None => {
@@ -429,6 +486,15 @@ pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateN
 pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteNodeResponse> {
     tracing::info!("Deleting node: {}", request.node_id);
 
+    // Validate input
+    if let Err(validation_error) = validate_node_id(request.node_id) {
+        tracing::error!("Validation failed: {}", validation_error);
+        return Json(DeleteNodeResponse {
+            message: "".to_string(),
+            error: Some(format!("Validation failed: {}", validation_error)),
+        });
+    }
+
     let _catalog_guard = match CATALOG.get() {
         Some(catalog) => catalog,
         None => {
@@ -442,31 +508,29 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
 
     // Implement actual node deletion
     match create_engine() {
-        Ok(mut engine) => {
-            match engine.delete_node(request.node_id) {
-                Ok(true) => {
-                    tracing::info!("Node {} deleted successfully", request.node_id);
-                    Json(DeleteNodeResponse {
-                        message: "Node deleted successfully".to_string(),
-                        error: None,
-                    })
-                }
-                Ok(false) => {
-                    tracing::warn!("Node {} not found", request.node_id);
-                    Json(DeleteNodeResponse {
-                        message: "Node not found".to_string(),
-                        error: Some("Node not found".to_string()),
-                    })
-                }
-                Err(e) => {
-                    tracing::error!("Failed to delete node: {}", e);
-                    Json(DeleteNodeResponse {
-                        message: "".to_string(),
-                        error: Some(format!("Failed to delete node: {}", e)),
-                    })
-                }
+        Ok(mut engine) => match engine.delete_node(request.node_id) {
+            Ok(true) => {
+                tracing::info!("Node {} deleted successfully", request.node_id);
+                Json(DeleteNodeResponse {
+                    message: "Node deleted successfully".to_string(),
+                    error: None,
+                })
             }
-        }
+            Ok(false) => {
+                tracing::warn!("Node {} not found", request.node_id);
+                Json(DeleteNodeResponse {
+                    message: "Node not found".to_string(),
+                    error: Some("Node not found".to_string()),
+                })
+            }
+            Err(e) => {
+                tracing::error!("Failed to delete node: {}", e);
+                Json(DeleteNodeResponse {
+                    message: "".to_string(),
+                    error: Some(format!("Failed to delete node: {}", e)),
+                })
+            }
+        },
         Err(e) => {
             tracing::error!("Failed to initialize engine: {}", e);
             Json(DeleteNodeResponse {
@@ -628,7 +692,20 @@ mod tests {
 
         let response = update_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert!(
+            response
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Validation failed")
+        );
+        assert!(
+            response
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Node ID cannot be 0")
+        );
     }
 
     #[tokio::test]
@@ -646,7 +723,20 @@ mod tests {
 
         let response = delete_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert!(
+            response
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Validation failed")
+        );
+        assert!(
+            response
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Node ID cannot be 0")
+        );
     }
 
     #[tokio::test]

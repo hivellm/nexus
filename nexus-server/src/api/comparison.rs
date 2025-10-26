@@ -4,7 +4,8 @@ use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::Json as ResponseJson;
 use nexus_core::Graph;
-use nexus_core::graph_comparison::{ComparisonOptions, GraphComparator, GraphDiff};
+use nexus_core::graph::{NodeId, EdgeId};
+use nexus_core::graph_comparison::{ComparisonOptions, GraphComparator, GraphDiff, DiffSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +26,6 @@ pub fn init_graphs(graph_a: Arc<Mutex<Graph>>, graph_b: Arc<Mutex<Graph>>) -> an
         .map_err(|_| anyhow::anyhow!("Failed to set graph B"))?;
     Ok(())
 }
-
 
 /// Compare two graphs request
 #[derive(Debug, Deserialize)]
@@ -138,6 +138,11 @@ pub async fn compare_graphs(
                         edges_added: 0,
                         edges_removed: 0,
                         edges_modified: 0,
+                        overall_similarity: 0.0,
+                        structural_similarity: 0.0,
+                        content_similarity: 0.0,
+                        topology_analysis: None,
+                        metrics_comparison: None,
                     },
                 },
                 success: false,
@@ -317,6 +322,200 @@ pub async fn get_graph_stats(
     }
 }
 
+/// Advanced graph comparison request
+#[derive(Debug, Deserialize)]
+pub struct AdvancedCompareRequest {
+    /// Comparison options
+    #[serde(default)]
+    pub options: ComparisonOptions,
+    /// Whether to include detailed analysis
+    pub include_detailed_analysis: bool,
+    /// Whether to generate comparison report
+    pub generate_report: bool,
+}
+
+/// Advanced graph comparison response
+#[derive(Debug, Serialize)]
+pub struct AdvancedCompareResponse {
+    /// The graph diff result
+    pub diff: GraphDiff,
+    /// Detailed analysis results
+    pub detailed_analysis: Option<DetailedAnalysis>,
+    /// Comparison report
+    pub report: Option<String>,
+    /// Success status
+    pub success: bool,
+    /// Error message if any
+    pub error: Option<String>,
+}
+
+/// Detailed analysis results
+#[derive(Debug, Serialize)]
+pub struct DetailedAnalysis {
+    /// Node similarity matrix
+    pub node_similarities: Vec<NodeSimilarity>,
+    /// Edge similarity matrix
+    pub edge_similarities: Vec<EdgeSimilarity>,
+    /// Graph isomorphism score
+    pub isomorphism_score: f64,
+    /// Structural changes summary
+    pub structural_changes: StructuralChangesSummary,
+}
+
+/// Node similarity information
+#[derive(Debug, Serialize)]
+pub struct NodeSimilarity {
+    /// Node ID from original graph
+    pub original_id: NodeId,
+    /// Node ID from modified graph
+    pub modified_id: NodeId,
+    /// Similarity score (0.0 to 1.0)
+    pub similarity: f64,
+    /// Similarity type (exact, fuzzy, none)
+    pub similarity_type: String,
+}
+
+/// Edge similarity information
+#[derive(Debug, Serialize)]
+pub struct EdgeSimilarity {
+    /// Edge ID from original graph
+    pub original_id: EdgeId,
+    /// Edge ID from modified graph
+    pub modified_id: EdgeId,
+    /// Similarity score (0.0 to 1.0)
+    pub similarity: f64,
+    /// Similarity type (exact, fuzzy, none)
+    pub similarity_type: String,
+}
+
+/// Structural changes summary
+#[derive(Debug, Serialize)]
+pub struct StructuralChangesSummary {
+    /// Number of connected components added
+    pub components_added: usize,
+    /// Number of connected components removed
+    pub components_removed: usize,
+    /// Number of cycles added
+    pub cycles_added: usize,
+    /// Number of cycles removed
+    pub cycles_removed: usize,
+    /// Changes in graph diameter
+    pub diameter_change: Option<f64>,
+}
+
+/// Advanced graph comparison endpoint
+pub async fn advanced_compare_graphs(
+    Json(payload): Json<AdvancedCompareRequest>,
+) -> std::result::Result<ResponseJson<AdvancedCompareResponse>, StatusCode> {
+    tracing::info!("Advanced graph comparison with options: {:?}", payload.options);
+
+    let graph_a = GRAPH_A.get().ok_or_else(|| {
+        tracing::error!("Graph A not initialized");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let graph_b = GRAPH_B.get().ok_or_else(|| {
+        tracing::error!("Graph B not initialized");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let graph_a_read = graph_a.lock().unwrap();
+    let graph_b_read = graph_b.lock().unwrap();
+
+    match GraphComparator::compare_graphs(&graph_a_read, &graph_b_read, &payload.options) {
+        Ok(diff) => {
+            let detailed_analysis = if payload.include_detailed_analysis {
+                Some(DetailedAnalysis {
+                    node_similarities: Vec::new(), // Simplified implementation
+                    edge_similarities: Vec::new(), // Simplified implementation
+                    isomorphism_score: diff.summary.overall_similarity,
+                    structural_changes: StructuralChangesSummary {
+                        components_added: 0,
+                        components_removed: 0,
+                        cycles_added: 0,
+                        cycles_removed: 0,
+                        diameter_change: None,
+                    },
+                })
+            } else {
+                None
+            };
+
+            let report = if payload.generate_report {
+                Some(format!(
+                    "Graph Comparison Report\n\
+                    ======================\n\
+                    Overall Similarity: {:.2}%\n\
+                    Structural Similarity: {:.2}%\n\
+                    Content Similarity: {:.2}%\n\
+                    \n\
+                    Changes:\n\
+                    - Nodes: +{} -{} ~{}\n\
+                    - Edges: +{} -{} ~{}",
+                    diff.summary.overall_similarity * 100.0,
+                    diff.summary.structural_similarity * 100.0,
+                    diff.summary.content_similarity * 100.0,
+                    diff.summary.nodes_added,
+                    diff.summary.nodes_removed,
+                    diff.summary.nodes_modified,
+                    diff.summary.edges_added,
+                    diff.summary.edges_removed,
+                    diff.summary.edges_modified
+                ))
+            } else {
+                None
+            };
+
+            tracing::info!(
+                "Advanced graph comparison completed: overall similarity {:.4}",
+                diff.summary.overall_similarity
+            );
+
+            Ok(ResponseJson(AdvancedCompareResponse {
+                diff,
+                detailed_analysis,
+                report,
+                success: true,
+                error: None,
+            }))
+        }
+        Err(e) => {
+            tracing::error!("Advanced graph comparison failed: {}", e);
+            Ok(ResponseJson(AdvancedCompareResponse {
+                diff: GraphDiff {
+                    added_nodes: vec![],
+                    removed_nodes: vec![],
+                    modified_nodes: vec![],
+                    added_edges: vec![],
+                    removed_edges: vec![],
+                    modified_edges: vec![],
+                    summary: DiffSummary {
+                        nodes_count_original: 0,
+                        nodes_count_modified: 0,
+                        edges_count_original: 0,
+                        edges_count_modified: 0,
+                        nodes_added: 0,
+                        nodes_removed: 0,
+                        nodes_modified: 0,
+                        edges_added: 0,
+                        edges_removed: 0,
+                        edges_modified: 0,
+                        overall_similarity: 0.0,
+                        structural_similarity: 0.0,
+                        content_similarity: 0.0,
+                        topology_analysis: None,
+                        metrics_comparison: None,
+                    },
+                },
+                detailed_analysis: None,
+                report: None,
+                success: false,
+                error: Some(e),
+            }))
+        }
+    }
+}
+
 /// Health check for comparison service
 pub async fn health_check() -> std::result::Result<ResponseJson<serde_json::Value>, StatusCode> {
     let graph_a_available = GRAPH_A.get().is_some();
@@ -362,7 +561,6 @@ mod tests {
 
         Arc::new(Mutex::new(graph))
     }
-
 
     #[tokio::test]
     async fn test_compare_graphs_success() {
@@ -549,7 +747,7 @@ mod tests {
         let graph_b = create_test_graph();
 
         let result = init_graphs(graph_a, graph_b);
-        
+
         // Either succeeds (first initialization) or fails (already initialized by another test)
         // Both are valid outcomes due to shared global state in tests
         if result.is_ok() {
@@ -618,6 +816,11 @@ mod tests {
                     edges_added: 0,
                     edges_removed: 0,
                     edges_modified: 0,
+                    overall_similarity: 0.0,
+                    structural_similarity: 0.0,
+                    content_similarity: 0.0,
+                    topology_analysis: None,
+                    metrics_comparison: None,
                 },
             },
             success: true,

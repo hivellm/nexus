@@ -5,7 +5,7 @@
 
 use nexus_core::{
     ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, DistanceMetric, FeatureStrategy,
-    LinkageType, SimpleGraph, PropertyValue,
+    LinkageType, PropertyValue, SimpleGraph,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -169,29 +169,95 @@ fn create_sample_graph() -> Result<SimpleGraph, Box<dyn std::error::Error>> {
 
     // Create employees with different roles and departments
     let employees = vec![
-        ("Alice", "Engineering", 28, 75000, vec!["Person", "Employee", "Developer"]),
-        ("Bob", "Engineering", 32, 85000, vec!["Person", "Employee", "SeniorDeveloper"]),
-        ("Charlie", "Engineering", 25, 65000, vec!["Person", "Employee", "JuniorDeveloper"]),
-        ("Diana", "Management", 35, 95000, vec!["Person", "Manager", "TeamLead"]),
-        ("Eve", "Management", 40, 110000, vec!["Person", "Manager", "Director"]),
-        ("Frank", "Sales", 30, 70000, vec!["Person", "Employee", "SalesRep"]),
-        ("Grace", "Sales", 28, 72000, vec!["Person", "Employee", "SalesRep"]),
-        ("Henry", "Marketing", 26, 68000, vec!["Person", "Employee", "MarketingSpecialist"]),
-        ("Ivy", "Marketing", 29, 75000, vec!["Person", "Employee", "MarketingManager"]),
-        ("Jack", "HR", 33, 80000, vec!["Person", "Employee", "HRSpecialist"]),
+        (
+            "Alice",
+            "Engineering",
+            28,
+            75000,
+            vec!["Person", "Employee", "Developer"],
+        ),
+        (
+            "Bob",
+            "Engineering",
+            32,
+            85000,
+            vec!["Person", "Employee", "SeniorDeveloper"],
+        ),
+        (
+            "Charlie",
+            "Engineering",
+            25,
+            65000,
+            vec!["Person", "Employee", "JuniorDeveloper"],
+        ),
+        (
+            "Diana",
+            "Management",
+            35,
+            95000,
+            vec!["Person", "Manager", "TeamLead"],
+        ),
+        (
+            "Eve",
+            "Management",
+            40,
+            110000,
+            vec!["Person", "Manager", "Director"],
+        ),
+        (
+            "Frank",
+            "Sales",
+            30,
+            70000,
+            vec!["Person", "Employee", "SalesRep"],
+        ),
+        (
+            "Grace",
+            "Sales",
+            28,
+            72000,
+            vec!["Person", "Employee", "SalesRep"],
+        ),
+        (
+            "Henry",
+            "Marketing",
+            26,
+            68000,
+            vec!["Person", "Employee", "MarketingSpecialist"],
+        ),
+        (
+            "Ivy",
+            "Marketing",
+            29,
+            75000,
+            vec!["Person", "Employee", "MarketingManager"],
+        ),
+        (
+            "Jack",
+            "HR",
+            33,
+            80000,
+            vec!["Person", "Employee", "HRSpecialist"],
+        ),
     ];
 
     for (name, department, age, salary, labels) in employees {
         let labels: Vec<String> = labels.into_iter().map(|s| s.to_string()).collect();
         let node_id = graph.create_node(labels)?;
-        
+
         // Add properties
         if let Some(node) = graph.get_node_mut(node_id)? {
             node.set_property("name".to_string(), PropertyValue::String(name.to_string()));
-            node.set_property("department".to_string(), PropertyValue::String(department.to_string()));
+            node.set_property(
+                "department".to_string(),
+                PropertyValue::String(department.to_string()),
+            );
             node.set_property("age".to_string(), PropertyValue::Int64(age));
             node.set_property("salary".to_string(), PropertyValue::Int64(salary));
-            node.set_property("experience_years".to_string(), PropertyValue::Int64(age - 22)); // Assume started at 22
+            node.set_property(
+                "experience_years".to_string(),
+                PropertyValue::Int64(age - 22),
+            ); // Assume started at 22
         }
     }
 
@@ -205,35 +271,55 @@ fn create_sample_graph() -> Result<SimpleGraph, Box<dyn std::error::Error>> {
     for (name, industry, labels) in companies {
         let labels: Vec<String> = labels.into_iter().map(|s| s.to_string()).collect();
         let node_id = graph.create_node(labels)?;
-        
+
         if let Some(node) = graph.get_node_mut(node_id)? {
             node.set_property("name".to_string(), PropertyValue::String(name.to_string()));
-            node.set_property("industry".to_string(), PropertyValue::String(industry.to_string()));
-            node.set_property("employee_count".to_string(), PropertyValue::Int64(100 + (name.len() as i64 * 10)));
+            node.set_property(
+                "industry".to_string(),
+                PropertyValue::String(industry.to_string()),
+            );
+            node.set_property(
+                "employee_count".to_string(),
+                PropertyValue::Int64(100 + (name.len() as i64 * 10)),
+            );
         }
     }
 
     // Create some projects
     let projects = vec![
         ("ProjectAlpha", "Active", vec!["Project", "ActiveProject"]),
-        ("ProjectBeta", "Completed", vec!["Project", "CompletedProject"]),
-        ("ProjectGamma", "Planning", vec!["Project", "PlanningProject"]),
+        (
+            "ProjectBeta",
+            "Completed",
+            vec!["Project", "CompletedProject"],
+        ),
+        (
+            "ProjectGamma",
+            "Planning",
+            vec!["Project", "PlanningProject"],
+        ),
     ];
 
     for (name, status, labels) in projects {
         let labels: Vec<String> = labels.into_iter().map(|s| s.to_string()).collect();
         let node_id = graph.create_node(labels)?;
-        
+
         if let Some(node) = graph.get_node_mut(node_id)? {
             node.set_property("name".to_string(), PropertyValue::String(name.to_string()));
-            node.set_property("status".to_string(), PropertyValue::String(status.to_string()));
-            node.set_property("budget".to_string(), PropertyValue::Int64(50000 + (name.len() as i64 * 1000)));
+            node.set_property(
+                "status".to_string(),
+                PropertyValue::String(status.to_string()),
+            );
+            node.set_property(
+                "budget".to_string(),
+                PropertyValue::Int64(50000 + (name.len() as i64 * 1000)),
+            );
         }
     }
 
     // Add some relationships to create structure
     let all_nodes: Vec<_> = graph.get_all_nodes()?.into_iter().map(|n| n.id).collect();
-    
+
     // Connect some employees to companies
     for i in 0..3 {
         if i < all_nodes.len() && i + 10 < all_nodes.len() {
@@ -265,12 +351,18 @@ fn print_clustering_result(result: &nexus_core::ClusteringResult) {
     println!("  Iterations: {}", result.iterations);
     println!("  Converged: {}", result.converged);
     println!("  Quality Metrics:");
-    println!("    Silhouette Score: {:.3}", result.metrics.silhouette_score);
+    println!(
+        "    Silhouette Score: {:.3}",
+        result.metrics.silhouette_score
+    );
     println!("    WCSS: {:.3}", result.metrics.wcss);
     println!("    BCSS: {:.3}", result.metrics.bcss);
-    println!("    Calinski-Harabasz: {:.3}", result.metrics.calinski_harabasz);
+    println!(
+        "    Calinski-Harabasz: {:.3}",
+        result.metrics.calinski_harabasz
+    );
     println!("    Davies-Bouldin: {:.3}", result.metrics.davies_bouldin);
-    
+
     println!("  Cluster Details:");
     for (i, cluster) in result.clusters.iter().enumerate() {
         println!("    Cluster {}: {} nodes", i, cluster.size());

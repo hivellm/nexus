@@ -462,6 +462,27 @@ impl RecordStore {
         Ok(node_id)
     }
 
+    /// Create a new node with pre-computed label bits
+    pub fn create_node_with_label_bits(
+        &mut self,
+        _tx: &mut crate::transaction::Transaction,
+        label_bits: u64,
+        _properties: serde_json::Value,
+    ) -> Result<u64> {
+        let node_id = self.next_node_id;
+        self.next_node_id += 1;
+
+        // Create node record
+        let mut record = NodeRecord::new();
+        record.label_bits = label_bits;
+        record.prop_ptr = 0; // TODO: Store properties when property store is implemented
+
+        // Write the record
+        self.write_node(node_id, &record)?;
+
+        Ok(node_id)
+    }
+
     /// Create a new relationship
     pub fn create_relationship(
         &mut self,
@@ -553,6 +574,27 @@ impl RecordStore {
             }
             Err(_) => Ok(None),
         }
+    }
+
+    /// Clear all data from the storage
+    pub fn clear_all(&mut self) -> Result<()> {
+        // Reset counters
+        self.next_node_id = 0;
+        self.next_rel_id = 0;
+
+        // Truncate files to initial size
+        self.nodes_file.set_len(INITIAL_NODES_FILE_SIZE as u64)?;
+        self.rels_file.set_len(INITIAL_RELS_FILE_SIZE as u64)?;
+
+        // Update file sizes
+        self.nodes_file_size = INITIAL_NODES_FILE_SIZE;
+        self.rels_file_size = INITIAL_RELS_FILE_SIZE;
+
+        // Recreate memory mappings
+        self.nodes_mmap = unsafe { MmapOptions::new().map_mut(&self.nodes_file)? };
+        self.rels_mmap = unsafe { MmapOptions::new().map_mut(&self.rels_file)? };
+
+        Ok(())
     }
 }
 
