@@ -20,8 +20,8 @@
 - [x] 2.3 Implement node clustering and grouping
 - [x] 2.4 Add graph validation and integrity checks
 - [x] 2.5 Implement graph statistics calculation
-- [ ] 2.6 Add graph comparison and diff functionality
-- [ ] 2.7 Create performance optimization utilities
+- [x] 2.6 Add graph comparison and diff functionality
+- [x] 2.7 Create performance optimization utilities
 - [x] 2.8 Add comprehensive unit tests (95%+ coverage)
 
 ### 3. Vectorizer Integration

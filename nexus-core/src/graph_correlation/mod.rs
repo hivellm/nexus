@@ -23,6 +23,13 @@ use crate::vectorizer_cache::{QueryMetadata, VectorizerCache};
 use crate::{Error, Result};
 pub use graph_export::{ExportFormat, export_graph};
 pub use graph_statistics::calculate_statistics;
+pub use graph_diff::{
+    EdgeDiff, GraphDiff, NodeDiff, apply_diff, calculate_structural_similarity, compare_graphs,
+};
+pub use performance::{
+    GraphCache, PerformanceMetrics, PerformanceProfiler, PerformanceSummary,
+    calculate_complexity, optimize_graph,
+};
 pub use pattern_recognition::{
     ArchitecturalPatternDetector, DetectedPattern, EventDrivenPatternDetector,
     PatternDetectionResult, PatternDetector, PatternStatistics, PatternType,
@@ -45,6 +52,12 @@ pub mod graph_export;
 
 /// Graph statistics and metrics
 pub mod graph_statistics;
+
+/// Graph comparison and diff
+pub mod graph_diff;
+
+/// Performance optimization utilities
+pub mod performance;
 
 /// Graph types supported by the correlation analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

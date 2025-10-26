@@ -1327,4 +1327,450 @@ mod tests {
         assert_eq!(data["status"], "ok");
         assert!(!data["nexus_version"].as_str().unwrap().is_empty());
     }
+
+    // ============================================================================
+    // Graph Correlation MCP Tools Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_graph_correlation_generate_call_graph() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let mut files = serde_json::Map::new();
+        files.insert(
+            "main.rs".to_string(),
+            json!("fn main() { helper(); }\nfn helper() {}"),
+        );
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_generate".into(),
+            arguments: Some(
+                json!({
+                    "graph_type": "Call",
+                    "files": files,
+                    "name": "Test Graph"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+
+        let tool_result = result.unwrap();
+        assert!(!tool_result.is_error.unwrap_or(true));
+        assert_eq!(tool_result.content.len(), 1);
+
+        // Parse response
+        if let Content::Text { text, .. } = &tool_result.content[0] {
+            let response: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(response["status"], "success");
+            assert!(response.get("graph").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_generate_dependency_graph() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let mut files = serde_json::Map::new();
+        files.insert("mod_a.rs".to_string(), json!("use mod_b;"));
+        files.insert("mod_b.rs".to_string(), json!(""));
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_generate".into(),
+            arguments: Some(
+                json!({
+                    "graph_type": "Dependency",
+                    "files": files
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_generate_invalid_type() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_generate".into(),
+            arguments: Some(
+                json!({
+                    "graph_type": "InvalidType",
+                    "files": {}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_analyze_statistics() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        // Create a simple graph
+        let graph = json!({
+            "name": "Test Graph",
+            "graph_type": "Call",
+            "nodes": [
+                {"id": "node1", "node_type": "Function", "label": "func1", "metadata": {}, "position": null, "size": null},
+                {"id": "node2", "node_type": "Function", "label": "func2", "metadata": {}, "position": null, "size": null}
+            ],
+            "edges": [
+                {"source": "node1", "target": "node2", "edge_type": "Calls", "label": null, "metadata": {}}
+            ],
+            "metadata": {}
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_analyze".into(),
+            arguments: Some(
+                json!({
+                    "graph": graph,
+                    "analysis_type": "statistics"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+
+        let tool_result = result.unwrap();
+        if let Content::Text { text, .. } = &tool_result.content[0] {
+            let response: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(response["status"], "success");
+            assert!(response.get("statistics").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_analyze_patterns() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let graph = json!({
+            "name": "Pipeline Graph",
+            "graph_type": "DataFlow",
+            "nodes": [
+                {"id": "stage1", "node_type": "Function", "label": "input", "metadata": {}, "position": null, "size": null},
+                {"id": "stage2", "node_type": "Function", "label": "process", "metadata": {}, "position": null, "size": null},
+                {"id": "stage3", "node_type": "Function", "label": "output", "metadata": {}, "position": null, "size": null}
+            ],
+            "edges": [
+                {"source": "stage1", "target": "stage2", "edge_type": "Transforms", "label": null, "metadata": {}},
+                {"source": "stage2", "target": "stage3", "edge_type": "Transforms", "label": null, "metadata": {}}
+            ],
+            "metadata": {}
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_analyze".into(),
+            arguments: Some(
+                json!({
+                    "graph": graph,
+                    "analysis_type": "patterns"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+
+        let tool_result = result.unwrap();
+        if let Content::Text { text, .. } = &tool_result.content[0] {
+            let response: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(response["status"], "success");
+            assert!(response.get("patterns").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_analyze_all() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let graph = json!({
+            "name": "Full Graph",
+            "graph_type": "Call",
+            "nodes": [
+                {"id": "n1", "node_type": "Function", "label": "f1", "metadata": {}, "position": null, "size": null}
+            ],
+            "edges": [],
+            "metadata": {}
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_analyze".into(),
+            arguments: Some(
+                json!({
+                    "graph": graph,
+                    "analysis_type": "all"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+
+        let tool_result = result.unwrap();
+        if let Content::Text { text, .. } = &tool_result.content[0] {
+            let response: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(response["status"], "success");
+            assert!(response.get("statistics").is_some());
+            assert!(response.get("patterns").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_export_json() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let graph = json!({
+            "name": "Export Test",
+            "graph_type": "Call",
+            "nodes": [{"id": "n1", "node_type": "Function", "label": "func", "metadata": {}, "position": null, "size": null}],
+            "edges": [],
+            "metadata": {}
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_export".into(),
+            arguments: Some(
+                json!({
+                    "graph": graph,
+                    "format": "JSON"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+
+        let tool_result = result.unwrap();
+        if let Content::Text { text, .. } = &tool_result.content[0] {
+            let response: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(response["status"], "success");
+            assert_eq!(response["format"], "JSON");
+            assert!(response.get("content").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_export_graphml() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let graph = json!({
+            "name": "GraphML Export",
+            "graph_type": "Dependency",
+            "nodes": [{"id": "mod1", "node_type": "Module", "label": "module1", "metadata": {}, "position": null, "size": null}],
+            "edges": [],
+            "metadata": {}
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_export".into(),
+            arguments: Some(
+                json!({
+                    "graph": graph,
+                    "format": "GraphML"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_export_invalid_format() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let graph = json!({
+            "name": "Test",
+            "graph_type": "Call",
+            "nodes": [],
+            "edges": [],
+            "metadata": {}
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_export".into(),
+            arguments: Some(
+                json!({
+                    "graph": graph,
+                    "format": "InvalidFormat"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_graph_correlation_types() {
+        let executor = Arc::new(RwLock::new(Executor::default()));
+        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
+        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
+        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+
+        let server = Arc::new(NexusServer {
+            executor,
+            catalog,
+            label_index,
+            knn_index,
+        });
+
+        let request = CallToolRequestParam {
+            name: "graph_correlation_types".into(),
+            arguments: None,
+        };
+
+        let result = handle_nexus_mcp_tool(request, server).await;
+        assert!(result.is_ok());
+
+        let tool_result = result.unwrap();
+        if let Content::Text { text, .. } = &tool_result.content[0] {
+            let response: serde_json::Value = serde_json::from_str(text).unwrap();
+            assert_eq!(response["status"], "success");
+            assert!(response.get("types").is_some());
+            
+            let types = response["types"].as_array().unwrap();
+            assert_eq!(types.len(), 4);
+            assert!(types.contains(&json!("Call")));
+            assert!(types.contains(&json!("Dependency")));
+            assert!(types.contains(&json!("DataFlow")));
+            assert!(types.contains(&json!("Component")));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_tools_include_graph_correlation() {
+        let tools = get_nexus_mcp_tools();
+        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        
+        assert!(tool_names.contains(&"graph_correlation_generate"));
+        assert!(tool_names.contains(&"graph_correlation_analyze"));
+        assert!(tool_names.contains(&"graph_correlation_export"));
+        assert!(tool_names.contains(&"graph_correlation_types"));
+    }
 }
