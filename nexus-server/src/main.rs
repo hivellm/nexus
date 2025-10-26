@@ -284,11 +284,14 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
+        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+
         let server = NexusServer {
             executor: executor_arc,
             catalog: catalog_arc,
             label_index: label_index_arc,
             knn_index: knn_index_arc,
+            engine,
         };
 
         // Test that the server can be created
@@ -316,11 +319,14 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
+        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+
         let server = NexusServer {
             executor: executor_arc,
             catalog: catalog_arc,
             label_index: label_index_arc,
             knn_index: knn_index_arc,
+            engine,
         };
 
         let cloned = server.clone();
@@ -347,11 +353,14 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
+        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+
         let server = Arc::new(NexusServer {
             executor: executor_arc,
             catalog: catalog_arc,
             label_index: label_index_arc,
             knn_index: knn_index_arc,
+            engine,
         });
 
         // Test that MCP router can be created
@@ -441,11 +450,14 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
+        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+
         let server = Arc::new(NexusServer {
             executor: executor_arc,
             catalog: catalog_arc,
             label_index: label_index_arc,
             knn_index: knn_index_arc,
+            engine,
         });
 
         // Test that we can create the MCP router
@@ -473,11 +485,14 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
+        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+
         let server = NexusServer {
             executor: executor_arc.clone(),
             catalog: catalog_arc.clone(),
             label_index: label_index_arc.clone(),
             knn_index: knn_index_arc.clone(),
+            engine,
         };
 
         // Test that all fields are accessible

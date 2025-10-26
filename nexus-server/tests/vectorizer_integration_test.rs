@@ -490,11 +490,13 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
     api::health::init();
 
     // Create server state
+    let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
     let server = Arc::new(NexusServer {
         executor: executor_arc,
         catalog: catalog_arc,
         label_index: label_index_arc,
         knn_index: knn_index_arc,
+        engine,
     });
 
     // Create mock vectorizer

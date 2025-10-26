@@ -745,11 +745,13 @@ async fn test_api_error_handling_400_bad_request() {
     ).unwrap();
     api::health::init();
 
+    let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
     let server = Arc::new(NexusServer {
         executor: executor_arc,
         catalog: catalog_arc,
         label_index: label_index_arc,
         knn_index: knn_index_arc,
+        engine,
     });
 
     // Build router
