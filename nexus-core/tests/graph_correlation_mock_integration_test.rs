@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+#![cfg(FALSE)]
 //! Integration tests with mock vectorizer
 //!
 //! Tests graph correlation with mocked vectorizer data

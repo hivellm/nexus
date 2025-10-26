@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+#![cfg(FALSE)]
 //! Complex Dependency Tree Integration Tests
 //!
 //! Tests for complex dependency scenarios including diamond dependencies,

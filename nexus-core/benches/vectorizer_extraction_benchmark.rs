@@ -271,7 +271,7 @@ fn bench_optimization(c: &mut Criterion) {
     let mut graph = manager.build_graph(GraphType::Call, &source_data).unwrap();
 
     // Add some duplicate edges for testing
-    if graph.edges.len() > 0 {
+    if !graph.edges.is_empty() {
         let first_edge = graph.edges[0].clone();
         graph.edges.push(first_edge.clone());
         graph.edges.push(first_edge);

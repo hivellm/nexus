@@ -7,7 +7,7 @@ use nexus_core::graph::correlation::{
     CallGraphBuilder, CorrelationGraph, EdgeType, GraphBuilder, GraphEdge, GraphNode, GraphType,
     NodeType, hierarchical_layout::HierarchicalCallGraphConfig,
 };
-use nexus_core::graph_construction::LayoutDirection;
+use nexus_core::graph::construction::LayoutDirection;
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

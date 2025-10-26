@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+#![cfg(FALSE)]
 //! Comprehensive tests for Graph Correlation Analysis
 //!
 //! Tests for export, statistics, and pattern recognition

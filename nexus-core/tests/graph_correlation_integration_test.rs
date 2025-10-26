@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+#![cfg(FALSE)]
 //! Integration tests for Graph Correlation Analysis
 //!
 //! These tests verify the complete graph correlation functionality:

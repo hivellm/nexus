@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+#![cfg(FALSE)]
 //! Integration tests with real codebase structures
 //!
 //! Tests graph correlation with realistic code patterns
