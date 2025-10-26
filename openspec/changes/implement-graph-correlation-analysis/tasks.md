@@ -64,9 +64,9 @@
 ### 6. REST API Implementation
 
 - [x] 6.1 Create GraphController with CRUD operations - comparison.rs, clustering.rs
-- [ ] 6.2 Implement POST /api/v1/graphs/generate endpoint
+- [x] 6.2 Implement POST /api/v1/graphs/generate endpoint
 - [x] 6.3 Add GET /api/v1/graphs/{graph_id} endpoint - get_graph_stats
-- [ ] 6.4 Create GET /api/v1/graphs/types endpoint
+- [x] 6.4 Create GET /api/v1/graphs/types endpoint
 - [x] 6.5 Implement POST /api/v1/graphs/{graph_id}/analyze endpoint - compare_graphs, calculate_similarity
 - [x] 6.6 Add request validation and error handling
 - [x] 6.7 Implement response serialization

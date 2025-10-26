@@ -109,6 +109,12 @@ async fn main() -> anyhow::Result<()> {
 
     api::comparison::init_graphs(graph_a, graph_b)?;
 
+    // Initialize graph correlation manager
+    let graph_manager = Arc::new(std::sync::Mutex::new(
+        nexus_core::graph_correlation::GraphCorrelationManager::new(),
+    ));
+    api::graph_correlation::init_manager(graph_manager)?;
+
     // Build main router
     let app = Router::new()
         .route("/", get(api::health::health_check))
@@ -188,6 +194,15 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .route("/sse/heartbeat", get(api::streaming::stream_heartbeat))
+        // Graph correlation endpoints
+        .route(
+            "/graph-correlation/generate",
+            post(api::graph_correlation::generate_graph),
+        )
+        .route(
+            "/graph-correlation/types",
+            get(api::graph_correlation::get_graph_types),
+        )
         // MCP StreamableHTTP endpoint
         .nest("/mcp", mcp_router)
         .layer(TraceLayer::new_for_http());
