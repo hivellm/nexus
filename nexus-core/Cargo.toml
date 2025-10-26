@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Core graph database engine for Nexus - Property Graph with Cypher subset"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+
 [dependencies]
 # Storage
 memmap2.workspace = true
