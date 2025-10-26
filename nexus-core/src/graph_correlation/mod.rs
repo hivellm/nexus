@@ -38,6 +38,7 @@ pub use impact_analysis::{
     ChangeImpactResult, ChangeType, ImpactAnalysis, ImpactSeverity, analyze_batch_impact,
     analyze_change_impact, analyze_impact, calculate_propagation_distance, identify_critical_nodes,
 };
+pub use vectorizer_cache::{CacheKeyBuilder, CacheStatistics, VectorizerQueryCache};
 pub use pattern_recognition::{
     ArchitecturalPatternDetector, DetectedPattern, EventDrivenPatternDetector,
     PatternDetectionResult, PatternDetector, PatternStatistics, PatternType,
@@ -72,6 +73,9 @@ pub mod dependency_filter;
 
 /// Dependency impact analysis
 pub mod impact_analysis;
+
+/// Enhanced vectorizer query caching
+pub mod vectorizer_cache;
 
 /// Graph types supported by the correlation analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

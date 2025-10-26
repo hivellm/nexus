@@ -59,6 +59,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "graph_correlation_benchmark"
 harness = false
 
+[[bench]]
+name = "vectorizer_extraction_benchmark"
+harness = false
+
 [[example]]
 name = "graph_construction_example"
 path = "examples/graph_construction_example.rs"

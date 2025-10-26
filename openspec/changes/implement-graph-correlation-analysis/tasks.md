@@ -30,10 +30,10 @@
 - [x] 3.2 Implement collection query interfaces
 - [x] 3.3 Add semantic search integration for relationship discovery
 - [x] 3.4 Create metadata enrichment from vectorizer data
-- [ ] 3.5 Implement caching layer for vectorizer queries
+- [x] 3.5 Implement caching layer for vectorizer queries
 - [x] 3.6 Add error handling for vectorizer failures
-- [ ] 3.7 Create integration tests with mock vectorizer
-- [ ] 3.8 Add performance benchmarks for data extraction
+- [x] 3.7 Create integration tests with mock vectorizer
+- [x] 3.8 Add performance benchmarks for data extraction
 
 ### 4. Call Graph Generation
 
