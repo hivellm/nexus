@@ -513,11 +513,38 @@ mod tests {
         assert_eq!(options.language, None);
         assert_eq!(options.label_id, None);
         assert_eq!(options.key_id, None);
-        assert_eq!(options.fuzzy, false);
+        assert!(!options.fuzzy);
         assert_eq!(options.fuzzy_distance, 1);
-        assert_eq!(options.phrase, false);
-        assert_eq!(options.highlight, false);
+        assert!(!options.phrase);
+        assert!(!options.highlight);
         assert_eq!(options.snippet_length, 100);
+    }
+
+    #[test]
+    fn test_search_options_custom() {
+        let options = SearchOptions {
+            limit: Some(50),
+            min_score: Some(0.8),
+            language: Some("en".to_string()),
+            label_id: Some(1),
+            key_id: Some(2),
+            fuzzy: true,
+            fuzzy_distance: 2,
+            phrase: true,
+            highlight: true,
+            snippet_length: 200,
+        };
+
+        assert_eq!(options.limit, Some(50));
+        assert_eq!(options.min_score, Some(0.8));
+        assert_eq!(options.language, Some("en".to_string()));
+        assert_eq!(options.label_id, Some(1));
+        assert_eq!(options.key_id, Some(2));
+        assert!(options.fuzzy);
+        assert_eq!(options.fuzzy_distance, 2);
+        assert!(options.phrase);
+        assert!(options.highlight);
+        assert_eq!(options.snippet_length, 200);
     }
 
     #[test]
@@ -538,6 +565,28 @@ mod tests {
     }
 
     #[test]
+    fn test_fulltext_stats_with_data() {
+        let now = chrono::Utc::now();
+        let stats = FullTextStats {
+            total_documents: 100,
+            label_count: 5,
+            key_count: 10,
+            content_size_bytes: 50000,
+            avg_document_size: 500.0,
+            index_size_bytes: 1000000,
+            last_updated: now,
+        };
+
+        assert_eq!(stats.total_documents, 100);
+        assert_eq!(stats.label_count, 5);
+        assert_eq!(stats.key_count, 10);
+        assert_eq!(stats.content_size_bytes, 50000);
+        assert_eq!(stats.avg_document_size, 500.0);
+        assert_eq!(stats.index_size_bytes, 1000000);
+        assert_eq!(stats.last_updated, now);
+    }
+
+    #[test]
     fn test_search_result_creation() {
         let result = SearchResult {
             node_id: 1,
@@ -554,5 +603,260 @@ mod tests {
         assert_eq!(result.score, 0.5);
         assert_eq!(result.snippets.len(), 1);
         assert_eq!(result.value, "test value");
+    }
+
+    #[test]
+    fn test_document_params_creation() {
+        let params = DocumentParams {
+            node_id: 123,
+            label_id: 1,
+            key_id: 2,
+            content: "test content".to_string(),
+            value: "test value".to_string(),
+            language: Some("en".to_string()),
+            boost: Some(1.5),
+        };
+
+        assert_eq!(params.node_id, 123);
+        assert_eq!(params.label_id, 1);
+        assert_eq!(params.key_id, 2);
+        assert_eq!(params.content, "test content");
+        assert_eq!(params.value, "test value");
+        assert_eq!(params.language, Some("en".to_string()));
+        assert_eq!(params.boost, Some(1.5));
+    }
+
+    #[test]
+    fn test_document_params_minimal() {
+        let params = DocumentParams {
+            node_id: 456,
+            label_id: 0,
+            key_id: 0,
+            content: "minimal content".to_string(),
+            value: "minimal value".to_string(),
+            language: None,
+            boost: None,
+        };
+
+        assert_eq!(params.node_id, 456);
+        assert_eq!(params.label_id, 0);
+        assert_eq!(params.key_id, 0);
+        assert_eq!(params.content, "minimal content");
+        assert_eq!(params.value, "minimal value");
+        assert_eq!(params.language, None);
+        assert_eq!(params.boost, None);
+    }
+
+    #[test]
+    fn test_fulltext_fields_creation() {
+        // Test that FullTextFields can be created
+        let fields = FullTextFields {
+            node_id: Field::from_field_id(0),
+            label_id: Field::from_field_id(1),
+            key_id: Field::from_field_id(2),
+            content: Field::from_field_id(3),
+            value: Field::from_field_id(4),
+            language: Field::from_field_id(5),
+            boost: Field::from_field_id(6),
+        };
+
+        // Fields are created successfully if we can access them
+        let _ = fields.node_id;
+        let _ = fields.label_id;
+        let _ = fields.key_id;
+        let _ = fields.content;
+        let _ = fields.value;
+        let _ = fields.language;
+        let _ = fields.boost;
+    }
+
+    #[test]
+    fn test_search_options_serialization() {
+        let options = SearchOptions {
+            limit: Some(50),
+            min_score: Some(0.8),
+            language: Some("en".to_string()),
+            label_id: Some(1),
+            key_id: Some(2),
+            fuzzy: true,
+            fuzzy_distance: 2,
+            phrase: true,
+            highlight: true,
+            snippet_length: 200,
+        };
+
+        // Test that we can clone the options
+        let cloned = options.clone();
+        assert_eq!(cloned.limit, options.limit);
+        assert_eq!(cloned.min_score, options.min_score);
+        assert_eq!(cloned.language, options.language);
+        assert_eq!(cloned.label_id, options.label_id);
+        assert_eq!(cloned.key_id, options.key_id);
+        assert_eq!(cloned.fuzzy, options.fuzzy);
+        assert_eq!(cloned.fuzzy_distance, options.fuzzy_distance);
+        assert_eq!(cloned.phrase, options.phrase);
+        assert_eq!(cloned.highlight, options.highlight);
+        assert_eq!(cloned.snippet_length, options.snippet_length);
+    }
+
+    #[test]
+    fn test_fulltext_stats_serialization() {
+        let stats = FullTextStats {
+            total_documents: 100,
+            label_count: 5,
+            key_count: 10,
+            content_size_bytes: 50000,
+            avg_document_size: 500.0,
+            index_size_bytes: 1000000,
+            last_updated: chrono::Utc::now(),
+        };
+
+        // Test that we can clone the stats
+        let cloned = stats.clone();
+        assert_eq!(cloned.total_documents, stats.total_documents);
+        assert_eq!(cloned.label_count, stats.label_count);
+        assert_eq!(cloned.key_count, stats.key_count);
+        assert_eq!(cloned.content_size_bytes, stats.content_size_bytes);
+        assert_eq!(cloned.avg_document_size, stats.avg_document_size);
+        assert_eq!(cloned.index_size_bytes, stats.index_size_bytes);
+        assert_eq!(cloned.last_updated, stats.last_updated);
+    }
+
+    #[test]
+    fn test_search_result_serialization() {
+        let result = SearchResult {
+            node_id: 1,
+            label_id: 0,
+            key_id: 0,
+            score: 0.5,
+            snippets: vec!["test snippet".to_string()],
+            value: "test value".to_string(),
+        };
+
+        // Test that we can clone the result
+        let cloned = result.clone();
+        assert_eq!(cloned.node_id, result.node_id);
+        assert_eq!(cloned.label_id, result.label_id);
+        assert_eq!(cloned.key_id, result.key_id);
+        assert_eq!(cloned.score, result.score);
+        assert_eq!(cloned.snippets, result.snippets);
+        assert_eq!(cloned.value, result.value);
+    }
+
+    #[test]
+    fn test_document_params_serialization() {
+        let params = DocumentParams {
+            node_id: 123,
+            label_id: 1,
+            key_id: 2,
+            content: "test content".to_string(),
+            value: "test value".to_string(),
+            language: Some("en".to_string()),
+            boost: Some(1.5),
+        };
+
+        // Test that we can clone the params
+        let cloned = params.clone();
+        assert_eq!(cloned.node_id, params.node_id);
+        assert_eq!(cloned.label_id, params.label_id);
+        assert_eq!(cloned.key_id, params.key_id);
+        assert_eq!(cloned.content, params.content);
+        assert_eq!(cloned.value, params.value);
+        assert_eq!(cloned.language, params.language);
+        assert_eq!(cloned.boost, params.boost);
+    }
+
+    #[test]
+    fn test_search_options_edge_cases() {
+        // Test with no limit
+        let options = SearchOptions {
+            limit: None,
+            ..Default::default()
+        };
+        assert_eq!(options.limit, None);
+
+        // Test with zero limit
+        let options = SearchOptions {
+            limit: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(options.limit, Some(0));
+
+        // Test with maximum fuzzy distance
+        let options = SearchOptions {
+            fuzzy_distance: 2,
+            ..Default::default()
+        };
+        assert_eq!(options.fuzzy_distance, 2);
+
+        // Test with minimum snippet length
+        let options = SearchOptions {
+            snippet_length: 1,
+            ..Default::default()
+        };
+        assert_eq!(options.snippet_length, 1);
+    }
+
+    #[test]
+    fn test_fulltext_stats_edge_cases() {
+        // Test with maximum values
+        let stats = FullTextStats {
+            total_documents: u64::MAX,
+            label_count: u32::MAX,
+            key_count: u32::MAX,
+            content_size_bytes: u64::MAX,
+            avg_document_size: f64::MAX,
+            index_size_bytes: u64::MAX,
+            last_updated: chrono::Utc::now(),
+        };
+
+        assert_eq!(stats.total_documents, u64::MAX);
+        assert_eq!(stats.label_count, u32::MAX);
+        assert_eq!(stats.key_count, u32::MAX);
+        assert_eq!(stats.content_size_bytes, u64::MAX);
+        assert_eq!(stats.avg_document_size, f64::MAX);
+        assert_eq!(stats.index_size_bytes, u64::MAX);
+    }
+
+    #[test]
+    fn test_search_result_edge_cases() {
+        // Test with maximum values
+        let result = SearchResult {
+            node_id: u64::MAX,
+            label_id: u32::MAX,
+            key_id: u32::MAX,
+            score: f32::MAX,
+            snippets: vec!["".to_string(); 1000],
+            value: "x".repeat(10000),
+        };
+
+        assert_eq!(result.node_id, u64::MAX);
+        assert_eq!(result.label_id, u32::MAX);
+        assert_eq!(result.key_id, u32::MAX);
+        assert_eq!(result.score, f32::MAX);
+        assert_eq!(result.snippets.len(), 1000);
+        assert_eq!(result.value.len(), 10000);
+    }
+
+    #[test]
+    fn test_document_params_edge_cases() {
+        // Test with maximum values
+        let params = DocumentParams {
+            node_id: u64::MAX,
+            label_id: u32::MAX,
+            key_id: u32::MAX,
+            content: "x".repeat(100000),
+            value: "x".repeat(100000),
+            language: Some("x".repeat(100)),
+            boost: Some(f64::MAX),
+        };
+
+        assert_eq!(params.node_id, u64::MAX);
+        assert_eq!(params.label_id, u32::MAX);
+        assert_eq!(params.key_id, u32::MAX);
+        assert_eq!(params.content.len(), 100000);
+        assert_eq!(params.value.len(), 100000);
+        assert_eq!(params.language.as_ref().unwrap().len(), 100);
+        assert_eq!(params.boost, Some(f64::MAX));
     }
 }
