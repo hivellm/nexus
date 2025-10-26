@@ -68,7 +68,7 @@ fn benchmark_graph_filtering(c: &mut Criterion) {
     let manager = GraphCorrelationManager::new();
 
     // Create a larger graph for filtering benchmarks
-    let mut source_data = create_test_data(100, GraphType::Call);
+    let source_data = create_test_data(100, GraphType::Call);
     let graph = manager.build_graph(GraphType::Call, &source_data).unwrap();
 
     let mut group = c.benchmark_group("graph_filtering");
