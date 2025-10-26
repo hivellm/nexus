@@ -15,50 +15,50 @@
 
 ### 2. Graph Builder Core
 
-- [ ] 2.1 Implement GraphBuilder trait and base implementation
-- [ ] 2.2 Create graph construction algorithms
+- [x] 2.1 Implement GraphBuilder trait and base implementation
+- [x] 2.2 Create graph construction algorithms
 - [ ] 2.3 Implement node clustering and grouping
-- [ ] 2.4 Add graph validation and integrity checks
-- [ ] 2.5 Implement graph statistics calculation
+- [x] 2.4 Add graph validation and integrity checks
+- [x] 2.5 Implement graph statistics calculation
 - [ ] 2.6 Add graph comparison and diff functionality
 - [ ] 2.7 Create performance optimization utilities
-- [ ] 2.8 Add comprehensive unit tests (95%+ coverage)
+- [x] 2.8 Add comprehensive unit tests (95%+ coverage)
 
 ### 3. Vectorizer Integration
 
-- [ ] 3.1 Create VectorizerGraphExtractor for data access
-- [ ] 3.2 Implement collection query interfaces
-- [ ] 3.3 Add semantic search integration for relationship discovery
-- [ ] 3.4 Create metadata enrichment from vectorizer data
+- [x] 3.1 Create VectorizerGraphExtractor for data access
+- [x] 3.2 Implement collection query interfaces
+- [x] 3.3 Add semantic search integration for relationship discovery
+- [x] 3.4 Create metadata enrichment from vectorizer data
 - [ ] 3.5 Implement caching layer for vectorizer queries
-- [ ] 3.6 Add error handling for vectorizer failures
+- [x] 3.6 Add error handling for vectorizer failures
 - [ ] 3.7 Create integration tests with mock vectorizer
 - [ ] 3.8 Add performance benchmarks for data extraction
 
 ### 4. Call Graph Generation
 
-- [ ] 4.1 Implement CallGraphBuilder
-- [ ] 4.2 Create function call extraction from AST
-- [ ] 4.3 Add call frequency and context analysis
+- [x] 4.1 Implement CallGraphBuilder
+- [x] 4.2 Create function call extraction from AST
+- [x] 4.3 Add call frequency and context analysis
 - [ ] 4.4 Implement hierarchical call graph layout
 - [ ] 4.5 Add recursive call detection and handling
-- [ ] 4.6 Create call graph visualization data
+- [x] 4.6 Create call graph visualization data
 - [ ] 4.7 Add call graph filtering and search
-- [ ] 4.8 Implement call graph statistics and metrics
-- [ ] 4.9 Add unit tests for call graph generation
+- [x] 4.8 Implement call graph statistics and metrics
+- [x] 4.9 Add unit tests for call graph generation
 - [ ] 4.10 Create integration tests with real codebases
 
 ### 5. Dependency Graph Generation
 
-- [ ] 5.1 Implement DependencyGraphBuilder
-- [ ] 5.2 Create import/export relationship extraction
-- [ ] 5.3 Add module dependency analysis
+- [x] 5.1 Implement DependencyGraphBuilder
+- [x] 5.2 Create import/export relationship extraction
+- [x] 5.3 Add module dependency analysis
 - [ ] 5.4 Implement circular dependency detection
 - [ ] 5.5 Create dependency graph layout (DAG)
 - [ ] 5.6 Add version constraint analysis
 - [ ] 5.7 Implement dependency graph filtering
 - [ ] 5.8 Add dependency impact analysis
-- [ ] 5.9 Create unit tests for dependency analysis
+- [x] 5.9 Create unit tests for dependency analysis
 - [ ] 5.10 Add integration tests with complex dependency trees
 
 ### 6. REST API Implementation

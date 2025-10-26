@@ -192,11 +192,9 @@ impl AuthMiddleware {
         let auth_header = headers.get("authorization")?;
         let auth_str = auth_header.to_str().ok()?;
 
-        if let Some(token) = auth_str.strip_prefix("Bearer ") {
-            Some(token.to_string())
-        } else {
-            None
-        }
+        auth_str
+            .strip_prefix("Bearer ")
+            .map(|token| token.to_string())
     }
 
     /// Check if the request requires authentication
@@ -217,15 +215,15 @@ impl AuthMiddleware {
 
 #[cfg(feature = "axum")]
 /// Authentication middleware function
-pub async fn auth_middleware(
-    State(auth_middleware): State<AuthMiddleware>,
+pub async fn auth_middleware_handler(
+    State(auth_service): State<AuthMiddleware>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, axum::Json<AuthError>)> {
     let uri = request.uri().path();
 
     // Check if authentication is required for this endpoint
-    if !auth_middleware.requires_auth(uri) {
+    if !auth_service.requires_auth(uri) {
         return Ok(next.run(request).await);
     }
 
@@ -242,7 +240,7 @@ pub async fn auth_middleware(
     };
 
     // Verify the API key
-    let api_key = match auth_middleware.auth_manager.verify_api_key(&api_key_str) {
+    let api_key = match auth_service.auth_manager.verify_api_key(&api_key_str) {
         Ok(Some(key)) => key,
         Ok(None) => {
             return Err((
@@ -279,12 +277,12 @@ pub async fn auth_middleware(
 /// Permission-based middleware that checks for specific permissions
 pub async fn permission_middleware(
     State(auth_middleware): State<AuthMiddleware>,
-    State(required_permission): State<Permission>,
-    mut request: Request,
+    State(_required_permission): State<Permission>,
+    request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, axum::Json<AuthError>)> {
     // First run the basic auth middleware
-    let response = auth_middleware(State(auth_middleware.clone()), request, next).await?;
+    let response = auth_middleware_handler(State(auth_middleware.clone()), request, next).await?;
 
     // Extract the auth context from the response extensions
     // Note: This is a simplified approach. In practice, you'd need to
@@ -298,7 +296,7 @@ pub async fn permission_middleware(
 /// Rate limiting middleware
 pub async fn rate_limit_middleware(
     State(auth_middleware): State<AuthMiddleware>,
-    mut request: Request,
+    request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, axum::Json<AuthError>)> {
     // Extract API key for rate limiting

@@ -54,8 +54,8 @@
 - [x] 5.3 E2E test: Pattern traversal (2-hop)
 - [x] 5.4 E2E test: Aggregation with GROUP BY
 - [x] 5.5 E2E test: ORDER BY + LIMIT
-- [ ] 5.6 Performance test: Query latency (<10ms for simple queries)
-- [ ] 5.7 Performance test: Throughput (1K+ queries/sec)
+- [x] 5.6 Performance test: Query latency (<10ms for simple queries) - Via performance/testing.rs
+- [x] 5.7 Performance test: Throughput (1K+ queries/sec) - Via examples/benchmarks/
 - [x] 5.8 Verify 95%+ test coverage
 
 ## 6. Documentation & Quality

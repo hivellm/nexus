@@ -248,9 +248,9 @@ mod tests {
 
     #[test]
     fn test_performance_optimizer_default() {
-        let optimizer = PerformanceOptimizer::default();
+        let _optimizer = PerformanceOptimizer::default();
         // Should not panic and create a valid instance
-        assert!(true); // Basic test that default() works
+        // Basic test that default() works - no assertion needed
     }
 
     #[test]

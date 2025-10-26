@@ -681,7 +681,7 @@ mod tests {
             NodeData {
                 id: None,
                 labels: vec!["Person".to_string()],
-                properties: properties,
+                properties,
             },
         ];
 
@@ -947,7 +947,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_loading_phase_variants() {
-        let phases = vec![
+        let phases = [
             LoadingPhase::Initializing,
             LoadingPhase::LoadingNodes,
             LoadingPhase::LoadingRelationships,
