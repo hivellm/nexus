@@ -1,12 +1,12 @@
 //! Comprehensive tests for graph comparison functionality
 
 use nexus_core::catalog::Catalog;
-use nexus_core::graph::simple::PropertyValue;
-use nexus_core::graph::{Edge, EdgeId, Graph, Node, NodeId};
 use nexus_core::graph::comparison::{
     ComparisonOptions, ComponentChange, DiffSummary, EdgeChanges, GraphComparator, GraphDiff,
     GraphMetrics, MetricsComparison, NodeChanges, PropertyValueChange, TopologyAnalysis,
 };
+use nexus_core::graph::simple::PropertyValue;
+use nexus_core::graph::{Edge, EdgeId, Graph, Node, NodeId};
 use nexus_core::storage::RecordStore;
 use std::collections::HashMap;
 use std::sync::Arc;
