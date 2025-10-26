@@ -21,6 +21,8 @@
 
 use crate::vectorizer_cache::{QueryMetadata, VectorizerCache};
 use crate::{Error, Result};
+pub use graph_export::{ExportFormat, export_graph};
+pub use graph_statistics::calculate_statistics;
 pub use pattern_recognition::{
     ArchitecturalPatternDetector, DetectedPattern, EventDrivenPatternDetector,
     PatternDetectionResult, PatternDetector, PatternStatistics, PatternType,
@@ -37,6 +39,12 @@ pub mod call_graph_filtering;
 
 /// Pattern recognition for architectural and design patterns
 pub mod pattern_recognition;
+
+/// Graph export to multiple formats
+pub mod graph_export;
+
+/// Graph statistics and metrics
+pub mod graph_statistics;
 
 /// Graph types supported by the correlation analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
