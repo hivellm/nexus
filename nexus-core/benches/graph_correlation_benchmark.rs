@@ -7,10 +7,7 @@
 //! - Large-scale graph handling
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use nexus_core::graph::correlation::{
-    CorrelationGraph, GraphCorrelationManager, GraphSourceData, GraphType,
-};
-use std::collections::HashMap;
+use nexus_core::graph::correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
 
 fn benchmark_call_graph_generation(c: &mut Criterion) {
     let manager = GraphCorrelationManager::new();
@@ -27,7 +24,7 @@ fn benchmark_call_graph_generation(c: &mut Criterion) {
             &scale,
             |b, &scale| {
                 // Generate test data
-                let mut source_data = create_test_data(scale, GraphType::Call);
+                let source_data = create_test_data(scale, GraphType::Call);
 
                 b.iter(|| {
                     let result = manager.build_graph(GraphType::Call, black_box(&source_data));
@@ -53,7 +50,7 @@ fn benchmark_dependency_graph_generation(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}_nodes", scale)),
             &scale,
             |b, &scale| {
-                let mut source_data = create_test_data(scale, GraphType::Dependency);
+                let source_data = create_test_data(scale, GraphType::Dependency);
 
                 b.iter(|| {
                     let result =
@@ -83,7 +80,7 @@ fn benchmark_graph_filtering(c: &mut Criterion) {
             let filtered: Vec<_> = graph
                 .nodes
                 .iter()
-                .filter(|node| node.name.contains("func"))
+                .filter(|node| node.label.contains("func"))
                 .collect();
             black_box(filtered)
         });
@@ -95,7 +92,13 @@ fn benchmark_graph_filtering(c: &mut Criterion) {
             let filtered: Vec<_> = graph
                 .nodes
                 .iter()
-                .filter(|node| node.hierarchical_info.depth <= 2)
+                .filter(|node| {
+                    node.metadata
+                        .get("depth")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                        <= 2
+                })
                 .collect();
             black_box(filtered)
         });
