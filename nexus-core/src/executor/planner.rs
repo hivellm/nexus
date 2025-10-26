@@ -37,17 +37,20 @@ impl<'a> QueryPlanner<'a> {
         for clause in &query.clauses {
             match clause {
                 Clause::Match(match_clause) => {
+                    eprintln!("DEBUG: Processing MATCH clause");
                     patterns.push(match_clause.pattern.clone());
                     if let Some(where_clause) = &match_clause.where_clause {
                         where_clauses.push(where_clause.expression.clone());
                     }
                 }
                 Clause::Create(create_clause) => {
+                    eprintln!("DEBUG: Processing CREATE clause");
                     patterns.push(create_clause.pattern.clone());
                     // CREATE is handled by creating nodes/relationships
                     // For now, just store the pattern for executor to handle
                 }
                 Clause::Merge(merge_clause) => {
+                    eprintln!("DEBUG: Processing MERGE clause with {} elements", merge_clause.pattern.elements.len());
                     patterns.push(merge_clause.pattern.clone());
                     // MERGE is handled as match-or-create
                     // Store pattern for executor to handle
