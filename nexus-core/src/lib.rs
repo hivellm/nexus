@@ -37,6 +37,7 @@
 #![warn(clippy::all)]
 #![allow(dead_code)] // Allow during initial scaffolding
 
+pub mod auth;
 pub mod catalog;
 pub mod clustering;
 pub mod error;
