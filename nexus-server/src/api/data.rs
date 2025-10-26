@@ -570,12 +570,16 @@ pub struct NodeData {
     pub properties: serde_json::Value,
 }
 
-/// Get a node by ID
-pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeResponse> {
-    tracing::info!("Getting node: {}", request.node_id);
+/// Get a node by ID from query parameter
+pub async fn get_node_by_id(axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>) -> Json<GetNodeResponse> {
+    let node_id = params.get("id").or_else(|| params.get("node_id"))
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    
+    tracing::info!("Getting node by ID from query: {}", node_id);
 
     // Validate input
-    if let Err(validation_error) = validate_node_id(request.node_id) {
+    if let Err(validation_error) = validate_node_id(node_id) {
         tracing::error!("Validation failed: {}", validation_error);
         return Json(GetNodeResponse {
             message: "".to_string(),
@@ -597,7 +601,7 @@ pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeRespon
     // Implement actual node retrieval
     match create_engine() {
         Ok(mut engine) => {
-            match engine.get_node(request.node_id) {
+            match engine.get_node(node_id) {
                 Ok(Some(node_record)) => {
                     // Get labels from bitmap
                     let labels = match engine
@@ -616,13 +620,13 @@ pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeRespon
                     };
 
                     // Load properties
-                    let properties = match engine.storage.load_node_properties(request.node_id) {
+                    let properties = match engine.storage.load_node_properties(node_id) {
                         Ok(Some(props)) => props,
                         Ok(None) => serde_json::Value::Object(serde_json::Map::new()),
                         Err(e) => {
                             tracing::warn!(
                                 "Failed to load properties for node {}: {}",
-                                request.node_id,
+                                node_id,
                                 e
                             );
                             serde_json::Value::Object(serde_json::Map::new())
@@ -630,12 +634,12 @@ pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeRespon
                     };
 
                     let node_data = NodeData {
-                        id: request.node_id,
+                        id: node_id,
                         labels,
                         properties,
                     };
 
-                    tracing::info!("Node {} retrieved successfully", request.node_id);
+                    tracing::info!("Node {} retrieved successfully", node_id);
                     Json(GetNodeResponse {
                         message: "Node retrieved successfully".to_string(),
                         node: Some(node_data),
@@ -643,7 +647,7 @@ pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeRespon
                     })
                 }
                 Ok(None) => {
-                    tracing::warn!("Node {} not found", request.node_id);
+                    tracing::warn!("Node {} not found", node_id);
                     Json(GetNodeResponse {
                         message: "Node not found".to_string(),
                         node: None,
@@ -651,7 +655,7 @@ pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeRespon
                     })
                 }
                 Err(e) => {
-                    tracing::error!("Failed to get node: {}", e);
+                    tracing::error!("Failed to get node {}: {}", node_id, e);
                     Json(GetNodeResponse {
                         message: "".to_string(),
                         node: None,
@@ -670,6 +674,8 @@ pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeRespon
         }
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {

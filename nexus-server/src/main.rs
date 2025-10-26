@@ -132,11 +132,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/schema/rel_types", post(api::schema::create_rel_type))
         .route("/schema/rel_types", get(api::schema::list_rel_types))
         // Data management endpoints
+        .route("/data/nodes", get(api::data::get_node_by_id))
         .route("/data/nodes", post(api::data::create_node))
-        .route("/data/nodes", get(api::data::get_node))
-        .route("/data/relationships", post(api::data::create_rel))
         .route("/data/nodes", put(api::data::update_node))
         .route("/data/nodes", delete(api::data::delete_node))
+        .route("/data/relationships", post(api::data::create_rel))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
         // Graph comparison endpoints
