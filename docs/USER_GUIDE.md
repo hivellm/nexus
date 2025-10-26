@@ -240,6 +240,127 @@ ORDER BY similarity
 LIMIT 10
 ```
 
+## Graph Comparison
+
+Nexus provides powerful graph comparison and diff functionality to analyze changes between different graph states or versions.
+
+### Basic Graph Comparison
+
+Compare two graphs and get a detailed diff:
+
+```bash
+POST /comparison/compare
+Content-Type: application/json
+
+{
+  "options": {
+    "include_property_changes": true,
+    "include_label_changes": true,
+    "include_structural_changes": true
+  }
+}
+```
+
+### Advanced Graph Comparison
+
+Get comprehensive analysis with similarity scores and detailed reporting:
+
+```bash
+POST /comparison/advanced
+Content-Type: application/json
+
+{
+  "options": {
+    "use_fuzzy_matching": true,
+    "fuzzy_threshold": 0.8,
+    "include_topology_analysis": true,
+    "calculate_metrics": true,
+    "include_temporal_analysis": false
+  },
+  "include_detailed_analysis": true,
+  "generate_report": true
+}
+```
+
+### Comparison Options
+
+- **include_property_changes**: Track property modifications
+- **include_label_changes**: Track label additions/removals
+- **include_structural_changes**: Track edge endpoint changes
+- **use_fuzzy_matching**: Enable fuzzy matching for similar nodes/edges
+- **fuzzy_threshold**: Similarity threshold for fuzzy matching (0.0-1.0)
+- **include_topology_analysis**: Analyze connected components and graph structure
+- **calculate_metrics**: Calculate detailed graph metrics
+- **include_temporal_analysis**: Analyze temporal changes (if timestamps available)
+
+### Similarity Calculation
+
+Nexus calculates multiple similarity scores:
+
+- **Overall Similarity**: Combined structural and content similarity
+- **Structural Similarity**: Based on edge structure changes
+- **Content Similarity**: Based on node property and label changes
+
+### Graph Metrics
+
+When enabled, comparison includes detailed metrics:
+
+- Node count, edge count, graph density
+- Average degree, clustering coefficient
+- Graph diameter, average shortest path length
+- Triangle count, assortativity coefficient
+
+### Example Response
+
+```json
+{
+  "diff": {
+    "added_nodes": [...],
+    "removed_nodes": [...],
+    "modified_nodes": [...],
+    "added_edges": [...],
+    "removed_edges": [...],
+    "modified_edges": [...],
+    "summary": {
+      "nodes_count_original": 100,
+      "nodes_count_modified": 105,
+      "overall_similarity": 0.85,
+      "structural_similarity": 0.80,
+      "content_similarity": 0.90,
+      "topology_analysis": {
+        "original_components": 3,
+        "modified_components": 4,
+        "component_changes": [...]
+      },
+      "metrics_comparison": {
+        "original_metrics": {...},
+        "modified_metrics": {...},
+        "percentage_changes": {...}
+      }
+    }
+  },
+  "detailed_analysis": {
+    "node_similarities": [...],
+    "edge_similarities": [...],
+    "isomorphism_score": 0.85,
+    "structural_changes": {...}
+  },
+  "report": "Graph Comparison Report\n======================\nOverall Similarity: 85.00%\n..."
+}
+```
+
+### Graph Statistics
+
+G## API Referenceconnected
+MATCH (a:Person)-[:KNOWS]->(b:Person) 
+WHERE a.vector IS NOT NULL 
+  AND b.vector IS NOT NULL 
+RETURN a.name, b.name, 
+       a.vector <-> b.vector as similarity 
+ORDER BY similarity 
+LIMIT 10
+```
+
 ## API Reference
 
 ### Health Check
