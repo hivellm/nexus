@@ -213,9 +213,10 @@ async fn check_indexes() -> ComponentStatus {
                 let _stats = engine
                     .stats()
                     .map_err(|e| format!("Index stats failed: {}", e))?;
-                // Test KNN search (even with empty index)
+                // Test KNN search (even with empty index) - using 128-dimensional vector
+                let test_vector: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
                 let _knn_result = engine
-                    .knn_search("Test", &[0.1, 0.2, 0.3], 5)
+                    .knn_search("Test", &test_vector, 5)
                     .map_err(|e| format!("Index search test failed: {}", e))?;
                 Ok::<(), String>(())
             }
