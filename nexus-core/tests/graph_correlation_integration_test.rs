@@ -321,7 +321,7 @@ fn test_graph_statistics() {
     assert!(node_count > 0, "Should have nodes");
     assert!(edge_count > 0, "Should have edges");
     assert!(function_count > 0, "Should have functions");
-    assert!(module_count >= 0, "Module count should be valid");
+    assert!(module_count > 0, "Module count should be positive");
 
     println!("Graph statistics test passed:");
     println!("  Total nodes: {}", node_count);

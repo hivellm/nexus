@@ -3,7 +3,7 @@
 //! This example demonstrates how to use the various graph construction algorithms
 //! provided by the nexus-core library.
 
-use nexus_core::graph_construction::*;
+use nexus_core::graph::construction::*;
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
