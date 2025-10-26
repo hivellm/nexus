@@ -4,8 +4,8 @@
 //! ensuring data integrity, consistency, and correctness across the entire graph.
 
 use crate::error::Result;
+use crate::graph::simple::PropertyValue;
 use crate::graph::{Edge, Graph, Node};
-use crate::graph_simple::PropertyValue;
 use std::collections::{HashMap, HashSet};
 
 /// Validation result containing detailed information about validation checks
@@ -638,7 +638,7 @@ impl Default for GraphValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_simple::PropertyValue;
+    use crate::graph::simple::PropertyValue;
     use tempfile::TempDir;
 
     fn create_test_graph() -> (Graph, TempDir) {

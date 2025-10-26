@@ -3,7 +3,7 @@
 //! Tests for complex dependency scenarios including diamond dependencies,
 //! circular dependencies, deep trees, and version conflicts
 
-use nexus_core::graph_correlation::{
+use nexus_core::graph::correlation::{
     ChangeType, CorrelationGraph, DependencyFilter, DependencyVersion, EdgeType, GraphNode,
     GraphSourceData, GraphType, NodeType, VersionConstraint, analyze_change_impact,
     analyze_version_constraints, filter_dependency_graph,
@@ -48,7 +48,7 @@ fn create_diamond_dependency_graph() -> CorrelationGraph {
     ]
     .into_iter()
     .map(
-        |(source, target, edge_type)| nexus_core::graph_correlation::GraphEdge {
+        |(source, target, edge_type)| nexus_core::graph::correlation::GraphEdge {
             source: source.to_string(),
             target: target.to_string(),
             edge_type,
@@ -79,7 +79,7 @@ fn create_deep_dependency_tree(depth: usize) -> CorrelationGraph {
         });
 
         if i > 0 {
-            edges.push(nexus_core::graph_correlation::GraphEdge {
+            edges.push(nexus_core::graph::correlation::GraphEdge {
                 source: format!("level_{}", i - 1),
                 target: format!("level_{}", i),
                 edge_type: EdgeType::DependsOn,
@@ -115,7 +115,7 @@ fn create_wide_dependency_graph(width: usize) -> CorrelationGraph {
             properties: HashMap::new(),
         });
 
-        edges.push(nexus_core::graph_correlation::GraphEdge {
+        edges.push(nexus_core::graph::correlation::GraphEdge {
             source: "root".to_string(),
             target: format!("dep_{}", i),
             edge_type: EdgeType::DependsOn,
@@ -169,7 +169,7 @@ fn create_circular_dependency_graph() -> CorrelationGraph {
     ]
     .into_iter()
     .map(
-        |(source, target, edge_type)| nexus_core::graph_correlation::GraphEdge {
+        |(source, target, edge_type)| nexus_core::graph::correlation::GraphEdge {
             source: source.to_string(),
             target: target.to_string(),
             edge_type,
@@ -315,7 +315,7 @@ fn test_complex_multi_level_dependencies() {
     ]
     .into_iter()
     .map(
-        |(source, target)| nexus_core::graph_correlation::GraphEdge {
+        |(source, target)| nexus_core::graph::correlation::GraphEdge {
             source: source.to_string(),
             target: target.to_string(),
             edge_type: EdgeType::DependsOn,
@@ -387,7 +387,7 @@ fn test_large_scale_dependency_graph() {
         // Create dependencies: each node depends on previous 3 nodes
         for j in 1..=3 {
             if i >= j {
-                edges.push(nexus_core::graph_correlation::GraphEdge {
+                edges.push(nexus_core::graph::correlation::GraphEdge {
                     source: format!("node_{}", i),
                     target: format!("node_{}", i - j),
                     edge_type: EdgeType::DependsOn,
@@ -425,7 +425,7 @@ fn test_transitive_dependency_resolution() {
 
     // Get transitive deps from level_0
     let transitive =
-        nexus_core::graph_correlation::get_transitive_dependencies(&graph, "level_0").unwrap();
+        nexus_core::graph::correlation::get_transitive_dependencies(&graph, "level_0").unwrap();
 
     // Should include all levels from 1 to 9
     assert_eq!(transitive.len(), 9);
@@ -438,7 +438,7 @@ fn test_leaf_and_root_identification() {
     let graph = create_diamond_dependency_graph();
 
     let (leaf_nodes, root_nodes) =
-        nexus_core::graph_correlation::identify_leaf_and_root_nodes(&graph);
+        nexus_core::graph::correlation::identify_leaf_and_root_nodes(&graph);
 
     // lib_d is a leaf (no outgoing edges)
     assert!(leaf_nodes.contains(&"lib_d".to_string()));
@@ -451,7 +451,7 @@ fn test_leaf_and_root_identification() {
 fn test_dependency_depth_calculation() {
     let graph = create_deep_dependency_tree(10);
 
-    let depths = nexus_core::graph_correlation::calculate_node_depths(&graph, "level_0");
+    let depths = nexus_core::graph::correlation::calculate_node_depths(&graph, "level_0");
 
     // level_0 should be at depth 0
     assert_eq!(depths.get("level_0"), Some(&0));

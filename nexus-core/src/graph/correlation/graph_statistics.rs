@@ -2,7 +2,7 @@
 //!
 //! Calculate various graph metrics and statistics
 
-use crate::graph_correlation::CorrelationGraph;
+use crate::graph::correlation::CorrelationGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -222,7 +222,7 @@ fn bfs_distances(graph: &CorrelationGraph, start: &str) -> HashMap<String, usize
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::GraphType;
+    use crate::graph::correlation::GraphType;
 
     #[test]
     fn test_empty_graph_statistics() {

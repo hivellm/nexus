@@ -4,7 +4,7 @@
 //! allowing users to find specific nodes, edges, and patterns within the graph structure.
 
 use crate::Result;
-use crate::graph_correlation::{CorrelationGraph, EdgeType, GraphEdge, GraphNode, NodeType};
+use crate::graph::correlation::{CorrelationGraph, EdgeType, GraphEdge, GraphNode, NodeType};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -1044,7 +1044,7 @@ impl CallGraphFiltering for CorrelationGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{GraphEdge, GraphNode, GraphType};
+    use crate::graph::correlation::{GraphEdge, GraphNode, GraphType};
     use std::collections::HashMap;
 
     fn create_test_graph() -> CorrelationGraph {

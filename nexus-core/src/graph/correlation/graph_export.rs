@@ -3,7 +3,7 @@
 //! Export graphs to multiple formats: JSON, GraphML, GEXF, DOT
 
 use crate::Result;
-use crate::graph_correlation::{CorrelationGraph, EdgeType, NodeType};
+use crate::graph::correlation::{CorrelationGraph, EdgeType, NodeType};
 use std::fmt::Write;
 
 /// Graph export format
@@ -209,7 +209,7 @@ fn escape_dot(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{EdgeType, GraphEdge, GraphNode, GraphType, NodeType};
+    use crate::graph::correlation::{EdgeType, GraphEdge, GraphNode, GraphType, NodeType};
     use std::collections::HashMap;
 
     fn create_test_graph() -> CorrelationGraph {

@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize graph correlation manager
     let graph_manager = Arc::new(std::sync::Mutex::new(
-        nexus_core::graph_correlation::GraphCorrelationManager::new(),
+        nexus_core::graph::correlation::GraphCorrelationManager::new(),
     ));
     api::graph_correlation::init_manager(graph_manager)?;
 

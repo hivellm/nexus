@@ -7,7 +7,7 @@
 //! - Design patterns
 
 use crate::Result;
-use crate::graph_correlation::{CorrelationGraph, EdgeType};
+use crate::graph::correlation::{CorrelationGraph, EdgeType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -355,7 +355,7 @@ fn calculate_quality_score(patterns: &[DetectedPattern]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{
+    use crate::graph::correlation::{
         CorrelationGraph, EdgeType, GraphEdge, GraphNode, GraphType, NodeType,
     };
     use std::collections::HashMap;

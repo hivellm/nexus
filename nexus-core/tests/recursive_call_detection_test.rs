@@ -1,6 +1,6 @@
 //! Comprehensive tests for recursive call detection functionality
 
-use nexus_core::graph_correlation::{
+use nexus_core::graph::correlation::{
     CallGraphBuilder, CorrelationGraph, EdgeType, GraphBuilder, GraphEdge, GraphNode,
     GraphSourceData, NodeType, RecursionType, RecursiveCallConfig, RecursiveCallInfo,
 };
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 /// Helper function to create a test call graph with recursive functions
 fn create_recursive_test_graph() -> CorrelationGraph {
     let mut graph = CorrelationGraph::new(
-        nexus_core::graph_correlation::GraphType::Call,
+        nexus_core::graph::correlation::GraphType::Call,
         "Test Recursive Graph".to_string(),
     );
 
@@ -368,7 +368,7 @@ fn test_recursive_call_info_serialization() {
 #[test]
 fn test_complex_recursion_scenario() {
     let mut graph = CorrelationGraph::new(
-        nexus_core::graph_correlation::GraphType::Call,
+        nexus_core::graph::correlation::GraphType::Call,
         "Complex Recursion".to_string(),
     );
 
@@ -424,7 +424,7 @@ fn test_complex_recursion_scenario() {
 #[test]
 fn test_max_depth_limit() {
     let mut graph = CorrelationGraph::new(
-        nexus_core::graph_correlation::GraphType::Call,
+        nexus_core::graph::correlation::GraphType::Call,
         "Depth Limit Test".to_string(),
     );
 

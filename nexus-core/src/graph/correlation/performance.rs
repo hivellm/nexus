@@ -3,7 +3,7 @@
 //! Provides caching, indexing, and optimization strategies
 
 use crate::Result;
-use crate::graph_correlation::CorrelationGraph;
+use crate::graph::correlation::CorrelationGraph;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -298,7 +298,7 @@ pub fn calculate_complexity(graph: &CorrelationGraph) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{EdgeType, GraphEdge, GraphNode, GraphType, NodeType};
+    use crate::graph::correlation::{EdgeType, GraphEdge, GraphNode, GraphType, NodeType};
 
     fn create_test_graph() -> CorrelationGraph {
         CorrelationGraph {

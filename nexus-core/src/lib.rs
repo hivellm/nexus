@@ -39,16 +39,10 @@
 
 pub mod auth;
 pub mod catalog;
-pub mod clustering;
 pub mod concurrent_access;
 pub mod error;
 pub mod executor;
-pub mod graph; // Re-enabled with validation support
-pub mod graph_algorithms;
-pub mod graph_comparison;
-pub mod graph_construction;
-pub mod graph_correlation;
-pub mod graph_simple;
+pub mod graph; // Unified graph module with submodules
 pub mod index;
 pub mod loader;
 pub mod memory_management;
@@ -63,25 +57,25 @@ pub mod validation;
 pub mod vectorizer_cache;
 pub mod wal;
 
-pub use clustering::{
+pub use error::{Error, Result};
+pub use graph::clustering::{
     Cluster, ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, ClusteringMetrics,
     ClusteringResult, DistanceMetric, FeatureStrategy, LinkageType,
 };
-pub use error::{Error, Result};
-pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
-pub use graph_comparison::{
+pub use graph::comparison::{
     ComparisonOptions, DiffSummary, EdgeChanges, EdgeModification, GraphComparator, GraphDiff,
     NodeChanges, NodeModification, PropertyValueChange,
 };
-pub use graph_construction::{
+pub use graph::construction::{
     CircularLayout, ConnectedComponents, ForceDirectedLayout, GraphLayout, GridLayout,
     HierarchicalLayout, KMeansClustering, LayoutDirection, LayoutEdge, LayoutNode, Point2D,
 };
-pub use graph_correlation::NodeType;
-pub use graph_simple::{
+pub use graph::correlation::NodeType;
+pub use graph::simple::{
     Edge as SimpleEdge, EdgeId as SimpleEdgeId, Graph as SimpleGraph,
     GraphStats as SimpleGraphStats, Node as SimpleNode, NodeId as SimpleNodeId, PropertyValue,
 };
+pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
 use std::sync::Arc;
 pub use validation::{
     GraphValidator, ValidationConfig, ValidationError, ValidationErrorType, ValidationResult,
@@ -332,8 +326,8 @@ impl Engine {
     }
 
     /// Convert the storage to a simple graph for clustering and analysis
-    pub fn convert_to_simple_graph(&mut self) -> Result<graph_simple::Graph> {
-        let mut simple_graph = graph_simple::Graph::new();
+    pub fn convert_to_simple_graph(&mut self) -> Result<graph::simple::Graph> {
+        let mut simple_graph = graph::simple::Graph::new();
 
         // Scan all nodes and add them to the simple graph
         for node_id in 0..self.storage.node_count() {
@@ -344,8 +338,8 @@ impl Engine {
                     .get_labels_from_bitmap(node_record.label_bits)?;
 
                 // Create node in simple graph
-                let simple_node_id = graph_simple::NodeId::new(node_id);
-                let node = graph_simple::Node::new(simple_node_id, labels);
+                let simple_node_id = graph::simple::NodeId::new(node_id);
+                let node = graph::simple::Node::new(simple_node_id, labels);
 
                 // Load properties if they exist
                 if node_record.prop_ptr != 0 {
@@ -379,8 +373,8 @@ impl Engine {
                 }
 
                 // Create edge in simple graph
-                let source_id = graph_simple::NodeId::new(rel_record.src_id);
-                let target_id = graph_simple::NodeId::new(rel_record.dst_id);
+                let source_id = graph::simple::NodeId::new(rel_record.src_id);
+                let target_id = graph::simple::NodeId::new(rel_record.dst_id);
 
                 simple_graph.create_edge(source_id, target_id, rel_type)?;
             }

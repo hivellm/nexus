@@ -3,7 +3,7 @@
 //! Analyzes the impact of changes to dependencies
 
 use crate::Result;
-use crate::graph_correlation::CorrelationGraph;
+use crate::graph::correlation::CorrelationGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -318,7 +318,7 @@ pub fn calculate_propagation_distance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{EdgeType, GraphEdge, GraphNode, GraphType, NodeType};
+    use crate::graph::correlation::{EdgeType, GraphEdge, GraphNode, GraphType, NodeType};
 
     fn create_test_graph() -> CorrelationGraph {
         CorrelationGraph {

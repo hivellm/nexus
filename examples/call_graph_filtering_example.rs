@@ -4,7 +4,7 @@
 //! for call graphs, including node filtering, edge filtering, text search,
 //! and path finding.
 
-use nexus_core::graph_correlation::{
+use nexus_core::graph::correlation::{
     CallGraphFilter, CallGraphSearch, CorrelationGraph, EdgeFilter, EdgeType, GraphEdge, GraphNode,
     GraphType, NodeFilter, NodeType, PathSearch, RecursiveCallConfig,
 };

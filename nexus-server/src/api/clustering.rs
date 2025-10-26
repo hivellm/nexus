@@ -9,11 +9,11 @@ use axum::{
     response::Json,
     routing::{get, post},
 };
-use nexus_core::clustering::{
+use nexus_core::graph::clustering::{
     ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, DistanceMetric, FeatureStrategy,
     LinkageType,
 };
-use nexus_core::graph_simple::Graph;
+use nexus_core::graph::simple::Graph;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -448,18 +448,18 @@ fn parse_linkage_type(s: &str) -> Result<LinkageType, ()> {
 }
 
 /// Convert PropertyValue to JSON Value
-fn property_value_to_json(value: nexus_core::graph_simple::PropertyValue) -> serde_json::Value {
+fn property_value_to_json(value: nexus_core::graph::simple::PropertyValue) -> serde_json::Value {
     match value {
-        nexus_core::graph_simple::PropertyValue::Null => serde_json::Value::Null,
-        nexus_core::graph_simple::PropertyValue::Bool(b) => serde_json::Value::Bool(b),
-        nexus_core::graph_simple::PropertyValue::Int64(i) => {
+        nexus_core::graph::simple::PropertyValue::Null => serde_json::Value::Null,
+        nexus_core::graph::simple::PropertyValue::Bool(b) => serde_json::Value::Bool(b),
+        nexus_core::graph::simple::PropertyValue::Int64(i) => {
             serde_json::Value::Number(serde_json::Number::from(i))
         }
-        nexus_core::graph_simple::PropertyValue::Float64(f) => serde_json::Value::Number(
+        nexus_core::graph::simple::PropertyValue::Float64(f) => serde_json::Value::Number(
             serde_json::Number::from_f64(f).unwrap_or(serde_json::Number::from(0)),
         ),
-        nexus_core::graph_simple::PropertyValue::String(s) => serde_json::Value::String(s),
-        nexus_core::graph_simple::PropertyValue::Bytes(b) => serde_json::Value::Array(
+        nexus_core::graph::simple::PropertyValue::String(s) => serde_json::Value::String(s),
+        nexus_core::graph::simple::PropertyValue::Bytes(b) => serde_json::Value::Array(
             b.into_iter()
                 .map(|x| serde_json::Value::Number(serde_json::Number::from(x)))
                 .collect(),
@@ -470,7 +470,7 @@ fn property_value_to_json(value: nexus_core::graph_simple::PropertyValue) -> ser
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexus_core::graph_simple::Graph;
+    use nexus_core::graph::simple::Graph;
 
     #[allow(dead_code)]
     fn create_test_graph() -> Graph {
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn test_property_value_to_json() {
-        use nexus_core::graph_simple::PropertyValue;
+        use nexus_core::graph::simple::PropertyValue;
 
         assert_eq!(
             property_value_to_json(PropertyValue::Null),
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn test_property_value_to_json_float() {
-        use nexus_core::graph_simple::PropertyValue;
+        use nexus_core::graph::simple::PropertyValue;
 
         let result = property_value_to_json(PropertyValue::Float64(std::f64::consts::PI));
         assert!(matches!(result, serde_json::Value::Number(_)));
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_property_value_to_json_bytes() {
-        use nexus_core::graph_simple::PropertyValue;
+        use nexus_core::graph::simple::PropertyValue;
 
         let bytes = vec![1, 2, 3, 4];
         let result = property_value_to_json(PropertyValue::Bytes(bytes));

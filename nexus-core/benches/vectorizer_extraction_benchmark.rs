@@ -3,7 +3,7 @@
 //! Benchmarks graph correlation operations at various scales
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use nexus_core::graph_correlation::*;
+use nexus_core::graph::correlation::*;
 
 /// Create test data with varying sizes
 fn create_test_data(num_files: usize, funcs_per_file: usize) -> GraphSourceData {

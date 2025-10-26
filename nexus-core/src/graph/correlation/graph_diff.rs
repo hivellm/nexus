@@ -3,7 +3,7 @@
 //! Provides utilities to compare two graphs and identify differences
 
 use crate::Result;
-use crate::graph_correlation::CorrelationGraph;
+use crate::graph::correlation::CorrelationGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -200,7 +200,7 @@ pub fn calculate_structural_similarity(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{EdgeType, GraphNode, GraphType, NodeType};
+    use crate::graph::correlation::{EdgeType, GraphNode, GraphType, NodeType};
 
     fn create_test_graph(name: &str, node_count: usize) -> CorrelationGraph {
         let mut graph = CorrelationGraph {

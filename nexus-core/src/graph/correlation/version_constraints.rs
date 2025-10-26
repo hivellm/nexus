@@ -3,7 +3,7 @@
 //! Analyzes version constraints and compatibility in dependency graphs
 
 use crate::Result;
-use crate::graph_correlation::CorrelationGraph;
+use crate::graph::correlation::CorrelationGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

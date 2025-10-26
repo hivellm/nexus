@@ -2,7 +2,7 @@
 //!
 //! Tests graph correlation with mocked vectorizer data
 
-use nexus_core::graph_correlation::*;
+use nexus_core::graph::correlation::*;
 use serde_json::json;
 use std::collections::HashMap;
 

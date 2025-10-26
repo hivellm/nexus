@@ -5,7 +5,7 @@
 //! structural relationships.
 
 use crate::error::Result;
-use crate::graph_simple::{Graph, Node, NodeId, PropertyValue};
+use crate::graph::simple::{Graph, Node, NodeId, PropertyValue};
 use std::collections::{HashMap, HashSet};
 // use std::cmp::{max, min}; // Not used in current implementation
 use std::f64;

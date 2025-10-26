@@ -3,8 +3,8 @@
 //! This module provides utilities for comparing graphs and generating diffs
 //! between different graph states or versions.
 
+use crate::graph::simple::PropertyValue;
 use crate::graph::{Edge, EdgeId, Graph, Node, NodeId};
-use crate::graph_simple::PropertyValue;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -902,7 +902,7 @@ impl GraphComparator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_simple::PropertyValue;
+    use crate::graph::simple::PropertyValue;
 
     #[test]
     fn test_property_value_equality() {

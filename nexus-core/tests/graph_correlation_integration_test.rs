@@ -6,7 +6,7 @@
 //! - Performance with realistic codebase sizes
 //! - Edge cases and error handling
 
-use nexus_core::graph_correlation::{
+use nexus_core::graph::correlation::{
     GraphCorrelationManager, GraphSourceData, GraphType, NodeType,
 };
 

@@ -4,8 +4,8 @@ use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::Json as ResponseJson;
 use nexus_core::Graph;
+use nexus_core::graph::comparison::{ComparisonOptions, DiffSummary, GraphComparator, GraphDiff};
 use nexus_core::graph::{EdgeId, NodeId};
-use nexus_core::graph_comparison::{ComparisonOptions, DiffSummary, GraphComparator, GraphDiff};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -127,7 +127,7 @@ pub async fn compare_graphs(
                     added_edges: vec![],
                     removed_edges: vec![],
                     modified_edges: vec![],
-                    summary: nexus_core::graph_comparison::DiffSummary {
+                    summary: nexus_core::graph::comparison::DiffSummary {
                         nodes_count_original: 0,
                         nodes_count_modified: 0,
                         edges_count_original: 0,
@@ -545,7 +545,7 @@ mod tests {
     use super::*;
     use axum::extract::Json;
     use nexus_core::Graph;
-    use nexus_core::graph_comparison::ComparisonOptions;
+    use nexus_core::graph::comparison::ComparisonOptions;
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -801,14 +801,14 @@ mod tests {
     async fn test_response_structures() {
         // Test CompareGraphsResponse
         let compare_response = CompareGraphsResponse {
-            diff: nexus_core::graph_comparison::GraphDiff {
+            diff: nexus_core::graph::comparison::GraphDiff {
                 added_nodes: vec![],
                 removed_nodes: vec![],
                 modified_nodes: vec![],
                 added_edges: vec![],
                 removed_edges: vec![],
                 modified_edges: vec![],
-                summary: nexus_core::graph_comparison::DiffSummary {
+                summary: nexus_core::graph::comparison::DiffSummary {
                     nodes_count_original: 0,
                     nodes_count_modified: 0,
                     edges_count_original: 0,

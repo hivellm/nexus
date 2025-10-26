@@ -10,7 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use nexus_core::graph_correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
+use nexus_core::graph::correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
 
 /// Query parameters for automatic graph generation
 #[derive(Debug, Deserialize)]

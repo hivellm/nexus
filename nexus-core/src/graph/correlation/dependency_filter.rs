@@ -3,7 +3,7 @@
 //! Provides advanced filtering capabilities for dependency graphs
 
 use crate::Result;
-use crate::graph_correlation::{CorrelationGraph, EdgeType, NodeType};
+use crate::graph::correlation::{CorrelationGraph, EdgeType, NodeType};
 use std::collections::{HashMap, HashSet};
 
 /// Filter criteria for dependency graphs
@@ -337,7 +337,7 @@ pub fn get_transitive_dependencies(graph: &CorrelationGraph, node_id: &str) -> H
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{GraphEdge, GraphType};
+    use crate::graph::correlation::{GraphEdge, GraphType};
 
     fn create_test_graph() -> CorrelationGraph {
         CorrelationGraph {

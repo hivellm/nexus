@@ -1,7 +1,7 @@
 //! Graph Correlation API endpoints
 
 use axum::{http::StatusCode, response::Json};
-use nexus_core::graph_correlation::{
+use nexus_core::graph::correlation::{
     CorrelationGraph, GraphCorrelationManager, GraphSourceData, GraphType,
 };
 use serde::{Deserialize, Serialize};

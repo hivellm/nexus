@@ -2,7 +2,7 @@
 //!
 //! Tests for export, statistics, and pattern recognition
 
-use nexus_core::graph_correlation::*;
+use nexus_core::graph::correlation::*;
 use std::collections::HashMap;
 
 #[test]

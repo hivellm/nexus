@@ -2,7 +2,7 @@
 //!
 //! Tests graph correlation with realistic code patterns
 
-use nexus_core::graph_correlation::*;
+use nexus_core::graph::correlation::*;
 use std::collections::HashMap;
 
 /// Simulates a real microservices architecture

@@ -4,8 +4,8 @@
 //! optimizing the visualization of function call hierarchies and dependencies.
 
 use crate::Result;
-use crate::graph_construction::{LayoutDirection, Point2D};
-use crate::graph_correlation::{CorrelationGraph, EdgeType, NodeType};
+use crate::graph::construction::{LayoutDirection, Point2D};
+use crate::graph::correlation::{CorrelationGraph, EdgeType, NodeType};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Hierarchical call graph layout configuration
@@ -638,7 +638,7 @@ pub struct LayoutStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_correlation::{GraphEdge, GraphNode, GraphType};
+    use crate::graph::correlation::{GraphEdge, GraphNode, GraphType};
 
     fn create_test_call_graph() -> CorrelationGraph {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test Call Graph".to_string());

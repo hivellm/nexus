@@ -755,7 +755,7 @@ async fn handle_graph_correlation_generate(
     request: CallToolRequestParam,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
-    use nexus_core::graph_correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
+    use nexus_core::graph::correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
 
     let args = request
         .arguments
@@ -841,7 +841,7 @@ async fn handle_graph_correlation_analyze(
     request: CallToolRequestParam,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
-    use nexus_core::graph_correlation::{
+    use nexus_core::graph::correlation::{
         ArchitecturalPatternDetector, CorrelationGraph, EventDrivenPatternDetector,
         PatternDetector, PipelinePatternDetector, calculate_statistics,
     };
@@ -972,7 +972,7 @@ async fn handle_graph_correlation_export(
     request: CallToolRequestParam,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
-    use nexus_core::graph_correlation::{CorrelationGraph, ExportFormat, export_graph};
+    use nexus_core::graph::correlation::{CorrelationGraph, ExportFormat, export_graph};
 
     let args = request
         .arguments

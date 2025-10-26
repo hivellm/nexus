@@ -7,7 +7,7 @@
 //! - Large-scale graph handling
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use nexus_core::graph_correlation::{
+use nexus_core::graph::correlation::{
     CorrelationGraph, GraphCorrelationManager, GraphSourceData, GraphType,
 };
 use std::collections::HashMap;

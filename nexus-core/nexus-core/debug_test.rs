@@ -1,10 +1,10 @@
-use nexus_core::graph_correlation::{
+use nexus_core::graph::correlation::{
     CorrelationGraph, EdgeType, GraphNode, GraphEdge, NodeType, RecursiveCallConfig
 };
 use std::collections::HashMap;
 
 fn main() {
-    let mut graph = CorrelationGraph::new(nexus_core::graph_correlation::GraphType::Call, "Debug Test".to_string());
+    let mut graph = CorrelationGraph::new(nexus_core::graph::correlation::GraphType::Call, "Debug Test".to_string());
     
     // Add factorial node
     let node = GraphNode {
