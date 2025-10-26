@@ -56,8 +56,8 @@
 - [x] 5.4 Implement circular dependency detection  
 - [x] 5.5 Create dependency graph layout (DAG)
 - [ ] 5.6 Add version constraint analysis
-- [ ] 5.7 Implement dependency graph filtering
-- [ ] 5.8 Add dependency impact analysis
+- [x] 5.7 Implement dependency graph filtering
+- [x] 5.8 Add dependency impact analysis
 - [x] 5.9 Create unit tests for dependency analysis
 - [ ] 5.10 Add integration tests with complex dependency trees
 

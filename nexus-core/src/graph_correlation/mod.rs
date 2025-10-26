@@ -30,6 +30,14 @@ pub use performance::{
     GraphCache, PerformanceMetrics, PerformanceProfiler, PerformanceSummary,
     calculate_complexity, optimize_graph,
 };
+pub use dependency_filter::{
+    DependencyFilter, calculate_node_depths, filter_dependency_graph, get_direct_dependencies,
+    get_transitive_dependencies, identify_leaf_and_root_nodes,
+};
+pub use impact_analysis::{
+    ChangeImpactResult, ChangeType, ImpactAnalysis, ImpactSeverity, analyze_batch_impact,
+    analyze_change_impact, analyze_impact, calculate_propagation_distance, identify_critical_nodes,
+};
 pub use pattern_recognition::{
     ArchitecturalPatternDetector, DetectedPattern, EventDrivenPatternDetector,
     PatternDetectionResult, PatternDetector, PatternStatistics, PatternType,
@@ -58,6 +66,12 @@ pub mod graph_diff;
 
 /// Performance optimization utilities
 pub mod performance;
+
+/// Dependency graph filtering
+pub mod dependency_filter;
+
+/// Dependency impact analysis
+pub mod impact_analysis;
 
 /// Graph types supported by the correlation analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
