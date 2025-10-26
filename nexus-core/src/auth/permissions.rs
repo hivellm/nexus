@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// Permissions that can be granted to API keys
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,13 +41,13 @@ impl Permission {
 
     /// Check if this permission includes another permission
     pub fn includes(&self, other: &Permission) -> bool {
-        match (self, other) {
-            (Permission::Super, _) => true,
-            (Permission::Admin, Permission::Read | Permission::Write) => true,
-            (Permission::Write, Permission::Read) => true,
-            (Permission::Read, Permission::Read) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (Permission::Super, _)
+                | (Permission::Admin, Permission::Read | Permission::Write)
+                | (Permission::Write, Permission::Read)
+                | (Permission::Read, Permission::Read)
+        )
     }
 
     /// Get the hierarchy level of this permission
@@ -58,15 +59,18 @@ impl Permission {
             Permission::Super => 4,
         }
     }
+}
 
-    /// Parse a permission from a string
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for Permission {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "read" => Some(Permission::Read),
-            "write" => Some(Permission::Write),
-            "admin" => Some(Permission::Admin),
-            "super" => Some(Permission::Super),
-            _ => None,
+            "read" => Ok(Permission::Read),
+            "write" => Ok(Permission::Write),
+            "admin" => Ok(Permission::Admin),
+            "super" => Ok(Permission::Super),
+            _ => Err(format!("Invalid permission: {}", s)),
         }
     }
 }
@@ -109,7 +113,9 @@ impl PermissionSet {
 
     /// Check if the set has any permission that includes the given permission
     pub fn has_permission(&self, permission: &Permission) -> bool {
-        self.permissions.iter().any(|p| p.includes(permission) || p == permission)
+        self.permissions
+            .iter()
+            .any(|p| p.includes(permission) || p == permission)
     }
 
     /// Get all permissions in the set
@@ -172,12 +178,12 @@ mod tests {
 
     #[test]
     fn test_permission_from_str() {
-        assert_eq!(Permission::from_str("read"), Some(Permission::Read));
-        assert_eq!(Permission::from_str("READ"), Some(Permission::Read));
-        assert_eq!(Permission::from_str("Write"), Some(Permission::Write));
-        assert_eq!(Permission::from_str("admin"), Some(Permission::Admin));
-        assert_eq!(Permission::from_str("super"), Some(Permission::Super));
-        assert_eq!(Permission::from_str("invalid"), None);
+        assert_eq!("read".parse::<Permission>(), Ok(Permission::Read));
+        assert_eq!("READ".parse::<Permission>(), Ok(Permission::Read));
+        assert_eq!("Write".parse::<Permission>(), Ok(Permission::Write));
+        assert_eq!("admin".parse::<Permission>(), Ok(Permission::Admin));
+        assert_eq!("super".parse::<Permission>(), Ok(Permission::Super));
+        assert!("invalid".parse::<Permission>().is_err());
     }
 
     #[test]
@@ -217,15 +223,15 @@ mod tests {
     #[test]
     fn test_permission_set_operations() {
         let mut set = PermissionSet::new();
-        
+
         set.add(Permission::Read);
         assert!(set.contains(&Permission::Read));
         assert_eq!(set.len(), 1);
-        
+
         set.add(Permission::Write);
         assert!(set.contains(&Permission::Write));
         assert_eq!(set.len(), 2);
-        
+
         set.remove(&Permission::Read);
         assert!(!set.contains(&Permission::Read));
         assert!(set.contains(&Permission::Write));
@@ -235,7 +241,7 @@ mod tests {
     #[test]
     fn test_permission_set_has_permission() {
         let set = PermissionSet::from_vec(vec![Permission::Admin]);
-        
+
         assert!(set.has_permission(&Permission::Read));
         assert!(set.has_permission(&Permission::Write));
         assert!(set.has_permission(&Permission::Admin));
@@ -247,7 +253,7 @@ mod tests {
         let set1 = PermissionSet::from_vec(vec![Permission::Super]);
         let set2 = PermissionSet::from_vec(vec![Permission::Read, Permission::Write]);
         let set3 = PermissionSet::from_vec(vec![Permission::Super]);
-        
+
         assert!(set1.includes_all(&set2));
         assert!(set1.includes_all(&set3));
         assert!(!set2.includes_all(&set1));
@@ -257,9 +263,9 @@ mod tests {
     fn test_permission_set_merge() {
         let mut set1 = PermissionSet::from_vec(vec![Permission::Read]);
         let set2 = PermissionSet::from_vec(vec![Permission::Write, Permission::Admin]);
-        
+
         set1.merge(&set2);
-        
+
         assert!(set1.contains(&Permission::Read));
         assert!(set1.contains(&Permission::Write));
         assert!(set1.contains(&Permission::Admin));

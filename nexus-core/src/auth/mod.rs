@@ -9,18 +9,18 @@ pub mod permissions;
 pub mod rbac;
 
 pub use api_key::ApiKey;
-pub use middleware::{AuthMiddleware, AuthContext, AuthError};
+pub use middleware::{AuthContext, AuthError, AuthMiddleware};
 pub use permissions::{Permission, PermissionSet};
-pub use rbac::{RoleBasedAccessControl, Role, User};
+pub use rbac::{Role, RoleBasedAccessControl, User};
 
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use argon2::password_hash::{rand_core::OsRng, SaltString};
 use anyhow::Result;
+use argon2::password_hash::{SaltString, rand_core::OsRng};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use chrono::Utc;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
-use chrono::Utc;
 
 /// Authentication configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,18 +77,15 @@ impl AuthManager {
     }
 
     /// Generate a new API key
-    pub fn generate_api_key(
-        &self,
-        name: String,
-        permissions: Vec<Permission>,
-    ) -> Result<ApiKey> {
+    pub fn generate_api_key(&self, name: String, permissions: Vec<Permission>) -> Result<ApiKey> {
         let key_id = uuid::Uuid::new_v4().to_string();
         let key_secret = self.generate_secret();
         let full_key = format!("nexus_sk_{}_{}", key_id, key_secret);
-        
+
         // Hash the full key for storage
         let salt = SaltString::generate(&mut OsRng);
-        let password_hash = self.argon2
+        let password_hash = self
+            .argon2
             .hash_password(full_key.as_bytes(), &salt)
             .map_err(|e| anyhow::anyhow!("Failed to hash API key: {}", e))?;
 
@@ -143,7 +140,11 @@ impl AuthManager {
             let password_hash = PasswordHash::new(&api_key.hashed_key)
                 .map_err(|e| anyhow::anyhow!("Invalid password hash: {}", e))?;
 
-            if self.argon2.verify_password(key.as_bytes(), &password_hash).is_ok() {
+            if self
+                .argon2
+                .verify_password(key.as_bytes(), &password_hash)
+                .is_ok()
+            {
                 // Update last used timestamp
                 {
                     let mut keys = self.api_keys.write();
@@ -197,7 +198,7 @@ impl AuthManager {
         use rand::Rng;
         const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         let mut rng = rand::thread_rng();
-        
+
         (0..32)
             .map(|_| {
                 let idx = rng.gen_range(0..CHARSET.len());
@@ -230,12 +231,14 @@ mod tests {
             ..Default::default()
         };
         let manager = AuthManager::new(config);
-        
-        let api_key = manager.generate_api_key(
-            "test-key".to_string(),
-            vec![Permission::Read, Permission::Write],
-        ).unwrap();
-        
+
+        let api_key = manager
+            .generate_api_key(
+                "test-key".to_string(),
+                vec![Permission::Read, Permission::Write],
+            )
+            .unwrap();
+
         assert_eq!(api_key.name, "test-key");
         assert!(api_key.permissions.contains(&Permission::Read));
         assert!(api_key.permissions.contains(&Permission::Write));
@@ -246,7 +249,7 @@ mod tests {
     fn test_permission_checking() {
         let config = AuthConfig::default();
         let manager = AuthManager::new(config);
-        
+
         let api_key = ApiKey {
             id: "test".to_string(),
             name: "test".to_string(),
@@ -256,7 +259,7 @@ mod tests {
             last_used: None,
             is_active: true,
         };
-        
+
         assert!(manager.has_permission(&api_key, Permission::Read));
         assert!(!manager.has_permission(&api_key, Permission::Write));
     }

@@ -1,5 +1,6 @@
 //! Authentication middleware for HTTP requests
 
+use super::{AuthManager, Permission};
 #[cfg(feature = "axum")]
 use axum::{
     extract::{Request, State},
@@ -9,7 +10,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use super::{AuthManager, Permission};
 
 /// Authentication context for the current request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,7 +83,7 @@ impl AuthMiddleware {
     pub fn extract_api_key(headers: &HeaderMap) -> Option<String> {
         let auth_header = headers.get("authorization")?;
         let auth_str = auth_header.to_str().ok()?;
-        
+
         if let Some(token) = auth_str.strip_prefix("Bearer ") {
             Some(token.to_string())
         } else {
@@ -97,7 +97,7 @@ impl AuthMiddleware {
         if uri == "/health" || uri == "/stats" {
             return false;
         }
-        
+
         self.require_auth
     }
 
@@ -115,7 +115,7 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Result<Response, (StatusCode, axum::Json<AuthError>)> {
     let uri = request.uri().path();
-    
+
     // Check if authentication is required for this endpoint
     if !auth_middleware.requires_auth(uri) {
         return Ok(next.run(request).await);
@@ -176,17 +176,13 @@ pub async fn permission_middleware(
     next: Next,
 ) -> Result<Response, (StatusCode, axum::Json<AuthError>)> {
     // First run the basic auth middleware
-    let response = auth_middleware(
-        State(auth_middleware.clone()),
-        request,
-        next,
-    ).await?;
+    let response = auth_middleware(State(auth_middleware.clone()), request, next).await?;
 
     // Extract the auth context from the response extensions
     // Note: This is a simplified approach. In practice, you'd need to
     // modify the middleware to pass the context through the response.
     // For now, we'll assume the permission check was done in the auth middleware.
-    
+
     Ok(response)
 }
 
@@ -229,18 +225,17 @@ pub fn get_api_key(request: &Request) -> Option<&super::ApiKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn test_auth_error_creation() {
         let error = AuthError::authentication_required();
         assert_eq!(error.code, "AUTHENTICATION_REQUIRED");
         assert_eq!(error.message, "Authentication required for this endpoint");
-        
+
         let error = AuthError::invalid_token();
         assert_eq!(error.code, "INVALID_TOKEN");
         assert_eq!(error.message, "Invalid or expired authentication token");
-        
+
         let error = AuthError::insufficient_permissions();
         assert_eq!(error.code, "INSUFFICIENT_PERMISSIONS");
         assert_eq!(error.message, "Insufficient permissions for this operation");
@@ -251,7 +246,7 @@ mod tests {
         let config = super::super::AuthConfig::default();
         let auth_manager = Arc::new(AuthManager::new(config));
         let middleware = AuthMiddleware::new(auth_manager, true);
-        
+
         assert!(middleware.requires_auth("/api/cypher"));
         assert!(!middleware.requires_auth("/health"));
         assert!(!middleware.requires_auth("/stats"));

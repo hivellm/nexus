@@ -1,8 +1,8 @@
 //! API Key management for Nexus authentication
 
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 use super::permissions::Permission;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// API Key for authentication
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,12 +25,7 @@ pub struct ApiKey {
 
 impl ApiKey {
     /// Create a new API key
-    pub fn new(
-        id: String,
-        name: String,
-        permissions: Vec<Permission>,
-        hashed_key: String,
-    ) -> Self {
+    pub fn new(id: String, name: String, permissions: Vec<Permission>, hashed_key: String) -> Self {
         Self {
             id,
             name,
@@ -148,10 +143,10 @@ mod tests {
         );
 
         assert!(api_key.is_active);
-        
+
         api_key.deactivate();
         assert!(!api_key.is_active);
-        
+
         api_key.activate();
         assert!(api_key.is_active);
     }
@@ -166,7 +161,7 @@ mod tests {
         );
 
         assert!(api_key.last_used.is_none());
-        
+
         api_key.mark_used();
         assert!(api_key.last_used.is_some());
     }

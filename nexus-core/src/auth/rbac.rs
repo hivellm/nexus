@@ -1,8 +1,8 @@
 //! Role-Based Access Control (RBAC) for Nexus
 
+use super::permissions::{Permission, PermissionSet};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use super::permissions::{Permission, PermissionSet};
 
 /// A role in the RBAC system
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,7 +233,8 @@ impl RoleBasedAccessControl {
 
     /// Get effective permissions for a user
     pub fn user_permissions(&self, user_id: &str) -> Option<PermissionSet> {
-        self.get_user(user_id).map(|user| user.effective_permissions(self))
+        self.get_user(user_id)
+            .map(|user| user.effective_permissions(self))
     }
 
     /// Create default roles
@@ -270,7 +271,12 @@ impl RoleBasedAccessControl {
             "super".to_string(),
             "Super User".to_string(),
             "Full access to all database operations including replication".to_string(),
-            PermissionSet::from_vec(vec![Permission::Read, Permission::Write, Permission::Admin, Permission::Super]),
+            PermissionSet::from_vec(vec![
+                Permission::Read,
+                Permission::Write,
+                Permission::Admin,
+                Permission::Super,
+            ]),
         );
         self.add_role(super_user);
     }
@@ -303,7 +309,7 @@ mod tests {
     #[test]
     fn test_user_creation() {
         let user = User::new("user1".to_string(), "testuser".to_string());
-        
+
         assert_eq!(user.id, "user1");
         assert_eq!(user.username, "testuser");
         assert!(user.is_active);
@@ -317,17 +323,17 @@ mod tests {
             "testuser".to_string(),
             "test@example.com".to_string(),
         );
-        
+
         assert_eq!(user.email, Some("test@example.com".to_string()));
     }
 
     #[test]
     fn test_user_role_management() {
         let mut user = User::new("user1".to_string(), "testuser".to_string());
-        
+
         user.add_role("admin".to_string());
         assert!(user.roles.contains(&"admin".to_string()));
-        
+
         user.remove_role("admin");
         assert!(!user.roles.contains(&"admin".to_string()));
     }
@@ -335,12 +341,19 @@ mod tests {
     #[test]
     fn test_user_permission_management() {
         let mut user = User::new("user1".to_string(), "testuser".to_string());
-        
+
         user.add_permission(Permission::Read);
-        assert!(user.additional_permissions.has_permission(&Permission::Read));
-        
+        assert!(
+            user.additional_permissions
+                .has_permission(&Permission::Read)
+        );
+
         user.remove_permission(&Permission::Read);
-        assert!(!user.additional_permissions.has_permission(&Permission::Read));
+        assert!(
+            !user
+                .additional_permissions
+                .has_permission(&Permission::Read)
+        );
     }
 
     #[test]
@@ -353,16 +366,16 @@ mod tests {
     #[test]
     fn test_rbac_role_management() {
         let mut rbac = RoleBasedAccessControl::new();
-        
+
         let role = Role::new(
             "admin".to_string(),
             "Administrator".to_string(),
             PermissionSet::from_vec(vec![Permission::Admin]),
         );
-        
+
         rbac.add_role(role);
         assert!(rbac.get_role("admin").is_some());
-        
+
         rbac.remove_role("admin");
         assert!(rbac.get_role("admin").is_none());
     }
@@ -370,12 +383,12 @@ mod tests {
     #[test]
     fn test_rbac_user_management() {
         let mut rbac = RoleBasedAccessControl::new();
-        
+
         let user = User::new("user1".to_string(), "testuser".to_string());
-        
+
         rbac.add_user(user);
         assert!(rbac.get_user("user1").is_some());
-        
+
         rbac.remove_user("user1");
         assert!(rbac.get_user("user1").is_none());
     }
@@ -383,7 +396,7 @@ mod tests {
     #[test]
     fn test_user_permission_checking() {
         let mut rbac = RoleBasedAccessControl::new();
-        
+
         // Create admin role
         let admin_role = Role::new(
             "admin".to_string(),
@@ -391,12 +404,12 @@ mod tests {
             PermissionSet::from_vec(vec![Permission::Admin]),
         );
         rbac.add_role(admin_role);
-        
+
         // Create user with admin role
         let mut user = User::new("user1".to_string(), "testuser".to_string());
         user.add_role("admin".to_string());
         rbac.add_user(user);
-        
+
         // Check permissions
         assert!(rbac.user_has_permission("user1", &Permission::Read));
         assert!(rbac.user_has_permission("user1", &Permission::Write));
@@ -408,7 +421,7 @@ mod tests {
     fn test_default_roles_creation() {
         let mut rbac = RoleBasedAccessControl::new();
         rbac.create_default_roles();
-        
+
         assert!(rbac.get_role("read_only").is_some());
         assert!(rbac.get_role("read_write").is_some());
         assert!(rbac.get_role("admin").is_some());
