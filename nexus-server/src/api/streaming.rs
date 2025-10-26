@@ -407,7 +407,7 @@ pub async fn handle_nexus_mcp_tool(
 /// Handle create node tool
 async fn handle_create_node(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -425,29 +425,53 @@ async fn handle_create_node(
 
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
-    // Use real Engine for node creation
-    match nexus_core::Engine::new() {
-        Ok(mut engine) => {
-            match engine.create_node(labels.clone(), properties.clone()) {
-                Ok(node_id) => {
-                    let response = json!({
-                        "status": "created",
-                        "node_id": node_id,
-                        "labels": labels,
-                        "properties": properties
-                    });
-                    Ok(CallToolResult::success(vec![Content::text(
-                        response.to_string(),
-                    )]))
+    // Use executor to create node
+    let mut executor = server.executor.write().await;
+    
+    // Execute Cypher CREATE query
+    let mut create_query = String::from("CREATE (n");
+    for label in labels.iter() {
+        create_query.push(':');
+        create_query.push_str(label);
+    }
+    create_query.push_str(") SET n = $props RETURN id(n) as node_id");
+    
+    let mut params = HashMap::new();
+    params.insert("props".to_string(), properties.clone());
+    
+    let query = CypherQuery {
+        cypher: create_query,
+        params,
+    };
+    
+    match executor.execute(&query) {
+        Ok(result_set) => {
+            if let Some(row) = result_set.rows.first() {
+                // Try to find node_id column index
+                let node_id_idx = result_set.columns.iter().position(|c| c == "node_id");
+                if let Some(idx) = node_id_idx {
+                    if idx < row.values.len() {
+                        // The value is in row.values[idx], convert it
+                        let node_id = row.values[idx].as_u64().unwrap_or(0);
+                        let response = json!({
+                            "status": "created",
+                            "node_id": node_id,
+                            "labels": labels,
+                            "properties": properties
+                        });
+                        return Ok(CallToolResult::success(vec![Content::text(
+                            response.to_string(),
+                        )]));
+                    }
                 }
-                Err(e) => Err(ErrorData::internal_error(
-                    format!("Failed to create node: {}", e),
-                    None,
-                )),
             }
+            Err(ErrorData::internal_error(
+                "Failed to extract node ID from result".to_string(),
+                None,
+            ))
         }
         Err(e) => Err(ErrorData::internal_error(
-            format!("Failed to initialize engine: {}", e),
+            format!("Failed to create node: {}", e),
             None,
         )),
     }
@@ -456,7 +480,7 @@ async fn handle_create_node(
 /// Handle create relationship tool
 async fn handle_create_relationship(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -481,31 +505,55 @@ async fn handle_create_relationship(
 
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
-    // Use real Engine for relationship creation
-    match nexus_core::Engine::new() {
-        Ok(mut engine) => {
-            match engine.create_relationship(source_id, target_id, rel_type.clone(), properties.clone()) {
-                Ok(rel_id) => {
-                    let response = json!({
-                        "status": "created",
-                        "relationship_id": rel_id,
-                        "source_id": source_id,
-                        "target_id": target_id,
-                        "rel_type": rel_type,
-                        "properties": properties
-                    });
-                    Ok(CallToolResult::success(vec![Content::text(
-                        response.to_string(),
-                    )]))
+    // Use executor to create relationship
+    let mut executor = server.executor.write().await;
+    
+    // Execute Cypher CREATE query for relationship
+    let create_query = format!(
+        "MATCH (s), (t) WHERE id(s) = $src_id AND id(t) = $tgt_id CREATE (s)-[r:{}]->(t) SET r = $props RETURN id(r) as rel_id",
+        rel_type
+    );
+    
+    let mut params = HashMap::new();
+    params.insert("src_id".to_string(), json!(source_id));
+    params.insert("tgt_id".to_string(), json!(target_id));
+    params.insert("props".to_string(), properties.clone());
+    
+    let query = CypherQuery {
+        cypher: create_query,
+        params,
+    };
+    
+    match executor.execute(&query) {
+        Ok(result_set) => {
+            if let Some(row) = result_set.rows.first() {
+                // Try to find rel_id column index
+                let rel_id_idx = result_set.columns.iter().position(|c| c == "rel_id");
+                if let Some(idx) = rel_id_idx {
+                    if idx < row.values.len() {
+                        // The value is in row.values[idx], convert it
+                        let rel_id = row.values[idx].as_u64().unwrap_or(0);
+                        let response = json!({
+                            "status": "created",
+                            "relationship_id": rel_id,
+                            "source_id": source_id,
+                            "target_id": target_id,
+                            "rel_type": rel_type,
+                            "properties": properties
+                        });
+                        return Ok(CallToolResult::success(vec![Content::text(
+                            response.to_string(),
+                        )]));
+                    }
                 }
-                Err(e) => Err(ErrorData::internal_error(
-                    format!("Failed to create relationship: {}", e),
-                    None,
-                )),
             }
+            Err(ErrorData::internal_error(
+                "Failed to extract relationship ID from result".to_string(),
+                None,
+            ))
         }
         Err(e) => Err(ErrorData::internal_error(
-            format!("Failed to initialize engine: {}", e),
+            format!("Failed to create relationship: {}", e),
             None,
         )),
     }
@@ -635,43 +683,31 @@ async fn handle_knn_search(
 /// Handle get stats tool
 async fn handle_get_stats(
     _request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
-    // Use real Engine for stats
-    match nexus_core::Engine::new() {
-        Ok(engine) => {
-            match engine.stats() {
-                Ok(stats) => {
-                    let response = json!({
-                        "status": "ok",
-                        "stats": {
-                            "node_count": stats.nodes,
-                            "relationship_count": stats.relationships,
-                            "label_count": stats.labels,
-                            "relationship_type_count": stats.rel_types,
-                            "label_index_size": 0, // Get from label_index if available
-                            "knn_index_size": 0, // Get from knn_index if available
-                            "memory_usage_mb": 0,
-                            "uptime_seconds": stats.active_transactions
-                        },
-                        "timestamp": chrono::Utc::now().to_rfc3339()
-                    });
+    // Get stats from shared components
+    let catalog = server.catalog.read().await;
+    let knn_index = server.knn_index.read().await;
+    let knn_stats = knn_index.get_stats();
+    
+    let response = json!({
+        "status": "ok",
+        "stats": {
+            "node_count": 0, // TODO: Get from storage layer
+            "relationship_count": 0, // TODO: Get from storage layer
+            "label_count": catalog.label_count(),
+            "relationship_type_count": 0, // TODO: Get from catalog
+            "label_index_size": 0,
+            "knn_index_size": knn_stats.total_vectors,
+            "memory_usage_mb": 0,
+            "uptime_seconds": 0
+        },
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
 
-                    Ok(CallToolResult::success(vec![Content::text(
-                        response.to_string(),
-                    )]))
-                }
-                Err(e) => Err(ErrorData::internal_error(
-                    format!("Failed to get stats: {}", e),
-                    None,
-                )),
-            }
-        }
-        Err(e) => Err(ErrorData::internal_error(
-            format!("Failed to initialize engine: {}", e),
-            None,
-        )),
-    }
+    Ok(CallToolResult::success(vec![Content::text(
+        response.to_string(),
+    )]))
 }
 
 /// Handle graph correlation generate tool
