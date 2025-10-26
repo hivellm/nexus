@@ -2,8 +2,8 @@
 //!
 //! Provides utilities to compare two graphs and identify differences
 
-use crate::graph_correlation::CorrelationGraph;
 use crate::Result;
+use crate::graph_correlation::CorrelationGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -58,16 +58,8 @@ pub fn compare_graphs(graph1: &CorrelationGraph, graph2: &CorrelationGraph) -> R
     let common_nodes: HashSet<_> = nodes1.intersection(&nodes2).cloned().collect();
     let mut modified_nodes = Vec::new();
 
-    let node_map1: HashMap<String, _> = graph1
-        .nodes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
-    let node_map2: HashMap<String, _> = graph2
-        .nodes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
+    let node_map1: HashMap<String, _> = graph1.nodes.iter().map(|n| (n.id.clone(), n)).collect();
+    let node_map2: HashMap<String, _> = graph2.nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
     for node_id in &common_nodes {
         if let (Some(n1), Some(n2)) = (node_map1.get(node_id), node_map2.get(node_id)) {
@@ -174,9 +166,7 @@ pub fn compare_graphs(graph1: &CorrelationGraph, graph2: &CorrelationGraph) -> R
 /// Apply a diff to a graph (forward direction)
 pub fn apply_diff(graph: &mut CorrelationGraph, diff: &GraphDiff) -> Result<()> {
     // Remove nodes
-    graph
-        .nodes
-        .retain(|n| !diff.removed_nodes.contains(&n.id));
+    graph.nodes.retain(|n| !diff.removed_nodes.contains(&n.id));
 
     // Remove edges connected to removed nodes
     let removed_set: HashSet<_> = diff.removed_nodes.iter().cloned().collect();
@@ -298,4 +288,3 @@ mod tests {
         assert_eq!(diff.modified_nodes[0].node_id, "node0");
     }
 }
-

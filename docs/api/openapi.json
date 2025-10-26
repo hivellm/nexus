@@ -3,7 +3,7 @@
   "info": {
     "title": "Nexus Graph Database API",
     "version": "0.1.0",
-    "description": "High-performance property graph database with native vector search.\n\nNexus provides a Cypher-compatible query interface with first-class KNN support\nfor hybrid RAG (Retrieval-Augmented Generation) applications.\n\n## Features\n- Property graph model with Cypher subset queries\n- Native KNN vector search via HNSW indexes\n- ACID transactions with MVCC\n- StreamableHTTP with SSE for large result sets\n- MCP and UMICP protocol support\n",
+    "description": "High-performance property graph database with native vector search.\n\nNexus provides a Cypher-compatible query interface with first-class KNN support\nfor hybrid RAG (Retrieval-Augmented Generation) applications.\n\n## Features\n- Property graph model with Cypher subset queries\n- Native KNN vector search via HNSW indexes\n- ACID transactions with MVCC\n- MCP (Model Context Protocol) with StreamableHTTP transport\n- MCP and UMICP protocol support\n",
     "contact": {
       "name": "HiveLLM Team",
       "email": "team@hivellm.org",

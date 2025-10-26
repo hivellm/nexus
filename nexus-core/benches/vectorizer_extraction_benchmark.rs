@@ -2,7 +2,7 @@
 //!
 //! Benchmarks graph correlation operations at various scales
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use nexus_core::graph_correlation::*;
 
 /// Create test data with varying sizes
@@ -226,7 +226,7 @@ fn bench_cache(c: &mut Criterion) {
     group.bench_function("cache_lookups", |b| {
         let mut cache = GraphCache::new();
         cache.build_from_graph(&graph);
-        
+
         b.iter(|| {
             for node in &graph.nodes {
                 let _ = cache.get_node_degree(black_box(&node.id));
@@ -251,7 +251,7 @@ fn bench_cache(c: &mut Criterion) {
         for i in 0..100 {
             cache.insert(format!("key_{}", i), serde_json::json!({"data": i}));
         }
-        
+
         b.iter(|| {
             for i in 0..100 {
                 let _ = cache.get(black_box(&format!("key_{}", i)));
@@ -305,4 +305,3 @@ criterion_group!(
 );
 
 criterion_main!(benches);
-

@@ -2,8 +2,8 @@
 //!
 //! Provides caching, indexing, and optimization strategies
 
-use crate::graph_correlation::CorrelationGraph;
 use crate::Result;
+use crate::graph_correlation::CorrelationGraph;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -261,8 +261,7 @@ pub fn optimize_graph(graph: &mut CorrelationGraph) -> Result<()> {
     });
 
     // Remove orphaned edges (edges pointing to non-existent nodes)
-    let node_ids: std::collections::HashSet<_> =
-        graph.nodes.iter().map(|n| n.id.clone()).collect();
+    let node_ids: std::collections::HashSet<_> = graph.nodes.iter().map(|n| n.id.clone()).collect();
     graph
         .edges
         .retain(|e| node_ids.contains(&e.source) && node_ids.contains(&e.target));
@@ -354,7 +353,9 @@ mod tests {
     #[test]
     fn test_cache_statistics() {
         let mut cache = GraphCache::new();
-        cache.adjacency_cache.insert("n1".to_string(), vec!["n2".to_string()]);
+        cache
+            .adjacency_cache
+            .insert("n1".to_string(), vec!["n2".to_string()]);
 
         let _ = cache.get_adjacent_nodes("n1");
         let _ = cache.get_adjacent_nodes("n3");
@@ -381,7 +382,7 @@ mod tests {
     #[test]
     fn test_optimize_graph() {
         let mut graph = create_test_graph();
-        
+
         // Add duplicate edge
         graph.edges.push(GraphEdge {
             source: "n1".to_string(),
@@ -403,4 +404,3 @@ mod tests {
         assert!(complexity >= 0.0 && complexity <= 1.0);
     }
 }
-

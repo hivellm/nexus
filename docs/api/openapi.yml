@@ -8,16 +8,15 @@ info:
     - Graph database with Cypher query support
     - KNN vector similarity search
     - REST API with comprehensive endpoints
-    - Server-Sent Events (SSE) for real-time streaming
+    - MCP (Model Context Protocol) with StreamableHTTP transport
     - Bulk data ingestion
     - Schema management
-    - MCP (Model Context Protocol) integration
     
     ## Authentication
     Currently no authentication is required. All endpoints are publicly accessible.
     
     ## Rate Limiting
-    No rate limiting is currently implemented. Consider implementing rate limiting for production deployments.
+    Rate limiting is implemented per-IP with token bucket algorithm (100 req/min default).
     
     ## Error Handling
     All endpoints return appropriate HTTP status codes and error messages in JSON format.
@@ -435,122 +434,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatsResponse'
-
-  /sse/cypher:
-    get:
-      summary: Stream Cypher Query Results
-      description: |
-        Stream Cypher query results using Server-Sent Events (SSE).
-        
-        This endpoint allows real-time streaming of query results,
-        useful for monitoring and real-time applications.
-      operationId: streamCypherQuery
-      tags:
-        - Streaming
-      parameters:
-        - name: query
-          in: query
-          description: Cypher query to execute
-          required: false
-          schema:
-            type: string
-            default: "MATCH (n) RETURN n LIMIT 10"
-        - name: interval
-          in: query
-          description: Interval between query executions in milliseconds
-          required: false
-          schema:
-            type: integer
-            default: 1000
-            minimum: 100
-            maximum: 60000
-        - name: limit
-          in: query
-          description: Maximum number of query executions
-          required: false
-          schema:
-            type: integer
-            default: 100
-            minimum: 1
-            maximum: 1000
-      responses:
-        '200':
-          description: SSE stream started
-          content:
-            text/event-stream:
-              schema:
-                type: string
-                description: Server-Sent Events stream
-
-  /sse/stats:
-    get:
-      summary: Stream Database Statistics
-      description: Stream database statistics using Server-Sent Events
-      operationId: streamStats
-      tags:
-        - Streaming
-      parameters:
-        - name: interval
-          in: query
-          description: Interval between statistics updates in milliseconds
-          required: false
-          schema:
-            type: integer
-            default: 2000
-            minimum: 1000
-            maximum: 60000
-        - name: limit
-          in: query
-          description: Maximum number of statistics updates
-          required: false
-          schema:
-            type: integer
-            default: 50
-            minimum: 1
-            maximum: 1000
-      responses:
-        '200':
-          description: SSE stream started
-          content:
-            text/event-stream:
-              schema:
-                type: string
-                description: Server-Sent Events stream
-
-  /sse/heartbeat:
-    get:
-      summary: Heartbeat Stream
-      description: Stream heartbeat events using Server-Sent Events
-      operationId: streamHeartbeat
-      tags:
-        - Streaming
-      parameters:
-        - name: interval
-          in: query
-          description: Interval between heartbeat events in milliseconds
-          required: false
-          schema:
-            type: integer
-            default: 5000
-            minimum: 1000
-            maximum: 60000
-        - name: limit
-          in: query
-          description: Maximum number of heartbeat events
-          required: false
-          schema:
-            type: integer
-            default: 1000
-            minimum: 1
-            maximum: 10000
-      responses:
-        '200':
-          description: SSE stream started
-          content:
-            text/event-stream:
-              schema:
-                type: string
-                description: Server-Sent Events stream
 
 components:
   schemas:
@@ -974,5 +857,3 @@ tags:
     description: Node and relationship management
   - name: Schema
     description: Schema management (labels and relationship types)
-  - name: Streaming
-    description: Server-Sent Events streaming endpoints

@@ -1,16 +1,18 @@
-//! StreamableHTTP implementation for Nexus
+//! MCP StreamableHTTP implementation for Nexus
 //!
-//! This module provides StreamableHTTP support for the Nexus graph database,
-//! enabling high-performance streaming communication over HTTP using MCP protocol.
+//! This module provides MCP (Model Context Protocol) support using StreamableHTTP transport.
+//! Based on the rmcp crate with transport-streamable-http-server.
 //!
-//! Based on Vectorizer's implementation using rmcp with transport-streamable-http-server.
+//! ## Protocol
+//! - **MCP StreamableHTTP**: Primary protocol for AI integrations
+//! - **Transport**: HTTP with chunked transfer encoding
+//! - **Compatible with**: Vectorizer, Context7, and other MCP clients
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::Query;
-use axum::response::{Json, Sse, sse::Event};
-use futures::stream::Stream;
+use axum::response::Json;
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, Content, ErrorData, Implementation, ListResourcesResult,
@@ -873,238 +875,6 @@ pub async fn health_check() -> Json<serde_json::Value> {
     }))
 }
 
-// ============================================================================
-// Server-Sent Events (SSE) Implementation
-// ============================================================================
-
-/// SSE query parameters
-#[derive(serde::Deserialize)]
-pub struct SseQueryParams {
-    /// Query to execute
-    pub query: Option<String>,
-    /// Interval between updates in milliseconds (default: 1000)
-    pub interval: Option<u64>,
-    /// Maximum number of events to send (default: 100)
-    pub limit: Option<u64>,
-}
-
-/// SSE event types
-#[derive(serde::Serialize)]
-pub enum SseEventType {
-    /// Query execution result
-    QueryResult,
-    /// Database statistics update
-    StatsUpdate,
-    /// Error event
-    Error,
-    /// Heartbeat event
-    Heartbeat,
-}
-
-/// SSE event data
-#[derive(serde::Serialize)]
-pub struct SseEventData {
-    /// Event type
-    pub event_type: SseEventType,
-    /// Event data
-    pub data: serde_json::Value,
-    /// Timestamp
-    pub timestamp: String,
-    /// Event ID
-    pub id: Option<String>,
-}
-
-/// Stream Cypher query results via SSE
-pub async fn stream_cypher_query(
-    Query(params): Query<SseQueryParams>,
-    server: Arc<NexusServer>,
-) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
-    let query = params
-        .query
-        .unwrap_or_else(|| "MATCH (n) RETURN n LIMIT 10".to_string());
-    let interval_ms = params.interval.unwrap_or(1000);
-    let limit = params.limit.unwrap_or(100);
-
-    let stream = async_stream::stream! {
-        let mut count = 0;
-
-        while count < limit {
-            // Execute query
-            let start_time = std::time::Instant::now();
-            let mut executor = server.executor.write().await;
-            let query_obj = CypherQuery {
-                cypher: query.clone(),
-                params: HashMap::new(),
-            };
-
-            match executor.execute(&query_obj) {
-                Ok(result_set) => {
-                    let execution_time = start_time.elapsed().as_millis() as u64;
-
-                    // Convert result to JSON
-                    let mut rows = Vec::new();
-                    for row in &result_set.rows {
-                        let mut row_obj = serde_json::Map::new();
-                        for (i, value) in row.values.iter().enumerate() {
-                            if i < result_set.columns.len() {
-                                let column_name = &result_set.columns[i];
-                                row_obj.insert(
-                                    column_name.clone(),
-                                    serde_json::to_value(value).unwrap_or(json!(null)),
-                                );
-                            }
-                        }
-                        rows.push(serde_json::Value::Object(row_obj));
-                    }
-
-                    let event_data = SseEventData {
-                        event_type: SseEventType::QueryResult,
-                        data: json!({
-                            "query": query,
-                            "columns": result_set.columns,
-                            "rows": rows,
-                            "row_count": result_set.rows.len(),
-                            "execution_time_ms": execution_time,
-                            "iteration": count + 1
-                        }),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        id: Some(format!("query-{}", count + 1)),
-                    };
-
-                    yield Ok(Event::default()
-                        .event("query-result")
-                        .id(format!("query-{}", count + 1))
-                        .data(serde_json::to_string(&event_data).unwrap_or_default()));
-                }
-                Err(e) => {
-                    let event_data = SseEventData {
-                        event_type: SseEventType::Error,
-                        data: json!({
-                            "error": e.to_string(),
-                            "query": query
-                        }),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        id: Some(format!("error-{}", count + 1)),
-                    };
-
-                    yield Ok(Event::default()
-                        .event("error")
-                        .id(format!("error-{}", count + 1))
-                        .data(serde_json::to_string(&event_data).unwrap_or_default()));
-                }
-            }
-
-            count += 1;
-
-            // Wait for next iteration
-            tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
-        }
-    };
-
-    Sse::new(stream)
-}
-
-/// Stream database statistics via SSE
-pub async fn stream_stats(
-    Query(params): Query<SseQueryParams>,
-    server: Arc<NexusServer>,
-) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
-    let interval_ms = params.interval.unwrap_or(2000);
-    let limit = params.limit.unwrap_or(50);
-
-    let stream = async_stream::stream! {
-        let mut count = 0;
-
-        while count < limit {
-            // Get catalog stats
-            let catalog_stats = match server.catalog.read().await.get_statistics() {
-                Ok(stats) => json!({
-                    "label_count": stats.label_count,
-                    "type_count": stats.type_count,
-                    "node_counts": stats.node_counts,
-                    "rel_counts": stats.rel_counts
-                }),
-                Err(_) => json!({
-                    "error": "Failed to get catalog statistics"
-                }),
-            };
-
-            // Get label index stats
-            let label_index_stats = json!({
-                "indexed_labels": server.label_index.read().await.get_stats().label_count,
-                "total_nodes": server.label_index.read().await.get_stats().total_nodes
-            });
-
-            // Get KNN index stats
-            let knn_index_stats = json!({
-                "total_vectors": server.knn_index.read().await.get_stats().total_vectors,
-                "dimension": server.knn_index.read().await.dimension()
-            });
-
-            let event_data = SseEventData {
-                event_type: SseEventType::StatsUpdate,
-                data: json!({
-                    "catalog": catalog_stats,
-                    "label_index": label_index_stats,
-                    "knn_index": knn_index_stats,
-                    "iteration": count + 1
-                }),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                id: Some(format!("stats-{}", count + 1)),
-            };
-
-            yield Ok(Event::default()
-                .event("stats-update")
-                .id(format!("stats-{}", count + 1))
-                .data(serde_json::to_string(&event_data).unwrap_or_default()));
-
-            count += 1;
-
-            // Wait for next iteration
-            tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
-        }
-    };
-
-    Sse::new(stream)
-}
-
-/// Stream heartbeat events via SSE
-pub async fn stream_heartbeat(
-    Query(params): Query<SseQueryParams>,
-) -> Sse<impl Stream<Item = Result<Event, axum::Error>>> {
-    let interval_ms = params.interval.unwrap_or(5000);
-    let limit = params.limit.unwrap_or(1000); // Heartbeat can run longer
-
-    let stream = async_stream::stream! {
-        let mut count = 0;
-
-        while count < limit {
-            let event_data = SseEventData {
-                event_type: SseEventType::Heartbeat,
-                data: json!({
-                    "message": "Nexus Server is alive",
-                    "iteration": count + 1,
-                    "uptime_seconds": count * interval_ms / 1000
-                }),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                id: Some(format!("heartbeat-{}", count + 1)),
-            };
-
-            yield Ok(Event::default()
-                .event("heartbeat")
-                .id(format!("heartbeat-{}", count + 1))
-                .data(serde_json::to_string(&event_data).unwrap_or_default()));
-
-            count += 1;
-
-            // Wait for next iteration
-            tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
-        }
-    };
-
-    Sse::new(stream)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1753,7 +1523,7 @@ mod tests {
             let response: serde_json::Value = serde_json::from_str(text).unwrap();
             assert_eq!(response["status"], "success");
             assert!(response.get("types").is_some());
-            
+
             let types = response["types"].as_array().unwrap();
             assert_eq!(types.len(), 4);
             assert!(types.contains(&json!("Call")));
@@ -1767,7 +1537,7 @@ mod tests {
     async fn test_mcp_tools_include_graph_correlation() {
         let tools = get_nexus_mcp_tools();
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        
+
         assert!(tool_names.contains(&"graph_correlation_generate"));
         assert!(tool_names.contains(&"graph_correlation_analyze"));
         assert!(tool_names.contains(&"graph_correlation_export"));

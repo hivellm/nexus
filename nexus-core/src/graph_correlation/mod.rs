@@ -21,31 +21,35 @@
 
 use crate::vectorizer_cache::{QueryMetadata, VectorizerCache};
 use crate::{Error, Result};
-pub use graph_export::{ExportFormat, export_graph};
-pub use graph_statistics::calculate_statistics;
-pub use graph_diff::{
-    EdgeDiff, GraphDiff, NodeDiff, apply_diff, calculate_structural_similarity, compare_graphs,
-};
-pub use performance::{
-    GraphCache, PerformanceMetrics, PerformanceProfiler, PerformanceSummary,
-    calculate_complexity, optimize_graph,
-};
 pub use dependency_filter::{
     DependencyFilter, calculate_node_depths, filter_dependency_graph, get_direct_dependencies,
     get_transitive_dependencies, identify_leaf_and_root_nodes,
 };
+pub use graph_diff::{
+    EdgeDiff, GraphDiff, NodeDiff, apply_diff, calculate_structural_similarity, compare_graphs,
+};
+pub use graph_export::{ExportFormat, export_graph};
+pub use graph_statistics::calculate_statistics;
 pub use impact_analysis::{
     ChangeImpactResult, ChangeType, ImpactAnalysis, ImpactSeverity, analyze_batch_impact,
     analyze_change_impact, analyze_impact, calculate_propagation_distance, identify_critical_nodes,
 };
-pub use vectorizer_cache::{CacheKeyBuilder, CacheStatistics, VectorizerQueryCache};
 pub use pattern_recognition::{
     ArchitecturalPatternDetector, DetectedPattern, EventDrivenPatternDetector,
     PatternDetectionResult, PatternDetector, PatternStatistics, PatternType,
     PipelinePatternDetector,
 };
+pub use performance::{
+    GraphCache, PerformanceMetrics, PerformanceProfiler, PerformanceSummary, calculate_complexity,
+    optimize_graph,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+pub use vectorizer_cache::{CacheKeyBuilder, CacheStatistics, VectorizerQueryCache};
+pub use version_constraints::{
+    ConflictSeverity, DependencyVersion, VersionCompatibility, VersionConflict, VersionConstraint,
+    analyze_version_constraints,
+};
 
 /// Hierarchical call graph layout algorithms
 pub mod hierarchical_layout;
@@ -76,6 +80,9 @@ pub mod impact_analysis;
 
 /// Enhanced vectorizer query caching
 pub mod vectorizer_cache;
+
+/// Version constraint analysis for dependencies
+pub mod version_constraints;
 
 /// Graph types supported by the correlation analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -125,7 +125,7 @@ fn test_graph_statistics_calculation() {
 
 #[test]
 fn test_pattern_detection_pipeline() {
-    let mut graph = create_pipeline_graph();
+    let graph = create_pipeline_graph();
 
     let detector = PipelinePatternDetector;
     let result = detector.detect(&graph).unwrap();
@@ -138,23 +138,23 @@ fn test_pattern_detection_pipeline() {
 
 #[test]
 fn test_pattern_detection_event_driven() {
-    let mut graph = create_event_driven_graph();
+    let graph = create_event_driven_graph();
 
     let detector = EventDrivenPatternDetector;
     let result = detector.detect(&graph).unwrap();
 
     // May or may not find patterns depending on graph structure
-    assert!(result.statistics.total_patterns >= 0);
+    assert!(result.patterns.len() >= 0);
 }
 
 #[test]
 fn test_pattern_detection_architectural() {
-    let mut graph = create_layered_architecture_graph();
+    let graph = create_layered_architecture_graph();
 
     let detector = ArchitecturalPatternDetector;
     let result = detector.detect(&graph).unwrap();
 
-    assert!(result.statistics.total_patterns >= 0);
+    assert!(result.patterns.len() >= 0);
     assert!(result.quality_score >= 0.0);
 }
 

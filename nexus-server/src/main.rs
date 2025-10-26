@@ -27,7 +27,7 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use nexus_server::{NexusServer, api, config::Config};
+use nexus_server::{NexusServer, api, config::Config, middleware::RateLimiter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -115,6 +115,9 @@ async fn main() -> anyhow::Result<()> {
     ));
     api::graph_correlation::init_manager(graph_manager)?;
 
+    // Initialize rate limiter
+    let rate_limiter = RateLimiter::new();
+
     // Build main router
     let app = Router::new()
         .route("/", get(api::health::health_check))
@@ -178,22 +181,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }),
         )
-        // SSE streaming endpoints
-        .route(
-            "/sse/cypher",
-            get({
-                let server = nexus_server.clone();
-                move |query| api::streaming::stream_cypher_query(query, server)
-            }),
-        )
-        .route(
-            "/sse/stats",
-            get({
-                let server = nexus_server.clone();
-                move |query| api::streaming::stream_stats(query, server)
-            }),
-        )
-        .route("/sse/heartbeat", get(api::streaming::stream_heartbeat))
         // Graph correlation endpoints
         .route(
             "/graph-correlation/generate",
@@ -203,9 +190,17 @@ async fn main() -> anyhow::Result<()> {
             "/graph-correlation/types",
             get(api::graph_correlation::get_graph_types),
         )
+        .route(
+            "/graph-correlation/auto-generate",
+            get(api::auto_generate::auto_generate_graphs),
+        )
+        .route("/openapi.json", get(|| async {
+            axum::Json(api::openapi::generate_openapi_spec())
+        }))
         // MCP StreamableHTTP endpoint
         .nest("/mcp", mcp_router)
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .with_state(rate_limiter);
 
     // Start server
     let listener = tokio::net::TcpListener::bind(&config.addr).await?;

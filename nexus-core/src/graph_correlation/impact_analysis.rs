@@ -2,8 +2,8 @@
 //!
 //! Analyzes the impact of changes to dependencies
 
-use crate::graph_correlation::CorrelationGraph;
 use crate::Result;
+use crate::graph_correlation::CorrelationGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -27,7 +27,7 @@ pub struct ImpactAnalysis {
 }
 
 /// Change impact type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChangeType {
     /// API breaking change
     Breaking,
@@ -47,10 +47,7 @@ pub fn analyze_impact(graph: &CorrelationGraph, node_id: &str) -> Result<ImpactA
     let reverse_deps = build_reverse_dependency_map(graph);
 
     // Calculate direct impact
-    let direct_impact: Vec<String> = reverse_deps
-        .get(node_id)
-        .cloned()
-        .unwrap_or_default();
+    let direct_impact: Vec<String> = reverse_deps.get(node_id).cloned().unwrap_or_default();
 
     // Calculate transitive impact using BFS
     let mut transitive_impact = Vec::new();
@@ -200,7 +197,7 @@ fn build_reverse_dependency_map(graph: &CorrelationGraph) -> HashMap<String, Vec
 
 /// Find the critical path (longest chain) from a node
 fn find_critical_path(
-    graph: &CorrelationGraph,
+    _graph: &CorrelationGraph,
     start_node: &str,
     reverse_deps: &HashMap<String, Vec<String>>,
 ) -> Vec<String> {
@@ -455,4 +452,3 @@ mod tests {
         assert_eq!(analysis.impact_by_level.get(&1).unwrap().len(), 2);
     }
 }
-

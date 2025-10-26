@@ -20,6 +20,7 @@ use tokio::sync::RwLock;
 
 pub mod api;
 pub mod config;
+pub mod middleware;
 
 // use config::Config;
 

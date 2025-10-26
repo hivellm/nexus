@@ -2,9 +2,9 @@
 //!
 //! Provides advanced filtering capabilities for dependency graphs
 
-use crate::graph_correlation::{CorrelationGraph, EdgeType, GraphNode, NodeType};
 use crate::Result;
-use std::collections::{HashSet, HashMap};
+use crate::graph_correlation::{CorrelationGraph, EdgeType, NodeType};
+use std::collections::{HashMap, HashSet};
 
 /// Filter criteria for dependency graphs
 #[derive(Debug, Clone)]
@@ -179,7 +179,7 @@ pub fn filter_dependency_graph(
     });
 
     // Get remaining node IDs
-    let remaining_nodes: HashSet<_> = filtered_graph.nodes.iter().map(|n| n.id.clone()).collect();
+    let _remaining_nodes: HashSet<_> = filtered_graph.nodes.iter().map(|n| n.id.clone()).collect();
 
     // Apply depth filter if specified
     if let Some(max_depth) = filter.max_depth {
@@ -190,7 +190,7 @@ pub fn filter_dependency_graph(
     }
 
     // Update remaining nodes after depth filter
-    let remaining_nodes: HashSet<_> = filtered_graph.nodes.iter().map(|n| n.id.clone()).collect();
+    let _remaining_nodes: HashSet<_> = filtered_graph.nodes.iter().map(|n| n.id.clone()).collect();
 
     // Filter edges by edge type and node existence
     filtered_graph.edges.retain(|edge| {
@@ -260,7 +260,7 @@ fn find_cycles_dfs(
     for edge in &graph.edges {
         if edge.source == node_id {
             let target = &edge.target;
-            
+
             if !visited.contains(target) {
                 find_cycles_dfs(target, graph, visited, rec_stack, circular_nodes);
             } else if rec_stack.contains(target) {
@@ -275,7 +275,9 @@ fn find_cycles_dfs(
 }
 
 /// Identify leaf nodes (no outgoing edges) and root nodes (no incoming edges)
-pub fn identify_leaf_and_root_nodes(graph: &CorrelationGraph) -> (HashSet<String>, HashSet<String>) {
+pub fn identify_leaf_and_root_nodes(
+    graph: &CorrelationGraph,
+) -> (HashSet<String>, HashSet<String>) {
     let mut has_outgoing = HashSet::new();
     let mut has_incoming = HashSet::new();
 
@@ -323,10 +325,7 @@ pub fn calculate_node_depths(graph: &CorrelationGraph, max_depth: usize) -> Hash
 }
 
 /// Filter to extract only direct dependencies of a node
-pub fn get_direct_dependencies(
-    graph: &CorrelationGraph,
-    node_id: &str,
-) -> Vec<String> {
+pub fn get_direct_dependencies(graph: &CorrelationGraph, node_id: &str) -> Vec<String> {
     graph
         .edges
         .iter()
@@ -336,10 +335,7 @@ pub fn get_direct_dependencies(
 }
 
 /// Filter to extract all transitive dependencies of a node
-pub fn get_transitive_dependencies(
-    graph: &CorrelationGraph,
-    node_id: &str,
-) -> HashSet<String> {
+pub fn get_transitive_dependencies(graph: &CorrelationGraph, node_id: &str) -> HashSet<String> {
     let mut dependencies = HashSet::new();
     let mut to_visit = vec![node_id.to_string()];
 
@@ -414,7 +410,7 @@ mod tests {
     fn test_filter_by_node_type() {
         let graph = create_test_graph();
         let filter = DependencyFilter::new().with_node_types(vec![NodeType::Module]);
-        
+
         let filtered = filter_dependency_graph(&graph, &filter).unwrap();
         assert_eq!(filtered.nodes.len(), 3);
     }
@@ -423,7 +419,7 @@ mod tests {
     fn test_filter_by_label_pattern() {
         let graph = create_test_graph();
         let filter = DependencyFilter::new().with_labels(vec!["module_a".to_string()]);
-        
+
         let filtered = filter_dependency_graph(&graph, &filter).unwrap();
         assert_eq!(filtered.nodes.len(), 1);
         assert_eq!(filtered.nodes[0].id, "mod_a");
@@ -433,7 +429,7 @@ mod tests {
     fn test_filter_leaf_nodes() {
         let graph = create_test_graph();
         let filter = DependencyFilter::new().leaf_nodes_only();
-        
+
         let filtered = filter_dependency_graph(&graph, &filter).unwrap();
         assert_eq!(filtered.nodes.len(), 1);
         assert_eq!(filtered.nodes[0].id, "mod_c");
@@ -443,7 +439,7 @@ mod tests {
     fn test_filter_root_nodes() {
         let graph = create_test_graph();
         let filter = DependencyFilter::new().root_nodes_only();
-        
+
         let filtered = filter_dependency_graph(&graph, &filter).unwrap();
         assert_eq!(filtered.nodes.len(), 1);
         assert_eq!(filtered.nodes[0].id, "mod_a");
@@ -453,7 +449,7 @@ mod tests {
     fn test_get_direct_dependencies() {
         let graph = create_test_graph();
         let deps = get_direct_dependencies(&graph, "mod_a");
-        
+
         assert_eq!(deps.len(), 1);
         assert!(deps.contains(&"mod_b".to_string()));
     }
@@ -462,7 +458,7 @@ mod tests {
     fn test_get_transitive_dependencies() {
         let graph = create_test_graph();
         let deps = get_transitive_dependencies(&graph, "mod_a");
-        
+
         assert_eq!(deps.len(), 2);
         assert!(deps.contains("mod_b"));
         assert!(deps.contains("mod_c"));
@@ -472,10 +468,9 @@ mod tests {
     fn test_filter_by_min_degree() {
         let graph = create_test_graph();
         let filter = DependencyFilter::new().with_min_degree(2);
-        
+
         let filtered = filter_dependency_graph(&graph, &filter).unwrap();
         assert_eq!(filtered.nodes.len(), 1);
         assert_eq!(filtered.nodes[0].id, "mod_b");
     }
 }
-

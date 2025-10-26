@@ -233,11 +233,10 @@ fn dfs_pipeline_chain(
     let mut chain = vec![node_id.to_string()];
 
     for edge in &graph.edges {
-        if edge.source == node_id
-            && !visited.contains(&edge.target) {
-                let mut sub_chain = dfs_pipeline_chain(graph, &edge.target, visited);
-                chain.append(&mut sub_chain);
-            }
+        if edge.source == node_id && !visited.contains(&edge.target) {
+            let mut sub_chain = dfs_pipeline_chain(graph, &edge.target, visited);
+            chain.append(&mut sub_chain);
+        }
     }
 
     chain
@@ -356,17 +355,199 @@ fn calculate_quality_score(patterns: &[DetectedPattern]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph_correlation::{
+        CorrelationGraph, EdgeType, GraphEdge, GraphNode, GraphType, NodeType,
+    };
+    use std::collections::HashMap;
 
-    #[test]
-    fn test_pattern_statistics() {
-        let stats = PatternStatistics::default();
-        assert_eq!(stats.total_patterns, 0);
-        assert_eq!(stats.avg_confidence, 0.0);
+    fn create_test_graph() -> CorrelationGraph {
+        let nodes = vec![
+            GraphNode {
+                id: "node1".to_string(),
+                label: "Node 1".to_string(),
+                node_type: NodeType::Function,
+                properties: HashMap::new(),
+            },
+            GraphNode {
+                id: "node2".to_string(),
+                label: "Node 2".to_string(),
+                node_type: NodeType::Function,
+                properties: HashMap::new(),
+            },
+        ];
+
+        let edges = vec![GraphEdge {
+            source: "node1".to_string(),
+            target: "node2".to_string(),
+            edge_type: EdgeType::Calls,
+            properties: HashMap::new(),
+        }];
+
+        CorrelationGraph {
+            graph_type: GraphType::Call,
+            nodes,
+            edges,
+            metadata: HashMap::new(),
+        }
     }
 
     #[test]
-    fn test_pattern_types() {
-        let pattern = PatternType::Pipeline;
-        assert_eq!(pattern, PatternType::Pipeline);
+    fn test_pattern_statistics_default() {
+        let stats = PatternStatistics::default();
+        assert_eq!(stats.total_patterns, 0);
+        assert_eq!(stats.avg_confidence, 0.0);
+        assert!(stats.pattern_counts.is_empty());
+    }
+
+    #[test]
+    fn test_pattern_types_all() {
+        assert_eq!(format!("{:?}", PatternType::Pipeline), "Pipeline");
+        assert_eq!(format!("{:?}", PatternType::EventDriven), "EventDriven");
+        assert_eq!(format!("{:?}", PatternType::Layered), "Layered");
+        assert_eq!(format!("{:?}", PatternType::Microservices), "Microservices");
+    }
+
+    #[test]
+    fn test_detected_pattern_creation() {
+        let pattern = DetectedPattern {
+            pattern_type: PatternType::Pipeline,
+            nodes: vec!["a".to_string(), "b".to_string()],
+            confidence: 0.9,
+            description: "Test pattern".to_string(),
+        };
+
+        assert_eq!(pattern.pattern_type, PatternType::Pipeline);
+        assert_eq!(pattern.nodes.len(), 2);
+        assert_eq!(pattern.confidence, 0.9);
+    }
+
+    #[test]
+    fn test_pipeline_detector_empty_graph() {
+        let graph = CorrelationGraph {
+            graph_type: GraphType::Call,
+            nodes: vec![],
+            edges: vec![],
+            metadata: HashMap::new(),
+        };
+
+        let detector = PipelinePatternDetector;
+        let result = detector.detect(&graph).unwrap();
+
+        assert_eq!(result.patterns.len(), 0);
+        assert_eq!(result.statistics.total_patterns, 0);
+    }
+
+    #[test]
+    fn test_pipeline_detector_simple_chain() {
+        let graph = create_test_graph();
+        let detector = PipelinePatternDetector;
+        let result = detector.detect(&graph).unwrap();
+
+        assert!(result.quality_score >= 0.0);
+        assert!(result.quality_score <= 1.0);
+    }
+
+    #[test]
+    fn test_event_driven_detector_empty() {
+        let graph = CorrelationGraph {
+            graph_type: GraphType::Call,
+            nodes: vec![],
+            edges: vec![],
+            metadata: HashMap::new(),
+        };
+
+        let detector = EventDrivenPatternDetector;
+        let result = detector.detect(&graph).unwrap();
+
+        assert_eq!(result.patterns.len(), 0);
+    }
+
+    #[test]
+    fn test_architectural_detector_empty() {
+        let graph = CorrelationGraph {
+            graph_type: GraphType::Call,
+            nodes: vec![],
+            edges: vec![],
+            metadata: HashMap::new(),
+        };
+
+        let detector = ArchitecturalPatternDetector;
+        let result = detector.detect(&graph).unwrap();
+
+        assert_eq!(result.patterns.len(), 0);
+    }
+
+    #[test]
+    fn test_calculate_statistics_empty() {
+        let patterns = vec![];
+        let stats = calculate_statistics(&patterns);
+
+        assert_eq!(stats.total_patterns, 0);
+        assert_eq!(stats.avg_confidence, 0.0);
+        assert!(stats.pattern_counts.is_empty());
+    }
+
+    #[test]
+    fn test_calculate_statistics_with_patterns() {
+        let patterns = vec![
+            DetectedPattern {
+                pattern_type: PatternType::Pipeline,
+                nodes: vec!["a".to_string()],
+                confidence: 0.8,
+                description: "Test".to_string(),
+            },
+            DetectedPattern {
+                pattern_type: PatternType::Pipeline,
+                nodes: vec!["b".to_string()],
+                confidence: 0.6,
+                description: "Test2".to_string(),
+            },
+        ];
+
+        let stats = calculate_statistics(&patterns);
+
+        assert_eq!(stats.total_patterns, 2);
+        assert_eq!(stats.avg_confidence, 0.7);
+        assert_eq!(stats.pattern_counts.get("Pipeline"), Some(&2));
+    }
+
+    #[test]
+    fn test_calculate_quality_score_empty() {
+        let patterns = vec![];
+        let score = calculate_quality_score(&patterns);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_quality_score_with_patterns() {
+        let patterns = vec![
+            DetectedPattern {
+                pattern_type: PatternType::Pipeline,
+                nodes: vec![],
+                confidence: 0.9,
+                description: "".to_string(),
+            },
+            DetectedPattern {
+                pattern_type: PatternType::EventDriven,
+                nodes: vec![],
+                confidence: 0.7,
+                description: "".to_string(),
+            },
+        ];
+
+        let score = calculate_quality_score(&patterns);
+        assert_eq!(score, 0.8);
+    }
+
+    #[test]
+    fn test_pattern_detection_result_structure() {
+        let result = PatternDetectionResult {
+            patterns: vec![],
+            statistics: PatternStatistics::default(),
+            quality_score: 0.5,
+        };
+
+        assert_eq!(result.patterns.len(), 0);
+        assert_eq!(result.quality_score, 0.5);
     }
 }
