@@ -434,10 +434,29 @@ async fn handle_create_node(
         create_query.push(':');
         create_query.push_str(label);
     }
-    create_query.push_str(") SET n = $props RETURN id(n) as node_id");
+    
+    // Build Cypher properties map from JSON
+    let mut props_parts = Vec::new();
+    if let Some(props_obj) = properties.as_object() {
+        for (key, value) in props_obj.iter() {
+            let val_str = match value {
+                serde_json::Value::String(s) => format!("\"{}\"", s),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => format!("{}", value),
+            };
+            props_parts.push(format!("{}: {}", key, val_str));
+        }
+    }
+    let props_str = if props_parts.is_empty() {
+        String::new()
+    } else {
+        format!(" {{{}}}", props_parts.join(", "))
+    };
+    
+    create_query.push_str(&format!("{}) RETURN id(n) as node_id", props_str));
     
     let mut params = HashMap::new();
-    params.insert("props".to_string(), properties.clone());
     
     let query = CypherQuery {
         cypher: create_query,
