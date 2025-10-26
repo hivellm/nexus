@@ -54,6 +54,15 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ⭕ **Circular Layout**: Circular positioning for cyclic graphs and networks
 - 🔲 **Grid Layout**: Regular grid positioning for structured data visualization
 - 🎯 **K-Means Clustering**: Partition nodes into k clusters for grouping analysis
+
+### **Node Clustering & Grouping**
+- 🔍 **Multiple Algorithms**: K-means, hierarchical, DBSCAN, and community detection
+- 🏷️ **Label-based Grouping**: Group nodes by their labels automatically
+- 📊 **Property-based Grouping**: Cluster nodes by specific property values
+- 🧮 **Feature Strategies**: Label-based, property-based, structural, and combined features
+- 📏 **Distance Metrics**: Euclidean, Manhattan, Cosine, Jaccard, and Hamming distances
+- 📈 **Quality Metrics**: Silhouette score, WCSS, BCSS, Calinski-Harabasz, and Davies-Bouldin indices
+- ⚙️ **Configurable Parameters**: Customizable clustering parameters and random seeds
 - 🔗 **Connected Components**: Find strongly/weakly connected components
 - ⚙️ **Graph Operations**: Centering, scaling, neighbor finding, and density calculationCosine similarity, Euclidean distance
 

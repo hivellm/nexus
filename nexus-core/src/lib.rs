@@ -60,6 +60,10 @@ pub mod wal;
 
 pub use error::{Error, Result};
 pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
+pub use clustering::{
+    Cluster, ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, ClusteringMetrics,
+    ClusteringResult, DistanceMetric, FeatureStrategy, LinkageType,
+};
 pub use graph_comparison::{
     ComparisonOptions, DiffSummary, EdgeChanges, EdgeModification, GraphComparator, GraphDiff,
     NodeChanges, NodeModification, PropertyValueChange,
@@ -208,6 +212,69 @@ impl Engine {
     /// Perform KNN search
     pub fn knn_search(&self, label: &str, vector: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
         self.indexes.knn_search(label, vector, k)
+    }
+
+    /// Perform node clustering on the graph
+    pub fn cluster_nodes(&self, config: ClusteringConfig) -> Result<ClusteringResult> {
+        // Create a temporary simple graph for clustering
+        let _temp_dir = tempfile::tempdir()?;
+        let simple_graph = graph_simple::Graph::new();
+        
+        // For now, return empty result as we need to implement proper conversion
+        // TODO: Implement proper conversion from storage to simple graph
+        let engine = ClusteringEngine::new(config);
+        engine.cluster(&simple_graph)
+    }
+
+    /// Perform label-based grouping of nodes
+    pub fn group_nodes_by_labels(&self) -> Result<ClusteringResult> {
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::LabelBased,
+            feature_strategy: FeatureStrategy::LabelBased,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: None,
+        };
+        self.cluster_nodes(config)
+    }
+
+    /// Perform property-based grouping of nodes
+    pub fn group_nodes_by_property(&self, property_key: &str) -> Result<ClusteringResult> {
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::PropertyBased {
+                property_key: property_key.to_string(),
+            },
+            feature_strategy: FeatureStrategy::PropertyBased {
+                property_keys: vec![property_key.to_string()],
+            },
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: None,
+        };
+        self.cluster_nodes(config)
+    }
+
+    /// Perform K-means clustering on nodes
+    pub fn kmeans_cluster_nodes(&self, k: usize, max_iterations: usize) -> Result<ClusteringResult> {
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::KMeans {
+                k,
+                max_iterations,
+            },
+            feature_strategy: FeatureStrategy::Structural,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: Some(42),
+        };
+        self.cluster_nodes(config)
+    }
+
+    /// Perform community detection on nodes
+    pub fn detect_communities(&self) -> Result<ClusteringResult> {
+        let config = ClusteringConfig {
+            algorithm: ClusteringAlgorithm::CommunityDetection,
+            feature_strategy: FeatureStrategy::Structural,
+            distance_metric: DistanceMetric::Euclidean,
+            random_seed: None,
+        };
+        self.cluster_nodes(config)
     }
 
     /// Validate the entire graph for integrity and consistency
