@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 pub mod btree;
+pub mod fulltext;
 
 /// Type alias for property index trees
 type PropertyIndexTree = BTreeMap<PropertyValue, RoaringBitmap>;
