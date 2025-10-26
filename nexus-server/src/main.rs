@@ -284,7 +284,9 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+        let engine = Arc::new(RwLock::new(
+            nexus_core::Engine::new().expect("Failed to create engine"),
+        ));
 
         let server = NexusServer {
             executor: executor_arc,
@@ -319,7 +321,9 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+        let engine = Arc::new(RwLock::new(
+            nexus_core::Engine::new().expect("Failed to create engine"),
+        ));
 
         let server = NexusServer {
             executor: executor_arc,
@@ -353,7 +357,9 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+        let engine = Arc::new(RwLock::new(
+            nexus_core::Engine::new().expect("Failed to create engine"),
+        ));
 
         let server = Arc::new(NexusServer {
             executor: executor_arc,
@@ -450,7 +456,9 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+        let engine = Arc::new(RwLock::new(
+            nexus_core::Engine::new().expect("Failed to create engine"),
+        ));
 
         let server = Arc::new(NexusServer {
             executor: executor_arc,
@@ -485,7 +493,9 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(nexus_core::Engine::new().expect("Failed to create engine")));
+        let engine = Arc::new(RwLock::new(
+            nexus_core::Engine::new().expect("Failed to create engine"),
+        ));
 
         let server = NexusServer {
             executor: executor_arc.clone(),
