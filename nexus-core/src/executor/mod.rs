@@ -385,6 +385,23 @@ impl Executor {
                         });
                     }
                 }
+                parser::Clause::Merge(merge_clause) => {
+                    // MERGE: match-or-create pattern
+                    // For now, treat as MATCH - executor will handle match-or-create logic
+                    for element in &merge_clause.pattern.elements {
+                        if let parser::PatternElement::Node(node) = element {
+                            if let Some(variable) = &node.variable {
+                                if let Some(label) = node.labels.first() {
+                                    let label_id = self.catalog.get_or_create_label(label)?;
+                                    operators.push(Operator::NodeByLabel {
+                                        label_id,
+                                        variable: variable.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
                 parser::Clause::Where(where_clause) => {
                     operators.push(Operator::Filter {
                         predicate: self.expression_to_string(&where_clause.expression)?,

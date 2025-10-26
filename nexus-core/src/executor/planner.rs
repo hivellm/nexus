@@ -47,6 +47,11 @@ impl<'a> QueryPlanner<'a> {
                     // CREATE is handled by creating nodes/relationships
                     // For now, just store the pattern for executor to handle
                 }
+                Clause::Merge(merge_clause) => {
+                    patterns.push(merge_clause.pattern.clone());
+                    // MERGE is handled as match-or-create
+                    // Store pattern for executor to handle
+                }
                 Clause::Where(where_clause) => {
                     where_clauses.push(where_clause.expression.clone());
                 }
