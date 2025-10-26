@@ -10,11 +10,11 @@
 //! - Statistics per label (|V|), per type (|E|), average degree
 //! - Reorder patterns for selectivity
 
+/// Query optimizer for cost-based optimization
+pub mod optimizer;
 pub mod parser;
 /// Query planner for optimizing Cypher execution
 pub mod planner;
-/// Query optimizer for cost-based optimization
-pub mod optimizer;
 
 use crate::catalog::Catalog;
 use crate::index::{KnnIndex, LabelIndex};
@@ -318,16 +318,16 @@ impl Executor {
                         condition.as_deref(),
                     )?;
                 }
-                Operator::IndexScan {
-                    index_name,
-                    label,
-                } => {
+                Operator::IndexScan { index_name, label } => {
                     self.execute_index_scan_new(&mut context, &index_name, &label)?;
                 }
                 Operator::Distinct { columns } => {
                     self.execute_distinct(&mut context, &columns)?;
                 }
-                Operator::HashJoin { left_key, right_key } => {
+                Operator::HashJoin {
+                    left_key,
+                    right_key,
+                } => {
                     self.execute_hash_join(&mut context, &left_key, &right_key)?;
                 }
             }
@@ -961,17 +961,17 @@ impl Executor {
             } => {
                 self.execute_join(context, left, right, *join_type, condition.as_deref())?;
             }
-            Operator::IndexScan {
-                index_name,
-                label,
-            } => {
+            Operator::IndexScan { index_name, label } => {
                 self.execute_index_scan_new(context, index_name, label)?;
             }
             Operator::Distinct { columns } => {
                 self.execute_distinct(context, columns)?;
             }
-            Operator::HashJoin { left_key, right_key } => {
-                self.execute_hash_join(context, &left_key, &right_key)?;
+            Operator::HashJoin {
+                left_key,
+                right_key,
+            } => {
+                self.execute_hash_join(context, left_key, right_key)?;
             }
         }
         Ok(())
@@ -1574,21 +1574,31 @@ impl Executor {
     }
 
     /// Execute hash join operation
-    fn execute_hash_join(&self, _context: &mut ExecutionContext, _left_key: &str, _right_key: &str) -> Result<()> {
+    fn execute_hash_join(
+        &self,
+        _context: &mut ExecutionContext,
+        _left_key: &str,
+        _right_key: &str,
+    ) -> Result<()> {
         // MVP implementation - just pass through for now
         // In a real implementation, this would perform hash join
         Ok(())
     }
 
     /// Execute new index scan operation
-    fn execute_index_scan_new(&self, context: &mut ExecutionContext, _index_name: &str, label: &str) -> Result<()> {
+    fn execute_index_scan_new(
+        &self,
+        context: &mut ExecutionContext,
+        _index_name: &str,
+        label: &str,
+    ) -> Result<()> {
         // Get label ID from catalog
         let label_id = self.catalog.get_or_create_label(label)?;
-        
+
         // Execute node by label scan
         let nodes = self.execute_node_by_label(label_id)?;
         context.set_variable("n", Value::Array(nodes));
-        
+
         Ok(())
     }
 }

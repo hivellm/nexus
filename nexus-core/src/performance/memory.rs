@@ -392,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn test_memory_optimizer_creation() {
         let optimizer = MemoryOptimizer::new().unwrap();
-        assert!(optimizer.baseline_memory >= 0);
+        assert!(optimizer.baseline_memory > 0);
     }
 
     #[tokio::test]
@@ -433,13 +433,15 @@ mod tests {
     #[tokio::test]
     async fn test_optimization_recommendations() {
         let mut optimizer = MemoryOptimizer::new().unwrap();
-        
+
         // Set lower thresholds to trigger recommendations
-        let mut config = MemoryConfig::default();
-        config.max_memory_threshold = 100 * 1024 * 1024; // 100MB
-        config.memory_pressure_threshold = 0.5; // 50%
+        let config = MemoryConfig {
+            max_memory_threshold: 100 * 1024 * 1024, // 100MB
+            memory_pressure_threshold: 0.5,          // 50%
+            ..Default::default()
+        };
         optimizer.set_config(config);
-        
+
         // Add some memory history to trigger recommendations
         for _ in 0..5 {
             let snapshot = MemorySnapshot {
@@ -454,7 +456,7 @@ mod tests {
             let mut history = optimizer.memory_history.write().await;
             history.push(snapshot);
         }
-        
+
         let recommendations = optimizer.get_optimization_recommendations().await;
 
         // Should have some recommendations based on thresholds

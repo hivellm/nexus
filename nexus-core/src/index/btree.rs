@@ -42,7 +42,9 @@ impl PropertyKey {
             (Value::Number(a_num), Value::Number(b_num)) => {
                 let a_f64 = a_num.as_f64().unwrap_or(0.0);
                 let b_f64 = b_num.as_f64().unwrap_or(0.0);
-                a_f64.partial_cmp(&b_f64).unwrap_or(std::cmp::Ordering::Equal) as i32
+                a_f64
+                    .partial_cmp(&b_f64)
+                    .unwrap_or(std::cmp::Ordering::Equal) as i32
             }
             (Value::String(a_str), Value::String(b_str)) => a_str.cmp(b_str) as i32,
             (Value::Bool(a_bool), Value::Bool(b_bool)) => (*a_bool as i32) - (*b_bool as i32),
@@ -78,9 +80,18 @@ impl BTreeIndex {
     }
 
     pub fn insert(&self, node_id: u64, value: Value) -> Result<()> {
-        let key = PropertyKey { value: value.clone(), node_id };
-        let mut index = self.index.write().map_err(|_| Error::internal("B-tree index lock poisoned"))?;
-        let mut stats = self.stats.write().map_err(|_| Error::internal("B-tree stats lock poisoned"))?;
+        let key = PropertyKey {
+            value: value.clone(),
+            node_id,
+        };
+        let mut index = self
+            .index
+            .write()
+            .map_err(|_| Error::internal("B-tree index lock poisoned"))?;
+        let mut stats = self
+            .stats
+            .write()
+            .map_err(|_| Error::internal("B-tree stats lock poisoned"))?;
 
         if index.get(&key).is_none() {
             index.insert(key, vec![node_id]);
@@ -91,7 +102,10 @@ impl BTreeIndex {
     }
 
     pub fn find_exact(&self, value: &Value) -> Result<Vec<u64>> {
-        let index = self.index.read().map_err(|_| Error::internal("B-tree index lock poisoned"))?;
+        let index = self
+            .index
+            .read()
+            .map_err(|_| Error::internal("B-tree index lock poisoned"))?;
         let mut results = Vec::new();
         for (key, node_ids) in index.iter() {
             if key.value == *value {
@@ -102,7 +116,10 @@ impl BTreeIndex {
     }
 
     pub fn find_range(&self, min_value: &Value, max_value: &Value) -> Result<Vec<u64>> {
-        let index = self.index.read().map_err(|_| Error::internal("B-tree index lock poisoned"))?;
+        let index = self
+            .index
+            .read()
+            .map_err(|_| Error::internal("B-tree index lock poisoned"))?;
         let mut results = Vec::new();
         for (key, node_ids) in index.iter() {
             let cmp_min = self.compare_values(&key.value, min_value);

@@ -471,18 +471,20 @@ mod tests {
     #[tokio::test]
     async fn test_optimization_recommendations() {
         let mut monitor = SystemMonitor::new().unwrap();
-        
+
         // Set lower thresholds to trigger recommendations
-        let mut config = MonitoringConfig::default();
-        config.cpu_pressure_threshold = 0.5; // 50%
-        config.memory_pressure_threshold = 0.5; // 50%
-        config.overall_pressure_threshold = 0.5; // 50%
+        let config = MonitoringConfig {
+            cpu_pressure_threshold: 0.5,     // 50%
+            memory_pressure_threshold: 0.5,  // 50%
+            overall_pressure_threshold: 0.5, // 50%
+            ..Default::default()
+        };
         monitor.set_config(config);
-        
+
         // Add some metrics history to trigger recommendations
         for _ in 0..5 {
             let metrics = SystemMetrics {
-                cpu_usage: 80.0, // High CPU usage
+                cpu_usage: 80.0,                 // High CPU usage
                 memory_usage: 200 * 1024 * 1024, // High memory usage
                 memory_available: 100 * 1024 * 1024,
                 disk_usage: 90.0, // High disk usage
@@ -504,7 +506,7 @@ mod tests {
             let mut history = monitor.metrics_history.write().await;
             history.push(metrics);
         }
-        
+
         let recommendations = monitor.get_optimization_recommendations().await;
 
         // Should have some recommendations based on thresholds

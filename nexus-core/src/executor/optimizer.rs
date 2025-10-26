@@ -3,11 +3,11 @@
 //! This module provides cost-based query optimization for Cypher queries,
 //! including join order optimization, index selection, and execution plan generation.
 
+use crate::catalog::Catalog;
+use crate::error::{Error, Result};
 use crate::executor::{ExecutionPlan, Operator, Query};
 use crate::index::IndexManager;
 use crate::storage::RecordStore;
-use crate::catalog::Catalog;
-use crate::error::{Error, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -37,7 +37,7 @@ pub struct TableStats {
 }
 
 /// Statistics collector for query optimization
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StatisticsCollector {
     /// Table statistics
     table_stats: HashMap<String, TableStats>,
@@ -129,7 +129,7 @@ impl QueryOptimizer {
     /// Optimize a query and return the best execution plan
     pub fn optimize(&mut self, query: &Query) -> Result<OptimizationResult> {
         let start_time = std::time::Instant::now();
-        
+
         // Collect statistics
         self.stats.collect_table_stats(&self.storage)?;
         self.stats.collect_index_stats(&self.indexes)?;
@@ -137,12 +137,12 @@ impl QueryOptimizer {
         // Generate candidate plans
         let mut plans = self.generate_candidate_plans(query)?;
         let plans_count = plans.len();
-        
+
         // Evaluate costs and select best plan
         let best_plan = self.select_best_plan(&mut plans)?;
-        
+
         let optimization_time = start_time.elapsed();
-        
+
         Ok(OptimizationResult {
             plan: best_plan.plan.clone(),
             estimated_cost: best_plan.cost,
@@ -159,10 +159,10 @@ impl QueryOptimizer {
     /// Generate candidate execution plans
     fn generate_candidate_plans(&self, query: &Query) -> Result<Vec<CandidatePlan>> {
         let mut plans = Vec::new();
-        
+
         // Parse query to extract patterns
         let patterns = self.parse_patterns(query)?;
-        
+
         // Generate different join orders
         for join_order in self.generate_join_orders(&patterns) {
             // Generate different index selections
@@ -170,7 +170,7 @@ impl QueryOptimizer {
                 let plan = self.build_execution_plan(&patterns, &join_order, &index_selection)?;
                 let cost = self.estimate_cost(&plan)?;
                 let rows = self.estimate_rows(&plan)?;
-                
+
                 plans.push(CandidatePlan {
                     plan,
                     cost,
@@ -180,7 +180,7 @@ impl QueryOptimizer {
                 });
             }
         }
-        
+
         Ok(plans)
     }
 
@@ -189,7 +189,7 @@ impl QueryOptimizer {
         // This is a simplified pattern parser
         // In a real implementation, this would parse the Cypher query
         let mut patterns = Vec::new();
-        
+
         // Extract MATCH patterns
         if query.cypher.contains("MATCH") {
             // Simple pattern extraction - in reality this would be more sophisticated
@@ -199,7 +199,7 @@ impl QueryOptimizer {
                 filters: Vec::new(),
             });
         }
-        
+
         Ok(patterns)
     }
 
@@ -207,28 +207,28 @@ impl QueryOptimizer {
     fn generate_join_orders<'a>(&self, patterns: &'a [QueryPattern]) -> Vec<Vec<&'a QueryPattern>> {
         // Generate permutations of patterns for different join orders
         let mut orders = Vec::new();
-        
+
         // Simple case: just return patterns in order
         // In a real implementation, this would generate all permutations
         orders.push(patterns.iter().collect());
-        
+
         // Add some alternative orders
         if patterns.len() > 1 {
             let mut alt_order = patterns.iter().collect::<Vec<_>>();
             alt_order.reverse();
             orders.push(alt_order);
         }
-        
+
         orders
     }
 
     /// Generate different index selections
     fn generate_index_selections(&self, patterns: &[QueryPattern]) -> Vec<Vec<(String, String)>> {
         let mut selections = Vec::new();
-        
+
         // No indexes
         selections.push(Vec::new());
-        
+
         // Use label indexes
         let mut with_labels = Vec::new();
         for pattern in patterns {
@@ -239,7 +239,7 @@ impl QueryOptimizer {
         if !with_labels.is_empty() {
             selections.push(with_labels);
         }
-        
+
         selections
     }
 
@@ -251,12 +251,13 @@ impl QueryOptimizer {
         index_selection: &[(String, String)],
     ) -> Result<ExecutionPlan> {
         let mut operators = Vec::new();
-        
+
         for (i, pattern) in join_order.iter().enumerate() {
             // Add scan operator
-            if let Some((_, index_name)) = index_selection.iter().find(|(label, _)| {
-                pattern.node_labels.contains(label)
-            }) {
+            if let Some((_, index_name)) = index_selection
+                .iter()
+                .find(|(label, _)| pattern.node_labels.contains(label))
+            {
                 operators.push(Operator::IndexScan {
                     index_name: index_name.clone(),
                     label: pattern.node_labels[0].clone(),
@@ -267,14 +268,14 @@ impl QueryOptimizer {
                     variable: "n".to_string(),
                 });
             }
-            
+
             // Add filter operator if needed
             if !pattern.filters.is_empty() {
                 operators.push(Operator::Filter {
                     predicate: pattern.filters[0].clone(),
                 });
             }
-            
+
             // Add join operator if not the first pattern
             if i > 0 {
                 operators.push(Operator::HashJoin {
@@ -283,12 +284,12 @@ impl QueryOptimizer {
                 });
             }
         }
-        
+
         // Add final projection
         operators.push(Operator::Project {
             columns: vec!["n".to_string()],
         });
-        
+
         Ok(ExecutionPlan { operators })
     }
 
@@ -296,7 +297,7 @@ impl QueryOptimizer {
     fn estimate_cost(&self, plan: &ExecutionPlan) -> Result<f64> {
         let cost_model = CostModel::default();
         let mut total_cost = 0.0;
-        
+
         for operator in &plan.operators {
             match operator {
                 Operator::NodeByLabel { .. } => {
@@ -321,14 +322,14 @@ impl QueryOptimizer {
                 }
             }
         }
-        
+
         Ok(total_cost)
     }
 
     /// Estimate number of rows returned
     fn estimate_rows(&self, plan: &ExecutionPlan) -> Result<u64> {
         let mut estimated_rows = 1000; // Default estimate
-        
+
         for operator in &plan.operators {
             match operator {
                 Operator::NodeByLabel { .. } => {
@@ -339,22 +340,28 @@ impl QueryOptimizer {
                     estimated_rows = estimated_rows.min(100); // Index scans are more selective
                 }
                 Operator::Filter { .. } => {
-                    estimated_rows = estimated_rows / 10; // Filters reduce rows
+                    estimated_rows /= 10; // Filters reduce rows
                 }
                 Operator::HashJoin { .. } => {
-                    estimated_rows = estimated_rows * 2; // Joins can increase rows
+                    estimated_rows *= 2; // Joins can increase rows
                 }
                 _ => {}
             }
         }
-        
+
         Ok(estimated_rows)
     }
 
     /// Select the best plan from candidates
     fn select_best_plan<'a>(&self, plans: &'a mut [CandidatePlan]) -> Result<&'a CandidatePlan> {
-        plans.sort_by(|a, b| a.cost.partial_cmp(&b.cost).unwrap_or(std::cmp::Ordering::Equal));
-        plans.first().ok_or_else(|| Error::internal("No plans generated"))
+        plans.sort_by(|a, b| {
+            a.cost
+                .partial_cmp(&b.cost)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        plans
+            .first()
+            .ok_or_else(|| Error::internal("No plans generated"))
     }
 }
 
@@ -393,56 +400,64 @@ struct CandidatePlan {
 impl StatisticsCollector {
     /// Create new statistics collector
     pub fn new() -> Self {
-        Self {
-            table_stats: HashMap::new(),
-            index_stats: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Collect table statistics
     pub fn collect_table_stats(&mut self, _storage: &RecordStore) -> Result<()> {
         // In a real implementation, this would scan the storage and collect statistics
         // For now, we'll use dummy data
-        self.table_stats.insert("Person".to_string(), TableStats {
-            row_count: 10000,
-            distinct_values: HashMap::new(),
-            avg_row_size: 64.0,
-            most_frequent: HashMap::new(),
-        });
-        
-        self.table_stats.insert("Company".to_string(), TableStats {
-            row_count: 1000,
-            distinct_values: HashMap::new(),
-            avg_row_size: 128.0,
-            most_frequent: HashMap::new(),
-        });
-        
+        self.table_stats.insert(
+            "Person".to_string(),
+            TableStats {
+                row_count: 10000,
+                distinct_values: HashMap::new(),
+                avg_row_size: 64.0,
+                most_frequent: HashMap::new(),
+            },
+        );
+
+        self.table_stats.insert(
+            "Company".to_string(),
+            TableStats {
+                row_count: 1000,
+                distinct_values: HashMap::new(),
+                avg_row_size: 128.0,
+                most_frequent: HashMap::new(),
+            },
+        );
+
         Ok(())
     }
 
     /// Collect index statistics
     pub fn collect_index_stats(&mut self, _indexes: &IndexManager) -> Result<()> {
         // In a real implementation, this would collect actual index statistics
-        self.index_stats.insert("label_Person".to_string(), IndexStats {
-            cardinality: 10000,
-            size_bytes: 1024,
-            selectivity: 0.1,
-            height: 3,
-        });
-        
+        self.index_stats.insert(
+            "label_Person".to_string(),
+            IndexStats {
+                cardinality: 10000,
+                size_bytes: 1024,
+                selectivity: 0.1,
+                height: 3,
+            },
+        );
+
         Ok(())
     }
 
     /// Get table statistics
     pub fn get_table_stats(&self, table_name: &str) -> Result<&TableStats> {
-        self.table_stats.get(table_name)
-            .ok_or_else(|| Error::internal(&format!("No statistics for table: {}", table_name)))
+        self.table_stats
+            .get(table_name)
+            .ok_or_else(|| Error::internal(format!("No statistics for table: {}", table_name)))
     }
 
     /// Get index statistics
     pub fn get_index_stats(&self, index_name: &str) -> Result<&IndexStats> {
-        self.index_stats.get(index_name)
-            .ok_or_else(|| Error::internal(&format!("No statistics for index: {}", index_name)))
+        self.index_stats
+            .get(index_name)
+            .ok_or_else(|| Error::internal(format!("No statistics for index: {}", index_name)))
     }
 }
 
@@ -458,7 +473,7 @@ mod tests {
         let catalog = Arc::new(Catalog::new(temp_dir.path()).unwrap());
         let storage = Arc::new(RecordStore::new(temp_dir.path()).unwrap());
         let indexes = Arc::new(IndexManager::new(temp_dir.path().join("indexes")).unwrap());
-        
+
         let optimizer = QueryOptimizer::new(catalog, storage, indexes);
         assert!(optimizer.stats.table_stats.is_empty());
         assert!(optimizer.stats.index_stats.is_empty());
@@ -482,10 +497,12 @@ mod tests {
             avg_row_size: 64.0,
             most_frequent: HashMap::new(),
         };
-        
+
         stats.distinct_values.insert("name".to_string(), 100);
-        stats.most_frequent.insert("name".to_string(), vec![("Alice".to_string(), 10)]);
-        
+        stats
+            .most_frequent
+            .insert("name".to_string(), vec![("Alice".to_string(), 10)]);
+
         assert_eq!(stats.row_count, 1000);
         assert_eq!(stats.avg_row_size, 64.0);
         assert_eq!(stats.distinct_values.len(), 1);
@@ -500,7 +517,7 @@ mod tests {
             selectivity: 0.1,
             height: 3,
         };
-        
+
         assert_eq!(stats.cardinality, 1000);
         assert_eq!(stats.size_bytes, 1024);
         assert_eq!(stats.selectivity, 0.1);
@@ -512,15 +529,18 @@ mod tests {
         let mut collector = StatisticsCollector::new();
         assert!(collector.table_stats.is_empty());
         assert!(collector.index_stats.is_empty());
-        
+
         // Test adding table stats
-        collector.table_stats.insert("test".to_string(), TableStats {
-            row_count: 100,
-            distinct_values: HashMap::new(),
-            avg_row_size: 32.0,
-            most_frequent: HashMap::new(),
-        });
-        
+        collector.table_stats.insert(
+            "test".to_string(),
+            TableStats {
+                row_count: 100,
+                distinct_values: HashMap::new(),
+                avg_row_size: 32.0,
+                most_frequent: HashMap::new(),
+            },
+        );
+
         assert_eq!(collector.table_stats.len(), 1);
         assert!(collector.table_stats.contains_key("test"));
     }
@@ -532,7 +552,7 @@ mod tests {
             relationship_types: vec!["WORKS_AT".to_string()],
             filters: vec!["age > 25".to_string()],
         };
-        
+
         assert_eq!(pattern.node_labels.len(), 2);
         assert_eq!(pattern.relationship_types.len(), 1);
         assert_eq!(pattern.filters.len(), 1);
@@ -550,7 +570,7 @@ mod tests {
             indexes_used: vec!["idx1".to_string()],
             join_order: vec!["table1".to_string()],
         };
-        
+
         assert_eq!(plan.cost, 100.0);
         assert_eq!(plan.rows, 1000);
         assert_eq!(plan.indexes_used.len(), 1);

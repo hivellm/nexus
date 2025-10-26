@@ -61,7 +61,7 @@ impl PerformanceTester {
 
         for i in 0..iterations {
             let operation_start = Instant::now();
-            
+
             // Simulate operation
             let success = self.simulate_operation(i).await;
             let _operation_duration = operation_start.elapsed();
@@ -112,7 +112,7 @@ impl PerformanceTester {
 
         for i in 0..iterations {
             let operation_start = Instant::now();
-            
+
             // Simulate high-load operation
             let success = self.simulate_stress_operation(i).await;
             let _operation_duration = operation_start.elapsed();
@@ -294,7 +294,9 @@ impl PerformanceTester {
                 success_count += 1;
                 total_latency += _operation_duration;
 
-                if _operation_duration.as_millis() > self.config.query.slow_query_threshold_ms as u128 {
+                if _operation_duration.as_millis()
+                    > self.config.query.slow_query_threshold_ms as u128
+                {
                     slow_queries += 1;
                 }
             }

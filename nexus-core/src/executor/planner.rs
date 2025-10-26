@@ -294,12 +294,12 @@ impl<'a> QueryPlanner<'a> {
 mod tests {
     use super::*;
     use crate::catalog::Catalog;
+    use crate::executor::JoinType;
     use crate::executor::parser::{
         BinaryOperator, Clause, CypherQuery, Expression, LimitClause, Literal, MatchClause,
         NodePattern, Pattern, PatternElement, RelationshipDirection, RelationshipPattern,
         ReturnClause, ReturnItem, WhereClause,
     };
-    use crate::executor::{IndexType, JoinType};
     use crate::index::{KnnIndex, LabelIndex};
 
     #[test]

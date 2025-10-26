@@ -32,7 +32,7 @@ impl PerformanceConfig {
             memory: MemoryConfig {
                 max_memory_threshold: 4 * 1024 * 1024 * 1024, // 4GB
                 max_heap_memory: 2 * 1024 * 1024 * 1024,      // 2GB
-                max_cache_memory: 1024 * 1024 * 1024,     // 1GB
+                max_cache_memory: 1024 * 1024 * 1024,         // 1GB
                 gc_threshold: 0.9,
                 memory_pressure_threshold: 0.9,
             },
@@ -86,7 +86,7 @@ impl PerformanceConfig {
         Self {
             memory: MemoryConfig {
                 max_memory_threshold: 2 * 1024 * 1024 * 1024, // 2GB
-                max_heap_memory: 1024 * 1024 * 1024,      // 1GB
+                max_heap_memory: 1024 * 1024 * 1024,          // 1GB
                 max_cache_memory: 512 * 1024 * 1024,          // 512MB
                 gc_threshold: 0.7,
                 memory_pressure_threshold: 0.7,
@@ -267,7 +267,6 @@ impl PerformanceConfig {
         }
     }
 }
-
 
 /// Query performance configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

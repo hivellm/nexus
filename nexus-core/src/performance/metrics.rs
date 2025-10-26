@@ -41,9 +41,7 @@ impl PerformanceMetrics {
     /// Set a gauge value
     pub async fn set_gauge(&self, name: &str, value: f64) {
         let mut gauges = self.gauges.write().await;
-        let gauge = gauges
-            .entry(name.to_string())
-            .or_insert_with(Gauge::new);
+        let gauge = gauges.entry(name.to_string()).or_insert_with(Gauge::new);
         gauge.set(value);
     }
 
@@ -59,18 +57,14 @@ impl PerformanceMetrics {
     /// Start a timer
     pub async fn start_timer(&self, name: &str) -> TimerHandle {
         let mut timers = self.timers.write().await;
-        let timer = timers
-            .entry(name.to_string())
-            .or_insert_with(Timer::new);
+        let timer = timers.entry(name.to_string()).or_insert_with(Timer::new);
         timer.start()
     }
 
     /// Record a timer duration
     pub async fn record_timer(&self, name: &str, duration: Duration) {
         let mut timers = self.timers.write().await;
-        let timer = timers
-            .entry(name.to_string())
-            .or_insert_with(Timer::new);
+        let timer = timers.entry(name.to_string()).or_insert_with(Timer::new);
         timer.record(duration);
     }
 
