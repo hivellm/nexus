@@ -8,21 +8,27 @@
 //! - Performance configuration helpers
 //! - Testing and validation tools
 
+pub mod benchmarking;
 pub mod cache;
 pub mod config;
 pub mod memory;
 pub mod metrics;
 pub mod monitoring;
 pub mod profiler;
+pub mod recommendations;
 pub mod testing;
+pub mod visualization;
 
+pub use benchmarking::PerformanceBenchmark;
 pub use cache::CacheOptimizer;
 pub use config::PerformanceConfig;
 pub use memory::MemoryOptimizer;
 pub use metrics::PerformanceMetrics;
 pub use monitoring::SystemMonitor;
 pub use profiler::QueryProfiler;
+pub use recommendations::PerformanceRecommendations;
 pub use testing::PerformanceTester;
+pub use visualization::PerformanceVisualizer;
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
