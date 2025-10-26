@@ -250,6 +250,137 @@ pub fn get_nexus_mcp_tools() -> Vec<rmcp::model::Tool> {
                     .idempotent(true),
             ),
         },
+        // Graph Correlation Tools
+        rmcp::model::Tool {
+            name: std::borrow::Cow::Borrowed("graph_correlation_generate"),
+            title: Some("Generate Correlation Graph".to_string()),
+            description: Some(std::borrow::Cow::Borrowed(
+                "Generate a correlation graph from source code (Call, Dependency, DataFlow, or Component graph).",
+            )),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "graph_type": {
+                        "type": "string",
+                        "enum": ["Call", "Dependency", "DataFlow", "Component"],
+                        "description": "Type of graph to generate"
+                    },
+                    "files": {
+                        "type": "object",
+                        "description": "Map of file paths to content"
+                    },
+                    "functions": {
+                        "type": "object",
+                        "description": "Map of files to function lists (optional)"
+                    },
+                    "imports": {
+                        "type": "object",
+                        "description": "Map of files to import lists (optional)"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Graph name (optional)"
+                    }
+                },
+                "required": ["graph_type", "files"]
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+            .into(),
+            output_schema: None,
+            icons: None,
+            annotations: Some(rmcp::model::ToolAnnotations::new().read_only(false)),
+        },
+        rmcp::model::Tool {
+            name: std::borrow::Cow::Borrowed("graph_correlation_analyze"),
+            title: Some("Analyze Correlation Graph".to_string()),
+            description: Some(std::borrow::Cow::Borrowed(
+                "Analyze a correlation graph to extract patterns and statistics.",
+            )),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "graph": {
+                        "type": "object",
+                        "description": "Graph to analyze"
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": ["statistics", "patterns", "all"],
+                        "description": "Type of analysis to perform"
+                    }
+                },
+                "required": ["graph", "analysis_type"]
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+            .into(),
+            output_schema: None,
+            icons: None,
+            annotations: Some(
+                rmcp::model::ToolAnnotations::new()
+                    .read_only(true)
+                    .idempotent(true),
+            ),
+        },
+        rmcp::model::Tool {
+            name: std::borrow::Cow::Borrowed("graph_correlation_export"),
+            title: Some("Export Correlation Graph".to_string()),
+            description: Some(std::borrow::Cow::Borrowed(
+                "Export a correlation graph to various formats (JSON, GraphML, GEXF, DOT).",
+            )),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "graph": {
+                        "type": "object",
+                        "description": "Graph to export"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["JSON", "GraphML", "GEXF", "DOT"],
+                        "description": "Export format"
+                    }
+                },
+                "required": ["graph", "format"]
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+            .into(),
+            output_schema: None,
+            icons: None,
+            annotations: Some(
+                rmcp::model::ToolAnnotations::new()
+                    .read_only(true)
+                    .idempotent(true),
+            ),
+        },
+        rmcp::model::Tool {
+            name: std::borrow::Cow::Borrowed("graph_correlation_types"),
+            title: Some("List Graph Correlation Types".to_string()),
+            description: Some(std::borrow::Cow::Borrowed(
+                "List available graph correlation types.",
+            )),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+            .into(),
+            output_schema: None,
+            icons: None,
+            annotations: Some(
+                rmcp::model::ToolAnnotations::new()
+                    .read_only(true)
+                    .idempotent(true),
+            ),
+        },
     ]
 }
 
@@ -264,6 +395,10 @@ pub async fn handle_nexus_mcp_tool(
         "execute_cypher" => handle_execute_cypher(request, server).await,
         "knn_search" => handle_knn_search(request, server).await,
         "get_stats" => handle_get_stats(request, server).await,
+        "graph_correlation_generate" => handle_graph_correlation_generate(request, server).await,
+        "graph_correlation_analyze" => handle_graph_correlation_analyze(request, server).await,
+        "graph_correlation_export" => handle_graph_correlation_export(request, server).await,
+        "graph_correlation_types" => handle_graph_correlation_types(request, server).await,
         _ => Err(ErrorData::invalid_params("Unknown tool", None)),
     }
 }
@@ -469,6 +604,256 @@ async fn handle_get_stats(
         },
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "message": "Stats collection implemented - integration with storage layer pending"
+    });
+
+    Ok(CallToolResult::success(vec![Content::text(
+        response.to_string(),
+    )]))
+}
+
+/// Handle graph correlation generate tool
+async fn handle_graph_correlation_generate(
+    request: CallToolRequestParam,
+    _server: Arc<NexusServer>,
+) -> Result<CallToolResult, ErrorData> {
+    use nexus_core::graph_correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
+
+    let args = request
+        .arguments
+        .as_ref()
+        .ok_or_else(|| ErrorData::invalid_params("Missing arguments", None))?;
+
+    // Parse graph type
+    let graph_type_str = args
+        .get("graph_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ErrorData::invalid_params("Missing graph_type", None))?;
+
+    let graph_type = match graph_type_str {
+        "Call" => GraphType::Call,
+        "Dependency" => GraphType::Dependency,
+        "DataFlow" => GraphType::DataFlow,
+        "Component" => GraphType::Component,
+        _ => return Err(ErrorData::invalid_params("Invalid graph_type", None)),
+    };
+
+    // Parse files
+    let mut source_data = GraphSourceData::new();
+
+    if let Some(files) = args.get("files").and_then(|v| v.as_object()) {
+        for (path, content) in files {
+            if let Some(content_str) = content.as_str() {
+                source_data.add_file(path.clone(), content_str.to_string());
+            }
+        }
+    }
+
+    // Parse functions (optional)
+    if let Some(functions) = args.get("functions").and_then(|v| v.as_object()) {
+        for (file, funcs) in functions {
+            if let Some(func_array) = funcs.as_array() {
+                let func_list: Vec<String> = func_array
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                source_data.add_functions(file.clone(), func_list);
+            }
+        }
+    }
+
+    // Parse imports (optional)
+    if let Some(imports) = args.get("imports").and_then(|v| v.as_object()) {
+        for (file, imps) in imports {
+            if let Some(imp_array) = imps.as_array() {
+                let imp_list: Vec<String> = imp_array
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                source_data.add_imports(file.clone(), imp_list);
+            }
+        }
+    }
+
+    // Build graph
+    let manager = GraphCorrelationManager::new();
+    let graph = manager
+        .build_graph(graph_type, &source_data)
+        .map_err(|e| ErrorData::internal_error(format!("Failed to build graph: {}", e), None))?;
+
+    // Serialize graph
+    let graph_json = serde_json::to_value(&graph).map_err(|e| {
+        ErrorData::internal_error(format!("Failed to serialize graph: {}", e), None)
+    })?;
+
+    let response = json!({
+        "status": "success",
+        "graph": graph_json,
+        "node_count": graph.nodes.len(),
+        "edge_count": graph.edges.len()
+    });
+
+    Ok(CallToolResult::success(vec![Content::text(
+        response.to_string(),
+    )]))
+}
+
+/// Handle graph correlation analyze tool
+async fn handle_graph_correlation_analyze(
+    request: CallToolRequestParam,
+    _server: Arc<NexusServer>,
+) -> Result<CallToolResult, ErrorData> {
+    use nexus_core::graph_correlation::{
+        ArchitecturalPatternDetector, CorrelationGraph, EventDrivenPatternDetector,
+        PatternDetector, PipelinePatternDetector, calculate_statistics,
+    };
+
+    let args = request
+        .arguments
+        .as_ref()
+        .ok_or_else(|| ErrorData::invalid_params("Missing arguments", None))?;
+
+    // Parse graph
+    let graph: CorrelationGraph =
+        serde_json::from_value(args.get("graph").cloned().unwrap_or(json!({})))
+            .map_err(|e| ErrorData::invalid_params(format!("Invalid graph: {}", e), None))?;
+
+    // Parse analysis type
+    let analysis_type = args
+        .get("analysis_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ErrorData::invalid_params("Missing analysis_type", None))?;
+
+    let mut response = json!({
+        "status": "success",
+        "analysis_type": analysis_type
+    });
+
+    // Perform analysis based on type
+    match analysis_type {
+        "statistics" => {
+            let stats = calculate_statistics(&graph);
+            response["statistics"] = serde_json::to_value(&stats).unwrap_or(json!({}));
+        }
+        "patterns" => {
+            let mut all_patterns = Vec::new();
+
+            // Pipeline patterns
+            let pipeline_detector = PipelinePatternDetector;
+            if let Ok(result) = pipeline_detector.detect(&graph) {
+                all_patterns.extend(result.patterns);
+            }
+
+            // Event-driven patterns
+            let event_detector = EventDrivenPatternDetector;
+            if let Ok(result) = event_detector.detect(&graph) {
+                all_patterns.extend(result.patterns);
+            }
+
+            // Architectural patterns
+            let arch_detector = ArchitecturalPatternDetector;
+            if let Ok(result) = arch_detector.detect(&graph) {
+                all_patterns.extend(result.patterns);
+            }
+
+            response["patterns"] = serde_json::to_value(&all_patterns).unwrap_or(json!([]));
+            response["pattern_count"] = json!(all_patterns.len());
+        }
+        "all" => {
+            // Statistics
+            let stats = calculate_statistics(&graph);
+            response["statistics"] = serde_json::to_value(&stats).unwrap_or(json!({}));
+
+            // Patterns
+            let mut all_patterns = Vec::new();
+
+            let pipeline_detector = PipelinePatternDetector;
+            if let Ok(result) = pipeline_detector.detect(&graph) {
+                all_patterns.extend(result.patterns);
+            }
+
+            let event_detector = EventDrivenPatternDetector;
+            if let Ok(result) = event_detector.detect(&graph) {
+                all_patterns.extend(result.patterns);
+            }
+
+            let arch_detector = ArchitecturalPatternDetector;
+            if let Ok(result) = arch_detector.detect(&graph) {
+                all_patterns.extend(result.patterns);
+            }
+
+            response["patterns"] = serde_json::to_value(&all_patterns).unwrap_or(json!([]));
+            response["pattern_count"] = json!(all_patterns.len());
+        }
+        _ => {
+            return Err(ErrorData::invalid_params("Invalid analysis_type", None));
+        }
+    }
+
+    Ok(CallToolResult::success(vec![Content::text(
+        response.to_string(),
+    )]))
+}
+
+/// Handle graph correlation export tool
+async fn handle_graph_correlation_export(
+    request: CallToolRequestParam,
+    _server: Arc<NexusServer>,
+) -> Result<CallToolResult, ErrorData> {
+    use nexus_core::graph_correlation::{CorrelationGraph, ExportFormat, export_graph};
+
+    let args = request
+        .arguments
+        .as_ref()
+        .ok_or_else(|| ErrorData::invalid_params("Missing arguments", None))?;
+
+    // Parse graph
+    let graph: CorrelationGraph =
+        serde_json::from_value(args.get("graph").cloned().unwrap_or(json!({})))
+            .map_err(|e| ErrorData::invalid_params(format!("Invalid graph: {}", e), None))?;
+
+    // Parse format
+    let format_str = args
+        .get("format")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ErrorData::invalid_params("Missing format", None))?;
+
+    let format = match format_str {
+        "JSON" => ExportFormat::Json,
+        "GraphML" => ExportFormat::GraphML,
+        "GEXF" => ExportFormat::GEXF,
+        "DOT" => ExportFormat::DOT,
+        _ => return Err(ErrorData::invalid_params("Invalid format", None)),
+    };
+
+    // Export graph
+    let exported = export_graph(&graph, format)
+        .map_err(|e| ErrorData::internal_error(format!("Failed to export graph: {}", e), None))?;
+
+    let response = json!({
+        "status": "success",
+        "format": format_str,
+        "content": exported
+    });
+
+    Ok(CallToolResult::success(vec![Content::text(
+        response.to_string(),
+    )]))
+}
+
+/// Handle graph correlation types tool
+async fn handle_graph_correlation_types(
+    _request: CallToolRequestParam,
+    _server: Arc<NexusServer>,
+) -> Result<CallToolResult, ErrorData> {
+    let response = json!({
+        "status": "success",
+        "types": ["Call", "Dependency", "DataFlow", "Component"],
+        "descriptions": {
+            "Call": "Function call relationships and execution flow",
+            "Dependency": "Module and package dependency relationships",
+            "DataFlow": "Data flow and transformation pipelines",
+            "Component": "High-level component and module relationships"
+        }
     });
 
     Ok(CallToolResult::success(vec![Content::text(

@@ -6,7 +6,8 @@
 //! - Architectural patterns
 //! - Design patterns
 
-use crate::graph_correlation::{CorrelationGraph, EdgeType, GraphNode, GraphType, NodeType};
+use crate::Result;
+use crate::graph_correlation::{CorrelationGraph, EdgeType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -232,12 +233,11 @@ fn dfs_pipeline_chain(
     let mut chain = vec![node_id.to_string()];
 
     for edge in &graph.edges {
-        if edge.source == node_id {
-            if !visited.contains(&edge.target) {
+        if edge.source == node_id
+            && !visited.contains(&edge.target) {
                 let mut sub_chain = dfs_pipeline_chain(graph, &edge.target, visited);
                 chain.append(&mut sub_chain);
             }
-        }
     }
 
     chain
@@ -253,7 +253,7 @@ fn detect_pub_sub_pattern(graph: &CorrelationGraph) -> Vec<Vec<String>> {
         if edge.edge_type == EdgeType::Uses {
             publishers
                 .entry(edge.source.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(edge.target.clone());
         }
     }
@@ -298,7 +298,7 @@ fn detect_microservices(graph: &CorrelationGraph) -> Vec<Vec<String>> {
             let module = file_path.split('/').next().unwrap_or("unknown");
             service_groups
                 .entry(module.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(node.id.clone());
         }
     }

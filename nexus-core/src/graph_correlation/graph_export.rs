@@ -4,7 +4,6 @@
 
 use crate::Result;
 use crate::graph_correlation::{CorrelationGraph, EdgeType, NodeType};
-use serde::Serialize;
 use std::fmt::Write;
 
 /// Graph export format

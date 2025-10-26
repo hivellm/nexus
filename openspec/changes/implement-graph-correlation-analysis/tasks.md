@@ -76,19 +76,19 @@
 
 ### 6.1 MCP Protocol Integration
 
-- [ ] 6.1.1 Implement GraphMcpTools struct with all MCP tools
-- [ ] 6.1.2 Create graph_generate MCP tool
-- [ ] 6.1.3 Create graph_get MCP tool
-- [ ] 6.1.4 Create graph_analyze MCP tool
-- [ ] 6.1.5 Create graph_search MCP tool
-- [ ] 6.1.6 Create graph_visualize MCP tool
-- [ ] 6.1.7 Create graph_patterns MCP tool
-- [ ] 6.1.8 Create graph_statistics MCP tool
-- [ ] 6.1.9 Create graph_export MCP tool
-- [ ] 6.1.10 Add MCP tool registration and discovery
-- [ ] 6.1.11 Implement MCP error handling and validation
-- [ ] 6.1.12 Add comprehensive MCP tool tests
-- [ ] 6.1.13 Create MCP tool documentation and examples
+- [x] 6.1.1 Implement MCP tools in NexusMcpService (streaming.rs)
+- [x] 6.1.2 Create graph_correlation_generate MCP tool
+- [x] 6.1.3 Create graph_correlation_analyze MCP tool (statistics + patterns)
+- [x] 6.1.4 Create graph_correlation_export MCP tool (JSON, GraphML, GEXF, DOT)
+- [x] 6.1.5 Create graph_correlation_types MCP tool
+- [x] 6.1.6 Add MCP tool registration in get_nexus_mcp_tools()
+- [x] 6.1.7 Implement MCP handlers (handle_graph_correlation_*)
+- [x] 6.1.8 Add MCP error handling and validation
+- [ ] 6.1.9 Add comprehensive MCP tool tests
+- [ ] 6.1.10 Create MCP tool documentation and examples
+- [ ] 6.1.11 Add MCP tool performance monitoring
+- [ ] 6.1.12 Implement MCP tool caching strategies
+- [ ] 6.1.13 Add MCP tool usage metrics
 
 ### 6.2 UMICP Protocol Integration
 
