@@ -346,6 +346,7 @@ LIMIT 5
 - 📐 [**Architecture Guide**](docs/ARCHITECTURE.md) - Complete system design
 - 🗺️ [**Development Roadmap**](docs/ROADMAP.md) - Implementation phases (MVP, V1, V2)
 - 🔗 [**Component DAG**](docs/DAG.md) - Module dependencies and build order
+- 🎯 [**Complete Neo4j Cypher Roadmap**](openspec/changes/) - 14-phase modular implementation plan (32-46 weeks)
 
 ### **Detailed Specifications**
 
@@ -353,7 +354,12 @@ LIMIT 5
 - 📝 [**Cypher Subset**](docs/specs/cypher-subset.md) - Supported query syntax & examples
 - 🧠 [**Page Cache**](docs/specs/page-cache.md) - Memory management & eviction policies
 - 📋 [**WAL & MVCC**](docs/specs/wal-mvcc.md) - Transaction model & crash recovery
-- 🎯 [**KNN Int### **📋 MVP (Phase 1)** - ✅ COMPLETED
+- 🎯 [**KNN Integration**](docs/specs/knn-integration.md) - Vector search implementation
+- 🔌 [**API Protocols**](docs/specs/api-protocols.md) - REST, MCP, UMICP specifications
+- 🎭 [**Graph Correlation**](docs/specs/graph-correlation-analysis.md) - Code relationship analysis
+- 🚀 [**Complete Neo4j Cypher Roadmap**](openspec/changes/) - 14-phase modular implementation plan
+
+### **📋 MVP (Phase 1)** - ✅ COMPLETED
 
 - [x] Architecture documentation
 - [x] Project scaffolding (Rust edition 2024)
@@ -375,6 +381,13 @@ LIMIT 5
 
 ### **🎯 V1 (Phase 2)** - Current Development
 
+- [ ] **Complete Neo4j Cypher Implementation** (14 modular phases)
+  - ✅ Master plan created with 32-46 week timeline
+  - 🔴 Phase 1: Write Operations (MERGE, SET, DELETE, REMOVE) - Ready to start
+  - 🟠 Phases 2-7: Core Cypher features (WITH, OPTIONAL MATCH, functions, schema)
+  - 🟡 Phases 8-12: Production features (import/export, monitoring, UDFs)
+  - 🟢 Phases 13-14: Optional features (graph algorithms, geospatial)
+  - See `openspec/changes/` for complete breakdown
 - [ ] **Advanced Indexes** (B-tree for properties, Tantivy full-text)
 - [ ] **Constraints** (UNIQUE, NOT NULL, CHECK)
 - [ ] **Query Optimization** (cost-based planner with statistics)
@@ -386,7 +399,7 @@ LIMIT 5
 - [ ] **Vectorizer Hybrid Search** (RRF ranking, bidirectional sync)
 - [ ] **Advanced Graph Analysis** (data flow graphs, component graphs, interactive visualization)
 
-**Target**: Q1 2025
+**Target**: Q1-Q4 2025
 
 ### **🚀 V2 (Phase 3)** - Distributed Graph
 
@@ -904,15 +917,23 @@ We welcome contributions! See [**CONTRIBUTING.md**](CONTRIBUTING.md) for guideli
 For significant features, use **OpenSpec** for spec-driven development:
 
 ```bash
-# Check existing specs
-openspec list --specs
+# View all active changes
+cat openspec/changes/README.md
 
-# Create proposal
-openspec init add-my-feature
+# Complete Neo4j Cypher implementation (14 phases)
+# Start with Phase 1: Write Operations
+cd openspec/changes/implement-cypher-write-operations/
 
-# Validate proposal
-openspec validate add-my-feature --strict
+# Check proposal and tasks
+cat proposal.md
+cat tasks.md
 ```
+
+**Current Active Changes:**
+- 🎯 **Complete Neo4j Cypher** - Master plan with 14 modular phases (32-46 weeks)
+- 🔴 **Phase 1 Ready**: Write Operations (MERGE, SET, DELETE, REMOVE)
+- 🔍 **Graph Correlation Analysis** - Call graphs, dependency analysis (47.5% complete)
+- 🔐 **Authentication System** - API keys, RBAC, rate limiting (48.6% complete)
 
 See `openspec/AGENTS.md` for complete workflow.
 

@@ -5,7 +5,7 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.0] - 2025-10-25
+## [0.8.0] - 2025-10-26
 
 ### Fixed
 
@@ -36,6 +36,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Archived 4 MVP changes to `archive/2025-10-25-*` (198 tasks complete)
   - Documented bonus modules: ~10,000 lines beyond MVP scope
   - Updated all tasks.md with implementation status
+
+- **Modular OpenSpec Structure for Complete Neo4j Cypher Implementation** ✅
+  - Created master tracker `implement-cypher-complete-clauses/` (MASTER PLAN)
+  - Split massive 554-task proposal into **14 manageable phases**
+  - Each phase has dedicated `proposal.md` + `tasks.md` files
+  - Added comprehensive `openspec/changes/README.md` for navigation
+  - **Phase 1**: Write Operations (MERGE, SET, DELETE, REMOVE) - Ready to start
+  - **Phase 2**: Query Composition (WITH, OPTIONAL MATCH, UNWIND, UNION)
+  - **Phase 3**: Advanced Features (FOREACH, EXISTS, CASE, comprehensions)
+  - **Phase 4**: String Operations (STARTS WITH, ENDS WITH, CONTAINS, regex)
+  - **Phase 5**: Path Operations (variable-length, shortest path, all paths)
+  - **Phase 6**: Built-in Functions (50+ functions: string, math, list, aggregation)
+  - **Phase 7**: Schema & Admin (indexes, constraints, transactions)
+  - **Phase 8**: Data Import/Export (LOAD CSV, bulk operations)
+  - **Phase 9**: Query Analysis (EXPLAIN, PROFILE, hints)
+  - **Phase 10**: Advanced DB Features (USE DATABASE, subqueries, named paths)
+  - **Phase 11**: Performance Monitoring (metrics, slow queries, statistics)
+  - **Phase 12**: UDF & Procedures (user-defined functions, plugin system)
+  - **Phase 13**: Graph Algorithms (pathfinding, centrality, community detection)
+  - **Phase 14**: Geospatial Support (Point, Distance, spatial indexes)
+  - Total timeline: **32-46 weeks** for full Neo4j Cypher compatibility
+  - Clear dependencies and implementation order defined
 
 - **Discovered Modules** ✅
   - Authentication system (5 files, 82 items, Argon2 + RBAC)
