@@ -84,11 +84,19 @@
 - [x] 6.1.6 Add MCP tool registration in get_nexus_mcp_tools()
 - [x] 6.1.7 Implement MCP handlers (handle_graph_correlation_*)
 - [x] 6.1.8 Add MCP error handling and validation
-- [ ] 6.1.9 Add comprehensive MCP tool tests
-- [ ] 6.1.10 Create MCP tool documentation and examples
-- [ ] 6.1.11 Add MCP tool performance monitoring
-- [ ] 6.1.12 Implement MCP tool caching strategies
-- [ ] 6.1.13 Add MCP tool usage metrics
+- [x] 6.1.9 Add graph normalization for partial structures ✅ (v0.9.0)
+- [x] 6.1.10 Fix create_node tool to return node_id ✅ (v0.9.0)
+- [ ] 6.1.11 Add comprehensive MCP tool tests
+- [ ] 6.1.12 Create MCP tool documentation and examples
+- [ ] 6.1.13 Add MCP tool performance monitoring
+- [ ] 6.1.14 Implement MCP tool caching strategies
+- [ ] 6.1.15 Add MCP tool usage metrics
+
+**Recent Fixes (v0.9.0)**:
+- ✅ graph_correlation_analyze now accepts partial graphs with auto-normalization
+- ✅ create_node tool returns node_id correctly via Engine integration
+- ✅ All MCP tools now use Engine for persistence
+- Commits: a2857da, 417be25
 
 ### 6.2 UMICP Protocol Integration
 

@@ -1,7 +1,31 @@
 # Implementation Tasks - Cypher Write Operations
 
+**Status**: ⚠️ PARTIALLY STARTED (v0.9.0)
+
+**Recent Implementation (2025-10-26)**:
+- ✅ CREATE clause parsing and execution (v0.9.0)
+- ✅ MergeClause added to parser AST
+- ✅ Engine integration for node persistence
+- ⏳ MERGE semantics implementation pending
+- ⏳ SET, DELETE, REMOVE clauses pending
+
+## 0. CREATE Clause (COMPLETED ✅)
+
+- [x] 0.1 CREATE clause parsing in parser.rs
+- [x] 0.2 CREATE execution via Engine integration
+- [x] 0.3 Property parsing with proper whitespace handling
+- [x] 0.4 Node creation with labels and properties
+- [x] 0.5 Parser fixes for clause recognition
+- [x] 0.6 Integration tests for CREATE operations
+
+**Implemented in**:
+- Commit: 51bbb32 (parser fixes)
+- Commit: 417be25 (CREATE persistence)
+- Files: `nexus-core/src/executor/parser.rs`, `nexus-server/src/api/cypher.rs`
+
 ## 1. MERGE Clause
-- [ ] 1.1 Add MergeClause to parser
+
+- [x] 1.1 Add MergeClause to parser AST ✅ (v0.9.0)
 - [ ] 1.2 Implement match-or-create semantics
 - [ ] 1.3 Add ON CREATE/ON MATCH support
 - [ ] 1.4 Add MERGE tests
@@ -27,3 +51,8 @@
 - [ ] 5.1 95%+ coverage
 - [ ] 5.2 No clippy warnings
 - [ ] 5.3 Update documentation
+
+---
+
+**Progress**: 6/23 tasks (26% complete)  
+**Next Priority**: Implement MERGE match-or-create semantics (Task 1.2)
