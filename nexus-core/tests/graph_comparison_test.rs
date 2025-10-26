@@ -3,7 +3,7 @@
 use nexus_core::catalog::Catalog;
 use nexus_core::graph::simple::PropertyValue;
 use nexus_core::graph::{Edge, EdgeId, Graph, Node, NodeId};
-use nexus_core::graph_comparison::{
+use nexus_core::graph::comparison::{
     ComparisonOptions, ComponentChange, DiffSummary, EdgeChanges, GraphComparator, GraphDiff,
     GraphMetrics, MetricsComparison, NodeChanges, PropertyValueChange, TopologyAnalysis,
 };
@@ -905,7 +905,7 @@ fn test_graph_diff_creation() {
     );
     let original = create_test_node(3, vec!["Person".to_string()], props.clone());
     let modified = create_test_node(3, vec!["Person".to_string(), "Employee".to_string()], props);
-    modified_nodes.push(nexus_core::graph_comparison::NodeModification {
+    modified_nodes.push(nexus_core::graph::comparison::NodeModification {
         node_id: NodeId::new(3),
         original,
         modified,
@@ -939,7 +939,7 @@ fn test_graph_diff_creation() {
     let mut modified_props = HashMap::new();
     modified_props.insert("weight".to_string(), PropertyValue::Float64(1.0));
     let modified_edge = create_test_edge(3, 1, 3, "KNOWS".to_string(), modified_props);
-    modified_edges.push(nexus_core::graph_comparison::EdgeModification {
+    modified_edges.push(nexus_core::graph::comparison::EdgeModification {
         edge_id: EdgeId::new(3),
         original: original_edge,
         modified: modified_edge,
