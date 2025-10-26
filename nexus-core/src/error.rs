@@ -90,6 +90,22 @@ pub enum Error {
     /// Generic internal error
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Deadlock detected
+    #[error("Deadlock detected: {0}")]
+    DeadlockDetected(String),
+
+    /// Lock timeout
+    #[error("Lock timeout: {0}")]
+    LockTimeout(String),
+
+    /// Out of memory
+    #[error("Out of memory: {0}")]
+    OutOfMemory(String),
+
+    /// Invalid input
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl Error {
@@ -136,5 +152,25 @@ impl Error {
     /// Create an internal error
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())
+    }
+
+    /// Create a deadlock detected error
+    pub fn deadlock_detected(msg: impl Into<String>) -> Self {
+        Self::DeadlockDetected(msg.into())
+    }
+
+    /// Create a lock timeout error
+    pub fn lock_timeout(msg: impl Into<String>) -> Self {
+        Self::LockTimeout(msg.into())
+    }
+
+    /// Create an out of memory error
+    pub fn out_of_memory(msg: impl Into<String>) -> Self {
+        Self::OutOfMemory(msg.into())
+    }
+
+    /// Create an invalid input error
+    pub fn invalid_input(msg: impl Into<String>) -> Self {
+        Self::InvalidInput(msg.into())
     }
 }

@@ -20,6 +20,7 @@
 //! - Multiple export formats (JSON, GraphML, GEXF)
 
 use crate::{Error, Result};
+use crate::vectorizer_cache::{QueryMetadata, VectorizerCache};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -1128,7 +1129,7 @@ impl Default for GraphCorrelationManager {
 pub trait CollectionQuery {
     /// Execute the query and return results
     #[allow(async_fn_in_trait)]
-    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult>;
+    async fn execute(&self, executor: &QueryExecutor) -> Result<QueryResult>;
 
     /// Get the collection name for this query
     fn collection(&self) -> &str;
@@ -1145,7 +1146,7 @@ pub enum CollectionQueryEnum {
 }
 
 impl CollectionQuery for CollectionQueryEnum {
-    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+    async fn execute(&self, executor: &QueryExecutor) -> Result<QueryResult> {
         match self {
             CollectionQueryEnum::Semantic(query) => query.execute(executor).await,
             CollectionQueryEnum::Metadata(query) => query.execute(executor).await,
@@ -1222,7 +1223,7 @@ impl SemanticQuery {
 }
 
 impl CollectionQuery for SemanticQuery {
-    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+    async fn execute(&self, executor: &QueryExecutor) -> Result<QueryResult> {
         executor.execute_semantic_query(self).await
     }
 
@@ -1315,7 +1316,7 @@ impl MetadataQuery {
 }
 
 impl CollectionQuery for MetadataQuery {
-    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+    async fn execute(&self, executor: &QueryExecutor) -> Result<QueryResult> {
         executor.execute_metadata_query(self).await
     }
 
@@ -1407,7 +1408,7 @@ impl HybridQuery {
 }
 
 impl CollectionQuery for HybridQuery {
-    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+    async fn execute(&self, executor: &QueryExecutor) -> Result<QueryResult> {
         executor.execute_hybrid_query(self).await
     }
 
@@ -1624,16 +1625,12 @@ impl QueryBuilder {
 }
 
 /// Query executor for running queries via MCP
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct QueryExecutor {
     /// MCP client for vectorizer communication
     mcp_client: Option<serde_json::Value>,
-    /// Cache for query results
-    query_cache: std::collections::HashMap<String, QueryResult>,
-    /// Cache TTL in seconds
-    cache_ttl_seconds: u64,
-    /// Cache timestamps
-    cache_timestamps: std::collections::HashMap<String, std::time::SystemTime>,
+    /// Advanced cache for query results
+    vectorizer_cache: VectorizerCache,
 }
 
 impl QueryExecutor {
@@ -1641,9 +1638,15 @@ impl QueryExecutor {
     pub fn new() -> Self {
         Self {
             mcp_client: None,
-            query_cache: std::collections::HashMap::new(),
-            cache_ttl_seconds: 3600, // 1 hour default
-            cache_timestamps: std::collections::HashMap::new(),
+            vectorizer_cache: VectorizerCache::new(),
+        }
+    }
+
+    /// Create a new query executor with custom cache configuration
+    pub fn with_cache_config(config: crate::vectorizer_cache::CacheConfig) -> Self {
+        Self {
+            mcp_client: None,
+            vectorizer_cache: VectorizerCache::with_config(config),
         }
     }
 
@@ -1652,18 +1655,33 @@ impl QueryExecutor {
         self.mcp_client = Some(client);
     }
 
-    /// Set the cache TTL
-    pub fn set_cache_ttl(&mut self, ttl_seconds: u64) {
-        self.cache_ttl_seconds = ttl_seconds;
+    /// Get cache statistics
+    pub async fn get_cache_statistics(&self) -> crate::vectorizer_cache::CacheStatistics {
+        self.vectorizer_cache.get_statistics().await
+    }
+
+    /// Get cache metrics
+    pub async fn get_cache_metrics(&self) -> crate::performance::cache::CacheMetrics {
+        self.vectorizer_cache.get_metrics().await
+    }
+
+    /// Clear the cache
+    pub async fn clear_cache(&self) -> Result<()> {
+        self.vectorizer_cache.clear().await
+    }
+
+    /// Invalidate cache entries matching a pattern
+    pub async fn invalidate_cache_pattern(&self, pattern: &str) -> Result<usize> {
+        self.vectorizer_cache.invalidate_pattern(pattern).await
     }
 
     /// Execute a semantic query
-    pub async fn execute_semantic_query(&mut self, query: &SemanticQuery) -> Result<QueryResult> {
+    pub async fn execute_semantic_query(&self, query: &SemanticQuery) -> Result<QueryResult> {
         let cache_key = format!("semantic:{}:{}", query.collection, query.query);
 
         // Check cache first
-        if let Some(cached_result) = self.get_cached_result(&cache_key) {
-            return Ok(cached_result);
+        if let Some(cached_result) = self.vectorizer_cache.get(&cache_key).await? {
+            return Ok(serde_json::from_value(cached_result)?);
         }
 
         let start_time = std::time::SystemTime::now();
@@ -1692,13 +1710,28 @@ impl QueryExecutor {
             );
 
         // Cache the result
-        self.cache_result(cache_key, result.clone());
+        let query_metadata = QueryMetadata {
+            query_type: "semantic".to_string(),
+            collection: query.collection.clone(),
+            query_string: query.query.clone(),
+            threshold: query.threshold,
+            limit: query.limit,
+            filters: None,
+        };
+
+        let result_json = serde_json::to_value(&result)?;
+        self.vectorizer_cache.put(
+            cache_key,
+            result_json,
+            query_metadata,
+            None,
+        ).await?;
 
         Ok(result)
     }
 
     /// Execute a metadata query
-    pub async fn execute_metadata_query(&mut self, query: &MetadataQuery) -> Result<QueryResult> {
+    pub async fn execute_metadata_query(&self, query: &MetadataQuery) -> Result<QueryResult> {
         let cache_key = format!(
             "metadata:{}:{}",
             query.collection,
@@ -1706,8 +1739,8 @@ impl QueryExecutor {
         );
 
         // Check cache first
-        if let Some(cached_result) = self.get_cached_result(&cache_key) {
-            return Ok(cached_result);
+        if let Some(cached_result) = self.vectorizer_cache.get(&cache_key).await? {
+            return Ok(serde_json::from_value(cached_result)?);
         }
 
         let start_time = std::time::SystemTime::now();
@@ -1737,13 +1770,28 @@ impl QueryExecutor {
             );
 
         // Cache the result
-        self.cache_result(cache_key, result.clone());
+        let query_metadata = QueryMetadata {
+            query_type: "metadata".to_string(),
+            collection: query.collection.clone(),
+            query_string: serde_json::to_string(&query.filters).unwrap_or_default(),
+            threshold: None,
+            limit: query.limit,
+            filters: Some(serde_json::to_value(&query.filters)?),
+        };
+
+        let result_json = serde_json::to_value(&result)?;
+        self.vectorizer_cache.put(
+            cache_key,
+            result_json,
+            query_metadata,
+            None,
+        ).await?;
 
         Ok(result)
     }
 
     /// Execute a hybrid query
-    pub async fn execute_hybrid_query(&mut self, query: &HybridQuery) -> Result<QueryResult> {
+    pub async fn execute_hybrid_query(&self, query: &HybridQuery) -> Result<QueryResult> {
         let cache_key = format!(
             "hybrid:{}:{}:{}",
             query.collection,
@@ -1752,8 +1800,8 @@ impl QueryExecutor {
         );
 
         // Check cache first
-        if let Some(cached_result) = self.get_cached_result(&cache_key) {
-            return Ok(cached_result);
+        if let Some(cached_result) = self.vectorizer_cache.get(&cache_key).await? {
+            return Ok(serde_json::from_value(cached_result)?);
         }
 
         let start_time = std::time::SystemTime::now();
@@ -1805,29 +1853,26 @@ impl QueryExecutor {
         );
 
         // Cache the result
-        self.cache_result(cache_key, result.clone());
+        let query_metadata = QueryMetadata {
+            query_type: "hybrid".to_string(),
+            collection: query.collection.clone(),
+            query_string: format!("{} + {}", query.semantic_query, serde_json::to_string(&query.metadata_filters).unwrap_or_default()),
+            threshold: query.threshold,
+            limit: query.limit,
+            filters: Some(serde_json::to_value(&query.metadata_filters)?),
+        };
+
+        let result_json = serde_json::to_value(&result)?;
+        self.vectorizer_cache.put(
+            cache_key,
+            result_json,
+            query_metadata,
+            None,
+        ).await?;
 
         Ok(result)
     }
 
-    /// Get a cached result if it's still valid
-    fn get_cached_result(&self, cache_key: &str) -> Option<QueryResult> {
-        if let Some(timestamp) = self.cache_timestamps.get(cache_key) {
-            if let Ok(elapsed) = timestamp.elapsed() {
-                if elapsed.as_secs() < self.cache_ttl_seconds {
-                    return self.query_cache.get(cache_key).cloned();
-                }
-            }
-        }
-        None
-    }
-
-    /// Cache a query result
-    fn cache_result(&mut self, cache_key: String, result: QueryResult) {
-        self.query_cache.insert(cache_key.clone(), result);
-        self.cache_timestamps
-            .insert(cache_key, std::time::SystemTime::now());
-    }
 
     /// Perform MCP semantic search (placeholder implementation)
     async fn perform_mcp_semantic_search(

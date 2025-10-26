@@ -3,11 +3,9 @@
 //! Provides tools for visualizing performance data including charts,
 //! graphs, and performance dashboards.
 
-use crate::performance::{
-    CacheMetrics, QueryProfile, SystemMetrics
-};
 use crate::performance::benchmarking::BenchmarkResult;
 use crate::performance::memory::MemoryStatistics;
+use crate::performance::{CacheMetrics, QueryProfile, SystemMetrics};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -36,33 +34,22 @@ impl PerformanceVisualizer {
         query_profiles: &[QueryProfile],
         benchmark_results: &[BenchmarkResult],
     ) -> PerformanceDashboard {
-        let mut dashboard = PerformanceDashboard::default();
-
-        // System metrics charts
-        dashboard.system_charts = self.generate_system_charts(system_metrics).await;
-
-        // Memory charts
-        dashboard.memory_charts = self.generate_memory_charts(memory_stats).await;
-
-        // Cache charts
-        dashboard.cache_charts = self.generate_cache_charts(cache_metrics).await;
-
-        // Query performance charts
-        dashboard.query_charts = self.generate_query_charts(query_profiles).await;
-
-        // Benchmark charts
-        dashboard.benchmark_charts = self.generate_benchmark_charts(benchmark_results).await;
-
-        // Performance summary
-        dashboard.summary = self.generate_performance_summary(
-            system_metrics,
-            memory_stats,
-            cache_metrics,
-            query_profiles,
-            benchmark_results,
-        ).await;
-
-        dashboard
+        PerformanceDashboard {
+            system_charts: self.generate_system_charts(system_metrics).await,
+            memory_charts: self.generate_memory_charts(memory_stats).await,
+            cache_charts: self.generate_cache_charts(cache_metrics).await,
+            query_charts: self.generate_query_charts(query_profiles).await,
+            benchmark_charts: self.generate_benchmark_charts(benchmark_results).await,
+            summary: self
+                .generate_performance_summary(
+                    system_metrics,
+                    memory_stats,
+                    cache_metrics,
+                    query_profiles,
+                    benchmark_results,
+                )
+                .await,
+        }
     }
 
     /// Generate system performance charts
@@ -74,7 +61,8 @@ impl PerformanceVisualizer {
         }
 
         // CPU usage chart
-        let cpu_data = metrics.iter()
+        let cpu_data = metrics
+            .iter()
             .map(|m| ChartDataPoint {
                 timestamp: m.timestamp,
                 value: m.cpu_usage,
@@ -92,7 +80,8 @@ impl PerformanceVisualizer {
         });
 
         // Memory usage chart
-        let memory_data = metrics.iter()
+        let memory_data = metrics
+            .iter()
             .map(|m| ChartDataPoint {
                 timestamp: m.timestamp,
                 value: m.memory_usage as f64 / 1024.0 / 1024.0, // Convert to MB
@@ -110,7 +99,8 @@ impl PerformanceVisualizer {
         });
 
         // Disk usage chart
-        let disk_data = metrics.iter()
+        let disk_data = metrics
+            .iter()
             .map(|m| ChartDataPoint {
                 timestamp: m.timestamp,
                 value: m.disk_usage,
@@ -139,7 +129,8 @@ impl PerformanceVisualizer {
         }
 
         // Memory pressure chart
-        let pressure_data = stats.iter()
+        let pressure_data = stats
+            .iter()
             .enumerate()
             .map(|(i, s)| ChartDataPoint {
                 timestamp: Instant::now(), // Placeholder
@@ -193,7 +184,8 @@ impl PerformanceVisualizer {
         }
 
         // Cache hit rate chart
-        let hit_rate_data = metrics.iter()
+        let hit_rate_data = metrics
+            .iter()
             .enumerate()
             .map(|(i, m)| ChartDataPoint {
                 timestamp: Instant::now(), // Placeholder
@@ -212,10 +204,11 @@ impl PerformanceVisualizer {
         });
 
         // Cache size chart
-        let size_data = metrics.iter()
+        let size_data = metrics
+            .iter()
             .enumerate()
             .map(|(i, m)| ChartDataPoint {
-                timestamp: Instant::now(), // Placeholder
+                timestamp: Instant::now(),                    // Placeholder
                 value: m.cache_size as f64 / 1024.0 / 1024.0, // Convert to MB
                 label: Some(format!("Sample {}", i)),
             })
@@ -278,7 +271,8 @@ impl PerformanceVisualizer {
         });
 
         // Memory usage per query
-        let memory_data = profiles.iter()
+        let memory_data = profiles
+            .iter()
             .enumerate()
             .map(|(i, p)| ChartDataPoint {
                 timestamp: Instant::now(),
@@ -308,7 +302,8 @@ impl PerformanceVisualizer {
         }
 
         // Throughput comparison
-        let throughput_data = results.iter()
+        let throughput_data = results
+            .iter()
             .map(|r| ChartDataPoint {
                 timestamp: Instant::now(),
                 value: r.throughput,
@@ -326,7 +321,8 @@ impl PerformanceVisualizer {
         });
 
         // Latency comparison
-        let latency_data = results.iter()
+        let latency_data = results
+            .iter()
             .map(|r| ChartDataPoint {
                 timestamp: Instant::now(),
                 value: r.avg_duration.as_millis() as f64,
@@ -378,12 +374,15 @@ impl PerformanceVisualizer {
 
         // Query summary
         if !query_profiles.is_empty() {
-            let avg_execution_time: Duration = query_profiles.iter()
+            let avg_execution_time: Duration = query_profiles
+                .iter()
                 .map(|p| p.execution_time)
-                .sum::<Duration>() / query_profiles.len() as u32;
+                .sum::<Duration>()
+                / query_profiles.len() as u32;
             summary.avg_query_time = avg_execution_time;
 
-            let slow_queries = query_profiles.iter()
+            let slow_queries = query_profiles
+                .iter()
                 .filter(|p| p.execution_time > Duration::from_millis(100))
                 .count();
             summary.slow_queries = slow_queries;
@@ -391,14 +390,15 @@ impl PerformanceVisualizer {
 
         // Benchmark summary
         if !benchmark_results.is_empty() {
-            let avg_throughput: f64 = benchmark_results.iter()
-                .map(|r| r.throughput)
-                .sum::<f64>() / benchmark_results.len() as f64;
+            let avg_throughput: f64 = benchmark_results.iter().map(|r| r.throughput).sum::<f64>()
+                / benchmark_results.len() as f64;
             summary.avg_throughput = avg_throughput;
 
-            let avg_latency: Duration = benchmark_results.iter()
+            let avg_latency: Duration = benchmark_results
+                .iter()
                 .map(|r| r.avg_duration)
-                .sum::<Duration>() / benchmark_results.len() as u32;
+                .sum::<Duration>()
+                / benchmark_results.len() as u32;
             summary.avg_latency = avg_latency;
         }
 
@@ -410,7 +410,7 @@ impl PerformanceVisualizer {
 
     /// Calculate overall health score (0-100)
     fn calculate_health_score(&self, summary: &PerformanceSummary) -> f64 {
-        let mut score = 100.0;
+        let mut score: f64 = 100.0;
 
         // CPU penalty
         if summary.cpu_usage > 90.0 {
@@ -447,7 +447,7 @@ impl PerformanceVisualizer {
             score -= 10.0;
         }
 
-        score.max(0.0_f64)
+        score.max(0.0)
     }
 
     /// Export dashboard as JSON
@@ -458,7 +458,7 @@ impl PerformanceVisualizer {
     /// Export dashboard as HTML
     pub async fn export_dashboard_html(&self, dashboard: &PerformanceDashboard) -> String {
         let mut html = String::new();
-        
+
         html.push_str("<!DOCTYPE html>\n");
         html.push_str("<html>\n<head>\n");
         html.push_str("<title>Nexus Performance Dashboard</title>\n");
@@ -469,36 +469,51 @@ impl PerformanceVisualizer {
         // System charts
         html.push_str("<h2>System Performance</h2>\n");
         for chart in &dashboard.system_charts {
-            html.push_str(&format!("<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n", 
-                chart.title, chart.title.replace(" ", "_").to_lowercase()));
+            html.push_str(&format!(
+                "<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n",
+                chart.title,
+                chart.title.replace(" ", "_").to_lowercase()
+            ));
         }
 
         // Memory charts
         html.push_str("<h2>Memory Performance</h2>\n");
         for chart in &dashboard.memory_charts {
-            html.push_str(&format!("<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n", 
-                chart.title, chart.title.replace(" ", "_").to_lowercase()));
+            html.push_str(&format!(
+                "<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n",
+                chart.title,
+                chart.title.replace(" ", "_").to_lowercase()
+            ));
         }
 
         // Cache charts
         html.push_str("<h2>Cache Performance</h2>\n");
         for chart in &dashboard.cache_charts {
-            html.push_str(&format!("<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n", 
-                chart.title, chart.title.replace(" ", "_").to_lowercase()));
+            html.push_str(&format!(
+                "<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n",
+                chart.title,
+                chart.title.replace(" ", "_").to_lowercase()
+            ));
         }
 
         // Query charts
         html.push_str("<h2>Query Performance</h2>\n");
         for chart in &dashboard.query_charts {
-            html.push_str(&format!("<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n", 
-                chart.title, chart.title.replace(" ", "_").to_lowercase()));
+            html.push_str(&format!(
+                "<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n",
+                chart.title,
+                chart.title.replace(" ", "_").to_lowercase()
+            ));
         }
 
         // Benchmark charts
         html.push_str("<h2>Benchmark Performance</h2>\n");
         for chart in &dashboard.benchmark_charts {
-            html.push_str(&format!("<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n", 
-                chart.title, chart.title.replace(" ", "_").to_lowercase()));
+            html.push_str(&format!(
+                "<div><h3>{}</h3><canvas id=\"{}\"></canvas></div>\n",
+                chart.title,
+                chart.title.replace(" ", "_").to_lowercase()
+            ));
         }
 
         html.push_str("</body>\n</html>");
@@ -513,19 +528,10 @@ impl Default for PerformanceVisualizer {
 }
 
 /// Visualization configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VisualizationConfig {
     pub chart_config: ChartConfig,
     pub dashboard_config: DashboardConfig,
-}
-
-impl Default for VisualizationConfig {
-    fn default() -> Self {
-        Self {
-            chart_config: ChartConfig::default(),
-            dashboard_config: DashboardConfig::default(),
-        }
-    }
 }
 
 /// Chart configuration
@@ -591,8 +597,9 @@ pub struct Chart {
 }
 
 /// Chart data point
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChartDataPoint {
+    #[serde(with = "serde_millis")]
     pub timestamp: Instant,
     pub value: f64,
     pub label: Option<String>,
@@ -641,29 +648,27 @@ mod tests {
     #[tokio::test]
     async fn test_dashboard_generation() {
         let visualizer = PerformanceVisualizer::default();
-        
-        let system_metrics = vec![
-            SystemMetrics {
-                cpu_usage: 50.0,
-                memory_usage: 1024 * 1024 * 1024, // 1GB
-                memory_available: 1024 * 1024 * 1024, // 1GB
-                disk_usage: 60.0,
-                network_io: crate::performance::NetworkMetrics {
-                    bytes_sent: 1000,
-                    bytes_received: 2000,
-                    packets_sent: 10,
-                    packets_received: 20,
-                },
-                cache_metrics: crate::performance::CacheMetrics {
-                    hit_rate: 0.8,
-                    miss_rate: 0.2,
-                    total_requests: 1000,
-                    cache_size: 1024,
-                    evictions: 5,
-                },
-                timestamp: Instant::now(),
+
+        let system_metrics = vec![SystemMetrics {
+            cpu_usage: 50.0,
+            memory_usage: 1024 * 1024 * 1024,     // 1GB
+            memory_available: 1024 * 1024 * 1024, // 1GB
+            disk_usage: 60.0,
+            network_io: crate::performance::NetworkMetrics {
+                bytes_sent: 1000,
+                bytes_received: 2000,
+                packets_sent: 10,
+                packets_received: 20,
             },
-        ];
+            cache_metrics: crate::performance::CacheMetrics {
+                hit_rate: 0.8,
+                miss_rate: 0.2,
+                total_requests: 1000,
+                cache_size: 1024,
+                evictions: 5,
+            },
+            timestamp: Instant::now(),
+        }];
 
         let memory_stats = vec![MemoryStatistics::default()];
         let cache_metrics = vec![CacheMetrics {
@@ -676,13 +681,15 @@ mod tests {
         let query_profiles = vec![];
         let benchmark_results = vec![];
 
-        let dashboard = visualizer.generate_dashboard(
-            &system_metrics,
-            &memory_stats,
-            &cache_metrics,
-            &query_profiles,
-            &benchmark_results,
-        ).await;
+        let dashboard = visualizer
+            .generate_dashboard(
+                &system_metrics,
+                &memory_stats,
+                &cache_metrics,
+                &query_profiles,
+                &benchmark_results,
+            )
+            .await;
 
         assert!(!dashboard.system_charts.is_empty());
         assert!(!dashboard.memory_charts.is_empty());
@@ -693,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn test_health_score_calculation() {
         let visualizer = PerformanceVisualizer::default();
-        
+
         let summary = PerformanceSummary {
             cpu_usage: 95.0, // High CPU
             memory_usage: 1024 * 1024 * 1024,
@@ -703,7 +710,7 @@ mod tests {
             cache_hit_rate: 0.6, // Low hit rate
             cache_size: 1024,
             avg_query_time: Duration::from_millis(1500), // Slow queries
-            slow_queries: 15, // Many slow queries
+            slow_queries: 15,                            // Many slow queries
             avg_throughput: 100.0,
             avg_latency: Duration::from_millis(100),
             health_score: 0.0, // Will be calculated
@@ -717,7 +724,7 @@ mod tests {
     async fn test_export_dashboard_json() {
         let visualizer = PerformanceVisualizer::default();
         let dashboard = PerformanceDashboard::default();
-        
+
         let json = visualizer.export_dashboard_json(&dashboard).await;
         assert!(!json.is_empty());
         assert!(json.contains("system_charts"));
@@ -727,7 +734,7 @@ mod tests {
     async fn test_export_dashboard_html() {
         let visualizer = PerformanceVisualizer::default();
         let dashboard = PerformanceDashboard::default();
-        
+
         let html = visualizer.export_dashboard_html(&dashboard).await;
         assert!(!html.is_empty());
         assert!(html.contains("<!DOCTYPE html>"));

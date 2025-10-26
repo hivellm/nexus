@@ -33,39 +33,63 @@ impl PerformanceBenchmark {
         let mut results = Vec::new();
 
         // Micro-benchmarks
-        results.push(self.run_micro_benchmark("memory_allocation", |_| async {
-            self.benchmark_memory_allocation().await
-        }).await?);
-        
-        results.push(self.run_micro_benchmark("cache_operations", |_| async {
-            self.benchmark_cache_operations().await
-        }).await?);
-        
-        results.push(self.run_micro_benchmark("string_operations", |_| async {
-            self.benchmark_string_operations().await
-        }).await?);
+        results.push(
+            self.run_micro_benchmark("memory_allocation", |_| async {
+                self.benchmark_memory_allocation().await
+            })
+            .await?,
+        );
+
+        results.push(
+            self.run_micro_benchmark("cache_operations", |_| async {
+                self.benchmark_cache_operations().await
+            })
+            .await?,
+        );
+
+        results.push(
+            self.run_micro_benchmark("string_operations", |_| async {
+                self.benchmark_string_operations().await
+            })
+            .await?,
+        );
 
         // Macro-benchmarks
-        results.push(self.run_macro_benchmark("query_execution", |_| async {
-            self.benchmark_query_execution().await
-        }).await?);
-        
-        results.push(self.run_macro_benchmark("data_ingestion", |_| async {
-            self.benchmark_data_ingestion().await
-        }).await?);
-        
-        results.push(self.run_macro_benchmark("concurrent_operations", |_| async {
-            self.benchmark_concurrent_operations().await
-        }).await?);
+        results.push(
+            self.run_macro_benchmark("query_execution", |_| async {
+                self.benchmark_query_execution().await
+            })
+            .await?,
+        );
+
+        results.push(
+            self.run_macro_benchmark("data_ingestion", |_| async {
+                self.benchmark_data_ingestion().await
+            })
+            .await?,
+        );
+
+        results.push(
+            self.run_macro_benchmark("concurrent_operations", |_| async {
+                self.benchmark_concurrent_operations().await
+            })
+            .await?,
+        );
 
         // System benchmarks
-        results.push(self.run_system_benchmark("cpu_intensive", |_| async {
-            self.benchmark_cpu_intensive_operations().await
-        }).await?);
-        
-        results.push(self.run_system_benchmark("io_intensive", |_| async {
-            self.benchmark_io_intensive_operations().await
-        }).await?);
+        results.push(
+            self.run_system_benchmark("cpu_intensive", |_| async {
+                self.benchmark_cpu_intensive_operations().await
+            })
+            .await?,
+        );
+
+        results.push(
+            self.run_system_benchmark("io_intensive", |_| async {
+                self.benchmark_io_intensive_operations().await
+            })
+            .await?,
+        );
 
         // Store results
         {
@@ -96,19 +120,27 @@ impl PerformanceBenchmark {
 
         // Warmup
         for _ in 0..self.config.warmup_iterations {
-            let _ = benchmark_fn(0);
+            let _ = benchmark_fn(0).await;
         }
 
         // Actual benchmark
         for i in 0..iterations {
-            let duration = benchmark_fn(i)?;
+            let duration = benchmark_fn(i).await?;
             durations.push(duration);
             total_duration += duration;
         }
 
         let avg_duration = total_duration / iterations as u32;
-        let min_duration = durations.iter().min().copied().unwrap_or(Duration::new(0, 0));
-        let max_duration = durations.iter().max().copied().unwrap_or(Duration::new(0, 0));
+        let min_duration = durations
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(Duration::new(0, 0));
+        let max_duration = durations
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or(Duration::new(0, 0));
 
         // Calculate standard deviation
         let variance = durations
@@ -141,13 +173,14 @@ impl PerformanceBenchmark {
     }
 
     /// Run a macro-benchmark
-    async fn run_macro_benchmark<F>(
+    async fn run_macro_benchmark<F, Fut>(
         &self,
         name: &str,
         benchmark_fn: F,
     ) -> Result<BenchmarkResult, Box<dyn std::error::Error>>
     where
-        F: Fn(usize) -> Result<Duration, Box<dyn std::error::Error>>,
+        F: Fn(usize) -> Fut,
+        Fut: std::future::Future<Output = Result<Duration, Box<dyn std::error::Error>>>,
     {
         let iterations = self.config.macro_benchmark_iterations;
         let mut durations = Vec::new();
@@ -155,19 +188,27 @@ impl PerformanceBenchmark {
 
         // Warmup
         for _ in 0..self.config.warmup_iterations {
-            let _ = benchmark_fn(0);
+            let _ = benchmark_fn(0).await;
         }
 
         // Actual benchmark
         for i in 0..iterations {
-            let duration = benchmark_fn(i)?;
+            let duration = benchmark_fn(i).await?;
             durations.push(duration);
             total_duration += duration;
         }
 
         let avg_duration = total_duration / iterations as u32;
-        let min_duration = durations.iter().min().copied().unwrap_or(Duration::new(0, 0));
-        let max_duration = durations.iter().max().copied().unwrap_or(Duration::new(0, 0));
+        let min_duration = durations
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(Duration::new(0, 0));
+        let max_duration = durations
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or(Duration::new(0, 0));
 
         // Calculate standard deviation
         let variance = durations
@@ -200,13 +241,14 @@ impl PerformanceBenchmark {
     }
 
     /// Run a system benchmark
-    async fn run_system_benchmark<F>(
+    async fn run_system_benchmark<F, Fut>(
         &self,
         name: &str,
         benchmark_fn: F,
     ) -> Result<BenchmarkResult, Box<dyn std::error::Error>>
     where
-        F: Fn(usize) -> Result<Duration, Box<dyn std::error::Error>>,
+        F: Fn(usize) -> Fut,
+        Fut: std::future::Future<Output = Result<Duration, Box<dyn std::error::Error>>>,
     {
         let iterations = self.config.system_benchmark_iterations;
         let mut durations = Vec::new();
@@ -214,19 +256,27 @@ impl PerformanceBenchmark {
 
         // Warmup
         for _ in 0..self.config.warmup_iterations {
-            let _ = benchmark_fn(0);
+            let _ = benchmark_fn(0).await;
         }
 
         // Actual benchmark
         for i in 0..iterations {
-            let duration = benchmark_fn(i)?;
+            let duration = benchmark_fn(i).await?;
             durations.push(duration);
             total_duration += duration;
         }
 
         let avg_duration = total_duration / iterations as u32;
-        let min_duration = durations.iter().min().copied().unwrap_or(Duration::new(0, 0));
-        let max_duration = durations.iter().max().copied().unwrap_or(Duration::new(0, 0));
+        let min_duration = durations
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(Duration::new(0, 0));
+        let max_duration = durations
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or(Duration::new(0, 0));
 
         // Calculate standard deviation
         let variance = durations
@@ -266,7 +316,8 @@ impl PerformanceBenchmark {
 
     /// Compare current results with baseline
     pub async fn compare_with_baseline(&self) -> Option<BenchmarkComparison> {
-        let baseline = self.baseline_results.read().await.as_ref()?;
+        let baseline = self.baseline_results.read().await;
+        let baseline = baseline.as_ref()?;
         let current_results = self.benchmark_results.read().await;
 
         if current_results.is_empty() {
@@ -279,8 +330,10 @@ impl PerformanceBenchmark {
         for current in current_results.iter() {
             if let Some(baseline_result) = baseline.results.get(&current.name) {
                 let performance_change = if baseline_result.avg_duration.as_nanos() > 0 {
-                    ((current.avg_duration.as_nanos() as f64 - baseline_result.avg_duration.as_nanos() as f64)
-                        / baseline_result.avg_duration.as_nanos() as f64) * 100.0
+                    ((current.avg_duration.as_nanos() as f64
+                        - baseline_result.avg_duration.as_nanos() as f64)
+                        / baseline_result.avg_duration.as_nanos() as f64)
+                        * 100.0
                 } else {
                     0.0
                 };
@@ -309,11 +362,14 @@ impl PerformanceBenchmark {
             }
         }
 
+        let regression_count = comparisons.iter().filter(|c| c.is_regression).count();
+        let total_benchmarks = comparisons.len();
+
         Some(BenchmarkComparison {
             comparisons,
             overall_regression,
-            regression_count: comparisons.iter().filter(|c| c.is_regression).count(),
-            total_benchmarks: comparisons.len(),
+            regression_count,
+            total_benchmarks,
         })
     }
 
@@ -329,16 +385,30 @@ impl PerformanceBenchmark {
         let total_duration: Duration = results.iter().map(|r| r.total_duration).sum();
         let avg_duration = total_duration / total_benchmarks as u32;
 
-        let mut fastest_benchmark = None;
-        let mut slowest_benchmark = None;
+        let mut fastest_benchmark: Option<String> = None;
+        let mut slowest_benchmark: Option<String> = None;
         let mut highest_throughput = 0.0;
         let mut lowest_throughput = f64::INFINITY;
 
         for result in results.iter() {
-            if fastest_benchmark.is_none() || result.avg_duration < fastest_benchmark.unwrap().avg_duration {
+            if fastest_benchmark.is_none()
+                || result.avg_duration
+                    < results
+                        .iter()
+                        .find(|r| r.name == *fastest_benchmark.as_ref().unwrap())
+                        .unwrap()
+                        .avg_duration
+            {
                 fastest_benchmark = Some(result.name.clone());
             }
-            if slowest_benchmark.is_none() || result.avg_duration > slowest_benchmark.unwrap().avg_duration {
+            if slowest_benchmark.is_none()
+                || result.avg_duration
+                    > results
+                        .iter()
+                        .find(|r| r.name == *slowest_benchmark.as_ref().unwrap())
+                        .unwrap()
+                        .avg_duration
+            {
                 slowest_benchmark = Some(result.name.clone());
             }
             if result.throughput > highest_throughput {
@@ -369,72 +439,74 @@ impl PerformanceBenchmark {
     // Benchmark implementations
     async fn benchmark_memory_allocation(&self) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate memory allocation
         let mut data = Vec::with_capacity(10000);
         for i in 0..10000 {
             data.push(i);
         }
-        
+
         // Simulate some operations
         let _sum: usize = data.iter().sum();
-        
+
         Ok(start.elapsed())
     }
 
     async fn benchmark_cache_operations(&self) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate cache operations
         let mut cache = std::collections::HashMap::new();
         for i in 0..1000 {
             cache.insert(i, i * 2);
         }
-        
+
         // Simulate cache lookups
         for i in 0..1000 {
             let _ = cache.get(&i);
         }
-        
+
         Ok(start.elapsed())
     }
 
     async fn benchmark_string_operations(&self) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate string operations
         let mut strings = Vec::new();
         for i in 0..1000 {
             strings.push(format!("string_{}", i));
         }
-        
+
         // Simulate string processing
         let _total_length: usize = strings.iter().map(|s| s.len()).sum();
-        
+
         Ok(start.elapsed())
     }
 
     async fn benchmark_query_execution(&self) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate query execution
         tokio::time::sleep(Duration::from_millis(10)).await;
-        
+
         Ok(start.elapsed())
     }
 
     async fn benchmark_data_ingestion(&self) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate data ingestion
         tokio::time::sleep(Duration::from_millis(50)).await;
-        
+
         Ok(start.elapsed())
     }
 
-    async fn benchmark_concurrent_operations(&self) -> Result<Duration, Box<dyn std::error::Error>> {
+    async fn benchmark_concurrent_operations(
+        &self,
+    ) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate concurrent operations
         let handles: Vec<_> = (0..10)
             .map(|_| {
@@ -443,32 +515,36 @@ impl PerformanceBenchmark {
                 })
             })
             .collect();
-        
+
         for handle in handles {
             let _ = handle.await;
         }
-        
+
         Ok(start.elapsed())
     }
 
-    async fn benchmark_cpu_intensive_operations(&self) -> Result<Duration, Box<dyn std::error::Error>> {
+    async fn benchmark_cpu_intensive_operations(
+        &self,
+    ) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate CPU-intensive operations
-        let mut sum = 0u64;
+        let mut _sum = 0u64;
         for i in 0..1000000 {
-            sum += i;
+            _sum += i;
         }
-        
+
         Ok(start.elapsed())
     }
 
-    async fn benchmark_io_intensive_operations(&self) -> Result<Duration, Box<dyn std::error::Error>> {
+    async fn benchmark_io_intensive_operations(
+        &self,
+    ) -> Result<Duration, Box<dyn std::error::Error>> {
         let start = Instant::now();
-        
+
         // Simulate I/O-intensive operations
         tokio::time::sleep(Duration::from_millis(20)).await;
-        
+
         Ok(start.elapsed())
     }
 
@@ -538,7 +614,7 @@ pub struct BenchmarkResult {
 }
 
 /// Benchmark suite
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BenchmarkSuite {
     pub results: Vec<BenchmarkResult>,
     pub total_duration: Duration,
@@ -546,7 +622,7 @@ pub struct BenchmarkSuite {
 }
 
 /// Benchmark baseline
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BenchmarkBaseline {
     pub results: HashMap<String, BenchmarkResult>,
     pub timestamp: Instant,
@@ -613,11 +689,12 @@ mod tests {
             ..Default::default()
         };
         let benchmark = PerformanceBenchmark::new(config);
-        
-        let result = benchmark.run_micro_benchmark("test", |_| {
-            Ok(Duration::from_millis(1))
-        }).await.unwrap();
-        
+
+        let result = benchmark
+            .run_micro_benchmark("test", |_| async { Ok(Duration::from_millis(1)) })
+            .await
+            .unwrap();
+
         assert_eq!(result.name, "test");
         assert_eq!(result.benchmark_type, BenchmarkType::Micro);
         assert_eq!(result.iterations, 100);
@@ -631,11 +708,12 @@ mod tests {
             ..Default::default()
         };
         let benchmark = PerformanceBenchmark::new(config);
-        
-        let result = benchmark.run_macro_benchmark("test", |_| {
-            Ok(Duration::from_millis(10))
-        }).await.unwrap();
-        
+
+        let result = benchmark
+            .run_macro_benchmark("test", |_| async { Ok(Duration::from_millis(10)) })
+            .await
+            .unwrap();
+
         assert_eq!(result.name, "test");
         assert_eq!(result.benchmark_type, BenchmarkType::Macro);
         assert_eq!(result.iterations, 10);
@@ -649,11 +727,12 @@ mod tests {
             ..Default::default()
         };
         let benchmark = PerformanceBenchmark::new(config);
-        
-        let result = benchmark.run_system_benchmark("test", |_| {
-            Ok(Duration::from_millis(20))
-        }).await.unwrap();
-        
+
+        let result = benchmark
+            .run_system_benchmark("test", |_| async { Ok(Duration::from_millis(20)) })
+            .await
+            .unwrap();
+
         assert_eq!(result.name, "test");
         assert_eq!(result.benchmark_type, BenchmarkType::System);
         assert_eq!(result.iterations, 5);
@@ -663,31 +742,34 @@ mod tests {
     async fn test_benchmark_comparison() {
         let config = BenchmarkConfig::default();
         let benchmark = PerformanceBenchmark::new(config);
-        
+
         // Create baseline
         let mut baseline_results = HashMap::new();
-        baseline_results.insert("test".to_string(), BenchmarkResult {
-            name: "test".to_string(),
-            benchmark_type: BenchmarkType::Micro,
-            iterations: 100,
-            total_duration: Duration::from_millis(100),
-            avg_duration: Duration::from_millis(1),
-            min_duration: Duration::from_millis(1),
-            max_duration: Duration::from_millis(1),
-            std_deviation: Duration::from_millis(0),
-            throughput: 100.0,
-            memory_usage: 1024,
-            cpu_usage: 25.0,
-        });
-        
+        baseline_results.insert(
+            "test".to_string(),
+            BenchmarkResult {
+                name: "test".to_string(),
+                benchmark_type: BenchmarkType::Micro,
+                iterations: 100,
+                total_duration: Duration::from_millis(100),
+                avg_duration: Duration::from_millis(1),
+                min_duration: Duration::from_millis(1),
+                max_duration: Duration::from_millis(1),
+                std_deviation: Duration::from_millis(0),
+                throughput: 100.0,
+                memory_usage: 1024,
+                cpu_usage: 25.0,
+            },
+        );
+
         let baseline = BenchmarkBaseline {
             results: baseline_results,
             timestamp: Instant::now(),
             version: "1.0.0".to_string(),
         };
-        
+
         benchmark.set_baseline(baseline).await;
-        
+
         // Add current results
         {
             let mut results = benchmark.benchmark_results.write().await;
@@ -705,7 +787,7 @@ mod tests {
                 cpu_usage: 25.0,
             });
         }
-        
+
         let comparison = benchmark.compare_with_baseline().await;
         assert!(comparison.is_some());
     }
@@ -714,7 +796,7 @@ mod tests {
     async fn test_benchmark_statistics() {
         let config = BenchmarkConfig::default();
         let benchmark = PerformanceBenchmark::new(config);
-        
+
         // Add some results
         {
             let mut results = benchmark.benchmark_results.write().await;
@@ -745,7 +827,7 @@ mod tests {
                 cpu_usage: 50.0,
             });
         }
-        
+
         let stats = benchmark.get_benchmark_statistics().await;
         assert_eq!(stats.total_benchmarks, 2);
         assert_eq!(stats.fastest_benchmark, Some("test1".to_string()));

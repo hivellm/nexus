@@ -3,11 +3,11 @@
 //! Provides AI-powered performance recommendations based on system metrics,
 //! query patterns, and performance data analysis.
 
-use crate::performance::{
-    CacheMetrics, OptimizationRecommendation, Priority, Impact, Effort, QueryProfile, SystemMetrics
-};
 use crate::performance::benchmarking::BenchmarkResult;
 use crate::performance::memory::MemoryStatistics;
+use crate::performance::{
+    CacheMetrics, Effort, Impact, OptimizationRecommendation, Priority, QueryProfile, SystemMetrics,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -59,11 +59,13 @@ impl PerformanceRecommendations {
         recommendations = self.apply_recommendation_rules(recommendations).await;
 
         // Store performance snapshot
-        self.store_performance_snapshot(system_metrics, memory_stats, cache_metrics).await;
+        self.store_performance_snapshot(system_metrics, memory_stats, cache_metrics)
+            .await;
 
         // Sort by priority and impact
         recommendations.sort_by(|a, b| {
-            b.priority.cmp(&a.priority)
+            b.priority
+                .cmp(&a.priority)
                 .then(b.impact.cmp(&a.impact))
                 .then(a.effort.cmp(&b.effort))
         });
@@ -72,7 +74,10 @@ impl PerformanceRecommendations {
     }
 
     /// Analyze system metrics for recommendations
-    async fn analyze_system_metrics(&self, metrics: &SystemMetrics) -> Vec<OptimizationRecommendation> {
+    async fn analyze_system_metrics(
+        &self,
+        metrics: &SystemMetrics,
+    ) -> Vec<OptimizationRecommendation> {
         let mut recommendations = Vec::new();
 
         // CPU usage analysis
@@ -83,7 +88,9 @@ impl PerformanceRecommendations {
                 description: format!("High CPU usage: {:.1}%", metrics.cpu_usage),
                 impact: Impact::High,
                 effort: Effort::Medium,
-                implementation: "Consider CPU optimization, parallel processing, or hardware upgrade".to_string(),
+                implementation:
+                    "Consider CPU optimization, parallel processing, or hardware upgrade"
+                        .to_string(),
             });
         }
 
@@ -107,7 +114,9 @@ impl PerformanceRecommendations {
                 description: format!("High disk usage: {:.1}%", metrics.disk_usage),
                 impact: Impact::Medium,
                 effort: Effort::Medium,
-                implementation: "Optimize storage usage, implement data compression, or add more storage".to_string(),
+                implementation:
+                    "Optimize storage usage, implement data compression, or add more storage"
+                        .to_string(),
             });
         }
 
@@ -115,7 +124,10 @@ impl PerformanceRecommendations {
     }
 
     /// Analyze memory usage for recommendations
-    async fn analyze_memory_usage(&self, stats: &MemoryStatistics) -> Vec<OptimizationRecommendation> {
+    async fn analyze_memory_usage(
+        &self,
+        stats: &MemoryStatistics,
+    ) -> Vec<OptimizationRecommendation> {
         let mut recommendations = Vec::new();
 
         // Memory pressure analysis
@@ -123,10 +135,15 @@ impl PerformanceRecommendations {
             recommendations.push(OptimizationRecommendation {
                 category: "Memory Pressure".to_string(),
                 priority: Priority::Critical,
-                description: format!("High memory pressure: {:.1}%", stats.memory_pressure * 100.0),
+                description: format!(
+                    "High memory pressure: {:.1}%",
+                    stats.memory_pressure * 100.0
+                ),
                 impact: Impact::VeryHigh,
                 effort: Effort::High,
-                implementation: "Implement aggressive memory management, reduce memory usage, or add swap space".to_string(),
+                implementation:
+                    "Implement aggressive memory management, reduce memory usage, or add swap space"
+                        .to_string(),
             });
         }
 
@@ -138,7 +155,9 @@ impl PerformanceRecommendations {
                 description: "High memory fragmentation detected".to_string(),
                 impact: Impact::Medium,
                 effort: Effort::High,
-                implementation: "Implement memory compaction or object pooling to reduce fragmentation".to_string(),
+                implementation:
+                    "Implement memory compaction or object pooling to reduce fragmentation"
+                        .to_string(),
             });
         }
 
@@ -146,7 +165,10 @@ impl PerformanceRecommendations {
     }
 
     /// Analyze cache performance for recommendations
-    async fn analyze_cache_performance(&self, metrics: &CacheMetrics) -> Vec<OptimizationRecommendation> {
+    async fn analyze_cache_performance(
+        &self,
+        metrics: &CacheMetrics,
+    ) -> Vec<OptimizationRecommendation> {
         let mut recommendations = Vec::new();
 
         // Cache hit rate analysis
@@ -157,7 +179,9 @@ impl PerformanceRecommendations {
                 description: format!("Low cache hit rate: {:.1}%", metrics.hit_rate * 100.0),
                 impact: Impact::High,
                 effort: Effort::Medium,
-                implementation: "Increase cache size, optimize eviction policy, or improve data locality".to_string(),
+                implementation:
+                    "Increase cache size, optimize eviction policy, or improve data locality"
+                        .to_string(),
             });
         }
 
@@ -166,10 +190,14 @@ impl PerformanceRecommendations {
             recommendations.push(OptimizationRecommendation {
                 category: "Cache Size".to_string(),
                 priority: Priority::Medium,
-                description: format!("Large cache size: {:.1}MB", metrics.cache_size as f64 / 1024.0 / 1024.0),
+                description: format!(
+                    "Large cache size: {:.1}MB",
+                    metrics.cache_size as f64 / 1024.0 / 1024.0
+                ),
                 impact: Impact::Medium,
                 effort: Effort::Low,
-                implementation: "Consider cache partitioning or implementing cache tiers".to_string(),
+                implementation: "Consider cache partitioning or implementing cache tiers"
+                    .to_string(),
             });
         }
 
@@ -189,7 +217,10 @@ impl PerformanceRecommendations {
     }
 
     /// Analyze query performance for recommendations
-    async fn analyze_query_performance(&self, profiles: &[QueryProfile]) -> Vec<OptimizationRecommendation> {
+    async fn analyze_query_performance(
+        &self,
+        profiles: &[QueryProfile],
+    ) -> Vec<OptimizationRecommendation> {
         let mut recommendations = Vec::new();
 
         if profiles.is_empty() {
@@ -197,7 +228,8 @@ impl PerformanceRecommendations {
         }
 
         // Slow query analysis
-        let slow_queries: Vec<_> = profiles.iter()
+        let slow_queries: Vec<_> = profiles
+            .iter()
             .filter(|p| p.execution_time > self.config.slow_query_threshold)
             .collect();
 
@@ -208,12 +240,14 @@ impl PerformanceRecommendations {
                 description: format!("{} slow queries detected", slow_queries.len()),
                 impact: Impact::High,
                 effort: Effort::Medium,
-                implementation: "Add indexes, optimize query patterns, or use query hints".to_string(),
+                implementation: "Add indexes, optimize query patterns, or use query hints"
+                    .to_string(),
             });
         }
 
         // Memory intensive query analysis
-        let memory_intensive: Vec<_> = profiles.iter()
+        let memory_intensive: Vec<_> = profiles
+            .iter()
             .filter(|p| p.memory_usage > self.config.memory_intensive_threshold)
             .collect();
 
@@ -221,15 +255,20 @@ impl PerformanceRecommendations {
             recommendations.push(OptimizationRecommendation {
                 category: "Query Memory Usage".to_string(),
                 priority: Priority::Medium,
-                description: format!("{} memory intensive queries detected", memory_intensive.len()),
+                description: format!(
+                    "{} memory intensive queries detected",
+                    memory_intensive.len()
+                ),
                 impact: Impact::Medium,
                 effort: Effort::High,
-                implementation: "Optimize query execution plans or implement result streaming".to_string(),
+                implementation: "Optimize query execution plans or implement result streaming"
+                    .to_string(),
             });
         }
 
         // CPU intensive query analysis
-        let cpu_intensive: Vec<_> = profiles.iter()
+        let cpu_intensive: Vec<_> = profiles
+            .iter()
             .filter(|p| p.cpu_usage > self.config.cpu_intensive_threshold)
             .collect();
 
@@ -248,7 +287,10 @@ impl PerformanceRecommendations {
     }
 
     /// Analyze benchmark results for recommendations
-    async fn analyze_benchmark_results(&self, results: &[BenchmarkResult]) -> Vec<OptimizationRecommendation> {
+    async fn analyze_benchmark_results(
+        &self,
+        results: &[BenchmarkResult],
+    ) -> Vec<OptimizationRecommendation> {
         let mut recommendations = Vec::new();
 
         if results.is_empty() {
@@ -256,7 +298,8 @@ impl PerformanceRecommendations {
         }
 
         // Throughput analysis
-        let avg_throughput: f64 = results.iter().map(|r| r.throughput).sum::<f64>() / results.len() as f64;
+        let avg_throughput: f64 =
+            results.iter().map(|r| r.throughput).sum::<f64>() / results.len() as f64;
         if avg_throughput < self.config.min_throughput {
             recommendations.push(OptimizationRecommendation {
                 category: "System Throughput".to_string(),
@@ -264,15 +307,16 @@ impl PerformanceRecommendations {
                 description: format!("Low average throughput: {:.2} ops/sec", avg_throughput),
                 impact: Impact::High,
                 effort: Effort::High,
-                implementation: "Optimize system configuration, increase resources, or improve algorithms".to_string(),
+                implementation:
+                    "Optimize system configuration, increase resources, or improve algorithms"
+                        .to_string(),
             });
         }
 
         // Latency analysis
-        let avg_latency: Duration = results.iter()
-            .map(|r| r.avg_duration)
-            .sum::<Duration>() / results.len() as u32;
-        
+        let avg_latency: Duration =
+            results.iter().map(|r| r.avg_duration).sum::<Duration>() / results.len() as u32;
+
         if avg_latency > self.config.max_latency {
             recommendations.push(OptimizationRecommendation {
                 category: "System Latency".to_string(),
@@ -280,20 +324,27 @@ impl PerformanceRecommendations {
                 description: format!("High average latency: {:?}", avg_latency),
                 impact: Impact::High,
                 effort: Effort::Medium,
-                implementation: "Optimize I/O operations, reduce network latency, or improve caching".to_string(),
+                implementation:
+                    "Optimize I/O operations, reduce network latency, or improve caching"
+                        .to_string(),
             });
         }
 
         // Memory usage analysis
-        let avg_memory: u64 = results.iter().map(|r| r.memory_usage).sum::<u64>() / results.len() as u64;
+        let avg_memory: u64 =
+            results.iter().map(|r| r.memory_usage).sum::<u64>() / results.len() as u64;
         if avg_memory > self.config.max_memory_per_operation {
             recommendations.push(OptimizationRecommendation {
                 category: "Operation Memory Usage".to_string(),
                 priority: Priority::Medium,
-                description: format!("High memory usage per operation: {:.1}MB", avg_memory as f64 / 1024.0 / 1024.0),
+                description: format!(
+                    "High memory usage per operation: {:.1}MB",
+                    avg_memory as f64 / 1024.0 / 1024.0
+                ),
                 impact: Impact::Medium,
                 effort: Effort::High,
-                implementation: "Optimize memory allocation patterns or implement memory pooling".to_string(),
+                implementation: "Optimize memory allocation patterns or implement memory pooling"
+                    .to_string(),
             });
         }
 
@@ -301,7 +352,10 @@ impl PerformanceRecommendations {
     }
 
     /// Apply recommendation rules to filter and prioritize recommendations
-    async fn apply_recommendation_rules(&self, recommendations: Vec<OptimizationRecommendation>) -> Vec<OptimizationRecommendation> {
+    async fn apply_recommendation_rules(
+        &self,
+        recommendations: Vec<OptimizationRecommendation>,
+    ) -> Vec<OptimizationRecommendation> {
         let mut filtered_recommendations = Vec::new();
 
         for recommendation in recommendations {
@@ -316,7 +370,8 @@ impl PerformanceRecommendations {
                         break;
                     } else if rule.action == RuleAction::Modify {
                         // Apply modifications
-                        modified_recommendation = rule.modify_recommendation(modified_recommendation);
+                        modified_recommendation =
+                            rule.modify_recommendation(modified_recommendation);
                         should_include = false;
                         break;
                     }
@@ -330,7 +385,8 @@ impl PerformanceRecommendations {
 
         // Remove duplicates
         filtered_recommendations.sort_by(|a, b| a.category.cmp(&b.category));
-        filtered_recommendations.dedup_by(|a, b| a.category == b.category && a.description == b.description);
+        filtered_recommendations
+            .dedup_by(|a, b| a.category == b.category && a.description == b.description);
 
         filtered_recommendations
     }
@@ -354,7 +410,7 @@ impl PerformanceRecommendations {
         // Store in history
         self.performance_history
             .entry("system".to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(snapshot);
 
         // Keep only recent snapshots
@@ -370,7 +426,9 @@ impl PerformanceRecommendations {
         vec![
             RecommendationRule {
                 name: "exclude_low_impact".to_string(),
-                condition: Box::new(|rec| rec.impact == Impact::Low && rec.effort == Effort::VeryHigh),
+                condition: Box::new(|rec| {
+                    rec.impact == Impact::Low && rec.effort == Effort::VeryHigh
+                }),
                 action: RuleAction::Exclude,
                 modifier: None,
             },
@@ -456,7 +514,8 @@ pub struct RecommendationRule {
     pub name: String,
     pub condition: Box<dyn Fn(&OptimizationRecommendation) -> bool + Send + Sync>,
     pub action: RuleAction,
-    pub modifier: Option<Box<dyn Fn(OptimizationRecommendation) -> OptimizationRecommendation + Send + Sync>>,
+    pub modifier:
+        Option<Box<dyn Fn(OptimizationRecommendation) -> OptimizationRecommendation + Send + Sync>>,
 }
 
 impl RecommendationRule {
@@ -464,7 +523,10 @@ impl RecommendationRule {
         (self.condition)(recommendation)
     }
 
-    pub fn modify_recommendation(&self, recommendation: OptimizationRecommendation) -> OptimizationRecommendation {
+    pub fn modify_recommendation(
+        &self,
+        recommendation: OptimizationRecommendation,
+    ) -> OptimizationRecommendation {
         if let Some(modifier) = &self.modifier {
             modifier(recommendation)
         } else {
@@ -518,7 +580,7 @@ mod tests {
         let mut recommendations = PerformanceRecommendations::new(config);
 
         let system_metrics = SystemMetrics {
-            cpu_usage: 90.0, // High CPU usage
+            cpu_usage: 90.0,                      // High CPU usage
             memory_usage: 2 * 1024 * 1024 * 1024, // 2GB
             memory_available: 1024 * 1024 * 1024, // 1GB
             disk_usage: 50.0,
@@ -540,11 +602,11 @@ mod tests {
 
         let memory_stats = MemoryStatistics {
             avg_total_memory: 2 * 1024 * 1024 * 1024, // 2GB
-            peak_memory: 3 * 1024 * 1024 * 1024, // 3GB
-            min_memory: 1024 * 1024 * 1024, // 1GB
-            avg_heap_memory: 1024 * 1024 * 1024, // 1GB
-            avg_cache_memory: 512 * 1024 * 1024, // 512MB
-            memory_pressure: 0.9, // High pressure
+            peak_memory: 3 * 1024 * 1024 * 1024,      // 3GB
+            min_memory: 1024 * 1024 * 1024,           // 1GB
+            avg_heap_memory: 1024 * 1024 * 1024,      // 1GB
+            avg_cache_memory: 512 * 1024 * 1024,      // 512MB
+            memory_pressure: 0.9,                     // High pressure
             sample_count: 10,
         };
 
@@ -553,16 +615,12 @@ mod tests {
             miss_rate: 0.3,
             total_requests: 1000,
             cache_size: 2 * 1024 * 1024 * 1024, // 2GB
-            evictions: 1500, // High evictions
+            evictions: 1500,                    // High evictions
         };
 
-        let recs = recommendations.generate_recommendations(
-            &system_metrics,
-            &memory_stats,
-            &cache_metrics,
-            &[],
-            &[],
-        ).await;
+        let recs = recommendations
+            .generate_recommendations(&system_metrics, &memory_stats, &cache_metrics, &[], &[])
+            .await;
 
         assert!(!recs.is_empty());
         assert!(recs.iter().any(|r| r.category == "CPU Performance"));
@@ -576,22 +634,20 @@ mod tests {
         let config = RecommendationsConfig::default();
         let mut recommendations = PerformanceRecommendations::new(config);
 
-        let query_profiles = vec![
-            QueryProfile {
-                query: "MATCH (n) RETURN n".to_string(),
-                execution_time: Duration::from_millis(150), // Slow query
-                memory_usage: 15 * 1024 * 1024, // 15MB - memory intensive
-                cpu_usage: 90.0, // CPU intensive
-                io_operations: 10,
-                cache_hits: 8,
-                cache_misses: 2,
-                recommendations: vec![],
-            },
-        ];
+        let query_profiles = vec![QueryProfile {
+            query: "MATCH (n) RETURN n".to_string(),
+            execution_time: Duration::from_millis(150), // Slow query
+            memory_usage: 15 * 1024 * 1024,             // 15MB - memory intensive
+            cpu_usage: 90.0,                            // CPU intensive
+            io_operations: 10,
+            cache_hits: 8,
+            cache_misses: 2,
+            recommendations: vec![],
+        }];
 
         let system_metrics = SystemMetrics {
             cpu_usage: 50.0,
-            memory_usage: 512 * 1024 * 1024, // 512MB
+            memory_usage: 512 * 1024 * 1024,      // 512MB
             memory_available: 1024 * 1024 * 1024, // 1GB
             disk_usage: 50.0,
             network_io: crate::performance::NetworkMetrics {
@@ -619,13 +675,15 @@ mod tests {
             evictions: 5,
         };
 
-        let recs = recommendations.generate_recommendations(
-            &system_metrics,
-            &memory_stats,
-            &cache_metrics,
-            &query_profiles,
-            &[],
-        ).await;
+        let recs = recommendations
+            .generate_recommendations(
+                &system_metrics,
+                &memory_stats,
+                &cache_metrics,
+                &query_profiles,
+                &[],
+            )
+            .await;
 
         assert!(!recs.is_empty());
         assert!(recs.iter().any(|r| r.category == "Query Performance"));

@@ -42,6 +42,7 @@ chrono.workspace = true
 
 # Error handling
 anyhow.workspace = true
+thiserror.workspace = true
 
 # Temporary files
 tempfile.workspace = true

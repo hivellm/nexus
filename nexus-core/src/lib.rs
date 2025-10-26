@@ -40,15 +40,19 @@
 pub mod auth;
 pub mod catalog;
 pub mod clustering;
+pub mod concurrent_access;
 pub mod error;
 pub mod executor;
 pub mod graph; // Re-enabled with validation support
+pub mod graph_algorithms;
 pub mod graph_comparison;
 pub mod graph_construction;
 pub mod graph_correlation;
 pub mod graph_simple;
 pub mod index;
 pub mod loader;
+pub mod memory_management;
+pub mod monitoring;
 pub mod page_cache;
 pub mod performance;
 pub mod retry;
@@ -56,6 +60,7 @@ pub mod security;
 pub mod storage;
 pub mod transaction;
 pub mod validation;
+pub mod vectorizer_cache;
 pub mod wal;
 
 pub use clustering::{
