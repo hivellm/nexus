@@ -13,6 +13,8 @@
 pub mod parser;
 /// Query planner for optimizing Cypher execution
 pub mod planner;
+/// Query optimizer for cost-based optimization
+pub mod optimizer;
 
 use crate::catalog::Catalog;
 use crate::index::{KnnIndex, LabelIndex};
@@ -45,6 +47,13 @@ pub struct ResultSet {
     pub columns: Vec<String>,
     /// Result rows
     pub rows: Vec<Row>,
+}
+
+/// Execution plan containing a sequence of operators
+#[derive(Debug, Clone)]
+pub struct ExecutionPlan {
+    /// Sequence of operators to execute
+    pub operators: Vec<Operator>,
 }
 
 /// Physical operator
@@ -119,17 +128,22 @@ pub enum Operator {
     },
     /// Scan using index
     IndexScan {
-        /// Type of index
-        index_type: IndexType,
-        /// Key to search for
-        key: String,
-        /// Variable name
-        variable: String,
+        /// Index name
+        index_name: String,
+        /// Label to scan
+        label: String,
     },
     /// Distinct results
     Distinct {
         /// Columns to check for distinctness
         columns: Vec<String>,
+    },
+    /// Hash join operation
+    HashJoin {
+        /// Left join key
+        left_key: String,
+        /// Right join key
+        right_key: String,
     },
 }
 
@@ -305,14 +319,16 @@ impl Executor {
                     )?;
                 }
                 Operator::IndexScan {
-                    index_type,
-                    key,
-                    variable,
+                    index_name,
+                    label,
                 } => {
-                    self.execute_index_scan(&mut context, index_type, &key, &variable)?;
+                    self.execute_index_scan_new(&mut context, &index_name, &label)?;
                 }
                 Operator::Distinct { columns } => {
                     self.execute_distinct(&mut context, &columns)?;
+                }
+                Operator::HashJoin { left_key, right_key } => {
+                    self.execute_hash_join(&mut context, &left_key, &right_key)?;
                 }
             }
         }
@@ -946,14 +962,16 @@ impl Executor {
                 self.execute_join(context, left, right, *join_type, condition.as_deref())?;
             }
             Operator::IndexScan {
-                index_type,
-                key,
-                variable,
+                index_name,
+                label,
             } => {
-                self.execute_index_scan(context, *index_type, key, variable)?;
+                self.execute_index_scan_new(context, index_name, label)?;
             }
             Operator::Distinct { columns } => {
                 self.execute_distinct(context, columns)?;
+            }
+            Operator::HashJoin { left_key, right_key } => {
+                self.execute_hash_join(context, &left_key, &right_key)?;
             }
         }
         Ok(())
@@ -1553,6 +1571,25 @@ impl Executor {
             Value::Array(arr) => format!("[{}]", arr.len()),
             Value::Object(obj) => format!("{{{}}}", obj.len()),
         }
+    }
+
+    /// Execute hash join operation
+    fn execute_hash_join(&self, _context: &mut ExecutionContext, _left_key: &str, _right_key: &str) -> Result<()> {
+        // MVP implementation - just pass through for now
+        // In a real implementation, this would perform hash join
+        Ok(())
+    }
+
+    /// Execute new index scan operation
+    fn execute_index_scan_new(&self, context: &mut ExecutionContext, _index_name: &str, label: &str) -> Result<()> {
+        // Get label ID from catalog
+        let label_id = self.catalog.get_or_create_label(label)?;
+        
+        // Execute node by label scan
+        let nodes = self.execute_node_by_label(label_id)?;
+        context.set_variable("n", Value::Array(nodes));
+        
+        Ok(())
     }
 }
 
@@ -2478,9 +2515,8 @@ mod tests {
         assert!(matches!(join_op, Operator::Join { .. }));
 
         let index_scan_op = Operator::IndexScan {
-            index_type: IndexType::Label,
-            key: "Person".to_string(),
-            variable: "n".to_string(),
+            index_name: "label_Person".to_string(),
+            label: "Person".to_string(),
         };
         assert!(matches!(index_scan_op, Operator::IndexScan { .. }));
 

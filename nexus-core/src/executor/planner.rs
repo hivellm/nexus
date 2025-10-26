@@ -265,6 +265,10 @@ impl<'a> QueryPlanner<'a> {
                     // Distinct is moderately expensive
                     total_cost += 40.0;
                 }
+                Operator::HashJoin { .. } => {
+                    // Hash join operations are moderately expensive
+                    total_cost += 200.0;
+                }
             }
         }
 
@@ -705,9 +709,8 @@ mod tests {
                 condition: Some("a.id = b.id".to_string()),
             },
             Operator::IndexScan {
-                index_type: IndexType::Label,
-                key: "Person".to_string(),
-                variable: "n".to_string(),
+                index_name: "label_Person".to_string(),
+                label: "Person".to_string(),
             },
             Operator::Distinct {
                 columns: vec!["n".to_string()],
