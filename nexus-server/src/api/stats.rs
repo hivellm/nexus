@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 static CATALOG: std::sync::OnceLock<Arc<RwLock<Catalog>>> = std::sync::OnceLock::new();
 static LABEL_INDEX: std::sync::OnceLock<Arc<RwLock<LabelIndex>>> = std::sync::OnceLock::new();
 static KNN_INDEX: std::sync::OnceLock<Arc<RwLock<KnnIndex>>> = std::sync::OnceLock::new();
+static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
 
 /// Initialize the instances
 pub fn init_instances(
@@ -29,6 +30,14 @@ pub fn init_instances(
     KNN_INDEX
         .set(knn_index)
         .map_err(|_| anyhow::anyhow!("Failed to set knn index"))?;
+    Ok(())
+}
+
+/// Initialize the engine for stats
+pub fn init_engine(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
+    ENGINE
+        .set(engine)
+        .map_err(|_| anyhow::anyhow!("Failed to set engine for stats"))?;
     Ok(())
 }
 
@@ -83,6 +92,40 @@ pub struct KnnIndexStats {
 pub async fn get_stats() -> Json<DatabaseStatsResponse> {
     tracing::info!("Getting database statistics");
 
+    // Try to get stats from Engine first (if available)
+    if let Some(engine) = ENGINE.get() {
+        let engine_guard = engine.read().await;
+        if let Ok(engine_stats) = engine_guard.stats() {
+            tracing::info!(
+                "Database stats - Labels: {}, RelTypes: {}, Nodes: {}, Rels: {}",
+                engine_stats.labels,
+                engine_stats.rel_types,
+                engine_stats.nodes,
+                engine_stats.relationships
+            );
+            
+            return Json(DatabaseStatsResponse {
+                catalog: CatalogStats {
+                    label_count: engine_stats.labels as usize,
+                    rel_type_count: engine_stats.rel_types as usize,
+                    node_count: engine_stats.nodes as usize,
+                    rel_count: engine_stats.relationships as usize,
+                },
+                label_index: LabelIndexStats {
+                    indexed_labels: engine_stats.labels as usize,
+                    total_nodes: engine_stats.nodes as usize,
+                },
+                knn_index: KnnIndexStats {
+                    total_vectors: 0, // Engine stats doesn't have this yet
+                    dimension: 128,
+                    avg_search_time_us: 0.0,
+                },
+                error: None,
+            });
+        }
+    }
+
+    // Fallback to old method if Engine not available
     // Get catalog stats
     let catalog_stats = match CATALOG.get() {
         Some(catalog) => {

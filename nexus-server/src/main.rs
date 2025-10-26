@@ -73,6 +73,8 @@ async fn main() -> anyhow::Result<()> {
         label_index_arc.clone(),
         knn_index_arc.clone(),
     )?;
+    api::stats::init_engine(engine_arc.clone())?;
+    api::cypher::init_engine(engine_arc.clone())?;
 
     // Create Nexus server state
     let nexus_server = Arc::new(NexusServer {

@@ -66,7 +66,97 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
     tracing::info!("Executing Cypher query: {}", request.query);
 
-    // Get executor instance
+    // Check if this is a CREATE query
+    let is_create_query = request.query.trim().to_uppercase().starts_with("CREATE");
+
+    if is_create_query {
+        // Use Engine for CREATE operations
+        if let Some(engine) = ENGINE.get() {
+            use nexus_core::executor::parser::CypherParser;
+
+            let mut parser = CypherParser::new(request.query.clone());
+            let ast = match parser.parse() {
+                Ok(ast) => ast,
+                Err(e) => {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    tracing::error!("Parse error: {}", e);
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some(format!("Parse error: {}", e)),
+                    });
+                }
+            };
+
+            // Execute CREATE clauses using Engine
+            let mut engine = engine.write().await;
+            for clause in &ast.clauses {
+                if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
+                    // Extract pattern and create nodes
+                    for element in &create_clause.pattern.elements {
+                        if let nexus_core::executor::parser::PatternElement::Node(node_pattern) = element {
+                            let labels = node_pattern.labels.clone();
+
+                            // Convert properties
+                            let mut props = serde_json::Map::new();
+                            if let Some(prop_map) = &node_pattern.properties {
+                                for (key, expr) in &prop_map.properties {
+                                    // Convert expression to JSON value
+                                    let value = match expr {
+                                        nexus_core::executor::parser::Expression::Literal(lit) => match lit {
+                                            nexus_core::executor::parser::Literal::String(s) => serde_json::Value::String(s.clone()),
+                                            nexus_core::executor::parser::Literal::Integer(i) => serde_json::Value::Number((*i).into()),
+                                            nexus_core::executor::parser::Literal::Float(f) => {
+                                                serde_json::Number::from_f64(*f)
+                                                    .map(serde_json::Value::Number)
+                                                    .unwrap_or(serde_json::Value::Null)
+                                            }
+                                            nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
+                                            nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
+                                        },
+                                        _ => serde_json::Value::Null,
+                                    };
+                                    props.insert(key.clone(), value);
+                                }
+                            }
+
+                            let properties = serde_json::Value::Object(props);
+
+                            // Create node using Engine
+                            match engine.create_node(labels, properties) {
+                                Ok(_node_id) => {
+                                    tracing::info!("Node created successfully via Engine");
+                                }
+                                Err(e) => {
+                                    let execution_time = start_time.elapsed().as_millis() as u64;
+                                    tracing::error!("Failed to create node: {}", e);
+                                    return Json(CypherResponse {
+                                        columns: vec![],
+                                        rows: vec![],
+                                        execution_time_ms: execution_time,
+                                        error: Some(format!("Failed to create node: {}", e)),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            tracing::info!("CREATE query executed successfully in {}ms", execution_time);
+            
+            return Json(CypherResponse {
+                columns: vec![],
+                rows: vec![],
+                execution_time_ms: execution_time,
+                error: None,
+            });
+        }
+    }
+
+    // Get executor instance for non-CREATE queries
     let executor_guard = match EXECUTOR.get() {
         Some(executor) => executor,
         None => {
