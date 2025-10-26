@@ -1,7 +1,7 @@
 # Nexus OpenSpec Implementation Status
 
 **Last Updated**: 2025-10-25  
-**Test Coverage**: 70.39% overall (309 tests passing: 195 lib + 15 integration + 84 server + 10 HTTP + 5 doctests)
+**Test Coverage**: 70.39% overall (**858 tests passing**: 670 lib + 15 integration + 158 server + 10 HTTP + 5 doctests)
 
 ---
 
@@ -442,12 +442,16 @@ All Phase 1 implementations have been completed, tested (318 tests passing), and
 - 🚧 Documentation needs updates
 
 ### **Quality Metrics**
-- **Total Tests**: 318 (204 lib + 15 integration + 84 server + 10 HTTP + 5 doctests)
+- **Total Tests**: 858 (670 lib + 15 integration + 158 server + 10 HTTP + 5 doctests)
 - **Test Success Rate**: 100% (all tests passing)
 - **Overall Coverage**: 70.39% (target: 95%+)
 - **Core Module Coverage**: 95%+ (storage, transaction, indexes, auth, performance)
 - **Code Files**: 50 Rust files (nexus-core: 34, nexus-server: 16)
-- **Recent Fixes**: Fixed RecordStore persistence, packed field alignment, concurrent access, and test suite completeness
+- **Code Lines**: 40,758 total (nexus-core: 33,648 + nexus-server: 7,110)
+- **Recent Fixes**: 
+  - Fixed RecordStore persistence and packed field alignment
+  - Fixed concurrent access issues
+  - Fixed flaky OnceLock tests (test_init_graphs_success, test_create_rel_type_with_initialized_catalog)
 
 ### **Bonus Modules Implemented (Not Originally Planned)**
 - ✅ **Authentication** (`auth/`): 5 files, 82 items, Argon2 + RBAC + API keys
