@@ -1,5 +1,11 @@
 # Implementation Tasks - V1 Desktop GUI
 
+**Status**: 📋 PLANNED (0% - Not Started)  
+**Priority**: Medium (after MVP and Authentication)  
+**Estimated**: Q1 2026
+
+---
+
 ## 1. Electron Setup
 
 - [ ] 1.1 Initialize Electron project

@@ -1,5 +1,17 @@
 # Implementation Tasks - V2 Sharding
 
+**Status**: 📋 PLANNED (0% - Not Started)  
+**Priority**: Low (V2 feature for 2026)  
+**Estimated**: Q2-Q3 2026  
+**Dependencies**: 
+- Replication system (implement-v1-replication)
+- Distributed consensus
+- Query coordinator
+
+**Note**: This is a Phase 3 (V2) feature for horizontal scaling. MVP and V1 must be complete and production-tested before starting.
+
+---
+
 ## 1. Shard Management
 
 - [ ] 1.1 Implement shard assignment (hash-based)

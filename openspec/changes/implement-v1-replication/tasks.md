@@ -1,5 +1,14 @@
 # Implementation Tasks - V1 Replication
 
+**Status**: 📋 PLANNED (0% - Not Started)  
+**Priority**: High (after MVP completion)  
+**Estimated**: Q4 2025 / Q1 2026  
+**Dependencies**: MVP Storage, WAL, Transaction Manager (all complete ✅)
+
+**Note**: The `replication/` directory exists but is empty. Core infrastructure (WAL streaming, transaction management) is already in place and ready for replication implementation.
+
+---
+
 ## 1. Master Node Implementation
 
 - [ ] 1.1 Implement WAL streaming to replicas
