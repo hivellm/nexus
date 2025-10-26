@@ -5,6 +5,78 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2025-10-25
+
+### Added
+
+- **Rate Limiting System** ✅
+  - Configurable rate limiting in auth middleware
+  - Window-based rate limiting with sliding window support
+  - Per-client rate limit tracking with automatic cleanup
+  - Rate limit configuration with customizable thresholds
+  - Comprehensive rate limiting tests and validation
+
+- **Async Monitoring System** ✅
+  - Proper async monitoring with Send trait compliance
+  - System resource monitoring with background tasks
+  - Memory usage monitoring with continuous tracking
+  - Performance metrics collection with Arc<RwLock<T>> for thread safety
+  - Configurable monitoring intervals and thresholds
+  - Graceful shutdown of monitoring tasks
+
+- **Property Chain Traversal** ✅
+  - Full property chain traversal system in graph.rs
+  - PropertyStore for managing property storage and retrieval
+  - PropertyRecord structure for property chain management
+  - Serialization and deserialization of property chains
+  - Property pointer management and traversal
+  - Comprehensive property chain tests
+
+- **Bulk Data Loading** ✅
+  - Complete loader module implementation
+  - Support for JSON, CSV, and in-memory data sources
+  - Progress reporting and statistics tracking
+  - Error handling and validation
+  - Batch processing capabilities
+  - Data transformation and mapping
+
+- **Security Features** ✅
+  - Comprehensive security module implementation
+  - Rate limiting with configurable windows
+  - IP blocking and whitelist management
+  - SQL injection protection
+  - XSS protection and request validation
+  - Security statistics and monitoring
+  - Async security operations
+
+### Changed
+
+- **Error Handling** ✅
+  - Updated error types to use `Box<dyn std::error::Error + Send + Sync>`
+  - Consistent error handling across async boundaries
+  - Improved error propagation in spawned tasks
+  - Better error messages and debugging information
+
+- **Async Trait Compatibility** ✅
+  - Fixed async trait compatibility issues
+  - Introduced CollectionQueryEnum wrapper for trait objects
+  - Resolved dyn trait object limitations with async functions
+  - Maintained type safety while enabling async operations
+
+### Fixed
+
+- **Test Coverage** ✅
+  - Fixed failing test_clear_cache with proper node creation
+  - Updated async test patterns for proper synchronization
+  - Added comprehensive test coverage for new features
+  - All 628 tests now passing
+
+- **Code Quality** ✅
+  - Fixed all clippy warnings and linting issues
+  - Applied consistent code formatting
+  - Resolved unused variable warnings
+  - Added proper documentation and comments
+
 ## [0.6.0] - 2025-10-25
 
 ### Added
