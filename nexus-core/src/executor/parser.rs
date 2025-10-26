@@ -1608,6 +1608,11 @@ impl CypherParser {
     fn is_clause_boundary(&self) -> bool {
         // Check if we're at the start of a valid clause keyword
         self.peek_keyword("MATCH")
+            || self.peek_keyword("CREATE")
+            || self.peek_keyword("MERGE")
+            || self.peek_keyword("SET")
+            || self.peek_keyword("DELETE")
+            || self.peek_keyword("REMOVE")
             || self.peek_keyword("WHERE")
             || self.peek_keyword("RETURN")
             || self.peek_keyword("ORDER")
