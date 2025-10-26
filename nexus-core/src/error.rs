@@ -17,11 +17,11 @@ pub enum Error {
     Database(#[from] heed::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-    
+
     /// Tantivy full-text search errors
     #[error("Tantivy error: {0}")]
     Tantivy(#[from] tantivy::TantivyError),
-    
+
     /// Query parser errors
     #[error("Query parser error: {0}")]
     QueryParser(#[from] tantivy::query::QueryParserError),

@@ -1,5 +1,5 @@
 //! Advanced B-tree index implementation for property range queries
-//! 
+//!
 //! Features:
 //! - Composite keys for multi-property indexing
 //! - Range queries with inclusive/exclusive bounds
@@ -10,9 +10,9 @@
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::RwLock;
-use std::cmp::Ordering;
 
 /// Advanced B-tree index for property range queries
 #[derive(Debug)]
@@ -49,6 +49,12 @@ pub struct RangeBounds {
     pub max_inclusive: bool,
 }
 
+impl Default for RangeBounds {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RangeBounds {
     pub fn new() -> Self {
         Self {
@@ -81,14 +87,14 @@ impl PartialOrd for PropertyKey {
 impl Ord for PropertyKey {
     fn cmp(&self, other: &Self) -> Ordering {
         // Compare composite values lexicographically
-        for (_i, (a, b)) in self.values.iter().zip(other.values.iter()).enumerate() {
+        for (a, b) in self.values.iter().zip(other.values.iter()) {
             match PropertyKey::compare_values(a, b) {
                 x if x < 0 => return Ordering::Less,
                 x if x > 0 => return Ordering::Greater,
                 _ => continue, // Values are equal, check next component
             }
         }
-        
+
         // If all values are equal, compare by length first, then by node_id
         match self.values.len().cmp(&other.values.len()) {
             Ordering::Equal => self.node_id.cmp(&other.node_id),
@@ -104,9 +110,7 @@ impl PropertyKey {
             (Value::Number(a_num), Value::Number(b_num)) => {
                 let a_f64 = a_num.as_f64().unwrap_or(0.0);
                 let b_f64 = b_num.as_f64().unwrap_or(0.0);
-                a_f64
-                    .partial_cmp(&b_f64)
-                    .unwrap_or(Ordering::Equal) as i32
+                a_f64.partial_cmp(&b_f64).unwrap_or(Ordering::Equal) as i32
             }
             (Value::String(a_str), Value::String(b_str)) => a_str.cmp(b_str) as i32,
             (Value::Bool(a_bool), Value::Bool(b_bool)) => (*a_bool as i32) - (*b_bool as i32),
@@ -126,13 +130,13 @@ impl PropertyKey {
                 let mut b_keys: Vec<_> = b_obj.keys().collect();
                 a_keys.sort();
                 b_keys.sort();
-                
+
                 for (a_key, b_key) in a_keys.iter().zip(b_keys.iter()) {
                     let key_cmp = a_key.cmp(b_key) as i32;
                     if key_cmp != 0 {
                         return key_cmp;
                     }
-                    
+
                     let val_cmp = Self::compare_values(&a_obj[*a_key], &b_obj[*b_key]);
                     if val_cmp != 0 {
                         return val_cmp;
@@ -154,12 +158,12 @@ impl PropertyKey {
             (Value::Object(_), _) => 1,
         }
     }
-    
+
     /// Create a new composite key
     pub fn new(values: Vec<Value>, node_id: u64) -> Self {
         Self { values, node_id }
     }
-    
+
     /// Create a single-value key (backward compatibility)
     pub fn single(value: Value, node_id: u64) -> Self {
         Self {
@@ -212,13 +216,13 @@ impl BTreeIndex {
     pub fn new(label_id: u32, property_key_id: u32) -> Self {
         Self::new_composite(label_id, vec![property_key_id], false, false)
     }
-    
+
     /// Create a new composite B-tree index for multiple properties
     pub fn new_composite(
-        label_id: u32, 
-        property_key_ids: Vec<u32>, 
-        is_unique: bool, 
-        compression_enabled: bool
+        label_id: u32,
+        property_key_ids: Vec<u32>,
+        is_unique: bool,
+        compression_enabled: bool,
     ) -> Self {
         Self {
             index: RwLock::new(BTreeMap::new()),
@@ -240,12 +244,12 @@ impl BTreeIndex {
             compression_enabled,
         }
     }
-    
+
     /// Create a unique index
     pub fn new_unique(label_id: u32, property_key_id: u32) -> Self {
         Self::new_composite(label_id, vec![property_key_id], true, false)
     }
-    
+
     /// Create a composite unique index
     pub fn new_composite_unique(label_id: u32, property_key_ids: Vec<u32>) -> Self {
         Self::new_composite(label_id, property_key_ids, true, false)
@@ -255,7 +259,7 @@ impl BTreeIndex {
     pub fn insert(&self, node_id: u64, value: Value) -> Result<()> {
         self.insert_composite(node_id, vec![value])
     }
-    
+
     /// Insert a node with composite property values into the index
     pub fn insert_composite(&self, node_id: u64, values: Vec<Value>) -> Result<()> {
         if values.len() != self.property_key_ids.len() {
@@ -265,7 +269,7 @@ impl BTreeIndex {
                 values.len()
             )));
         }
-        
+
         let key = PropertyKey::new(values.clone(), node_id);
         let mut index = self
             .index
@@ -277,13 +281,11 @@ impl BTreeIndex {
             .map_err(|_| Error::internal("B-tree stats lock poisoned"))?;
 
         // Check for unique constraint violation
-        if self.is_unique {
-            if index.contains_key(&key) {
-                return Err(Error::ConstraintViolation(format!(
-                    "Unique constraint violation for key: {:?}",
-                    key.values
-                )));
-            }
+        if self.is_unique && index.contains_key(&key) {
+            return Err(Error::ConstraintViolation(format!(
+                "Unique constraint violation for key: {:?}",
+                key.values
+            )));
         }
 
         // Check if this exact key already exists
@@ -313,7 +315,7 @@ impl BTreeIndex {
     pub fn remove(&self, node_id: u64, value: &Value) -> Result<bool> {
         self.remove_composite(node_id, vec![value.clone()])
     }
-    
+
     /// Remove a node with composite values from the index
     pub fn remove_composite(&self, node_id: u64, values: Vec<Value>) -> Result<bool> {
         if values.len() != self.property_key_ids.len() {
@@ -323,7 +325,7 @@ impl BTreeIndex {
                 values.len()
             )));
         }
-        
+
         let key = PropertyKey::new(values, node_id);
         let mut index = self
             .index
@@ -359,7 +361,7 @@ impl BTreeIndex {
     pub fn find_exact(&self, value: &Value) -> Result<Vec<u64>> {
         self.find_exact_composite(vec![value.clone()])
     }
-    
+
     /// Find all nodes with exact composite property values
     pub fn find_exact_composite(&self, values: Vec<Value>) -> Result<Vec<u64>> {
         if values.len() != self.property_key_ids.len() {
@@ -369,7 +371,7 @@ impl BTreeIndex {
                 values.len()
             )));
         }
-        
+
         let index = self
             .index
             .read()
@@ -391,7 +393,7 @@ impl BTreeIndex {
             .with_max(max_value.clone(), true);
         self.find_range_with_bounds(&bounds)
     }
-    
+
     /// Find all nodes with property values in a range with custom bounds
     pub fn find_range_with_bounds(&self, bounds: &RangeBounds) -> Result<Vec<u64>> {
         let index = self
@@ -407,16 +409,22 @@ impl BTreeIndex {
         }
         Ok(results)
     }
-    
+
     /// Find all nodes with composite values in a range
-    pub fn find_composite_range(&self, min_values: &[Value], max_values: &[Value]) -> Result<Vec<u64>> {
-        if min_values.len() != self.property_key_ids.len() || max_values.len() != self.property_key_ids.len() {
+    pub fn find_composite_range(
+        &self,
+        min_values: &[Value],
+        max_values: &[Value],
+    ) -> Result<Vec<u64>> {
+        if min_values.len() != self.property_key_ids.len()
+            || max_values.len() != self.property_key_ids.len()
+        {
             return Err(Error::InvalidId("Range values length mismatch".to_string()));
         }
-        
+
         let min_key = PropertyKey::new(min_values.to_vec(), 0);
         let max_key = PropertyKey::new(max_values.to_vec(), u64::MAX);
-        
+
         let index = self
             .index
             .read()
@@ -459,7 +467,7 @@ impl BTreeIndex {
         }
         Ok(values)
     }
-    
+
     /// Get all unique composite values in the index
     pub fn get_unique_composite_values(&self) -> Result<Vec<Vec<Value>>> {
         let index = self
@@ -480,7 +488,7 @@ impl BTreeIndex {
     pub fn has_value(&self, node_id: u64, value: &Value) -> Result<bool> {
         self.has_composite_value(node_id, vec![value.clone()])
     }
-    
+
     /// Check if a specific node has specific composite property values
     pub fn has_composite_value(&self, node_id: u64, values: Vec<Value>) -> Result<bool> {
         if values.len() != self.property_key_ids.len() {
@@ -490,7 +498,7 @@ impl BTreeIndex {
                 values.len()
             )));
         }
-        
+
         let key = PropertyKey::new(values, node_id);
         let index = self
             .index
@@ -558,38 +566,34 @@ impl BTreeIndex {
         if key.values.is_empty() {
             return false;
         }
-        
+
         let value = &key.values[0]; // For single-property indexes
-        
+
         if let Some(ref min) = bounds.min {
             let cmp_min = PropertyKey::compare_values(value, min);
             if bounds.min_inclusive {
                 if cmp_min < 0 {
                     return false;
                 }
-            } else {
-                if cmp_min <= 0 {
-                    return false;
-                }
+            } else if cmp_min <= 0 {
+                return false;
             }
         }
-        
+
         if let Some(ref max) = bounds.max {
             let cmp_max = PropertyKey::compare_values(value, max);
             if bounds.max_inclusive {
                 if cmp_max > 0 {
                     return false;
                 }
-            } else {
-                if cmp_max >= 0 {
-                    return false;
-                }
+            } else if cmp_max >= 0 {
+                return false;
             }
         }
-        
+
         true
     }
-    
+
     /// Update comprehensive statistics
     fn update_statistics(&self, stats: &mut IndexStats, index: &BTreeMap<PropertyKey, Vec<u64>>) {
         stats.unique_value_count = index.len() as u64;
@@ -598,7 +602,7 @@ impl BTreeIndex {
         } else {
             0.0
         };
-        
+
         // Calculate average key size
         let mut total_key_size = 0;
         for key in index.keys() {
@@ -609,57 +613,56 @@ impl BTreeIndex {
         } else {
             0.0
         };
-        
+
         // Update size estimation
         stats.size_bytes = self.estimate_size_bytes(index);
-        
+
         // Build histogram (simplified - in production, use proper histogram algorithm)
         self.build_histogram(stats, index);
-        
+
         // Find most frequent values
         self.find_most_frequent(stats, index);
     }
-    
+
     /// Build value distribution histogram
     fn build_histogram(&self, stats: &mut IndexStats, index: &BTreeMap<PropertyKey, Vec<u64>>) {
         if index.is_empty() {
             stats.histogram.clear();
             return;
         }
-        
+
         let mut buckets = Vec::new();
         let bucket_count = 10.min(index.len());
         let values_per_bucket = index.len() / bucket_count;
-        
+
         let mut current_bucket = HistogramBucket {
             min_value: Value::Null,
             max_value: Value::Null,
             count: 0,
             distinct_count: 0,
         };
-        
+
         let mut distinct_values = std::collections::HashSet::new();
-        
+
         for (key, node_ids) in index.iter() {
             if key.values.is_empty() {
                 continue;
             }
-            
+
             let value = &key.values[0];
-            
+
             if current_bucket.count == 0 {
                 current_bucket.min_value = value.clone();
                 current_bucket.max_value = value.clone();
-            } else {
-                if PropertyKey::compare_values(value, &current_bucket.max_value) > 0 {
-                    current_bucket.max_value = value.clone();
-                }
+            } else if PropertyKey::compare_values(value, &current_bucket.max_value) > 0 {
+                current_bucket.max_value = value.clone();
             }
-            
+
             current_bucket.count += node_ids.len() as u64;
             distinct_values.insert(value.clone());
-            
-            if current_bucket.count >= values_per_bucket as u64 && buckets.len() < bucket_count - 1 {
+
+            if current_bucket.count >= values_per_bucket as u64 && buckets.len() < bucket_count - 1
+            {
                 current_bucket.distinct_count = distinct_values.len() as u64;
                 buckets.push(current_bucket);
                 current_bucket = HistogramBucket {
@@ -671,36 +674,36 @@ impl BTreeIndex {
                 distinct_values.clear();
             }
         }
-        
+
         // Add the last bucket
         if current_bucket.count > 0 {
             current_bucket.distinct_count = distinct_values.len() as u64;
             buckets.push(current_bucket);
         }
-        
+
         stats.histogram = buckets;
     }
-    
+
     /// Find most frequent values
     fn find_most_frequent(&self, stats: &mut IndexStats, index: &BTreeMap<PropertyKey, Vec<u64>>) {
         let mut frequency_map = HashMap::new();
-        
+
         for (key, node_ids) in index.iter() {
             if key.values.is_empty() {
                 continue;
             }
-            
+
             let value = &key.values[0];
             let count = node_ids.len() as u64;
             *frequency_map.entry(value.clone()).or_insert(0) += count;
         }
-        
+
         let mut frequencies: Vec<_> = frequency_map.into_iter().collect();
         frequencies.sort_by(|a, b| b.1.cmp(&a.1));
-        
+
         stats.most_frequent = frequencies.into_iter().take(10).collect();
     }
-    
+
     /// Estimate size in bytes
     fn estimate_size_bytes(&self, index: &BTreeMap<PropertyKey, Vec<u64>>) -> u64 {
         let mut size = 0;
@@ -711,37 +714,46 @@ impl BTreeIndex {
         }
         size
     }
-    
+
     /// Get property key IDs
     pub fn property_key_ids(&self) -> &[u32] {
         &self.property_key_ids
     }
-    
+
     /// Check if this is a unique index
     pub fn is_unique(&self) -> bool {
         self.is_unique
     }
-    
+
     /// Check if compression is enabled
     pub fn is_compression_enabled(&self) -> bool {
         self.compression_enabled
     }
-    
+
     /// Get index selectivity
     pub fn get_selectivity(&self) -> Result<f64> {
-        let stats = self.stats.read().map_err(|_| Error::internal("Stats lock poisoned"))?;
+        let stats = self
+            .stats
+            .read()
+            .map_err(|_| Error::internal("Stats lock poisoned"))?;
         Ok(stats.selectivity)
     }
-    
+
     /// Get histogram data
     pub fn get_histogram(&self) -> Result<Vec<HistogramBucket>> {
-        let stats = self.stats.read().map_err(|_| Error::internal("Stats lock poisoned"))?;
+        let stats = self
+            .stats
+            .read()
+            .map_err(|_| Error::internal("Stats lock poisoned"))?;
         Ok(stats.histogram.clone())
     }
-    
+
     /// Get most frequent values
     pub fn get_most_frequent(&self) -> Result<Vec<(Value, u64)>> {
-        let stats = self.stats.read().map_err(|_| Error::internal("Stats lock poisoned"))?;
+        let stats = self
+            .stats
+            .read()
+            .map_err(|_| Error::internal("Stats lock poisoned"))?;
         Ok(stats.most_frequent.clone())
     }
 }

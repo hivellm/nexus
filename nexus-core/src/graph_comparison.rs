@@ -199,6 +199,31 @@ pub struct GraphMetrics {
     pub avg_shortest_path: f64,
 }
 
+/// Parameters for calculating overall similarity
+#[derive(Debug)]
+pub struct SimilarityParams<'a> {
+    /// Original nodes
+    pub original_nodes: &'a HashMap<NodeId, Node>,
+    /// Modified nodes
+    pub modified_nodes: &'a HashMap<NodeId, Node>,
+    /// Original edges
+    pub original_edges: &'a HashMap<EdgeId, Edge>,
+    /// Modified edges
+    pub modified_edges: &'a HashMap<EdgeId, Edge>,
+    /// Added nodes
+    pub added_nodes: &'a [Node],
+    /// Removed nodes
+    pub removed_nodes: &'a [Node],
+    /// Modified nodes
+    pub modified_nodes_list: &'a [NodeModification],
+    /// Added edges
+    pub added_edges: &'a [Edge],
+    /// Removed edges
+    pub removed_edges: &'a [Edge],
+    /// Modified edges
+    pub modified_edges_list: &'a [EdgeModification],
+}
+
 /// Options for graph comparison
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComparisonOptions {
@@ -268,18 +293,19 @@ impl GraphComparator {
             Self::compare_edges(&original_edges, &modified_edges, options)?;
 
         // Calculate similarity scores
-        let overall_similarity = Self::calculate_overall_similarity(
-            &original_nodes,
-            &modified_nodes,
-            &original_edges,
-            &modified_edges,
-            &added_nodes,
-            &removed_nodes,
-            &modified_nodes_list,
-            &added_edges,
-            &removed_edges,
-            &modified_edges_list,
-        );
+        let similarity_params = SimilarityParams {
+            original_nodes: &original_nodes,
+            modified_nodes: &modified_nodes,
+            original_edges: &original_edges,
+            modified_edges: &modified_edges,
+            added_nodes: &added_nodes,
+            removed_nodes: &removed_nodes,
+            modified_nodes_list: &modified_nodes_list,
+            added_edges: &added_edges,
+            removed_edges: &removed_edges,
+            modified_edges_list: &modified_edges_list,
+        };
+        let overall_similarity = Self::calculate_overall_similarity(&similarity_params);
 
         let structural_similarity = Self::calculate_structural_similarity(
             &original_edges,
@@ -299,7 +325,12 @@ impl GraphComparator {
 
         // Perform topology analysis if enabled
         let topology_analysis = if options.include_topology_analysis {
-            Some(Self::analyze_topology(original, modified, &original_nodes, &modified_nodes)?)
+            Some(Self::analyze_topology(
+                original,
+                modified,
+                &original_nodes,
+                &modified_nodes,
+            )?)
         } else {
             None
         };
@@ -626,34 +657,27 @@ impl GraphComparator {
     }
 
     /// Calculate overall similarity score
-    fn calculate_overall_similarity(
-        original_nodes: &HashMap<NodeId, Node>,
-        modified_nodes: &HashMap<NodeId, Node>,
-        original_edges: &HashMap<EdgeId, Edge>,
-        modified_edges: &HashMap<EdgeId, Edge>,
-        added_nodes: &[Node],
-        removed_nodes: &[Node],
-        modified_nodes_list: &[NodeModification],
-        added_edges: &[Edge],
-        removed_edges: &[Edge],
-        modified_edges_list: &[EdgeModification],
-    ) -> f64 {
-        let total_nodes = original_nodes.len().max(modified_nodes.len());
-        let total_edges = original_edges.len().max(modified_edges.len());
+    fn calculate_overall_similarity(params: &SimilarityParams<'_>) -> f64 {
+        let total_nodes = params.original_nodes.len().max(params.modified_nodes.len());
+        let total_edges = params.original_edges.len().max(params.modified_edges.len());
 
         if total_nodes == 0 && total_edges == 0 {
             return 1.0; // Both graphs are empty
         }
 
         let node_similarity = if total_nodes > 0 {
-            1.0 - (added_nodes.len() + removed_nodes.len() + modified_nodes_list.len()) as f64
+            1.0 - (params.added_nodes.len()
+                + params.removed_nodes.len()
+                + params.modified_nodes_list.len()) as f64
                 / total_nodes as f64
         } else {
             1.0
         };
 
         let edge_similarity = if total_edges > 0 {
-            1.0 - (added_edges.len() + removed_edges.len() + modified_edges_list.len()) as f64
+            1.0 - (params.added_edges.len()
+                + params.removed_edges.len()
+                + params.modified_edges_list.len()) as f64
                 / total_edges as f64
         } else {
             1.0
@@ -701,18 +725,18 @@ impl GraphComparator {
 
     /// Analyze graph topology changes
     fn analyze_topology(
-        original: &Graph,
-        modified: &Graph,
-        original_nodes: &HashMap<NodeId, Node>,
-        modified_nodes: &HashMap<NodeId, Node>,
+        _original: &Graph,
+        _modified: &Graph,
+        _original_nodes: &HashMap<NodeId, Node>,
+        _modified_nodes: &HashMap<NodeId, Node>,
     ) -> Result<TopologyAnalysis, String> {
         // This is a simplified implementation
         // In a real implementation, you would use graph algorithms to find connected components
         // and calculate various topology metrics
-        
+
         let original_components = 1; // Simplified: assume single component
         let modified_components = 1; // Simplified: assume single component
-        
+
         Ok(TopologyAnalysis {
             original_components,
             modified_components,
@@ -725,12 +749,12 @@ impl GraphComparator {
 
     /// Calculate metrics comparison
     fn calculate_metrics_comparison(
-        original: &Graph,
-        modified: &Graph,
+        _original: &Graph,
+        _modified: &Graph,
     ) -> Result<MetricsComparison, String> {
         // This is a simplified implementation
         // In a real implementation, you would calculate actual graph metrics
-        
+
         let original_metrics = GraphMetrics {
             node_count: 0,
             edge_count: 0,
@@ -803,7 +827,8 @@ impl GraphComparator {
 
         // Property similarity
         let property_weight = 0.6;
-        let property_similarity = Self::calculate_property_similarity(&node1.properties, &node2.properties);
+        let property_similarity =
+            Self::calculate_property_similarity(&node1.properties, &node2.properties);
         similarity += property_similarity * property_weight;
         total_weight += property_weight;
 
@@ -830,7 +855,10 @@ impl GraphComparator {
     }
 
     /// Calculate property similarity
-    pub fn calculate_property_similarity(prop1: &HashMap<String, PropertyValue>, prop2: &HashMap<String, PropertyValue>) -> f64 {
+    pub fn calculate_property_similarity(
+        prop1: &HashMap<String, PropertyValue>,
+        prop2: &HashMap<String, PropertyValue>,
+    ) -> f64 {
         if prop1.is_empty() && prop2.is_empty() {
             return 1.0;
         }

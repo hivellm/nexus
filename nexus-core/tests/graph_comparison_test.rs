@@ -3,8 +3,8 @@
 use nexus_core::catalog::Catalog;
 use nexus_core::graph::{Edge, EdgeId, Graph, Node, NodeId};
 use nexus_core::graph_comparison::{
-    ComparisonOptions, DiffSummary, EdgeChanges, GraphComparator, GraphDiff, NodeChanges,
-    PropertyValueChange, TopologyAnalysis, ComponentChange, GraphMetrics, MetricsComparison,
+    ComparisonOptions, ComponentChange, DiffSummary, EdgeChanges, GraphComparator, GraphDiff,
+    GraphMetrics, MetricsComparison, NodeChanges, PropertyValueChange, TopologyAnalysis,
 };
 use nexus_core::graph_simple::PropertyValue;
 use nexus_core::storage::RecordStore;
@@ -607,12 +607,18 @@ fn test_enhanced_comparison_options() {
 #[test]
 fn test_node_similarity_calculation() {
     let mut props1 = HashMap::new();
-    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props1.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     props1.insert("age".to_string(), PropertyValue::Int64(30));
     let node1 = create_test_node(1, vec!["Person".to_string()], props1);
 
     let mut props2 = HashMap::new();
-    props2.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props2.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     props2.insert("age".to_string(), PropertyValue::Int64(30));
     let node2 = create_test_node(2, vec!["Person".to_string()], props2);
 
@@ -623,11 +629,17 @@ fn test_node_similarity_calculation() {
 #[test]
 fn test_node_similarity_different_labels() {
     let mut props1 = HashMap::new();
-    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props1.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     let node1 = create_test_node(1, vec!["Person".to_string()], props1);
 
     let mut props2 = HashMap::new();
-    props2.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props2.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     let node2 = create_test_node(2, vec!["Employee".to_string()], props2);
 
     let similarity = GraphComparator::calculate_node_similarity(&node1, &node2);
@@ -664,11 +676,17 @@ fn test_label_similarity_empty() {
 #[test]
 fn test_property_similarity_calculation() {
     let mut props1 = HashMap::new();
-    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props1.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     props1.insert("age".to_string(), PropertyValue::Int64(30));
 
     let mut props2 = HashMap::new();
-    props2.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props2.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     props2.insert("age".to_string(), PropertyValue::Int64(30));
 
     let similarity = GraphComparator::calculate_property_similarity(&props1, &props2);
@@ -678,7 +696,10 @@ fn test_property_similarity_calculation() {
 #[test]
 fn test_property_similarity_different_values() {
     let mut props1 = HashMap::new();
-    props1.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+    props1.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
     props1.insert("age".to_string(), PropertyValue::Int64(30));
 
     let mut props2 = HashMap::new();

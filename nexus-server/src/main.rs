@@ -153,7 +153,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/comparison/stats", post(api::comparison::get_graph_stats))
         .route("/comparison/health", get(api::comparison::health_check))
-        .route("/comparison/advanced", post(api::comparison::advanced_compare_graphs))
+        .route(
+            "/comparison/advanced",
+            post(api::comparison::advanced_compare_graphs),
+        )
         // Clustering endpoints
         .route(
             "/clustering/algorithms",

@@ -4,8 +4,8 @@ use axum::extract::Json;
 use axum::http::StatusCode;
 use axum::response::Json as ResponseJson;
 use nexus_core::Graph;
-use nexus_core::graph::{NodeId, EdgeId};
-use nexus_core::graph_comparison::{ComparisonOptions, GraphComparator, GraphDiff, DiffSummary};
+use nexus_core::graph::{EdgeId, NodeId};
+use nexus_core::graph_comparison::{ComparisonOptions, DiffSummary, GraphComparator, GraphDiff};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -407,7 +407,10 @@ pub struct StructuralChangesSummary {
 pub async fn advanced_compare_graphs(
     Json(payload): Json<AdvancedCompareRequest>,
 ) -> std::result::Result<ResponseJson<AdvancedCompareResponse>, StatusCode> {
-    tracing::info!("Advanced graph comparison with options: {:?}", payload.options);
+    tracing::info!(
+        "Advanced graph comparison with options: {:?}",
+        payload.options
+    );
 
     let graph_a = GRAPH_A.get().ok_or_else(|| {
         tracing::error!("Graph A not initialized");
