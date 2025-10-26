@@ -7,7 +7,7 @@ use crate::graph_correlation::{CorrelationGraph, EdgeType, NodeType};
 use std::collections::{HashMap, HashSet};
 
 /// Filter criteria for dependency graphs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DependencyFilter {
     /// Include only specific node types
     pub node_types: Option<Vec<NodeType>>,
@@ -27,22 +27,6 @@ pub struct DependencyFilter {
     pub root_nodes_only: bool,
     /// Maximum depth from root nodes
     pub max_depth: Option<usize>,
-}
-
-impl Default for DependencyFilter {
-    fn default() -> Self {
-        Self {
-            node_types: None,
-            edge_types: None,
-            label_patterns: None,
-            min_degree: None,
-            max_degree: None,
-            circular_only: false,
-            leaf_nodes_only: false,
-            root_nodes_only: false,
-            max_depth: None,
-        }
-    }
 }
 
 impl DependencyFilter {

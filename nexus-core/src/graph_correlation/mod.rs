@@ -835,10 +835,7 @@ impl GraphSourceData {
 
     /// Add a single import
     pub fn add_import(&mut self, file: String, import: String) {
-        self.imports
-            .entry(file)
-            .or_insert_with(Vec::new)
-            .push(import);
+        self.imports.entry(file).or_default().push(import);
     }
 
     /// Add function calls for a file

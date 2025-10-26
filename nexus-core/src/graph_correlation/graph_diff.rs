@@ -159,7 +159,7 @@ pub fn compare_graphs(graph1: &CorrelationGraph, graph2: &CorrelationGraph) -> R
         modified_nodes,
         added_edges,
         removed_edges,
-        similarity_score: similarity_score.max(0.0).min(1.0),
+        similarity_score: similarity_score.clamp(0.0, 1.0),
     })
 }
 

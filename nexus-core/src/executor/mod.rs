@@ -446,7 +446,7 @@ impl Executor {
     }
 
     /// Execute CREATE pattern to create nodes and relationships
-    fn execute_create_pattern(&self, pattern: &parser::Pattern) -> Result<()> {
+    fn execute_create_pattern(&self, _pattern: &parser::Pattern) -> Result<()> {
         // For now, CREATE is not fully implemented in this MVP executor
         // It requires transaction support which is not yet integrated here
         // The parser works correctly, but execution is deferred to future implementation
@@ -469,11 +469,9 @@ impl Executor {
                 parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
                 parser::Literal::Null => Ok(Value::Null),
             },
-            parser::Expression::Variable(_) => {
-                Err(Error::CypherExecution(
-                    "Variables not supported in CREATE properties".to_string(),
-                ))
-            }
+            parser::Expression::Variable(_) => Err(Error::CypherExecution(
+                "Variables not supported in CREATE properties".to_string(),
+            )),
             _ => Err(Error::CypherExecution(
                 "Complex expressions not supported in CREATE properties".to_string(),
             )),

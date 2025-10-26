@@ -103,7 +103,7 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
                 engine_stats.nodes,
                 engine_stats.relationships
             );
-            
+
             return Json(DatabaseStatsResponse {
                 catalog: CatalogStats {
                     label_count: engine_stats.labels as usize,

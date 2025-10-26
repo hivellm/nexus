@@ -318,11 +318,9 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
     };
 
     // Implement actual node creation using Engine API (CREATE not supported in Cypher parser)
-    let start_time = Instant::now();
+    let _start_time = Instant::now();
     log_operation("create_node", &format!("Labels: {:?}", request.labels));
 
-    // Use the shared Engine from lib.rs
-    use nexus_core::Engine;
     let catalog_arc = match CATALOG.get() {
         Some(c) => c.clone(),
         None => {
@@ -333,10 +331,10 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
             });
         }
     };
-    let catalog = catalog_arc.clone();
+    let _catalog = catalog_arc.clone();
 
     // Create a temporary Engine to use its create_node method
-    let record_store = match nexus_core::storage::RecordStore::new("./data") {
+    let _record_store = match nexus_core::storage::RecordStore::new("./data") {
         Ok(s) => s,
         Err(e) => {
             log_error(

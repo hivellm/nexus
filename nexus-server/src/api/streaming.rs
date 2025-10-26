@@ -427,7 +427,7 @@ async fn handle_create_node(
 
     // Use Engine to create node directly
     let mut engine = server.engine.write().await;
-    
+
     match engine.create_node(labels.clone(), properties.clone()) {
         Ok(node_id) => {
             let response = json!({
@@ -548,52 +548,66 @@ async fn handle_execute_cypher(
 
     // Check if query contains CREATE - if so, use Engine for actual node creation
     let is_create_query = query.trim().to_uppercase().starts_with("CREATE");
-    
+
     if is_create_query {
         // Parse and execute CREATE using Engine
         use nexus_core::executor::parser::CypherParser;
-        
+
         let mut parser = CypherParser::new(query.to_string());
-        let ast = parser.parse()
+        let ast = parser
+            .parse()
             .map_err(|e| ErrorData::internal_error(format!("Parse error: {}", e), None))?;
-        
+
         // Execute CREATE clauses using Engine
         let mut engine = server.engine.write().await;
         for clause in &ast.clauses {
             if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
                 // Extract pattern and create nodes
                 for element in &create_clause.pattern.elements {
-                    if let nexus_core::executor::parser::PatternElement::Node(node_pattern) = element {
+                    if let nexus_core::executor::parser::PatternElement::Node(node_pattern) =
+                        element
+                    {
                         let labels = node_pattern.labels.clone();
-                        
+
                         // Convert properties
                         let mut props = serde_json::Map::new();
                         if let Some(prop_map) = &node_pattern.properties {
                             for (key, expr) in &prop_map.properties {
                                 // Convert expression to JSON value
                                 let value = match expr {
-                                    nexus_core::executor::parser::Expression::Literal(lit) => match lit {
-                                        nexus_core::executor::parser::Literal::String(s) => serde_json::Value::String(s.clone()),
-                                        nexus_core::executor::parser::Literal::Integer(i) => serde_json::Value::Number((*i).into()),
-                                        nexus_core::executor::parser::Literal::Float(f) => {
-                                            serde_json::Number::from_f64(*f)
-                                                .map(serde_json::Value::Number)
-                                                .unwrap_or(serde_json::Value::Null)
+                                    nexus_core::executor::parser::Expression::Literal(lit) => {
+                                        match lit {
+                                            nexus_core::executor::parser::Literal::String(s) => {
+                                                serde_json::Value::String(s.clone())
+                                            }
+                                            nexus_core::executor::parser::Literal::Integer(i) => {
+                                                serde_json::Value::Number((*i).into())
+                                            }
+                                            nexus_core::executor::parser::Literal::Float(f) => {
+                                                serde_json::Number::from_f64(*f)
+                                                    .map(serde_json::Value::Number)
+                                                    .unwrap_or(serde_json::Value::Null)
+                                            }
+                                            nexus_core::executor::parser::Literal::Boolean(b) => {
+                                                serde_json::Value::Bool(*b)
+                                            }
+                                            nexus_core::executor::parser::Literal::Null => {
+                                                serde_json::Value::Null
+                                            }
                                         }
-                                        nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
-                                        nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
-                                    },
+                                    }
                                     _ => serde_json::Value::Null,
                                 };
                                 props.insert(key.clone(), value);
                             }
                         }
-                        
+
                         let properties = serde_json::Value::Object(props);
-                        
+
                         // Create node using Engine
-                        engine.create_node(labels, properties)
-                            .map_err(|e| ErrorData::internal_error(format!("Failed to create node: {}", e), None))?;
+                        engine.create_node(labels, properties).map_err(|e| {
+                            ErrorData::internal_error(format!("Failed to create node: {}", e), None)
+                        })?;
                     }
                 }
             }
@@ -839,15 +853,17 @@ async fn handle_graph_correlation_analyze(
 
     // Parse and normalize graph input
     let mut graph_value = args.get("graph").cloned().unwrap_or(json!({}));
-    
+
     // Add missing fields with defaults to make it accept partial graphs
     if let Some(obj) = graph_value.as_object_mut() {
         obj.entry("name").or_insert(json!("Graph"));
-        obj.entry("created_at").or_insert_with(|| json!(chrono::Utc::now().to_rfc3339()));
-        obj.entry("updated_at").or_insert_with(|| json!(chrono::Utc::now().to_rfc3339()));
+        obj.entry("created_at")
+            .or_insert_with(|| json!(chrono::Utc::now().to_rfc3339()));
+        obj.entry("updated_at")
+            .or_insert_with(|| json!(chrono::Utc::now().to_rfc3339()));
         obj.entry("metadata").or_insert(json!({}));
         obj.entry("description").or_insert(json!(null));
-        
+
         // Normalize nodes - ensure all have required fields
         if let Some(nodes) = obj.get_mut("nodes").and_then(|v| v.as_array_mut()) {
             for node in nodes.iter_mut() {
@@ -859,7 +875,7 @@ async fn handle_graph_correlation_analyze(
                 }
             }
         }
-        
+
         // Normalize edges - ensure all have required fields
         if let Some(edges) = obj.get_mut("edges").and_then(|v| v.as_array_mut()) {
             for edge in edges.iter_mut() {
@@ -869,7 +885,7 @@ async fn handle_graph_correlation_analyze(
             }
         }
     }
-    
+
     // Now deserialize with all required fields present
     let graph: CorrelationGraph = serde_json::from_value(graph_value)
         .map_err(|e| ErrorData::invalid_params(format!("Invalid graph: {}", e), None))?;
@@ -1037,37 +1053,35 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
-    #[tokio::test]
-    async fn test_nexus_mcp_service_new() {
+    /// Helper function to create a test server with all required components
+    fn create_test_server() -> Arc<NexusServer> {
         let executor = Arc::new(RwLock::new(Executor::default()));
         let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
         let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
         let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
+        let engine = Arc::new(RwLock::new(
+            nexus_core::Engine::new("./test_data".into()).expect("Failed to create test engine"),
+        ));
 
-        let server = Arc::new(NexusServer {
+        Arc::new(NexusServer {
             executor,
             catalog,
             label_index,
             knn_index,
-        });
+            engine,
+        })
+    }
 
+    #[tokio::test]
+    async fn test_nexus_mcp_service_new() {
+        let server = create_test_server();
         let _service = NexusMcpService::new(server);
         // Service created successfully
     }
 
     #[tokio::test]
     async fn test_get_info() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let service = NexusMcpService::new(server);
         let info = service.get_info();
@@ -1096,17 +1110,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_nexus_mcp_tool_unknown() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let request = CallToolRequestParam {
             name: "unknown_tool".into(),
@@ -1127,17 +1131,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_nexus_mcp_tool_create_node() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let request = CallToolRequestParam {
             name: "create_node".into(),
@@ -1166,17 +1160,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_nexus_mcp_tool_execute_cypher() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let request = CallToolRequestParam {
             name: "execute_cypher".into(),
@@ -1204,17 +1188,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_nexus_mcp_tool_knn_search() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let request = CallToolRequestParam {
             name: "knn_search".into(),
@@ -1259,17 +1233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_generate_call_graph() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let mut files = serde_json::Map::new();
         files.insert(
@@ -1308,17 +1272,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_generate_dependency_graph() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let mut files = serde_json::Map::new();
         files.insert("mod_a.rs".to_string(), json!("use mod_b;"));
@@ -1343,17 +1297,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_generate_invalid_type() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_generate".into(),
@@ -1374,17 +1318,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_analyze_statistics() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         // Create a simple graph
         let graph = json!({
@@ -1426,17 +1360,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_analyze_patterns() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let graph = json!({
             "name": "Pipeline Graph",
@@ -1479,17 +1403,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_analyze_all() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let graph = json!({
             "name": "Full Graph",
@@ -1528,17 +1442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_export_json() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let graph = json!({
             "name": "Export Test",
@@ -1575,17 +1479,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_export_graphml() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let graph = json!({
             "name": "GraphML Export",
@@ -1614,17 +1508,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_export_invalid_format() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let graph = json!({
             "name": "Test",
@@ -1653,17 +1537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_graph_correlation_types() {
-        let executor = Arc::new(RwLock::new(Executor::default()));
-        let catalog = Arc::new(RwLock::new(nexus_core::catalog::Catalog::default()));
-        let label_index = Arc::new(RwLock::new(nexus_core::index::LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(nexus_core::index::KnnIndex::new(128).unwrap()));
-
-        let server = Arc::new(NexusServer {
-            executor,
-            catalog,
-            label_index,
-            knn_index,
-        });
+        let server = create_test_server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_types".into(),

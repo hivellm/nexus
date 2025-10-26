@@ -38,11 +38,11 @@ impl VersionConstraint {
         }
 
         if trimmed.starts_with('^') {
-            return VersionConstraint::Caret(trimmed[1..].to_string());
+            return VersionConstraint::Caret(trimmed.strip_prefix('^').unwrap().to_string());
         }
 
         if trimmed.starts_with('~') {
-            return VersionConstraint::Tilde(trimmed[1..].to_string());
+            return VersionConstraint::Tilde(trimmed.strip_prefix('~').unwrap().to_string());
         }
 
         if trimmed.contains('*') {
@@ -63,11 +63,15 @@ impl VersionConstraint {
                     return VersionConstraint::Range(min.to_string(), max.to_string());
                 }
             }
-            return VersionConstraint::Minimum(trimmed[2..].trim().to_string());
+            return VersionConstraint::Minimum(
+                trimmed.strip_prefix(">=").unwrap().trim().to_string(),
+            );
         }
 
         if trimmed.starts_with('<') {
-            return VersionConstraint::Maximum(trimmed[1..].trim().to_string());
+            return VersionConstraint::Maximum(
+                trimmed.strip_prefix('<').unwrap().trim().to_string(),
+            );
         }
 
         // Default to exact version

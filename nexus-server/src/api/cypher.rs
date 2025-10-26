@@ -95,7 +95,9 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                 if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
                     // Extract pattern and create nodes
                     for element in &create_clause.pattern.elements {
-                        if let nexus_core::executor::parser::PatternElement::Node(node_pattern) = element {
+                        if let nexus_core::executor::parser::PatternElement::Node(node_pattern) =
+                            element
+                        {
                             let labels = node_pattern.labels.clone();
 
                             // Convert properties
@@ -104,17 +106,27 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                 for (key, expr) in &prop_map.properties {
                                     // Convert expression to JSON value
                                     let value = match expr {
-                                        nexus_core::executor::parser::Expression::Literal(lit) => match lit {
-                                            nexus_core::executor::parser::Literal::String(s) => serde_json::Value::String(s.clone()),
-                                            nexus_core::executor::parser::Literal::Integer(i) => serde_json::Value::Number((*i).into()),
-                                            nexus_core::executor::parser::Literal::Float(f) => {
-                                                serde_json::Number::from_f64(*f)
-                                                    .map(serde_json::Value::Number)
-                                                    .unwrap_or(serde_json::Value::Null)
+                                        nexus_core::executor::parser::Expression::Literal(lit) => {
+                                            match lit {
+                                                nexus_core::executor::parser::Literal::String(
+                                                    s,
+                                                ) => serde_json::Value::String(s.clone()),
+                                                nexus_core::executor::parser::Literal::Integer(
+                                                    i,
+                                                ) => serde_json::Value::Number((*i).into()),
+                                                nexus_core::executor::parser::Literal::Float(f) => {
+                                                    serde_json::Number::from_f64(*f)
+                                                        .map(serde_json::Value::Number)
+                                                        .unwrap_or(serde_json::Value::Null)
+                                                }
+                                                nexus_core::executor::parser::Literal::Boolean(
+                                                    b,
+                                                ) => serde_json::Value::Bool(*b),
+                                                nexus_core::executor::parser::Literal::Null => {
+                                                    serde_json::Value::Null
+                                                }
                                             }
-                                            nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
-                                            nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
-                                        },
+                                        }
                                         _ => serde_json::Value::Null,
                                     };
                                     props.insert(key.clone(), value);
@@ -146,7 +158,7 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
             let execution_time = start_time.elapsed().as_millis() as u64;
             tracing::info!("CREATE query executed successfully in {}ms", execution_time);
-            
+
             return Json(CypherResponse {
                 columns: vec![],
                 rows: vec![],
