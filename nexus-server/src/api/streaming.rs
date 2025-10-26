@@ -448,13 +448,12 @@ async fn handle_create_node(
             props_parts.push(format!("{}: {}", key, val_str));
         }
     }
-    let props_str = if props_parts.is_empty() {
-        String::new()
-    } else {
-        format!(" {{{}}}", props_parts.join(", "))
-    };
     
-    create_query.push_str(&format!("{}) RETURN id(n) as node_id", props_str));
+    if !props_parts.is_empty() {
+        create_query.push_str(&format!(" {{{}}}", props_parts.join(", ")));
+    }
+    
+    create_query.push_str(") RETURN id(n) as node_id");
     
     let mut params = HashMap::new();
     
