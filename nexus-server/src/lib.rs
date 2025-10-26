@@ -35,6 +35,8 @@ pub struct NexusServer {
     pub label_index: Arc<RwLock<nexus_core::index::LabelIndex>>,
     /// KNN index
     pub knn_index: Arc<RwLock<nexus_core::index::KnnIndex>>,
+    /// Engine for node creation (mutable operations)
+    pub engine: Arc<RwLock<nexus_core::Engine>>,
 }
 
 impl NexusServer {
@@ -44,12 +46,14 @@ impl NexusServer {
         catalog: Arc<RwLock<nexus_core::catalog::Catalog>>,
         label_index: Arc<RwLock<nexus_core::index::LabelIndex>>,
         knn_index: Arc<RwLock<nexus_core::index::KnnIndex>>,
+        engine: Arc<RwLock<nexus_core::Engine>>,
     ) -> Self {
         Self {
             executor,
             catalog,
             label_index,
             knn_index,
+            engine,
         }
     }
 }

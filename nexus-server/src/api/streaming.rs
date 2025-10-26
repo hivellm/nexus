@@ -425,68 +425,20 @@ async fn handle_create_node(
 
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
-    // Use executor to create node
-    let mut executor = server.executor.write().await;
-
-    // Execute Cypher CREATE query
-    let mut create_query = String::from("CREATE (n");
-    for label in labels.iter() {
-        create_query.push(':');
-        create_query.push_str(label);
-    }
-
-    // Build Cypher properties map from JSON
-    let mut props_parts = Vec::new();
-    if let Some(props_obj) = properties.as_object() {
-        for (key, value) in props_obj.iter() {
-            let val_str = match value {
-                serde_json::Value::String(s) => format!("\"{}\"", s),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                _ => format!("{}", value),
-            };
-            props_parts.push(format!("{}: {}", key, val_str));
-        }
-    }
-
-    if !props_parts.is_empty() {
-        create_query.push_str(&format!(" {{{}}}", props_parts.join(", ")));
-    }
-
-    create_query.push_str(") RETURN id(n) as node_id");
-
-    let mut params = HashMap::new();
-
-    let query = CypherQuery {
-        cypher: create_query,
-        params,
-    };
-
-    match executor.execute(&query) {
-        Ok(result_set) => {
-            if let Some(row) = result_set.rows.first() {
-                // Try to find node_id column index
-                let node_id_idx = result_set.columns.iter().position(|c| c == "node_id");
-                if let Some(idx) = node_id_idx {
-                    if idx < row.values.len() {
-                        // The value is in row.values[idx], convert it
-                        let node_id = row.values[idx].as_u64().unwrap_or(0);
-                        let response = json!({
-                            "status": "created",
-                            "node_id": node_id,
-                            "labels": labels,
-                            "properties": properties
-                        });
-                        return Ok(CallToolResult::success(vec![Content::text(
-                            response.to_string(),
-                        )]));
-                    }
-                }
-            }
-            Err(ErrorData::internal_error(
-                "Failed to extract node ID from result".to_string(),
-                None,
-            ))
+    // Use Engine to create node directly
+    let mut engine = server.engine.write().await;
+    
+    match engine.create_node(labels.clone(), properties.clone()) {
+        Ok(node_id) => {
+            let response = json!({
+                "status": "created",
+                "node_id": node_id,
+                "labels": labels,
+                "properties": properties
+            });
+            Ok(CallToolResult::success(vec![Content::text(
+                response.to_string(),
+            )]))
         }
         Err(e) => Err(ErrorData::internal_error(
             format!("Failed to create node: {}", e),
@@ -594,7 +546,61 @@ async fn handle_execute_cypher(
 
     let start_time = std::time::Instant::now();
 
-    // Execute Cypher query using the executor
+    // Check if query contains CREATE - if so, use Engine for actual node creation
+    let is_create_query = query.trim().to_uppercase().starts_with("CREATE");
+    
+    if is_create_query {
+        // Parse and execute CREATE using Engine
+        use nexus_core::executor::parser::CypherParser;
+        
+        let mut parser = CypherParser::new(query.to_string());
+        let ast = parser.parse()
+            .map_err(|e| ErrorData::internal_error(format!("Parse error: {}", e), None))?;
+        
+        // Execute CREATE clauses using Engine
+        let mut engine = server.engine.write().await;
+        for clause in &ast.clauses {
+            if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
+                // Extract pattern and create nodes
+                for element in &create_clause.pattern.elements {
+                    if let nexus_core::executor::parser::PatternElement::Node(node_pattern) = element {
+                        let labels = node_pattern.labels.clone();
+                        
+                        // Convert properties
+                        let mut props = serde_json::Map::new();
+                        if let Some(prop_map) = &node_pattern.properties {
+                            for (key, expr) in &prop_map.properties {
+                                // Convert expression to JSON value
+                                let value = match expr {
+                                    nexus_core::executor::parser::Expression::Literal(lit) => match lit {
+                                        nexus_core::executor::parser::Literal::String(s) => serde_json::Value::String(s.clone()),
+                                        nexus_core::executor::parser::Literal::Integer(i) => serde_json::Value::Number((*i).into()),
+                                        nexus_core::executor::parser::Literal::Float(f) => {
+                                            serde_json::Number::from_f64(*f)
+                                                .map(serde_json::Value::Number)
+                                                .unwrap_or(serde_json::Value::Null)
+                                        }
+                                        nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
+                                        nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
+                                    },
+                                    _ => serde_json::Value::Null,
+                                };
+                                props.insert(key.clone(), value);
+                            }
+                        }
+                        
+                        let properties = serde_json::Value::Object(props);
+                        
+                        // Create node using Engine
+                        engine.create_node(labels, properties)
+                            .map_err(|e| ErrorData::internal_error(format!("Failed to create node: {}", e), None))?;
+                    }
+                }
+            }
+        }
+    }
+
+    // Execute query normally through executor for RETURN/MATCH clauses
     let mut executor = server.executor.write().await;
     let query_obj = CypherQuery {
         cypher: query.to_string(),
@@ -831,10 +837,42 @@ async fn handle_graph_correlation_analyze(
         .as_ref()
         .ok_or_else(|| ErrorData::invalid_params("Missing arguments", None))?;
 
-    // Parse graph
-    let graph: CorrelationGraph =
-        serde_json::from_value(args.get("graph").cloned().unwrap_or(json!({})))
-            .map_err(|e| ErrorData::invalid_params(format!("Invalid graph: {}", e), None))?;
+    // Parse and normalize graph input
+    let mut graph_value = args.get("graph").cloned().unwrap_or(json!({}));
+    
+    // Add missing fields with defaults to make it accept partial graphs
+    if let Some(obj) = graph_value.as_object_mut() {
+        obj.entry("name").or_insert(json!("Graph"));
+        obj.entry("created_at").or_insert_with(|| json!(chrono::Utc::now().to_rfc3339()));
+        obj.entry("updated_at").or_insert_with(|| json!(chrono::Utc::now().to_rfc3339()));
+        obj.entry("metadata").or_insert(json!({}));
+        obj.entry("description").or_insert(json!(null));
+        
+        // Normalize nodes - ensure all have required fields
+        if let Some(nodes) = obj.get_mut("nodes").and_then(|v| v.as_array_mut()) {
+            for node in nodes.iter_mut() {
+                if let Some(node_obj) = node.as_object_mut() {
+                    node_obj.entry("metadata").or_insert(json!({}));
+                    node_obj.entry("color").or_insert(json!(null));
+                    node_obj.entry("size").or_insert(json!(null));
+                    node_obj.entry("position").or_insert(json!(null));
+                }
+            }
+        }
+        
+        // Normalize edges - ensure all have required fields
+        if let Some(edges) = obj.get_mut("edges").and_then(|v| v.as_array_mut()) {
+            for edge in edges.iter_mut() {
+                if let Some(edge_obj) = edge.as_object_mut() {
+                    edge_obj.entry("metadata").or_insert(json!({}));
+                }
+            }
+        }
+    }
+    
+    // Now deserialize with all required fields present
+    let graph: CorrelationGraph = serde_json::from_value(graph_value)
+        .map_err(|e| ErrorData::invalid_params(format!("Invalid graph: {}", e), None))?;
 
     // Parse analysis type
     let analysis_type = args

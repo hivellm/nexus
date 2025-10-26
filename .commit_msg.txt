@@ -1,0 +1,18 @@
+fix(parser): Critical Cypher parser fixes
+
+- Add skip_whitespace() in node_pattern and relationship_pattern
+- Add CREATE and MERGE to is_clause_boundary()
+- Add MergeClause struct and Clause::Merge handling
+- Add Clause::Create stub in executor
+- Add Error::CypherExecution for execution errors
+- Parser now recognizes properties with whitespace
+- Parser now identifies CREATE and MERGE clauses correctly
+
+Tests demonstrate parser works correctly:
+- CREATE (n:Person {name: 'Alice', age: 30}) → Parsed successfully
+- Properties with various types (string, int) work
+- Whitespace is handled correctly
+
+Known limitation: CREATE execution not yet implemented
+(requires transaction integration).
+

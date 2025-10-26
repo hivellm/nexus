@@ -43,6 +43,10 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration
     let config = Config::default();
 
+    // Initialize Engine (contains all core components)
+    let engine = nexus_core::Engine::new()?;
+    let engine_arc = Arc::new(RwLock::new(engine));
+
     // Initialize executor
     let executor = api::cypher::init_executor()?;
 
@@ -76,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         catalog: catalog_arc,
         label_index: label_index_arc,
         knn_index: knn_index_arc,
+        engine: engine_arc,
     });
 
     info!("Starting Nexus Server on {}", config.addr);

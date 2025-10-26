@@ -10,6 +10,9 @@ use tokio::sync::RwLock;
 /// Global executor instance
 static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
 
+/// Global engine instance for CREATE operations
+static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
+
 /// Initialize the executor
 pub fn init_executor() -> anyhow::Result<Arc<RwLock<Executor>>> {
     let executor = Executor::default();
@@ -18,6 +21,14 @@ pub fn init_executor() -> anyhow::Result<Arc<RwLock<Executor>>> {
         .set(executor_arc.clone())
         .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
     Ok(executor_arc)
+}
+
+/// Initialize the engine
+pub fn init_engine(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
+    ENGINE
+        .set(engine)
+        .map_err(|_| anyhow::anyhow!("Failed to set engine"))?;
+    Ok(())
 }
 
 /// Get the executor instance
