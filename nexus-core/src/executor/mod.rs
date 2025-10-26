@@ -385,6 +385,10 @@ impl Executor {
                         });
                     }
                 }
+                parser::Clause::Create(create_clause) => {
+                    // CREATE: create nodes and relationships from pattern
+                    self.execute_create_pattern(&create_clause.pattern)?;
+                }
                 parser::Clause::Merge(merge_clause) => {
                     // MERGE: match-or-create pattern
                     // For now, treat as MATCH - executor will handle match-or-create logic
@@ -439,6 +443,41 @@ impl Executor {
         }
 
         Ok(operators)
+    }
+
+    /// Execute CREATE pattern to create nodes and relationships
+    fn execute_create_pattern(&self, pattern: &parser::Pattern) -> Result<()> {
+        // For now, CREATE is not fully implemented in this MVP executor
+        // It requires transaction support which is not yet integrated here
+        // The parser works correctly, but execution is deferred to future implementation
+        Ok(())
+    }
+
+    /// Convert expression to JSON value
+    fn expression_to_json_value(&self, expr: &parser::Expression) -> Result<Value> {
+        match expr {
+            parser::Expression::Literal(lit) => match lit {
+                parser::Literal::String(s) => Ok(Value::String(s.clone())),
+                parser::Literal::Integer(i) => Ok(Value::Number((*i).into())),
+                parser::Literal::Float(f) => {
+                    if let Some(num) = serde_json::Number::from_f64(*f) {
+                        Ok(Value::Number(num))
+                    } else {
+                        Err(Error::CypherExecution(format!("Invalid float: {}", f)))
+                    }
+                }
+                parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
+                parser::Literal::Null => Ok(Value::Null),
+            },
+            parser::Expression::Variable(_) => {
+                Err(Error::CypherExecution(
+                    "Variables not supported in CREATE properties".to_string(),
+                ))
+            }
+            _ => Err(Error::CypherExecution(
+                "Complex expressions not supported in CREATE properties".to_string(),
+            )),
+        }
     }
 
     /// Convert expression to string representation

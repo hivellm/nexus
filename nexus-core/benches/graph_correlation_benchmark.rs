@@ -157,4 +157,3 @@ criterion_group!(
     benchmark_graph_filtering
 );
 criterion_main!(benches);
-

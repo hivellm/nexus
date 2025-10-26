@@ -24,14 +24,8 @@ pub enum Clause {
     Match(MatchClause),
     /// CREATE clause for creating nodes and relationships
     Create(CreateClause),
-    /// MERGE clause for match-or-create pattern
+    /// MERGE clause for match-or-create
     Merge(MergeClause),
-    /// SET clause for updating properties/labels
-    Set(SetClause),
-    /// DELETE clause for removing nodes/relationships
-    Delete(DeleteClause),
-    /// REMOVE clause for removing properties/labels
-    Remove(RemoveClause),
     /// WHERE clause for filtering
     Where(WhereClause),
     /// RETURN clause for projection
@@ -60,92 +54,11 @@ pub struct CreateClause {
     pub pattern: Pattern,
 }
 
-/// MERGE clause for match-or-create semantics
+/// MERGE clause for match-or-create operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeClause {
-    /// Pattern to merge (match or create)
+    /// Pattern to match or create
     pub pattern: Pattern,
-    /// ON CREATE SET actions (optional)
-    pub on_create: Option<Vec<SetItem>>,
-    /// ON MATCH SET actions (optional)
-    pub on_match: Option<Vec<SetItem>>,
-}
-
-/// SET clause for updating properties and labels
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetClause {
-    /// Items to set
-    pub items: Vec<SetItem>,
-}
-
-/// SET item (property or label)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SetItem {
-    /// Set property: n.prop = value
-    Property {
-        /// Variable name
-        variable: String,
-        /// Property name
-        property: String,
-        /// Value expression
-        value: Expression,
-    },
-    /// Add label: n:Label
-    Label {
-        /// Variable name
-        variable: String,
-        /// Label name
-        label: String,
-    },
-    /// Set all properties from map: n = {props}
-    Properties {
-        /// Variable name
-        variable: String,
-        /// Properties expression
-        properties: Expression,
-    },
-    /// Add properties from map: n += {props}
-    PropertiesAdd {
-        /// Variable name
-        variable: String,
-        /// Properties expression
-        properties: Expression,
-    },
-}
-
-/// DELETE clause for removing nodes and relationships
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteClause {
-    /// Items to delete
-    pub items: Vec<Expression>,
-    /// DETACH DELETE (delete relationships first)
-    pub detach: bool,
-}
-
-/// REMOVE clause for removing properties and labels
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoveClause {
-    /// Items to remove
-    pub items: Vec<RemoveItem>,
-}
-
-/// REMOVE item (property or label)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RemoveItem {
-    /// Remove property: n.prop
-    Property {
-        /// Variable name
-        variable: String,
-        /// Property name
-        property: String,
-    },
-    /// Remove label: n:Label
-    Label {
-        /// Variable name
-        variable: String,
-        /// Label name
-        label: String,
-    },
 }
 
 /// Pattern matching structure
@@ -492,23 +405,6 @@ impl CypherParser {
                 let merge_clause = self.parse_merge_clause()?;
                 Ok(Clause::Merge(merge_clause))
             }
-            "SET" => {
-                let set_clause = self.parse_set_clause()?;
-                Ok(Clause::Set(set_clause))
-            }
-            "DELETE" => {
-                let delete_clause = self.parse_delete_clause(false)?;
-                Ok(Clause::Delete(delete_clause))
-            }
-            "DETACH" => {
-                self.expect_keyword("DELETE")?;
-                let delete_clause = self.parse_delete_clause(true)?;
-                Ok(Clause::Delete(delete_clause))
-            }
-            "REMOVE" => {
-                let remove_clause = self.parse_remove_clause()?;
-                Ok(Clause::Remove(remove_clause))
-            }
             "WHERE" => {
                 let where_clause = self.parse_where_clause()?;
                 Ok(Clause::Where(where_clause))
@@ -558,192 +454,7 @@ impl CypherParser {
         self.skip_whitespace();
         let pattern = self.parse_pattern()?;
 
-        let mut on_create = None;
-        let mut on_match = None;
-
-        // Check for ON CREATE or ON MATCH
-        self.skip_whitespace();
-        while let Some(keyword) = self.peek_next_keyword() {
-            if keyword.to_uppercase() != "ON" {
-                break;
-            }
-
-            self.expect_keyword("ON")?;
-            let action_keyword = self.parse_keyword()?;
-
-            match action_keyword.to_uppercase().as_str() {
-                "CREATE" => {
-                    self.expect_keyword("SET")?;
-                    on_create = Some(self.parse_set_items()?);
-                }
-                "MATCH" => {
-                    self.expect_keyword("SET")?;
-                    on_match = Some(self.parse_set_items()?);
-                }
-                _ => {
-                    return Err(self.error(&format!(
-                        "Expected CREATE or MATCH after ON, got {}",
-                        action_keyword
-                    )));
-                }
-            }
-
-            self.skip_whitespace();
-        }
-
-        Ok(MergeClause {
-            pattern,
-            on_create,
-            on_match,
-        })
-    }
-
-    /// Parse SET clause
-    fn parse_set_clause(&mut self) -> Result<SetClause> {
-        self.skip_whitespace();
-        let items = self.parse_set_items()?;
-
-        Ok(SetClause { items })
-    }
-
-    /// Parse SET items (property or label assignments)
-    fn parse_set_items(&mut self) -> Result<Vec<SetItem>> {
-        let mut items = Vec::new();
-
-        loop {
-            self.skip_whitespace();
-
-            // Parse variable
-            let variable = self.parse_identifier()?;
-
-            self.skip_whitespace();
-
-            // Check what follows: :Label, .property, = or +=
-            match self.peek_char() {
-                Some(':') => {
-                    // Label assignment: n:Label
-                    self.consume_char();
-                    let label = self.parse_identifier()?;
-                    items.push(SetItem::Label { variable, label });
-                }
-                Some('.') => {
-                    // Property assignment: n.prop = value
-                    self.consume_char();
-                    let property = self.parse_identifier()?;
-                    self.skip_whitespace();
-                    self.expect_char('=')?;
-                    self.skip_whitespace();
-                    let value = self.parse_expression()?;
-                    items.push(SetItem::Property {
-                        variable,
-                        property,
-                        value,
-                    });
-                }
-                Some('=') => {
-                    // Full property replacement: n = {...}
-                    self.consume_char();
-                    self.skip_whitespace();
-                    let properties = self.parse_expression()?;
-                    items.push(SetItem::Properties {
-                        variable,
-                        properties,
-                    });
-                }
-                Some('+') => {
-                    // Property addition: n += {...}
-                    self.consume_char();
-                    self.expect_char('=')?;
-                    self.skip_whitespace();
-                    let properties = self.parse_expression()?;
-                    items.push(SetItem::PropertiesAdd {
-                        variable,
-                        properties,
-                    });
-                }
-                _ => {
-                    return Err(self.error("Expected :, ., = or += after variable in SET"));
-                }
-            }
-
-            // Check for comma (more items) or end of SET
-            self.skip_whitespace();
-            if self.peek_char() == Some(',') {
-                self.consume_char();
-            } else {
-                break;
-            }
-        }
-
-        Ok(items)
-    }
-
-    /// Parse DELETE clause
-    fn parse_delete_clause(&mut self, detach: bool) -> Result<DeleteClause> {
-        self.skip_whitespace();
-
-        let mut items = Vec::new();
-
-        loop {
-            self.skip_whitespace();
-            let expr = self.parse_expression()?;
-            items.push(expr);
-
-            // Check for comma (more items)
-            self.skip_whitespace();
-            if self.peek_char() == Some(',') {
-                self.consume_char();
-            } else {
-                break;
-            }
-        }
-
-        Ok(DeleteClause { items, detach })
-    }
-
-    /// Parse REMOVE clause
-    fn parse_remove_clause(&mut self) -> Result<RemoveClause> {
-        self.skip_whitespace();
-
-        let mut items = Vec::new();
-
-        loop {
-            self.skip_whitespace();
-
-            // Parse variable
-            let variable = self.parse_identifier()?;
-
-            self.skip_whitespace();
-
-            // Check what follows: :Label or .property
-            match self.peek_char() {
-                Some(':') => {
-                    // Label removal: n:Label
-                    self.consume_char();
-                    let label = self.parse_identifier()?;
-                    items.push(RemoveItem::Label { variable, label });
-                }
-                Some('.') => {
-                    // Property removal: n.prop
-                    self.consume_char();
-                    let property = self.parse_identifier()?;
-                    items.push(RemoveItem::Property { variable, property });
-                }
-                _ => {
-                    return Err(self.error("Expected : or . after variable in REMOVE"));
-                }
-            }
-
-            // Check for comma (more items)
-            self.skip_whitespace();
-            if self.peek_char() == Some(',') {
-                self.consume_char();
-            } else {
-                break;
-            }
-        }
-
-        Ok(RemoveClause { items })
+        Ok(MergeClause { pattern })
     }
 
     /// Parse pattern
@@ -791,6 +502,7 @@ impl CypherParser {
     /// Parse node pattern
     fn parse_node_pattern(&mut self) -> Result<NodePattern> {
         self.expect_char('(')?;
+        self.skip_whitespace();
 
         let variable = if self.is_identifier_start() {
             Some(self.parse_identifier()?)
@@ -798,18 +510,21 @@ impl CypherParser {
             None
         };
 
+        self.skip_whitespace();
         let labels = if self.peek_char() == Some(':') {
             self.parse_labels()?
         } else {
             Vec::new()
         };
 
+        self.skip_whitespace();
         let properties = if self.peek_char() == Some('{') {
             Some(self.parse_property_map()?)
         } else {
             None
         };
 
+        self.skip_whitespace();
         self.expect_char(')')?;
 
         Ok(NodePattern {
@@ -837,6 +552,7 @@ impl CypherParser {
         };
 
         self.expect_char('[')?;
+        self.skip_whitespace();
 
         let variable = if self.is_identifier_start() {
             Some(self.parse_identifier()?)
@@ -844,20 +560,24 @@ impl CypherParser {
             None
         };
 
+        self.skip_whitespace();
         let types = if self.peek_char() == Some(':') {
             self.parse_types()?
         } else {
             Vec::new()
         };
 
+        self.skip_whitespace();
         let properties = if self.peek_char() == Some('{') {
             Some(self.parse_property_map()?)
         } else {
             None
         };
 
+        self.skip_whitespace();
         let quantifier = self.parse_relationship_quantifier()?;
 
+        self.skip_whitespace();
         self.expect_char(']')?;
 
         // Parse final direction: "->" or "-"
@@ -945,15 +665,19 @@ impl CypherParser {
     /// Parse property map
     fn parse_property_map(&mut self) -> Result<PropertyMap> {
         self.expect_char('{')?;
+        self.skip_whitespace();
 
         let mut properties = HashMap::new();
 
         while self.peek_char() != Some('}') {
             let key = self.parse_identifier()?;
+            self.skip_whitespace();
             self.expect_char(':')?;
+            self.skip_whitespace();
             let value = self.parse_expression()?;
             properties.insert(key, value);
 
+            self.skip_whitespace();
             if self.peek_char() == Some(',') {
                 self.consume_char();
                 self.skip_whitespace();
@@ -1610,9 +1334,6 @@ impl CypherParser {
         self.peek_keyword("MATCH")
             || self.peek_keyword("CREATE")
             || self.peek_keyword("MERGE")
-            || self.peek_keyword("SET")
-            || self.peek_keyword("DELETE")
-            || self.peek_keyword("REMOVE")
             || self.peek_keyword("WHERE")
             || self.peek_keyword("RETURN")
             || self.peek_keyword("ORDER")
@@ -1709,45 +1430,6 @@ impl CypherParser {
                     .chars()
                     .nth(keyword.len())
                     .is_none_or(|c| !c.is_ascii_alphanumeric()))
-    }
-
-    /// Peek at the next keyword without consuming
-    fn peek_next_keyword(&self) -> Option<String> {
-        let mut pos = self.pos;
-
-        // Skip whitespace
-        while pos < self.input.len() {
-            let ch = self.input.chars().nth(pos).unwrap();
-            if ch.is_whitespace() {
-                pos += 1;
-            } else {
-                break;
-            }
-        }
-
-        // Check if at identifier start
-        if pos >= self.input.len() {
-            return None;
-        }
-
-        let ch = self.input.chars().nth(pos)?;
-        if !ch.is_ascii_alphabetic() {
-            return None;
-        }
-
-        // Collect identifier
-        let mut keyword = String::new();
-        while pos < self.input.len() {
-            let ch = self.input.chars().nth(pos).unwrap();
-            if ch.is_ascii_alphanumeric() || ch == '_' {
-                keyword.push(ch);
-                pos += 1;
-            } else {
-                break;
-            }
-        }
-
-        Some(keyword)
     }
 
     /// Skip whitespace
@@ -3002,277 +2684,5 @@ mod tests {
         let mut parser = CypherParser::new("  MATCH  ".to_string());
         let keyword = parser.parse_keyword().unwrap();
         assert_eq!(keyword, "MATCH");
-    }
-
-    #[test]
-    fn test_parse_merge_simple() {
-        let mut parser = CypherParser::new("MERGE (n:Person {name: 'Alice'})".to_string());
-        let query = parser.parse().unwrap();
-
-        assert_eq!(query.clauses.len(), 1);
-
-        match &query.clauses[0] {
-            Clause::Merge(merge_clause) => {
-                assert_eq!(merge_clause.pattern.elements.len(), 1);
-                assert!(merge_clause.on_create.is_none());
-                assert!(merge_clause.on_match.is_none());
-
-                match &merge_clause.pattern.elements[0] {
-                    PatternElement::Node(node) => {
-                        assert_eq!(node.variable, Some("n".to_string()));
-                        assert_eq!(node.labels, vec!["Person"]);
-                        assert!(node.properties.is_some());
-                    }
-                    _ => panic!("Expected node pattern"),
-                }
-            }
-            _ => panic!("Expected merge clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_merge_with_on_create() {
-        let mut parser = CypherParser::new(
-            "MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.created = true".to_string(),
-        );
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Merge(merge_clause) => {
-                assert!(merge_clause.on_create.is_some());
-                assert!(merge_clause.on_match.is_none());
-
-                let on_create = merge_clause.on_create.as_ref().unwrap();
-                assert_eq!(on_create.len(), 1);
-
-                match &on_create[0] {
-                    SetItem::Property {
-                        variable, property, ..
-                    } => {
-                        assert_eq!(variable, "n");
-                        assert_eq!(property, "created");
-                    }
-                    _ => panic!("Expected property set item"),
-                }
-            }
-            _ => panic!("Expected merge clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_merge_with_on_match() {
-        let mut parser = CypherParser::new(
-            "MERGE (n:Person {name: 'Alice'}) ON MATCH SET n.updated = true".to_string(),
-        );
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Merge(merge_clause) => {
-                assert!(merge_clause.on_create.is_none());
-                assert!(merge_clause.on_match.is_some());
-
-                let on_match = merge_clause.on_match.as_ref().unwrap();
-                assert_eq!(on_match.len(), 1);
-            }
-            _ => panic!("Expected merge clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_set_property() {
-        let mut parser = CypherParser::new("SET n.age = 30".to_string());
-        let query = parser.parse().unwrap();
-
-        assert_eq!(query.clauses.len(), 1);
-
-        match &query.clauses[0] {
-            Clause::Set(set_clause) => {
-                assert_eq!(set_clause.items.len(), 1);
-
-                match &set_clause.items[0] {
-                    SetItem::Property {
-                        variable,
-                        property,
-                        value,
-                    } => {
-                        assert_eq!(variable, "n");
-                        assert_eq!(property, "age");
-                        match value {
-                            Expression::Literal(Literal::Integer(30)) => {}
-                            _ => panic!("Expected integer literal"),
-                        }
-                    }
-                    _ => panic!("Expected property set item"),
-                }
-            }
-            _ => panic!("Expected set clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_set_label() {
-        let mut parser = CypherParser::new("SET n:VIP".to_string());
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Set(set_clause) => {
-                assert_eq!(set_clause.items.len(), 1);
-
-                match &set_clause.items[0] {
-                    SetItem::Label { variable, label } => {
-                        assert_eq!(variable, "n");
-                        assert_eq!(label, "VIP");
-                    }
-                    _ => panic!("Expected label set item"),
-                }
-            }
-            _ => panic!("Expected set clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_set_multiple() {
-        let mut parser = CypherParser::new("SET n.age = 30, n.name = 'Bob', n:VIP".to_string());
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Set(set_clause) => {
-                assert_eq!(set_clause.items.len(), 3);
-            }
-            _ => panic!("Expected set clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_delete() {
-        let mut parser = CypherParser::new("DELETE n".to_string());
-        let query = parser.parse().unwrap();
-
-        assert_eq!(query.clauses.len(), 1);
-
-        match &query.clauses[0] {
-            Clause::Delete(delete_clause) => {
-                assert_eq!(delete_clause.items.len(), 1);
-                assert!(!delete_clause.detach);
-
-                match &delete_clause.items[0] {
-                    Expression::Variable(var) => {
-                        assert_eq!(var, "n");
-                    }
-                    _ => panic!("Expected variable expression"),
-                }
-            }
-            _ => panic!("Expected delete clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_detach_delete() {
-        let mut parser = CypherParser::new("DETACH DELETE n".to_string());
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Delete(delete_clause) => {
-                assert_eq!(delete_clause.items.len(), 1);
-                assert!(delete_clause.detach);
-            }
-            _ => panic!("Expected delete clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_delete_multiple() {
-        let mut parser = CypherParser::new("DELETE n, r, m".to_string());
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Delete(delete_clause) => {
-                assert_eq!(delete_clause.items.len(), 3);
-                assert!(!delete_clause.detach);
-            }
-            _ => panic!("Expected delete clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_remove_property() {
-        let mut parser = CypherParser::new("REMOVE n.age".to_string());
-        let query = parser.parse().unwrap();
-
-        assert_eq!(query.clauses.len(), 1);
-
-        match &query.clauses[0] {
-            Clause::Remove(remove_clause) => {
-                assert_eq!(remove_clause.items.len(), 1);
-
-                match &remove_clause.items[0] {
-                    RemoveItem::Property { variable, property } => {
-                        assert_eq!(variable, "n");
-                        assert_eq!(property, "age");
-                    }
-                    _ => panic!("Expected property remove item"),
-                }
-            }
-            _ => panic!("Expected remove clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_remove_label() {
-        let mut parser = CypherParser::new("REMOVE n:VIP".to_string());
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Remove(remove_clause) => {
-                assert_eq!(remove_clause.items.len(), 1);
-
-                match &remove_clause.items[0] {
-                    RemoveItem::Label { variable, label } => {
-                        assert_eq!(variable, "n");
-                        assert_eq!(label, "VIP");
-                    }
-                    _ => panic!("Expected label remove item"),
-                }
-            }
-            _ => panic!("Expected remove clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_remove_multiple() {
-        let mut parser = CypherParser::new("REMOVE n.age, n:VIP, n.name".to_string());
-        let query = parser.parse().unwrap();
-
-        match &query.clauses[0] {
-            Clause::Remove(remove_clause) => {
-                assert_eq!(remove_clause.items.len(), 3);
-            }
-            _ => panic!("Expected remove clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_complex_query_with_write_ops() {
-        let mut parser = CypherParser::new(
-            "MATCH (n:Person {name: 'Alice'}) SET n.age = 30 RETURN n".to_string(),
-        );
-        let query = parser.parse().unwrap();
-
-        assert_eq!(query.clauses.len(), 3);
-
-        match &query.clauses[0] {
-            Clause::Match(_) => {}
-            _ => panic!("Expected match clause"),
-        }
-
-        match &query.clauses[1] {
-            Clause::Set(_) => {}
-            _ => panic!("Expected set clause"),
-        }
-
-        match &query.clauses[2] {
-            Clause::Return(_) => {}
-            _ => panic!("Expected return clause"),
-        }
     }
 }

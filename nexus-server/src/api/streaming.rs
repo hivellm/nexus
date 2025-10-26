@@ -427,14 +427,14 @@ async fn handle_create_node(
 
     // Use executor to create node
     let mut executor = server.executor.write().await;
-    
+
     // Execute Cypher CREATE query
     let mut create_query = String::from("CREATE (n");
     for label in labels.iter() {
         create_query.push(':');
         create_query.push_str(label);
     }
-    
+
     // Build Cypher properties map from JSON
     let mut props_parts = Vec::new();
     if let Some(props_obj) = properties.as_object() {
@@ -448,20 +448,20 @@ async fn handle_create_node(
             props_parts.push(format!("{}: {}", key, val_str));
         }
     }
-    
+
     if !props_parts.is_empty() {
         create_query.push_str(&format!(" {{{}}}", props_parts.join(", ")));
     }
-    
+
     create_query.push_str(") RETURN id(n) as node_id");
-    
+
     let mut params = HashMap::new();
-    
+
     let query = CypherQuery {
         cypher: create_query,
         params,
     };
-    
+
     match executor.execute(&query) {
         Ok(result_set) => {
             if let Some(row) = result_set.rows.first() {
@@ -525,23 +525,23 @@ async fn handle_create_relationship(
 
     // Use executor to create relationship
     let mut executor = server.executor.write().await;
-    
+
     // Execute Cypher CREATE query for relationship
     let create_query = format!(
         "MATCH (s), (t) WHERE id(s) = $src_id AND id(t) = $tgt_id CREATE (s)-[r:{}]->(t) SET r = $props RETURN id(r) as rel_id",
         rel_type
     );
-    
+
     let mut params = HashMap::new();
     params.insert("src_id".to_string(), json!(source_id));
     params.insert("tgt_id".to_string(), json!(target_id));
     params.insert("props".to_string(), properties.clone());
-    
+
     let query = CypherQuery {
         cypher: create_query,
         params,
     };
-    
+
     match executor.execute(&query) {
         Ok(result_set) => {
             if let Some(row) = result_set.rows.first() {
@@ -670,11 +670,13 @@ async fn handle_knn_search(
         Ok(results) => {
             let results_json: Vec<_> = results
                 .iter()
-                .map(|(node_id, distance)| json!({
-                    "node_id": node_id,
-                    "distance": distance,
-                    "score": 1.0 / (1.0 + distance)
-                }))
+                .map(|(node_id, distance)| {
+                    json!({
+                        "node_id": node_id,
+                        "distance": distance,
+                        "score": 1.0 / (1.0 + distance)
+                    })
+                })
                 .take(limit)
                 .collect();
 
@@ -707,7 +709,7 @@ async fn handle_get_stats(
     let catalog = server.catalog.read().await;
     let knn_index = server.knn_index.read().await;
     let knn_stats = knn_index.get_stats();
-    
+
     let response = json!({
         "status": "ok",
         "stats": {

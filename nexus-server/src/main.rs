@@ -195,9 +195,10 @@ async fn main() -> anyhow::Result<()> {
             "/graph-correlation/auto-generate",
             get(api::auto_generate::auto_generate_graphs),
         )
-        .route("/openapi.json", get(|| async {
-            axum::Json(api::openapi::generate_openapi_spec())
-        }))
+        .route(
+            "/openapi.json",
+            get(|| async { axum::Json(api::openapi::generate_openapi_spec()) }),
+        )
         // MCP StreamableHTTP endpoint
         .nest("/mcp", mcp_router)
         .layer(TraceLayer::new_for_http());

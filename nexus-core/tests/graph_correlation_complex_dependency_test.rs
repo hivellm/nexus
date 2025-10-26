@@ -462,4 +462,3 @@ fn test_dependency_depth_calculation() {
     // level_9 should be at depth 9
     assert_eq!(depths.get("level_9"), Some(&9));
 }
-

@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn test_generate_openapi_spec() {
         let spec = generate_openapi_spec();
-        
+
         assert_eq!(spec["openapi"], "3.0.3");
         assert_eq!(spec["info"]["title"], "Nexus Graph Correlation API");
         assert!(spec["paths"].is_object());
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn test_openapi_has_required_paths() {
         let spec = generate_openapi_spec();
-        
+
         assert!(spec["paths"]["/graph-correlation/generate"].is_object());
         assert!(spec["paths"]["/graph-correlation/types"].is_object());
         assert!(spec["paths"]["/graph-correlation/auto-generate"].is_object());
@@ -366,7 +366,7 @@ mod tests {
     fn test_openapi_has_schemas() {
         let spec = generate_openapi_spec();
         let schemas = &spec["components"]["schemas"];
-        
+
         assert!(schemas["GenerateGraphRequest"].is_object());
         assert!(schemas["CorrelationGraph"].is_object());
         assert!(schemas["GraphNode"].is_object());
@@ -375,4 +375,3 @@ mod tests {
         assert!(schemas["Error"].is_object());
     }
 }
-

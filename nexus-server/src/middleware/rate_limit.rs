@@ -147,7 +147,8 @@ impl RateLimiter {
     pub async fn cleanup(&self) {
         let mut buckets = self.buckets.write().await;
         buckets.retain(|_, bucket| {
-            bucket.tokens < bucket.capacity || bucket.last_refill.elapsed() < Duration::from_secs(300)
+            bucket.tokens < bucket.capacity
+                || bucket.last_refill.elapsed() < Duration::from_secs(300)
         });
     }
 }
@@ -250,12 +251,12 @@ mod tests {
     #[test]
     fn test_token_bucket_exhaustion() {
         let mut bucket = TokenBucket::new(5, Duration::from_secs(60), 0);
-        
+
         // Consume all tokens
         for _ in 0..5 {
             assert!(bucket.try_consume());
         }
-        
+
         // Should be rate limited
         assert!(!bucket.try_consume());
     }
@@ -320,16 +321,16 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_removes_old_entries() {
         let limiter = RateLimiter::new();
-        
+
         limiter.check_rate_limit("test-ip").await;
-        
+
         {
             let buckets = limiter.buckets.read().await;
             assert_eq!(buckets.len(), 1);
         }
-        
+
         limiter.cleanup().await;
-        
+
         // Cleanup shouldn't remove recent entries
         {
             let buckets = limiter.buckets.read().await;
@@ -337,4 +338,3 @@ mod tests {
         }
     }
 }
-

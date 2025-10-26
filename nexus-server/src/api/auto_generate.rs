@@ -10,9 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use nexus_core::graph_correlation::{
-    GraphCorrelationManager, GraphSourceData, GraphType,
-};
+use nexus_core::graph_correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
 
 /// Query parameters for automatic graph generation
 #[derive(Debug, Deserialize)]
@@ -56,9 +54,7 @@ pub struct GraphSummary {
 /// 2. Extracts code structure (functions, imports, calls)
 /// 3. Generates multiple graph types automatically
 /// 4. Returns summaries of all generated graphs
-pub async fn auto_generate_graphs(
-    Query(params): Query<AutoGenerateQuery>,
-) -> impl IntoResponse {
+pub async fn auto_generate_graphs(Query(params): Query<AutoGenerateQuery>) -> impl IntoResponse {
     let start_time = std::time::Instant::now();
 
     // Extract data from codebase
@@ -114,10 +110,7 @@ async fn extract_from_codebase(
     let mut source_data = GraphSourceData::new();
 
     // Simulate extraction from current Nexus codebase
-    let _project_path = params
-        .project_path
-        .as_deref()
-        .unwrap_or("./nexus-core/src");
+    let _project_path = params.project_path.as_deref().unwrap_or("./nexus-core/src");
 
     // Sample data extraction (in production, this would scan actual files)
     add_sample_rust_code_structure(&mut source_data, params.max_files.unwrap_or(50));
@@ -139,13 +132,34 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
             let server = Server::new(engine);
             server.run();
         }
-        "#.to_string(),
+        "#
+        .to_string(),
     );
 
-    source_data.add_function("main".to_string(), "fn main()".to_string(), "src/main.rs".to_string(), 1);
-    source_data.add_call("main".to_string(), "Engine::new".to_string(), "src/main.rs".to_string(), 4);
-    source_data.add_call("main".to_string(), "Server::new".to_string(), "src/main.rs".to_string(), 5);
-    source_data.add_call("main".to_string(), "server.run".to_string(), "src/main.rs".to_string(), 6);
+    source_data.add_function(
+        "main".to_string(),
+        "fn main()".to_string(),
+        "src/main.rs".to_string(),
+        1,
+    );
+    source_data.add_call(
+        "main".to_string(),
+        "Engine::new".to_string(),
+        "src/main.rs".to_string(),
+        4,
+    );
+    source_data.add_call(
+        "main".to_string(),
+        "Server::new".to_string(),
+        "src/main.rs".to_string(),
+        5,
+    );
+    source_data.add_call(
+        "main".to_string(),
+        "server.run".to_string(),
+        "src/main.rs".to_string(),
+        6,
+    );
 
     // Simulate engine.rs
     source_data.add_file(
@@ -165,24 +179,43 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
                 self.executor.run(query)
             }
         }
-        "#.to_string(),
+        "#
+        .to_string(),
     );
 
-    source_data.add_function("Engine::new".to_string(), "pub fn new() -> Self".to_string(), "src/engine.rs".to_string(), 6);
+    source_data.add_function(
+        "Engine::new".to_string(),
+        "pub fn new() -> Self".to_string(),
+        "src/engine.rs".to_string(),
+        6,
+    );
     source_data.add_function(
         "Engine::execute".to_string(),
         "pub fn execute(&self, query: &str) -> Result<QueryResult>".to_string(),
         "src/engine.rs".to_string(),
         11,
     );
-    source_data.add_call("Engine::new".to_string(), "Executor::init".to_string(), "src/engine.rs".to_string(), 7);
-    source_data.add_call("Engine::execute".to_string(), "executor.run".to_string(), "src/engine.rs".to_string(), 12);
+    source_data.add_call(
+        "Engine::new".to_string(),
+        "Executor::init".to_string(),
+        "src/engine.rs".to_string(),
+        7,
+    );
+    source_data.add_call(
+        "Engine::execute".to_string(),
+        "executor.run".to_string(),
+        "src/engine.rs".to_string(),
+        12,
+    );
 
     // Add imports
     source_data.add_import("main.rs".to_string(), "nexus_core::Engine".to_string());
     source_data.add_import("main.rs".to_string(), "nexus_server::Server".to_string());
     source_data.add_import("engine.rs".to_string(), "nexus_core::Executor".to_string());
-    source_data.add_import("engine.rs".to_string(), "nexus_core::QueryResult".to_string());
+    source_data.add_import(
+        "engine.rs".to_string(),
+        "nexus_core::QueryResult".to_string(),
+    );
 
     // Add more sample files up to max_files
     for i in 1..max_files.min(20) {
@@ -300,4 +333,3 @@ mod tests {
         assert!(summary.node_count > 0);
     }
 }
-

@@ -321,7 +321,7 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
     let start_time = Instant::now();
     log_operation("create_node", &format!("Labels: {:?}", request.labels));
 
-    // Use the shared Engine from lib.rs  
+    // Use the shared Engine from lib.rs
     use nexus_core::Engine;
     let catalog_arc = match CATALOG.get() {
         Some(c) => c.clone(),
@@ -334,12 +334,16 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
         }
     };
     let catalog = catalog_arc.clone();
-    
+
     // Create a temporary Engine to use its create_node method
     let record_store = match nexus_core::storage::RecordStore::new("./data") {
         Ok(s) => s,
         Err(e) => {
-            log_error("create_node", "Failed to create record store", &e.to_string());
+            log_error(
+                "create_node",
+                "Failed to create record store",
+                &e.to_string(),
+            );
             return Json(CreateNodeResponse {
                 node_id: 0,
                 message: "".to_string(),
@@ -347,7 +351,7 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
             });
         }
     };
-    
+
     // This approach creates a NEW Engine every time which won't persist data
     // We need to use the shared Engine from the server state
     // For now, return an error indicating this needs to be refactored
@@ -597,11 +601,15 @@ pub struct NodeData {
 }
 
 /// Get a node by ID from query parameter
-pub async fn get_node_by_id(axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>) -> Json<GetNodeResponse> {
-    let node_id = params.get("id").or_else(|| params.get("node_id"))
+pub async fn get_node_by_id(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<GetNodeResponse> {
+    let node_id = params
+        .get("id")
+        .or_else(|| params.get("node_id"))
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
-    
+
     tracing::info!("Getting node by ID from query: {}", node_id);
 
     // Validate input
@@ -627,14 +635,17 @@ pub async fn get_node_by_id(axum::extract::Query(params): axum::extract::Query<s
     // Implement actual node retrieval using Cypher
     let executor = get_executor();
     let mut executor_guard = executor.write().await;
-    
+
     // Use Cypher query to get node by ID
-    let query = format!("MATCH (n) WHERE id(n) = {} RETURN n, labels(n) as node_labels, properties(n) as node_props", node_id);
+    let query = format!(
+        "MATCH (n) WHERE id(n) = {} RETURN n, labels(n) as node_labels, properties(n) as node_props",
+        node_id
+    );
     let cypher_query = nexus_core::executor::Query {
         cypher: query,
         params: HashMap::new(),
     };
-    
+
     match executor_guard.execute(&cypher_query) {
         Ok(result_set) => {
             if result_set.rows.is_empty() {
@@ -645,7 +656,7 @@ pub async fn get_node_by_id(axum::extract::Query(params): axum::extract::Query<s
                     error: Some("Node not found".to_string()),
                 });
             }
-            
+
             // For now, return a simple response
             // TODO: Parse the result properly when Cypher result parsing is implemented
             tracing::info!("Node {} retrieved successfully", node_id);
@@ -669,8 +680,6 @@ pub async fn get_node_by_id(axum::extract::Query(params): axum::extract::Query<s
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

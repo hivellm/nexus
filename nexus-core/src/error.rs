@@ -66,6 +66,10 @@ pub enum Error {
     #[error("Cypher syntax error: {0}")]
     CypherSyntax(String),
 
+    /// Cypher execution errors
+    #[error("Cypher execution error: {0}")]
+    CypherExecution(String),
+
     /// Invalid node/relationship ID
     #[error("Invalid ID: {0}")]
     InvalidId(String),

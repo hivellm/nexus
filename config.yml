@@ -1,0 +1,72 @@
+# Nexus Configuration
+# Testing Configuration
+
+server:
+  addr: "127.0.0.1:15474"
+  workers: 4
+  timeout_secs: 30
+  max_body_size_mb: 10
+
+storage:
+  data_dir: "./data"
+  page_cache:
+    capacity: 10000
+    eviction_policy: "clock"
+  wal:
+    checkpoint_interval_secs: 300
+    max_wal_size_mb: 1024
+    fsync_on_commit: true
+  mvcc:
+    enabled: true
+    gc_interval_secs: 60
+    max_versions: 100
+
+authentication:
+  enabled: false
+  require_for_public_bind: true
+  jwt_secret: "change-this-secret-in-production"
+  jwt_expiration: 3600
+  api_key_length: 32
+  rate_limit:
+    per_minute: 1000
+    per_hour: 10000
+
+replication:
+  role: "master"
+  master_url: null
+  mode: "async"
+  sync_quorum: 1
+  timeout_ms: 5000
+  reconnect:
+    enabled: true
+    initial_delay_ms: 1000
+    max_delay_ms: 60000
+    max_retries: -1
+
+vectorizer:
+  url: "http://localhost:15002"
+  sync_enabled: false
+  sync_collections:
+    - "documents"
+    - "knowledge_base"
+  auto_embed_fields:
+    - "title"
+    - "content"
+    - "description"
+  rrf_k: 60
+
+logging:
+  level: "info"
+  format: "pretty"
+  file:
+    enabled: false
+    path: "./logs/nexus.log"
+    rotation: "daily"
+
+metrics:
+  enabled: false
+  endpoint: "/metrics"
+  tracing:
+    enabled: false
+    endpoint: "http://localhost:4317"
+
