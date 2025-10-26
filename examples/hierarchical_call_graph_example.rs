@@ -3,11 +3,11 @@
 //! This example demonstrates how to use the hierarchical call graph layout
 //! to visualize function call hierarchies in a more organized and readable way.
 
+use nexus_core::graph::construction::LayoutDirection;
 use nexus_core::graph::correlation::{
     CallGraphBuilder, CorrelationGraph, EdgeType, GraphBuilder, GraphEdge, GraphNode, GraphType,
     NodeType, hierarchical_layout::HierarchicalCallGraphConfig,
 };
-use nexus_core::graph::construction::LayoutDirection;
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
