@@ -5,6 +5,66 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2025-10-26
+
+### Fixed
+
+- **Critical Persistence Bugs** ✅
+  - Fixed CREATE queries not persisting nodes to storage
+  - Fixed stats endpoint always showing node_count: 0
+  - Fixed create_node MCP tool failing to extract node_id
+  - Fixed graph_correlation_analyze requiring complete graph structures
+
+- **Cypher Parser Improvements** ✅
+  - Added missing `skip_whitespace()` calls in parser
+  - Fixed `is_clause_boundary()` to recognize CREATE and MERGE keywords
+  - Fixed property map parsing with proper whitespace handling
+  - Added MergeClause to parser AST
+
+- **Engine Integration** ✅
+  - Integrated Engine into REST /cypher endpoint for CREATE operations
+  - Added ENGINE static to stats module for real-time statistics
+  - Implemented direct node creation via Engine.create_node()
+  - Stats now query Engine.stats() for accurate node/label counts
+
+### Changed
+
+- **License Simplification** ✅
+  - Changed from dual-license (MIT OR Apache-2.0) to MIT only
+  - Removed Apache-2.0 license text from LICENSE file
+  - Updated Cargo.toml workspace license field
+
+- **Architecture Improvements** ✅
+  - CREATE queries now use Engine instead of Executor for persistence
+  - Stats endpoint consults Engine as primary source of truth
+  - MCP tools use Engine directly for all write operations
+  - Fallback to old catalog stats if Engine unavailable
+
+### Added
+
+- **Graph Normalization** ✅
+  - Added automatic graph structure normalization in graph_correlation_analyze
+  - Default values for missing fields: name, created_at, updated_at, metadata
+  - Accepts partial graph structures without complete metadata
+  - Normalizes nodes and edges with missing optional fields
+
+### Testing
+
+- **Verification** ✅
+  - Tested CREATE via REST: Nodes persist correctly
+  - Tested create_node via MCP: Returns node_id successfully
+  - Tested stats endpoint: Shows accurate node_count
+  - Tested graph_correlation_analyze: Accepts partial graphs
+
+**Test Results**:
+```
+✅ CREATE (n:TestNode {value: 999}) → Success
+✅ CREATE (p:Person {age: 30, name: 'Alice'}) → Success  
+✅ GET /stats → {"node_count": 2, "label_count": 2} ✅
+✅ create_node MCP → {"node_id": 2, "status": "created"} ✅
+✅ graph_correlation_analyze → Accepts partial graphs ✅
+```
+
 ## [0.8.0] - 2025-10-26
 
 ### Fixed

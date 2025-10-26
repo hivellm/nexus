@@ -6,7 +6,7 @@
 
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
-![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Status](https://img.shields.io/badge/status-MVP%2089.8%25%20Complete-brightgreen.svg)
 ![Tests](https://img.shields.io/badge/tests-858%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
@@ -23,9 +23,16 @@ Nexus is a modern **property graph database** built for **read-heavy workloads**
 
 Think of it as **Neo4j meets Vector Search** - optimized for AI applications that need both structured relationships and s## ✨ **Version 0.6.0 - Core Implementation & Monitoring**
 
-### 🎉 **Current Status (v0.8.0)**
+### 🎉 **Current Status (v0.9.0)**
 
 **MVP: 89.8% Complete** - Production Ready! 🚀
+
+**🔥 Latest (v0.9.0)**: Critical persistence fixes, MIT license, 100% MCP functionality
+
+- ✅ **CREATE Persistence** - Nodes now persist correctly via Engine integration
+- ✅ **Stats Accuracy** - Real-time node/label counts from Engine.stats()
+- ✅ **MCP Tools Fixed** - create_node returns node_id, graph_correlation_analyze accepts partial graphs
+- ✅ **License Simplified** - Changed to MIT only for clearer licensing
 
 - ✅ **Storage Foundation** - Fixed-size records, memmap2, LMDB catalog (100% - ARCHIVED)
 - ✅ **Transactions & Durability** - WAL, MVCC, crash recovery (100% - ARCHIVED)
@@ -939,7 +946,7 @@ See `openspec/AGENTS.md` for complete workflow.
 
 ## 📜 **License**
 
-Dual-licensed under **MIT OR Apache-2.0**.
+Licensed under **MIT**.
 
 See [LICENSE](LICENSE) for details.
 
