@@ -5,12 +5,15 @@
 //! - File-based storage with growth capabilities
 //! - Memory-mapped file access for performance
 //! - CRUD operations for graph entities
+//! - Property storage and retrieval
 
 use crate::error::{Error, Result};
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+pub mod property_store;
 
 /// Size of a node record in bytes (32 bytes)
 pub const NODE_RECORD_SIZE: usize = 32;
@@ -157,6 +160,8 @@ pub struct RecordStore {
     nodes_mmap: MmapMut,
     /// Memory-mapped relationships file
     rels_mmap: MmapMut,
+    /// Property store for node and relationship properties
+    pub property_store: property_store::PropertyStore,
     /// Next available node ID
     next_node_id: u64,
     /// Next available relationship ID
@@ -250,12 +255,16 @@ impl RecordStore {
             }
         }
 
+        // Initialize property store
+        let property_store = property_store::PropertyStore::new(path.clone())?;
+
         Ok(Self {
             path,
             nodes_file,
             rels_file,
             nodes_mmap,
             rels_mmap,
+            property_store,
             next_node_id,
             next_rel_id,
             nodes_file_size,
@@ -444,11 +453,13 @@ impl RecordStore {
             }
         }
 
-        // Set property pointer (for now, use a placeholder)
-        // In a full implementation, this would store properties and return the pointer
+        // Store properties and get property pointer
         record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-            // Placeholder: use node_id as property pointer for now
-            node_id * 1000
+            self.property_store.store_properties(
+                node_id,
+                property_store::EntityType::Node,
+                properties,
+            )?
         } else {
             0
         };
@@ -467,7 +478,7 @@ impl RecordStore {
         &mut self,
         _tx: &mut crate::transaction::Transaction,
         label_bits: u64,
-        _properties: serde_json::Value,
+        properties: serde_json::Value,
     ) -> Result<u64> {
         let node_id = self.next_node_id;
         self.next_node_id += 1;
@@ -475,7 +486,17 @@ impl RecordStore {
         // Create node record
         let mut record = NodeRecord::new();
         record.label_bits = label_bits;
-        record.prop_ptr = 0; // TODO: Store properties when property store is implemented
+
+        // Store properties and get property pointer
+        record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+            self.property_store.store_properties(
+                node_id,
+                property_store::EntityType::Node,
+                properties,
+            )?
+        } else {
+            0
+        };
 
         // Write the record
         self.write_node(node_id, &record)?;
@@ -506,11 +527,13 @@ impl RecordStore {
         // In a full implementation, this would map type names to IDs via catalog
         record.type_id = rel_type.len() as u32; // Simple placeholder
 
-        // Set property pointer (for now, use a placeholder)
-        // In a full implementation, this would store properties and return the pointer
+        // Store properties and get property pointer
         record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-            // Placeholder: use rel_id as property pointer for now
-            rel_id * 1000
+            self.property_store.store_properties(
+                rel_id,
+                property_store::EntityType::Relationship,
+                properties,
+            )?
         } else {
             0
         };
@@ -595,6 +618,73 @@ impl RecordStore {
         self.rels_mmap = unsafe { MmapOptions::new().map_mut(&self.rels_file)? };
 
         Ok(())
+    }
+
+    /// Load properties for a node
+    pub fn load_node_properties(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
+        self.property_store
+            .load_properties(node_id, property_store::EntityType::Node)
+    }
+
+    /// Load properties for a relationship
+    pub fn load_relationship_properties(&self, rel_id: u64) -> Result<Option<serde_json::Value>> {
+        self.property_store
+            .load_properties(rel_id, property_store::EntityType::Relationship)
+    }
+
+    /// Update properties for a node
+    pub fn update_node_properties(
+        &mut self,
+        node_id: u64,
+        properties: serde_json::Value,
+    ) -> Result<()> {
+        if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+            self.property_store.store_properties(
+                node_id,
+                property_store::EntityType::Node,
+                properties,
+            )?;
+        } else {
+            self.property_store
+                .delete_properties(node_id, property_store::EntityType::Node)?;
+        }
+        Ok(())
+    }
+
+    /// Update properties for a relationship
+    pub fn update_relationship_properties(
+        &mut self,
+        rel_id: u64,
+        properties: serde_json::Value,
+    ) -> Result<()> {
+        if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+            self.property_store.store_properties(
+                rel_id,
+                property_store::EntityType::Relationship,
+                properties,
+            )?;
+        } else {
+            self.property_store
+                .delete_properties(rel_id, property_store::EntityType::Relationship)?;
+        }
+        Ok(())
+    }
+
+    /// Delete properties for a node
+    pub fn delete_node_properties(&mut self, node_id: u64) -> Result<()> {
+        self.property_store
+            .delete_properties(node_id, property_store::EntityType::Node)
+    }
+
+    /// Delete properties for a relationship
+    pub fn delete_relationship_properties(&mut self, rel_id: u64) -> Result<()> {
+        self.property_store
+            .delete_properties(rel_id, property_store::EntityType::Relationship)
+    }
+
+    /// Get property store statistics
+    pub fn property_count(&self) -> usize {
+        self.property_store.property_count()
     }
 }
 

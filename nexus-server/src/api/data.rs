@@ -541,6 +541,136 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
     }
 }
 
+/// Request to get a node by ID
+#[derive(Debug, Deserialize)]
+pub struct GetNodeRequest {
+    /// Node ID to retrieve
+    pub node_id: u64,
+}
+
+/// Response for getting a node
+#[derive(Debug, Serialize)]
+pub struct GetNodeResponse {
+    /// Success message
+    pub message: String,
+    /// Node data if found
+    pub node: Option<NodeData>,
+    /// Error message if any
+    pub error: Option<String>,
+}
+
+/// Node data structure
+#[derive(Debug, Serialize)]
+pub struct NodeData {
+    /// Node ID
+    pub id: u64,
+    /// Node labels
+    pub labels: Vec<String>,
+    /// Node properties
+    pub properties: serde_json::Value,
+}
+
+/// Get a node by ID
+pub async fn get_node(Json(request): Json<GetNodeRequest>) -> Json<GetNodeResponse> {
+    tracing::info!("Getting node: {}", request.node_id);
+
+    // Validate input
+    if let Err(validation_error) = validate_node_id(request.node_id) {
+        tracing::error!("Validation failed: {}", validation_error);
+        return Json(GetNodeResponse {
+            message: "".to_string(),
+            node: None,
+            error: Some(validation_error),
+        });
+    }
+
+    // Check if catalog is initialized
+    if CATALOG.get().is_none() {
+        tracing::error!("Catalog not initialized");
+        return Json(GetNodeResponse {
+            message: "".to_string(),
+            node: None,
+            error: Some("Catalog not initialized".to_string()),
+        });
+    }
+
+    // Implement actual node retrieval
+    match create_engine() {
+        Ok(mut engine) => {
+            match engine.get_node(request.node_id) {
+                Ok(Some(node_record)) => {
+                    // Get labels from bitmap
+                    let labels = match engine
+                        .catalog
+                        .get_labels_from_bitmap(node_record.label_bits)
+                    {
+                        Ok(labels) => labels,
+                        Err(e) => {
+                            tracing::error!("Failed to get labels: {}", e);
+                            return Json(GetNodeResponse {
+                                message: "".to_string(),
+                                node: None,
+                                error: Some(format!("Failed to get labels: {}", e)),
+                            });
+                        }
+                    };
+
+                    // Load properties
+                    let properties = match engine.storage.load_node_properties(request.node_id) {
+                        Ok(Some(props)) => props,
+                        Ok(None) => serde_json::Value::Object(serde_json::Map::new()),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to load properties for node {}: {}",
+                                request.node_id,
+                                e
+                            );
+                            serde_json::Value::Object(serde_json::Map::new())
+                        }
+                    };
+
+                    let node_data = NodeData {
+                        id: request.node_id,
+                        labels,
+                        properties,
+                    };
+
+                    tracing::info!("Node {} retrieved successfully", request.node_id);
+                    Json(GetNodeResponse {
+                        message: "Node retrieved successfully".to_string(),
+                        node: Some(node_data),
+                        error: None,
+                    })
+                }
+                Ok(None) => {
+                    tracing::warn!("Node {} not found", request.node_id);
+                    Json(GetNodeResponse {
+                        message: "Node not found".to_string(),
+                        node: None,
+                        error: Some("Node not found".to_string()),
+                    })
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get node: {}", e);
+                    Json(GetNodeResponse {
+                        message: "".to_string(),
+                        node: None,
+                        error: Some(format!("Failed to get node: {}", e)),
+                    })
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to initialize engine: {}", e);
+            Json(GetNodeResponse {
+                message: "".to_string(),
+                node: None,
+                error: Some(format!("Failed to initialize engine: {}", e)),
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

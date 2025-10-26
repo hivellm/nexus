@@ -106,6 +106,10 @@ pub enum Error {
     /// Invalid input
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    /// Regex compilation errors
+    #[error("Regex error: {0}")]
+    Regex(#[from] regex::Error),
 }
 
 impl Error {

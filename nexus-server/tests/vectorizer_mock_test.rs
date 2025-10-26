@@ -2,10 +2,10 @@
 //!
 //! These tests verify the mock vectorizer implementation and basic integration.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use thiserror::Error;
+// use thiserror::Error;
 
 // ============================================================================
 // Mock Vectorizer Implementation
@@ -24,7 +24,10 @@ pub trait Vectorizer {
     ) -> Result<Vec<SearchResult>, VectorizerError>;
 
     /// Get collection information
-    async fn get_collection_info(&self, collection: &str) -> Result<CollectionInfo, VectorizerError>;
+    async fn get_collection_info(
+        &self,
+        collection: &str,
+    ) -> Result<CollectionInfo, VectorizerError>;
 
     /// List available collections
     async fn list_collections(&self) -> Result<Vec<String>, VectorizerError>;
@@ -90,6 +93,12 @@ pub struct MockVectorizer {
     next_doc_id: u64,
 }
 
+impl Default for MockVectorizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockVectorizer {
     pub fn new() -> Self {
         let mut vectorizer = Self {
@@ -106,7 +115,7 @@ impl MockVectorizer {
     fn initialize_test_data(&mut self) {
         // Create test collection
         let collection_name = "test_collection".to_string();
-        
+
         let test_docs = vec![
             SearchResult {
                 id: "doc1".to_string(),
@@ -159,12 +168,19 @@ impl MockVectorizer {
         let codebase_docs = vec![
             SearchResult {
                 id: "func1".to_string(),
-                content: "async fn search_documents(query: &str) -> Result<Vec<Document>>".to_string(),
+                content: "async fn search_documents(query: &str) -> Result<Vec<Document>>"
+                    .to_string(),
                 score: 0.88,
                 metadata: {
                     let mut meta = HashMap::new();
-                    meta.insert("file".to_string(), Value::String("src/search.rs".to_string()));
-                    meta.insert("function".to_string(), Value::String("search_documents".to_string()));
+                    meta.insert(
+                        "file".to_string(),
+                        Value::String("src/search.rs".to_string()),
+                    );
+                    meta.insert(
+                        "function".to_string(),
+                        Value::String("search_documents".to_string()),
+                    );
                     meta.insert("language".to_string(), Value::String("rust".to_string()));
                     meta
                 },
@@ -175,15 +191,22 @@ impl MockVectorizer {
                 score: 0.85,
                 metadata: {
                     let mut meta = HashMap::new();
-                    meta.insert("file".to_string(), Value::String("src/index.rs".to_string()));
-                    meta.insert("function".to_string(), Value::String("create_index".to_string()));
+                    meta.insert(
+                        "file".to_string(),
+                        Value::String("src/index.rs".to_string()),
+                    );
+                    meta.insert(
+                        "function".to_string(),
+                        Value::String("create_index".to_string()),
+                    );
                     meta.insert("language".to_string(), Value::String("rust".to_string()));
                     meta
                 },
             },
         ];
 
-        self.collections.insert(codebase_collection.clone(), codebase_docs);
+        self.collections
+            .insert(codebase_collection.clone(), codebase_docs);
         self.collection_info.insert(
             codebase_collection.clone(),
             CollectionInfo {
@@ -211,7 +234,9 @@ impl Vectorizer for MockVectorizer {
         limit: Option<usize>,
         threshold: Option<f32>,
     ) -> Result<Vec<SearchResult>, VectorizerError> {
-        let docs = self.collections.get(collection)
+        let docs = self
+            .collections
+            .get(collection)
             .ok_or_else(|| VectorizerError::CollectionNotFound(collection.to_string()))?;
 
         let mut results = docs.clone();
@@ -222,7 +247,11 @@ impl Vectorizer for MockVectorizer {
         }
 
         // Sort by score (descending)
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Apply limit
         if let Some(limit) = limit {
@@ -232,22 +261,26 @@ impl Vectorizer for MockVectorizer {
         // Simulate query matching (simplified)
         if !query.is_empty() {
             results.retain(|doc| {
-                doc.content.to_lowercase().contains(&query.to_lowercase()) ||
-                doc.metadata.values().any(|v| {
-                    if let Some(s) = v.as_str() {
-                        s.to_lowercase().contains(&query.to_lowercase())
-                    } else {
-                        false
-                    }
-                })
+                doc.content.to_lowercase().contains(&query.to_lowercase())
+                    || doc.metadata.values().any(|v| {
+                        if let Some(s) = v.as_str() {
+                            s.to_lowercase().contains(&query.to_lowercase())
+                        } else {
+                            false
+                        }
+                    })
             });
         }
 
         Ok(results)
     }
 
-    async fn get_collection_info(&self, collection: &str) -> Result<CollectionInfo, VectorizerError> {
-        self.collection_info.get(collection)
+    async fn get_collection_info(
+        &self,
+        collection: &str,
+    ) -> Result<CollectionInfo, VectorizerError> {
+        self.collection_info
+            .get(collection)
             .cloned()
             .ok_or_else(|| VectorizerError::CollectionNotFound(collection.to_string()))
     }
@@ -258,7 +291,7 @@ impl Vectorizer for MockVectorizer {
 
     async fn index_document(
         &self,
-        collection: &str,
+        _collection: &str,
         document: Document,
     ) -> Result<String, VectorizerError> {
         // In a real implementation, this would index the document
@@ -287,15 +320,21 @@ impl Vectorizer for MockVectorizer {
 #[tokio::test]
 async fn test_mock_vectorizer_search() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test basic search
-    let results = vectorizer.search("test_collection", "machine learning", Some(5), Some(0.8)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "machine learning", Some(5), Some(0.8))
+        .await
+        .unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0].id, "doc1");
     assert!(results[0].score >= 0.8);
-    
+
     // Test search with different query
-    let results = vectorizer.search("test_collection", "graph", Some(5), Some(0.5)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "graph", Some(5), Some(0.5))
+        .await
+        .unwrap();
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| r.content.contains("Graph")));
 }
@@ -303,14 +342,17 @@ async fn test_mock_vectorizer_search() {
 #[tokio::test]
 async fn test_mock_vectorizer_collections() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test list collections
     let collections = vectorizer.list_collections().await.unwrap();
     assert!(collections.contains(&"test_collection".to_string()));
     assert!(collections.contains(&"codebase".to_string()));
-    
+
     // Test get collection info
-    let info = vectorizer.get_collection_info("test_collection").await.unwrap();
+    let info = vectorizer
+        .get_collection_info("test_collection")
+        .await
+        .unwrap();
     assert_eq!(info.name, "test_collection");
     assert_eq!(info.document_count, 3);
     assert_eq!(info.vector_dimensions, 384);
@@ -319,7 +361,7 @@ async fn test_mock_vectorizer_collections() {
 #[tokio::test]
 async fn test_mock_vectorizer_document_operations() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test index document
     let document = Document {
         id: None,
@@ -330,10 +372,13 @@ async fn test_mock_vectorizer_document_operations() {
             meta
         },
     };
-    
-    let doc_id = vectorizer.index_document("test_collection", document).await.unwrap();
+
+    let doc_id = vectorizer
+        .index_document("test_collection", document)
+        .await
+        .unwrap();
     assert!(!doc_id.is_empty());
-    
+
     // Test delete document
     let result = vectorizer.delete_document("test_collection", &doc_id).await;
     assert!(result.is_ok());
@@ -342,31 +387,43 @@ async fn test_mock_vectorizer_document_operations() {
 #[tokio::test]
 async fn test_vectorizer_error_handling() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test collection not found
-    let result = vectorizer.search("nonexistent_collection", "query", Some(5), Some(0.8)).await;
-    assert!(matches!(result, Err(VectorizerError::CollectionNotFound(_))));
-    
+    let result = vectorizer
+        .search("nonexistent_collection", "query", Some(5), Some(0.8))
+        .await;
+    assert!(matches!(
+        result,
+        Err(VectorizerError::CollectionNotFound(_))
+    ));
+
     // Test get collection info for non-existent collection
-    let result = vectorizer.get_collection_info("nonexistent_collection").await;
-    assert!(matches!(result, Err(VectorizerError::CollectionNotFound(_))));
+    let result = vectorizer
+        .get_collection_info("nonexistent_collection")
+        .await;
+    assert!(matches!(
+        result,
+        Err(VectorizerError::CollectionNotFound(_))
+    ));
 }
 
 #[tokio::test]
 async fn test_vectorizer_concurrent_access() {
     let vectorizer = Arc::new(MockVectorizer::new());
     let mut handles = vec![];
-    
+
     // Spawn multiple concurrent searches
     for i in 0..5 {
         let vectorizer_clone = vectorizer.clone();
         let handle = tokio::spawn(async move {
             let query = format!("concurrent query {}", i);
-            vectorizer_clone.search("test_collection", &query, Some(3), Some(0.7)).await
+            vectorizer_clone
+                .search("test_collection", &query, Some(3), Some(0.7))
+                .await
         });
         handles.push(handle);
     }
-    
+
     // Wait for all searches to complete
     let mut success_count = 0;
     for handle in handles {
@@ -375,38 +432,51 @@ async fn test_vectorizer_concurrent_access() {
             Err(e) => println!("Search failed: {:?}", e),
         }
     }
-    
+
     assert_eq!(success_count, 5);
 }
 
 #[tokio::test]
 async fn test_vectorizer_large_dataset() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test with larger result set
-    let results = vectorizer.search("test_collection", "", Some(100), Some(0.0)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "", Some(100), Some(0.0))
+        .await
+        .unwrap();
     assert_eq!(results.len(), 3); // All documents in test collection
-    
+
     // Test with high threshold (should return fewer results)
-    let results = vectorizer.search("test_collection", "", Some(100), Some(0.95)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "", Some(100), Some(0.95))
+        .await
+        .unwrap();
     assert!(results.len() <= 3);
-    
+
     // Test with low threshold (should return all results)
-    let results = vectorizer.search("test_collection", "", Some(100), Some(0.0)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "", Some(100), Some(0.0))
+        .await
+        .unwrap();
     assert_eq!(results.len(), 3);
 }
 
 #[tokio::test]
 async fn test_vectorizer_metadata_filtering() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Search for documents with specific metadata
-    let results = vectorizer.search("test_collection", "article", Some(10), Some(0.0)).await.unwrap();
-    
+    let results = vectorizer
+        .search("test_collection", "article", Some(10), Some(0.0))
+        .await
+        .unwrap();
+
     // Should find documents with "article" in metadata
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| {
-        r.metadata.get("type")
+        r.metadata
+            .get("type")
             .and_then(|v| v.as_str())
             .map(|s| s == "article")
             .unwrap_or(false)
@@ -416,16 +486,26 @@ async fn test_vectorizer_metadata_filtering() {
 #[tokio::test]
 async fn test_vectorizer_codebase_search() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Search in codebase collection
-    let results = vectorizer.search("codebase", "search", Some(5), Some(0.8)).await.unwrap();
-    
+    let results = vectorizer
+        .search("codebase", "search", Some(5), Some(0.8))
+        .await
+        .unwrap();
+
     assert!(!results.is_empty());
-    assert!(results.iter().any(|r| r.content.contains("search_documents")));
-    
+    assert!(
+        results
+            .iter()
+            .any(|r| r.content.contains("search_documents"))
+    );
+
     // Search for specific function
-    let results = vectorizer.search("codebase", "create_index", Some(5), Some(0.8)).await.unwrap();
-    
+    let results = vectorizer
+        .search("codebase", "create_index", Some(5), Some(0.8))
+        .await
+        .unwrap();
+
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| r.content.contains("create_index")));
 }
@@ -433,12 +513,12 @@ async fn test_vectorizer_codebase_search() {
 #[tokio::test]
 async fn test_hybrid_search_simulation() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Simulate hybrid search: graph traversal + vectorizer search
     let query = "machine learning";
-    
+
     // 1. Graph traversal (simulated)
-    let graph_results = vec![
+    let graph_results = [
         json!({
             "node_id": "node1",
             "label": "Algorithm",
@@ -448,21 +528,24 @@ async fn test_hybrid_search_simulation() {
             }
         }),
         json!({
-            "node_id": "node2", 
+            "node_id": "node2",
             "label": "Algorithm",
             "properties": {
                 "name": "Neural Network",
                 "type": "deep_learning"
             }
-        })
+        }),
     ];
-    
+
     // 2. Vectorizer semantic search
-    let vectorizer_results = vectorizer.search("test_collection", query, Some(5), Some(0.7)).await.unwrap();
-    
+    let vectorizer_results = vectorizer
+        .search("test_collection", query, Some(5), Some(0.7))
+        .await
+        .unwrap();
+
     // 3. Combine results (simplified RRF)
     let mut combined_results = Vec::new();
-    
+
     // Add graph results
     for (i, result) in graph_results.iter().enumerate() {
         combined_results.push(json!({
@@ -471,7 +554,7 @@ async fn test_hybrid_search_simulation() {
             "data": result
         }));
     }
-    
+
     // Add vectorizer results
     for (i, result) in vectorizer_results.iter().enumerate() {
         combined_results.push(json!({
@@ -485,7 +568,7 @@ async fn test_hybrid_search_simulation() {
             }
         }));
     }
-    
+
     // Verify combined results
     assert!(!combined_results.is_empty());
     assert!(combined_results.iter().any(|r| r["source"] == "graph"));
@@ -495,18 +578,21 @@ async fn test_hybrid_search_simulation() {
 #[tokio::test]
 async fn test_vectorizer_performance_metrics() {
     let vectorizer = MockVectorizer::new();
-    
+
     let start = std::time::Instant::now();
-    
+
     // Perform multiple searches
     for i in 0..10 {
         let query = format!("test query {}", i);
-        let _results = vectorizer.search("test_collection", &query, Some(5), Some(0.8)).await.unwrap();
+        let _results = vectorizer
+            .search("test_collection", &query, Some(5), Some(0.8))
+            .await
+            .unwrap();
     }
-    
+
     let elapsed = start.elapsed();
     println!("Performed 10 searches in {:?}", elapsed);
-    
+
     // Should be fast (under 1 second for 10 searches)
     assert!(elapsed.as_secs() < 1);
 }
@@ -514,17 +600,19 @@ async fn test_vectorizer_performance_metrics() {
 #[tokio::test]
 async fn test_vectorizer_error_propagation() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test various error conditions
-    let error_cases = vec![
-        ("nonexistent_collection", "query", "CollectionNotFound"),
-    ];
-    
+    let error_cases = vec![("nonexistent_collection", "query", "CollectionNotFound")];
+
     for (collection, query, expected_error) in error_cases {
-        let result = vectorizer.search(collection, query, Some(5), Some(0.8)).await;
-        
+        let result = vectorizer
+            .search(collection, query, Some(5), Some(0.8))
+            .await;
+
         match result {
-            Err(VectorizerError::CollectionNotFound(_)) if expected_error == "CollectionNotFound" => {
+            Err(VectorizerError::CollectionNotFound(_))
+                if expected_error == "CollectionNotFound" =>
+            {
                 // Expected error
             }
             Ok(_) => {

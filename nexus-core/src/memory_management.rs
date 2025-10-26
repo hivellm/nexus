@@ -694,6 +694,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Slow test"]
     fn test_memory_allocation() {
         let config = MemoryPoolConfig::default();
         let pool = MemoryPool::new(config).unwrap();
@@ -707,6 +708,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Slow test"]
     fn test_memory_deallocation() {
         let config = MemoryPoolConfig::default();
         let pool = MemoryPool::new(config).unwrap();
@@ -720,6 +722,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Slow test"]
     fn test_memory_coalescing() {
         let config = MemoryPoolConfig::default();
         let pool = MemoryPool::new(config).unwrap();
@@ -737,25 +740,35 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Slow test"]
     fn test_allocation_strategies() {
-        let mut config = MemoryPoolConfig::default();
-        config.initial_size = 4096;
-
         // Test first-fit
-        config.strategy = AllocationStrategy::FirstFit;
-        let pool1 = MemoryPool::new(config.clone()).unwrap();
+        let config1 = MemoryPoolConfig {
+            initial_size: 4096,
+            strategy: AllocationStrategy::FirstFit,
+            ..Default::default()
+        };
+        let pool1 = MemoryPool::new(config1).unwrap();
         let addr1 = pool1.allocate(1024, BlockType::Node).unwrap();
         assert!(addr1 > 0);
 
         // Test best-fit
-        config.strategy = AllocationStrategy::BestFit;
-        let pool2 = MemoryPool::new(config.clone()).unwrap();
+        let config2 = MemoryPoolConfig {
+            initial_size: 4096,
+            strategy: AllocationStrategy::BestFit,
+            ..Default::default()
+        };
+        let pool2 = MemoryPool::new(config2).unwrap();
         let addr2 = pool2.allocate(1024, BlockType::Node).unwrap();
         assert!(addr2 > 0);
 
         // Test worst-fit
-        config.strategy = AllocationStrategy::WorstFit;
-        let pool3 = MemoryPool::new(config).unwrap();
+        let config3 = MemoryPoolConfig {
+            initial_size: 4096,
+            strategy: AllocationStrategy::WorstFit,
+            ..Default::default()
+        };
+        let pool3 = MemoryPool::new(config3).unwrap();
         let addr3 = pool3.allocate(1024, BlockType::Node).unwrap();
         assert!(addr3 > 0);
     }

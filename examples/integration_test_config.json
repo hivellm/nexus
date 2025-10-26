@@ -1,0 +1,371 @@
+{
+  "name": "Nexus Real Codebase Integration Test Configuration",
+  "description": "Comprehensive integration test configuration for Nexus graph database with real datasets",
+  "version": "1.0.0",
+  "created": "2025-10-26",
+  "test_suites": [
+    {
+      "name": "Dataset Loading Tests",
+      "description": "Tests for loading real datasets into the graph database",
+      "datasets": [
+        {
+          "name": "Knowledge Graph",
+          "path": "examples/datasets/knowledge_graph.json",
+          "expected_nodes": 50,
+          "expected_relationships": 30,
+          "expected_labels": 3,
+          "expected_types": 5,
+          "has_vectors": true
+        },
+        {
+          "name": "Social Network",
+          "path": "examples/datasets/social_network.json",
+          "expected_nodes": 100,
+          "expected_relationships": 80,
+          "expected_labels": 4,
+          "expected_types": 6,
+          "has_vectors": false
+        }
+      ],
+      "tests": [
+        {
+          "name": "load_knowledge_graph",
+          "description": "Load Knowledge Graph dataset",
+          "type": "dataset_loading",
+          "dataset": "Knowledge Graph",
+          "timeout_seconds": 30,
+          "expected_success": true
+        },
+        {
+          "name": "load_social_network",
+          "description": "Load Social Network dataset",
+          "type": "dataset_loading",
+          "dataset": "Social Network",
+          "timeout_seconds": 30,
+          "expected_success": true
+        },
+        {
+          "name": "validate_data_integrity",
+          "description": "Validate loaded data integrity",
+          "type": "data_validation",
+          "timeout_seconds": 10,
+          "expected_success": true
+        }
+      ]
+    },
+    {
+      "name": "Cypher Query Tests",
+      "description": "Tests for Cypher query execution with real data",
+      "queries": [
+        {
+          "name": "basic_match",
+          "description": "Basic MATCH query",
+          "query": "MATCH (n) RETURN count(n) as total",
+          "expected_results": 1,
+          "expected_execution_time_ms": 1000,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "label_filter",
+          "description": "Filter by label",
+          "query": "MATCH (n:Person) RETURN count(n) as persons",
+          "expected_results": 1,
+          "expected_execution_time_ms": 1000,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "property_filter",
+          "description": "Filter by property",
+          "query": "MATCH (n:User) WHERE n.age > 25 RETURN count(n) as adults",
+          "expected_results": 1,
+          "expected_execution_time_ms": 1000,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "relationship_traversal",
+          "description": "Traverse relationships",
+          "query": "MATCH (a:User)-[:FOLLOWS]->(b:User) RETURN count(a) as follows",
+          "expected_results": 1,
+          "expected_execution_time_ms": 2000,
+          "timeout_seconds": 10
+        },
+        {
+          "name": "aggregation_query",
+          "description": "Aggregate data",
+          "query": "MATCH (n:User) RETURN COUNT(n) as total_users, AVG(n.age) as avg_age",
+          "expected_results": 1,
+          "expected_execution_time_ms": 1500,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "complex_pattern",
+          "description": "Complex pattern matching",
+          "query": "MATCH (a:User)-[:FOLLOWS*2]->(b:User) RETURN count(a) as indirect_follows",
+          "expected_results": 1,
+          "expected_execution_time_ms": 3000,
+          "timeout_seconds": 15
+        }
+      ]
+    },
+    {
+      "name": "Vector Search Tests",
+      "description": "Tests for vector similarity search functionality",
+      "vector_tests": [
+        {
+          "name": "knn_search_persons",
+          "description": "KNN search for Person entities",
+          "label": "Person",
+          "vector": [0.8, 0.6, 0.4, 0.9, 0.7, 0.3, 0.5, 0.8],
+          "k": 5,
+          "expected_results": 5,
+          "timeout_seconds": 10
+        },
+        {
+          "name": "knn_search_concepts",
+          "description": "KNN search for Concept entities",
+          "label": "Concept",
+          "vector": [0.5, 0.7, 0.9, 0.3, 0.6, 0.8, 0.4, 0.2],
+          "k": 3,
+          "expected_results": 3,
+          "timeout_seconds": 10
+        }
+      ]
+    },
+    {
+      "name": "Performance Tests",
+      "description": "Performance benchmarks with real data",
+      "performance_tests": [
+        {
+          "name": "simple_match_performance",
+          "description": "Simple match query performance",
+          "query": "MATCH (n) RETURN n LIMIT 10",
+          "iterations": 100,
+          "target_qps": 1000,
+          "max_avg_time_ms": 1.0
+        },
+        {
+          "name": "label_filter_performance",
+          "description": "Label filter query performance",
+          "query": "MATCH (n:Person) RETURN n LIMIT 10",
+          "iterations": 100,
+          "target_qps": 500,
+          "max_avg_time_ms": 2.0
+        },
+        {
+          "name": "property_filter_performance",
+          "description": "Property filter query performance",
+          "query": "MATCH (n:User) WHERE n.age > 25 RETURN n LIMIT 10",
+          "iterations": 100,
+          "target_qps": 200,
+          "max_avg_time_ms": 5.0
+        },
+        {
+          "name": "aggregation_performance",
+          "description": "Aggregation query performance",
+          "query": "MATCH (n:User) RETURN COUNT(n), AVG(n.age)",
+          "iterations": 50,
+          "target_qps": 100,
+          "max_avg_time_ms": 10.0
+        },
+        {
+          "name": "relationship_traversal_performance",
+          "description": "Relationship traversal performance",
+          "query": "MATCH (a:User)-[:FOLLOWS]->(b:User) RETURN a, b LIMIT 10",
+          "iterations": 50,
+          "target_qps": 50,
+          "max_avg_time_ms": 20.0
+        }
+      ]
+    },
+    {
+      "name": "Stress Tests",
+      "description": "Stress testing with concurrent operations",
+      "stress_tests": [
+        {
+          "name": "concurrent_queries",
+          "description": "Concurrent query execution",
+          "concurrent_requests": 50,
+          "queries": [
+            "MATCH (n) RETURN count(n)",
+            "MATCH (n:Person) RETURN count(n)",
+            "MATCH (n:User) RETURN count(n)"
+          ],
+          "expected_success_rate": 0.8,
+          "timeout_seconds": 30
+        },
+        {
+          "name": "concurrent_ingestion",
+          "description": "Concurrent data ingestion",
+          "concurrent_requests": 10,
+          "batch_size": 10,
+          "expected_success_rate": 0.9,
+          "timeout_seconds": 60
+        },
+        {
+          "name": "mixed_workload",
+          "description": "Mixed read/write workload",
+          "read_ratio": 0.8,
+          "write_ratio": 0.2,
+          "total_requests": 100,
+          "expected_success_rate": 0.85,
+          "timeout_seconds": 60
+        }
+      ]
+    },
+    {
+      "name": "Error Handling Tests",
+      "description": "Tests for error handling and edge cases",
+      "error_tests": [
+        {
+          "name": "invalid_cypher_syntax",
+          "description": "Invalid Cypher syntax handling",
+          "query": "INVALID CYPHER SYNTAX",
+          "expected_error": true,
+          "expected_status_code": 400
+        },
+        {
+          "name": "non_existent_label",
+          "description": "Non-existent label handling",
+          "query": "MATCH (n:NonExistentLabel) RETURN n",
+          "expected_error": false,
+          "expected_results": 0
+        },
+        {
+          "name": "malformed_query",
+          "description": "Malformed query handling",
+          "query": "MATCH (n RETURN n",
+          "expected_error": true,
+          "expected_status_code": 400
+        },
+        {
+          "name": "invalid_property_access",
+          "description": "Invalid property access handling",
+          "query": "MATCH (n:Person) RETURN n.nonExistentProperty",
+          "expected_error": false,
+          "expected_results": 0
+        },
+        {
+          "name": "timeout_handling",
+          "description": "Query timeout handling",
+          "query": "MATCH (n)-[r*1..10]->(m) RETURN count(n)",
+          "timeout_ms": 1000,
+          "expected_error": true,
+          "expected_status_code": 408
+        }
+      ]
+    },
+    {
+      "name": "Data Consistency Tests",
+      "description": "Tests for data consistency and integrity",
+      "consistency_tests": [
+        {
+          "name": "node_count_consistency",
+          "description": "Verify node count consistency",
+          "query": "MATCH (n) RETURN count(n) as total",
+          "expected_min": 1,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "relationship_count_consistency",
+          "description": "Verify relationship count consistency",
+          "query": "MATCH ()-[r]->() RETURN count(r) as total",
+          "expected_min": 1,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "label_distribution",
+          "description": "Verify label distribution",
+          "queries": [
+            "MATCH (n:Person) RETURN count(n) as persons",
+            "MATCH (n:User) RETURN count(n) as users",
+            "MATCH (n:Concept) RETURN count(n) as concepts"
+          ],
+          "expected_min_total": 1,
+          "timeout_seconds": 10
+        },
+        {
+          "name": "relationship_type_distribution",
+          "description": "Verify relationship type distribution",
+          "queries": [
+            "MATCH ()-[r:FOLLOWS]->() RETURN count(r) as follows",
+            "MATCH ()-[r:DEVELOPED]->() RETURN count(r) as developed",
+            "MATCH ()-[r:POSTED]->() RETURN count(r) as posted"
+          ],
+          "expected_min_total": 1,
+          "timeout_seconds": 10
+        }
+      ]
+    },
+    {
+      "name": "API Integration Tests",
+      "description": "Tests for API endpoints with real data",
+      "api_tests": [
+        {
+          "name": "health_check",
+          "description": "Health check endpoint",
+          "endpoint": "/health",
+          "method": "GET",
+          "expected_status": 200,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "metrics_endpoint",
+          "description": "Metrics endpoint",
+          "endpoint": "/metrics",
+          "method": "GET",
+          "expected_status": 200,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "stats_endpoint",
+          "description": "Statistics endpoint",
+          "endpoint": "/stats",
+          "method": "GET",
+          "expected_status": 200,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "schema_labels",
+          "description": "Schema labels endpoint",
+          "endpoint": "/schema/labels",
+          "method": "GET",
+          "expected_status": 200,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "schema_rel_types",
+          "description": "Schema relationship types endpoint",
+          "endpoint": "/schema/rel_types",
+          "method": "GET",
+          "expected_status": 200,
+          "timeout_seconds": 5
+        },
+        {
+          "name": "clustering_algorithms",
+          "description": "Clustering algorithms endpoint",
+          "endpoint": "/clustering/algorithms",
+          "method": "GET",
+          "expected_status": 200,
+          "timeout_seconds": 5
+        }
+      ]
+    }
+  ],
+  "global_settings": {
+    "default_timeout_seconds": 30,
+    "max_retries": 3,
+    "retry_delay_ms": 1000,
+    "performance_threshold_factor": 0.5,
+    "concurrent_test_limit": 10,
+    "memory_limit_mb": 1024,
+    "log_level": "INFO"
+  },
+  "reporting": {
+    "output_format": "json",
+    "include_performance_metrics": true,
+    "include_error_details": true,
+    "generate_html_report": true,
+    "save_test_artifacts": true,
+    "artifacts_directory": "test_artifacts"
+  }
+}

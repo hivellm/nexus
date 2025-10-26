@@ -244,7 +244,7 @@ impl Engine {
         &mut self,
         id: u64,
         labels: Vec<String>,
-        _properties: serde_json::Value,
+        properties: serde_json::Value,
     ) -> Result<()> {
         // Check if node exists
         if self.get_node(id)?.is_none() {
@@ -263,8 +263,18 @@ impl Engine {
         // Create updated node record
         let mut node_record = storage::NodeRecord::new();
         node_record.label_bits = label_bits;
-        // TODO: Add property storage when property store is implemented
-        // node_record.prop_ptr = self.store_properties(properties)?;
+
+        // Store properties and get property pointer
+        node_record.prop_ptr =
+            if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+                self.storage.property_store.store_properties(
+                    id,
+                    storage::property_store::EntityType::Node,
+                    properties,
+                )?
+            } else {
+                0
+            };
 
         // Write updated record
         let mut tx = self.transaction_manager.begin_write()?;
@@ -337,10 +347,13 @@ impl Engine {
                 let simple_node_id = graph_simple::NodeId::new(node_id);
                 let node = graph_simple::Node::new(simple_node_id, labels);
 
-                // TODO: Add properties when property store is implemented
-                // if node_record.prop_ptr != 0 {
-                //     // Load properties from property store
-                // }
+                // Load properties if they exist
+                if node_record.prop_ptr != 0 {
+                    if let Ok(Some(_properties)) = self.storage.load_node_properties(node_id) {
+                        // Properties are loaded but not yet integrated into simple graph
+                        // This will be handled in future property integration
+                    }
+                }
 
                 simple_graph.update_node(node)?;
             }
@@ -355,6 +368,15 @@ impl Engine {
                     .get_type_name(rel_record.type_id)
                     .unwrap_or_else(|_| Some("UNKNOWN".to_string()))
                     .unwrap_or_else(|| "UNKNOWN".to_string());
+
+                // Load properties if they exist
+                if rel_record.prop_ptr != 0 {
+                    if let Ok(Some(_properties)) = self.storage.load_relationship_properties(rel_id)
+                    {
+                        // Properties are loaded but not yet integrated into simple graph
+                        // This will be handled in future property integration
+                    }
+                }
 
                 // Create edge in simple graph
                 let source_id = graph_simple::NodeId::new(rel_record.src_id);

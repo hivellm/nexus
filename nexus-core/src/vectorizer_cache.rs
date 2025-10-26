@@ -91,7 +91,7 @@ impl Default for CacheConfig {
     fn default() -> Self {
         Self {
             max_entries: 10000,
-            max_memory_bytes: 100 * 1024 * 1024, // 100MB
+            max_memory_bytes: 100 * 1024 * 1024,    // 100MB
             default_ttl: Duration::from_secs(3600), // 1 hour
             eviction_policy: EvictionPolicy::Lru,
             enable_warming: true,
@@ -146,7 +146,7 @@ impl VectorizerCache {
     /// Get a cached result if it exists and is still valid
     pub async fn get(&self, cache_key: &str) -> Result<Option<serde_json::Value>> {
         let start_time = Instant::now();
-        
+
         // Check if entry exists
         let entry = {
             let cache = self.cache.read().await;
@@ -159,10 +159,10 @@ impl VectorizerCache {
                 if self.is_entry_valid(&entry).await {
                     // Update access tracking
                     self.update_access_tracking(cache_key).await;
-                    
+
                     // Record hit
                     self.record_hit(start_time).await;
-                    
+
                     Ok(Some(entry.result))
                 } else {
                     // Entry expired, remove it
@@ -187,10 +187,10 @@ impl VectorizerCache {
         _ttl: Option<Duration>,
     ) -> Result<()> {
         let _start_time = Instant::now();
-        
+
         // Calculate entry size
         let size_bytes = self.calculate_entry_size(&result, &query_metadata);
-        
+
         // Create cache entry
         let entry = CacheEntry {
             result: result.clone(),
@@ -231,12 +231,12 @@ impl VectorizerCache {
             let mut cache = self.cache.write().await;
             cache.clear();
         }
-        
+
         {
             let mut lru_order = self.lru_order.write().await;
             lru_order.clear();
         }
-        
+
         {
             let mut lfu_counts = self.lfu_counts.write().await;
             lfu_counts.clear();
@@ -264,20 +264,21 @@ impl VectorizerCache {
     }
 
     /// Warm the cache with frequently accessed queries
-    pub async fn warm_cache(&self, queries: Vec<(String, serde_json::Value, QueryMetadata)>) -> Result<()> {
+    pub async fn warm_cache(
+        &self,
+        queries: Vec<(String, serde_json::Value, QueryMetadata)>,
+    ) -> Result<()> {
         if !self.config.enable_warming {
             return Ok(());
         }
 
-        let mut warming_count = 0;
-        
-        for (cache_key, result, query_metadata) in queries {
+        for (warming_count, (cache_key, result, query_metadata)) in queries.into_iter().enumerate()
+        {
             if warming_count >= self.config.warming_batch_size {
                 break;
             }
 
             self.put(cache_key, result, query_metadata, None).await?;
-            warming_count += 1;
         }
 
         // Update warming statistics
@@ -335,7 +336,7 @@ impl VectorizerCache {
     /// Check if an entry is still valid (not expired)
     async fn is_entry_valid(&self, entry: &CacheEntry) -> bool {
         let ttl = self.config.default_ttl;
-        
+
         if let Ok(elapsed) = entry.created_at.elapsed() {
             elapsed < ttl
         } else {
@@ -447,13 +448,13 @@ impl VectorizerCache {
 
         while evicted_size < required_size && evicted_count < self.config.max_entries / 4 {
             let key_to_evict = self.select_eviction_candidate().await;
-            
+
             if let Some(key) = key_to_evict {
                 let entry_size = {
                     let cache = self.cache.read().await;
                     cache.get(&key).map(|e| e.size_bytes).unwrap_or(0)
                 };
-                
+
                 self.remove_entry(&key).await;
                 evicted_size += entry_size;
                 evicted_count += 1;
@@ -513,14 +514,12 @@ impl VectorizerCache {
 
     /// Calculate the approximate size of a cache entry
     fn calculate_entry_size(&self, result: &serde_json::Value, metadata: &QueryMetadata) -> usize {
-        let result_size = serde_json::to_string(result)
-            .map(|s| s.len())
-            .unwrap_or(0);
-        
+        let result_size = serde_json::to_string(result).map(|s| s.len()).unwrap_or(0);
+
         let metadata_size = serde_json::to_string(metadata)
             .map(|s| s.len())
             .unwrap_or(0);
-        
+
         // Add overhead for the CacheEntry structure
         result_size + metadata_size + 200 // Approximate overhead
     }
@@ -538,7 +537,7 @@ impl VectorizerCache {
     /// Record a cache hit
     async fn record_hit(&self, start_time: Instant) {
         let hit_time = start_time.elapsed().as_micros() as u64;
-        
+
         {
             let mut metrics = self.metrics.write().await;
             metrics.hits += 1;
@@ -557,7 +556,7 @@ impl VectorizerCache {
     /// Record a cache miss
     async fn record_miss(&self, start_time: Instant) {
         let miss_time = start_time.elapsed().as_micros() as u64;
-        
+
         {
             let mut metrics = self.metrics.write().await;
             metrics.misses += 1;
@@ -578,7 +577,8 @@ impl VectorizerCache {
         {
             let mut metrics = self.metrics.write().await;
             metrics.evictions += 1;
-            metrics.eviction_reasons
+            metrics
+                .eviction_reasons
                 .entry(EvictionReason::SizeLimit)
                 .and_modify(|e| *e += 1)
                 .or_insert(1);
@@ -613,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_put_and_get() {
         let cache = VectorizerCache::new();
-        
+
         let result = json!({"data": "test"});
         let metadata = QueryMetadata {
             query_type: "semantic".to_string(),
@@ -624,8 +624,11 @@ mod tests {
             filters: None,
         };
 
-        cache.put("test_key".to_string(), result.clone(), metadata, None).await.unwrap();
-        
+        cache
+            .put("test_key".to_string(), result.clone(), metadata, None)
+            .await
+            .unwrap();
+
         let cached_result = cache.get("test_key").await.unwrap();
         assert!(cached_result.is_some());
         assert_eq!(cached_result.unwrap(), result);
@@ -634,17 +637,19 @@ mod tests {
     #[tokio::test]
     async fn test_cache_miss() {
         let cache = VectorizerCache::new();
-        
+
         let result = cache.get("nonexistent_key").await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn test_cache_eviction() {
-        let mut config = CacheConfig::default();
-        config.max_entries = 2;
+        let config = CacheConfig {
+            max_entries: 2,
+            ..Default::default()
+        };
         let cache = VectorizerCache::with_config(config);
-        
+
         let metadata = QueryMetadata {
             query_type: "semantic".to_string(),
             collection: "test".to_string(),
@@ -655,16 +660,35 @@ mod tests {
         };
 
         // Add entries up to the limit
-        cache.put("key1".to_string(), json!({"data": "1"}), metadata.clone(), None).await.unwrap();
-        cache.put("key2".to_string(), json!({"data": "2"}), metadata.clone(), None).await.unwrap();
-        
+        cache
+            .put(
+                "key1".to_string(),
+                json!({"data": "1"}),
+                metadata.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+        cache
+            .put(
+                "key2".to_string(),
+                json!({"data": "2"}),
+                metadata.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+
         // Add one more to trigger eviction
-        cache.put("key3".to_string(), json!({"data": "3"}), metadata, None).await.unwrap();
-        
+        cache
+            .put("key3".to_string(), json!({"data": "3"}), metadata, None)
+            .await
+            .unwrap();
+
         // First key should be evicted (LRU)
         let result1 = cache.get("key1").await.unwrap();
         assert!(result1.is_none());
-        
+
         // Other keys should still be there
         let result2 = cache.get("key2").await.unwrap();
         let result3 = cache.get("key3").await.unwrap();
@@ -675,7 +699,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_clear() {
         let cache = VectorizerCache::new();
-        
+
         let metadata = QueryMetadata {
             query_type: "semantic".to_string(),
             collection: "test".to_string(),
@@ -685,9 +709,12 @@ mod tests {
             filters: None,
         };
 
-        cache.put("key1".to_string(), json!({"data": "1"}), metadata, None).await.unwrap();
+        cache
+            .put("key1".to_string(), json!({"data": "1"}), metadata, None)
+            .await
+            .unwrap();
         cache.clear().await.unwrap();
-        
+
         let result = cache.get("key1").await.unwrap();
         assert!(result.is_none());
     }
@@ -695,7 +722,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_statistics() {
         let cache = VectorizerCache::new();
-        
+
         let metadata = QueryMetadata {
             query_type: "semantic".to_string(),
             collection: "test".to_string(),
@@ -706,14 +733,17 @@ mod tests {
         };
 
         // Add an entry
-        cache.put("key1".to_string(), json!({"data": "1"}), metadata, None).await.unwrap();
-        
+        cache
+            .put("key1".to_string(), json!({"data": "1"}), metadata, None)
+            .await
+            .unwrap();
+
         // Hit
         cache.get("key1").await.unwrap();
-        
+
         // Miss
         cache.get("key2").await.unwrap();
-        
+
         let stats = cache.get_statistics().await;
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);

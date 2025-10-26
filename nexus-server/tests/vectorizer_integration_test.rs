@@ -3,13 +3,13 @@
 //! These tests verify the complete integration between Nexus and the vectorizer system,
 //! including MCP client, caching, and hybrid search functionality.
 
+use axum::body::to_bytes;
 use axum::{
+    Router,
     body::Body,
     http::{Method, Request, StatusCode},
-    Router,
 };
-use axum::body::to_bytes;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -21,12 +21,12 @@ use nexus_core::{
     executor::Executor,
     index::{KnnIndex, LabelIndex},
     storage::RecordStore,
-    vectorizer_cache::{VectorizerCache, QueryMetadata},
+    vectorizer_cache::{QueryMetadata, VectorizerCache},
 };
 use nexus_protocol::mcp::McpClient;
-use nexus_server::api;
 use nexus_server::NexusServer;
-use thiserror::Error;
+use nexus_server::api;
+// use thiserror::Error;
 
 // ============================================================================
 // Mock Vectorizer Implementation
@@ -45,7 +45,10 @@ pub trait Vectorizer {
     ) -> Result<Vec<SearchResult>, VectorizerError>;
 
     /// Get collection information
-    async fn get_collection_info(&self, collection: &str) -> Result<CollectionInfo, VectorizerError>;
+    async fn get_collection_info(
+        &self,
+        collection: &str,
+    ) -> Result<CollectionInfo, VectorizerError>;
 
     /// List available collections
     async fn list_collections(&self) -> Result<Vec<String>, VectorizerError>;
@@ -111,6 +114,12 @@ pub struct MockVectorizer {
     next_doc_id: u64,
 }
 
+impl Default for MockVectorizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockVectorizer {
     pub fn new() -> Self {
         let mut vectorizer = Self {
@@ -127,7 +136,7 @@ impl MockVectorizer {
     fn initialize_test_data(&mut self) {
         // Create test collection
         let collection_name = "test_collection".to_string();
-        
+
         let test_docs = vec![
             SearchResult {
                 id: "doc1".to_string(),
@@ -180,12 +189,19 @@ impl MockVectorizer {
         let codebase_docs = vec![
             SearchResult {
                 id: "func1".to_string(),
-                content: "async fn search_documents(query: &str) -> Result<Vec<Document>>".to_string(),
+                content: "async fn search_documents(query: &str) -> Result<Vec<Document>>"
+                    .to_string(),
                 score: 0.88,
                 metadata: {
                     let mut meta = HashMap::new();
-                    meta.insert("file".to_string(), Value::String("src/search.rs".to_string()));
-                    meta.insert("function".to_string(), Value::String("search_documents".to_string()));
+                    meta.insert(
+                        "file".to_string(),
+                        Value::String("src/search.rs".to_string()),
+                    );
+                    meta.insert(
+                        "function".to_string(),
+                        Value::String("search_documents".to_string()),
+                    );
                     meta.insert("language".to_string(), Value::String("rust".to_string()));
                     meta
                 },
@@ -196,15 +212,22 @@ impl MockVectorizer {
                 score: 0.85,
                 metadata: {
                     let mut meta = HashMap::new();
-                    meta.insert("file".to_string(), Value::String("src/index.rs".to_string()));
-                    meta.insert("function".to_string(), Value::String("create_index".to_string()));
+                    meta.insert(
+                        "file".to_string(),
+                        Value::String("src/index.rs".to_string()),
+                    );
+                    meta.insert(
+                        "function".to_string(),
+                        Value::String("create_index".to_string()),
+                    );
                     meta.insert("language".to_string(), Value::String("rust".to_string()));
                     meta
                 },
             },
         ];
 
-        self.collections.insert(codebase_collection.clone(), codebase_docs);
+        self.collections
+            .insert(codebase_collection.clone(), codebase_docs);
         self.collection_info.insert(
             codebase_collection.clone(),
             CollectionInfo {
@@ -232,7 +255,9 @@ impl Vectorizer for MockVectorizer {
         limit: Option<usize>,
         threshold: Option<f32>,
     ) -> Result<Vec<SearchResult>, VectorizerError> {
-        let docs = self.collections.get(collection)
+        let docs = self
+            .collections
+            .get(collection)
             .ok_or_else(|| VectorizerError::CollectionNotFound(collection.to_string()))?;
 
         let mut results = docs.clone();
@@ -243,7 +268,11 @@ impl Vectorizer for MockVectorizer {
         }
 
         // Sort by score (descending)
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Apply limit
         if let Some(limit) = limit {
@@ -253,22 +282,26 @@ impl Vectorizer for MockVectorizer {
         // Simulate query matching (simplified)
         if !query.is_empty() {
             results.retain(|doc| {
-                doc.content.to_lowercase().contains(&query.to_lowercase()) ||
-                doc.metadata.values().any(|v| {
-                    if let Some(s) = v.as_str() {
-                        s.to_lowercase().contains(&query.to_lowercase())
-                    } else {
-                        false
-                    }
-                })
+                doc.content.to_lowercase().contains(&query.to_lowercase())
+                    || doc.metadata.values().any(|v| {
+                        if let Some(s) = v.as_str() {
+                            s.to_lowercase().contains(&query.to_lowercase())
+                        } else {
+                            false
+                        }
+                    })
             });
         }
 
         Ok(results)
     }
 
-    async fn get_collection_info(&self, collection: &str) -> Result<CollectionInfo, VectorizerError> {
-        self.collection_info.get(collection)
+    async fn get_collection_info(
+        &self,
+        collection: &str,
+    ) -> Result<CollectionInfo, VectorizerError> {
+        self.collection_info
+            .get(collection)
             .cloned()
             .ok_or_else(|| VectorizerError::CollectionNotFound(collection.to_string()))
     }
@@ -279,7 +312,7 @@ impl Vectorizer for MockVectorizer {
 
     async fn index_document(
         &self,
-        collection: &str,
+        _collection: &str,
         document: Document,
     ) -> Result<String, VectorizerError> {
         // In a real implementation, this would index the document
@@ -330,7 +363,9 @@ impl McpVectorizerClient {
     }
 
     pub async fn connect(&mut self) -> Result<(), VectorizerError> {
-        self.mcp_client.connect().await
+        self.mcp_client
+            .connect()
+            .await
             .map_err(|e| VectorizerError::NetworkError(e.to_string()))?;
         Ok(())
     }
@@ -344,9 +379,14 @@ impl McpVectorizerClient {
     ) -> Result<Vec<SearchResult>, VectorizerError> {
         // Check cache first
         if let Some(cache) = &self.cache {
-            let cache_key = format!("search:{}:{}:{}:{}", collection, query, 
-                limit.unwrap_or(10), threshold.unwrap_or(0.0));
-            
+            let cache_key = format!(
+                "search:{}:{}:{}:{}",
+                collection,
+                query,
+                limit.unwrap_or(10),
+                threshold.unwrap_or(0.0)
+            );
+
             if let Ok(Some(cached_result)) = cache.get(&cache_key).await {
                 if let Ok(results) = serde_json::from_value::<Vec<SearchResult>>(cached_result) {
                     return Ok(results);
@@ -362,17 +402,26 @@ impl McpVectorizerClient {
             "threshold": threshold.unwrap_or(0.0)
         });
 
-        let result = self.mcp_client.call_tool("mcp_vectorizer_search", params).await
+        let result = self
+            .mcp_client
+            .call_tool("mcp_vectorizer_search", params)
+            .await
             .map_err(|e| VectorizerError::NetworkError(e.to_string()))?;
 
         // Parse results
-        let results: Vec<SearchResult> = serde_json::from_value(result)
-            .map_err(|e| VectorizerError::InternalError(format!("Failed to parse results: {}", e)))?;
+        let results: Vec<SearchResult> = serde_json::from_value(result).map_err(|e| {
+            VectorizerError::InternalError(format!("Failed to parse results: {}", e))
+        })?;
 
         // Cache results
         if let Some(cache) = &self.cache {
-            let cache_key = format!("search:{}:{}:{}:{}", collection, query, 
-                limit.unwrap_or(10), threshold.unwrap_or(0.0));
+            let cache_key = format!(
+                "search:{}:{}:{}:{}",
+                collection,
+                query,
+                limit.unwrap_or(10),
+                threshold.unwrap_or(0.0)
+            );
             let query_metadata = QueryMetadata {
                 query_type: "semantic".to_string(),
                 collection: collection.to_string(),
@@ -382,12 +431,14 @@ impl McpVectorizerClient {
                 filters: None,
             };
 
-            let _ = cache.put(
-                cache_key,
-                serde_json::to_value(&results).unwrap(),
-                query_metadata,
-                None,
-            ).await;
+            let _ = cache
+                .put(
+                    cache_key,
+                    serde_json::to_value(&results).unwrap(),
+                    query_metadata,
+                    None,
+                )
+                .await;
         }
 
         Ok(results)
@@ -401,30 +452,31 @@ impl McpVectorizerClient {
 /// Create a test server with vectorizer integration
 async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockVectorizer>) {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Initialize core components
     let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
     let catalog_arc = Arc::new(RwLock::new(catalog));
-    
+
     let store = RecordStore::new(temp_dir.path()).unwrap();
     let store_arc = Arc::new(RwLock::new(store));
-    
+
     let label_index = LabelIndex::new();
     let label_index_arc = Arc::new(RwLock::new(label_index));
-    
+
     let knn_index = KnnIndex::new(128).unwrap();
     let knn_index_arc = Arc::new(RwLock::new(knn_index));
-    
+
     let executor = Executor::new(
-        catalog_arc.read().await,
-        store_arc.read().await,
-        label_index_arc.read().await,
-        knn_index_arc.read().await,
-    ).unwrap();
+        &*catalog_arc.read().await,
+        &*store_arc.read().await,
+        &*label_index_arc.read().await,
+        &*knn_index_arc.read().await,
+    )
+    .unwrap();
     let executor_arc = Arc::new(RwLock::new(executor));
-    
+
     // Initialize API modules
-    api::cypher::init_executor(executor_arc.clone()).unwrap();
+    api::cypher::init_executor().unwrap();
     api::knn::init_executor(executor_arc.clone()).unwrap();
     api::ingest::init_executor(executor_arc.clone()).unwrap();
     api::schema::init_catalog(catalog_arc.clone()).unwrap();
@@ -433,9 +485,10 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
         catalog_arc.clone(),
         label_index_arc.clone(),
         knn_index_arc.clone(),
-    ).unwrap();
+    )
+    .unwrap();
     api::health::init();
-    
+
     // Create server state
     let server = Arc::new(NexusServer {
         executor: executor_arc,
@@ -443,10 +496,10 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
         label_index: label_index_arc,
         knn_index: knn_index_arc,
     });
-    
+
     // Create mock vectorizer
     let vectorizer = Arc::new(MockVectorizer::new());
-    
+
     // Build router
     let app = Router::new()
         .route("/", axum::routing::get(api::health::health_check))
@@ -455,29 +508,60 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
         .route("/cypher", axum::routing::post(api::cypher::execute_cypher))
         .route("/knn_traverse", axum::routing::post(api::knn::knn_traverse))
         .route("/ingest", axum::routing::post(api::ingest::ingest_data))
-        .route("/schema/labels", axum::routing::post(api::schema::create_label))
-        .route("/schema/labels", axum::routing::get(api::schema::list_labels))
-        .route("/schema/rel_types", axum::routing::post(api::schema::create_rel_type))
-        .route("/schema/rel_types", axum::routing::get(api::schema::list_rel_types))
+        .route(
+            "/schema/labels",
+            axum::routing::post(api::schema::create_label),
+        )
+        .route(
+            "/schema/labels",
+            axum::routing::get(api::schema::list_labels),
+        )
+        .route(
+            "/schema/rel_types",
+            axum::routing::post(api::schema::create_rel_type),
+        )
+        .route(
+            "/schema/rel_types",
+            axum::routing::get(api::schema::list_rel_types),
+        )
         .route("/data/nodes", axum::routing::post(api::data::create_node))
-        .route("/data/relationships", axum::routing::post(api::data::create_rel))
+        .route(
+            "/data/relationships",
+            axum::routing::post(api::data::create_rel),
+        )
         .route("/data/nodes", axum::routing::put(api::data::update_node))
         .route("/data/nodes", axum::routing::delete(api::data::delete_node))
         .route("/stats", axum::routing::get(api::stats::get_stats))
-        .route("/clustering/algorithms", axum::routing::get(api::clustering::get_algorithms))
-        .route("/clustering/cluster", axum::routing::post({
-            let server = server.clone();
-            move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
-        }))
-        .route("/clustering/group-by-label", axum::routing::post({
-            let server = server.clone();
-            move |request| api::clustering::group_by_label(axum::extract::State(server), request)
-        }))
-        .route("/clustering/group-by-property", axum::routing::post({
-            let server = server.clone();
-            move |request| api::clustering::group_by_property(axum::extract::State(server), request)
-        }));
-    
+        .route(
+            "/clustering/algorithms",
+            axum::routing::get(api::clustering::get_algorithms),
+        )
+        .route(
+            "/clustering/cluster",
+            axum::routing::post({
+                let server = server.clone();
+                move |request| api::clustering::cluster_nodes(axum::extract::State(server), request)
+            }),
+        )
+        .route(
+            "/clustering/group-by-label",
+            axum::routing::post({
+                let server = server.clone();
+                move |request| {
+                    api::clustering::group_by_label(axum::extract::State(server), request)
+                }
+            }),
+        )
+        .route(
+            "/clustering/group-by-property",
+            axum::routing::post({
+                let server = server.clone();
+                move |request| {
+                    api::clustering::group_by_property(axum::extract::State(server), request)
+                }
+            }),
+        );
+
     (app, server, vectorizer)
 }
 
@@ -488,15 +572,21 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
 #[tokio::test]
 async fn test_mock_vectorizer_search() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test basic search
-    let results = vectorizer.search("test_collection", "machine learning", Some(5), Some(0.8)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "machine learning", Some(5), Some(0.8))
+        .await
+        .unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0].id, "doc1");
     assert!(results[0].score >= 0.8);
-    
+
     // Test search with different query
-    let results = vectorizer.search("test_collection", "graph", Some(5), Some(0.5)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "graph", Some(5), Some(0.5))
+        .await
+        .unwrap();
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| r.content.contains("Graph")));
 }
@@ -504,14 +594,17 @@ async fn test_mock_vectorizer_search() {
 #[tokio::test]
 async fn test_mock_vectorizer_collections() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test list collections
     let collections = vectorizer.list_collections().await.unwrap();
     assert!(collections.contains(&"test_collection".to_string()));
     assert!(collections.contains(&"codebase".to_string()));
-    
+
     // Test get collection info
-    let info = vectorizer.get_collection_info("test_collection").await.unwrap();
+    let info = vectorizer
+        .get_collection_info("test_collection")
+        .await
+        .unwrap();
     assert_eq!(info.name, "test_collection");
     assert_eq!(info.document_count, 3);
     assert_eq!(info.vector_dimensions, 384);
@@ -520,7 +613,7 @@ async fn test_mock_vectorizer_collections() {
 #[tokio::test]
 async fn test_mock_vectorizer_document_operations() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test index document
     let document = Document {
         id: None,
@@ -531,10 +624,13 @@ async fn test_mock_vectorizer_document_operations() {
             meta
         },
     };
-    
-    let doc_id = vectorizer.index_document("test_collection", document).await.unwrap();
+
+    let doc_id = vectorizer
+        .index_document("test_collection", document)
+        .await
+        .unwrap();
     assert!(!doc_id.is_empty());
-    
+
     // Test delete document
     let result = vectorizer.delete_document("test_collection", &doc_id).await;
     assert!(result.is_ok());
@@ -544,10 +640,13 @@ async fn test_mock_vectorizer_document_operations() {
 async fn test_vectorizer_cache_integration() {
     let cache = VectorizerCache::new();
     let vectorizer = MockVectorizer::new();
-    
+
     // Perform search and cache result
-    let results = vectorizer.search("test_collection", "test query", Some(5), Some(0.8)).await.unwrap();
-    
+    let results = vectorizer
+        .search("test_collection", "test query", Some(5), Some(0.8))
+        .await
+        .unwrap();
+
     let query_metadata = QueryMetadata {
         query_type: "semantic".to_string(),
         collection: "test_collection".to_string(),
@@ -556,20 +655,24 @@ async fn test_vectorizer_cache_integration() {
         limit: Some(5),
         filters: None,
     };
-    
+
     // Cache the results
-    cache.put(
-        "test_key".to_string(),
-        serde_json::to_value(&results).unwrap(),
-        query_metadata,
-        None,
-    ).await.unwrap();
-    
+    cache
+        .put(
+            "test_key".to_string(),
+            serde_json::to_value(&results).unwrap(),
+            query_metadata,
+            None,
+        )
+        .await
+        .unwrap();
+
     // Retrieve from cache
     let cached_results = cache.get("test_key").await.unwrap();
     assert!(cached_results.is_some());
-    
-    let cached_results: Vec<SearchResult> = serde_json::from_value(cached_results.unwrap()).unwrap();
+
+    let cached_results: Vec<SearchResult> =
+        serde_json::from_value(cached_results.unwrap()).unwrap();
     assert_eq!(cached_results.len(), results.len());
 }
 
@@ -595,12 +698,12 @@ async fn test_mcp_vectorizer_client_without_cache() {
 #[tokio::test]
 async fn test_hybrid_search_simulation() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Simulate hybrid search: graph traversal + vectorizer search
     let query = "machine learning algorithms";
-    
+
     // 1. Graph traversal (simulated)
-    let graph_results = vec![
+    let graph_results = [
         json!({
             "node_id": "node1",
             "label": "Algorithm",
@@ -610,21 +713,24 @@ async fn test_hybrid_search_simulation() {
             }
         }),
         json!({
-            "node_id": "node2", 
+            "node_id": "node2",
             "label": "Algorithm",
             "properties": {
                 "name": "Neural Network",
                 "type": "deep_learning"
             }
-        })
+        }),
     ];
-    
+
     // 2. Vectorizer semantic search
-    let vectorizer_results = vectorizer.search("test_collection", query, Some(5), Some(0.7)).await.unwrap();
-    
+    let vectorizer_results = vectorizer
+        .search("test_collection", query, Some(5), Some(0.7))
+        .await
+        .unwrap();
+
     // 3. Combine results (simplified RRF)
     let mut combined_results = Vec::new();
-    
+
     // Add graph results
     for (i, result) in graph_results.iter().enumerate() {
         combined_results.push(json!({
@@ -633,7 +739,7 @@ async fn test_hybrid_search_simulation() {
             "data": result
         }));
     }
-    
+
     // Add vectorizer results
     for (i, result) in vectorizer_results.iter().enumerate() {
         combined_results.push(json!({
@@ -647,7 +753,7 @@ async fn test_hybrid_search_simulation() {
             }
         }));
     }
-    
+
     // Verify combined results
     assert!(!combined_results.is_empty());
     assert!(combined_results.iter().any(|r| r["source"] == "graph"));
@@ -657,28 +763,41 @@ async fn test_hybrid_search_simulation() {
 #[tokio::test]
 async fn test_vectorizer_error_handling() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test collection not found
-    let result = vectorizer.search("nonexistent_collection", "query", Some(5), Some(0.8)).await;
-    assert!(matches!(result, Err(VectorizerError::CollectionNotFound(_))));
-    
+    let result = vectorizer
+        .search("nonexistent_collection", "query", Some(5), Some(0.8))
+        .await;
+    assert!(matches!(
+        result,
+        Err(VectorizerError::CollectionNotFound(_))
+    ));
+
     // Test get collection info for non-existent collection
-    let result = vectorizer.get_collection_info("nonexistent_collection").await;
-    assert!(matches!(result, Err(VectorizerError::CollectionNotFound(_))));
+    let result = vectorizer
+        .get_collection_info("nonexistent_collection")
+        .await;
+    assert!(matches!(
+        result,
+        Err(VectorizerError::CollectionNotFound(_))
+    ));
 }
 
 #[tokio::test]
 async fn test_vectorizer_performance_metrics() {
     let vectorizer = MockVectorizer::new();
     let cache = VectorizerCache::new();
-    
+
     let start = std::time::Instant::now();
-    
+
     // Perform multiple searches
     for i in 0..10 {
         let query = format!("test query {}", i);
-        let results = vectorizer.search("test_collection", &query, Some(5), Some(0.8)).await.unwrap();
-        
+        let results = vectorizer
+            .search("test_collection", &query, Some(5), Some(0.8))
+            .await
+            .unwrap();
+
         // Cache results
         let query_metadata = QueryMetadata {
             query_type: "semantic".to_string(),
@@ -688,28 +807,34 @@ async fn test_vectorizer_performance_metrics() {
             limit: Some(5),
             filters: None,
         };
-        
-        cache.put(
-            format!("test_key_{}", i),
-            serde_json::to_value(&results).unwrap(),
-            query_metadata,
-            None,
-        ).await.unwrap();
+
+        cache
+            .put(
+                format!("test_key_{}", i),
+                serde_json::to_value(&results).unwrap(),
+                query_metadata,
+                None,
+            )
+            .await
+            .unwrap();
     }
-    
+
     let elapsed = start.elapsed();
-    println!("Performed 10 searches and cache operations in {:?}", elapsed);
-    
+    println!(
+        "Performed 10 searches and cache operations in {:?}",
+        elapsed
+    );
+
     // Verify cache statistics
     let stats = cache.get_statistics().await;
     assert_eq!(stats.hits, 0); // No cache hits yet
     assert_eq!(stats.misses, 0); // No cache misses yet
     assert!(stats.memory_usage > 0);
-    
+
     // Test cache hits
     let cached_results = cache.get("test_key_0").await.unwrap();
     assert!(cached_results.is_some());
-    
+
     let final_stats = cache.get_statistics().await;
     assert_eq!(final_stats.hits, 1);
 }
@@ -718,17 +843,19 @@ async fn test_vectorizer_performance_metrics() {
 async fn test_vectorizer_concurrent_access() {
     let vectorizer = Arc::new(MockVectorizer::new());
     let mut handles = vec![];
-    
+
     // Spawn multiple concurrent searches
     for i in 0..5 {
         let vectorizer_clone = vectorizer.clone();
         let handle = tokio::spawn(async move {
             let query = format!("concurrent query {}", i);
-            vectorizer_clone.search("test_collection", &query, Some(3), Some(0.7)).await
+            vectorizer_clone
+                .search("test_collection", &query, Some(3), Some(0.7))
+                .await
         });
         handles.push(handle);
     }
-    
+
     // Wait for all searches to complete
     let mut success_count = 0;
     for handle in handles {
@@ -737,38 +864,51 @@ async fn test_vectorizer_concurrent_access() {
             Err(e) => println!("Search failed: {:?}", e),
         }
     }
-    
+
     assert_eq!(success_count, 5);
 }
 
 #[tokio::test]
 async fn test_vectorizer_large_dataset() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test with larger result set
-    let results = vectorizer.search("test_collection", "", Some(100), Some(0.0)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "", Some(100), Some(0.0))
+        .await
+        .unwrap();
     assert_eq!(results.len(), 3); // All documents in test collection
-    
+
     // Test with high threshold (should return fewer results)
-    let results = vectorizer.search("test_collection", "", Some(100), Some(0.95)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "", Some(100), Some(0.95))
+        .await
+        .unwrap();
     assert!(results.len() <= 3);
-    
+
     // Test with low threshold (should return all results)
-    let results = vectorizer.search("test_collection", "", Some(100), Some(0.0)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "", Some(100), Some(0.0))
+        .await
+        .unwrap();
     assert_eq!(results.len(), 3);
 }
 
 #[tokio::test]
 async fn test_vectorizer_metadata_filtering() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Search for documents with specific metadata
-    let results = vectorizer.search("test_collection", "article", Some(10), Some(0.0)).await.unwrap();
-    
+    let results = vectorizer
+        .search("test_collection", "article", Some(10), Some(0.0))
+        .await
+        .unwrap();
+
     // Should find documents with "article" in metadata
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| {
-        r.metadata.get("type")
+        r.metadata
+            .get("type")
             .and_then(|v| v.as_str())
             .map(|s| s == "article")
             .unwrap_or(false)
@@ -778,52 +918,73 @@ async fn test_vectorizer_metadata_filtering() {
 #[tokio::test]
 async fn test_vectorizer_codebase_search() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Search in codebase collection
-    let results = vectorizer.search("codebase", "search", Some(5), Some(0.8)).await.unwrap();
-    
+    let results = vectorizer
+        .search("codebase", "search", Some(5), Some(0.8))
+        .await
+        .unwrap();
+
     assert!(!results.is_empty());
-    assert!(results.iter().any(|r| r.content.contains("search_documents")));
-    
+    assert!(
+        results
+            .iter()
+            .any(|r| r.content.contains("search_documents"))
+    );
+
     // Search for specific function
-    let results = vectorizer.search("codebase", "create_index", Some(5), Some(0.8)).await.unwrap();
-    
+    let results = vectorizer
+        .search("codebase", "create_index", Some(5), Some(0.8))
+        .await
+        .unwrap();
+
     assert!(!results.is_empty());
     assert!(results.iter().any(|r| r.content.contains("create_index")));
 }
 
 #[tokio::test]
 async fn test_vectorizer_integration_with_api() {
-    let (app, _server, _vectorizer): (Router, Arc<NexusServer>, Arc<MockVectorizer>) = create_vectorizer_test_server().await;
-    
+    let (app, _server, _vectorizer): (Router, Arc<NexusServer>, Arc<MockVectorizer>) =
+        create_vectorizer_test_server().await;
+
     // Test that the API endpoints still work with vectorizer integration
     let request = Request::builder()
         .method(Method::GET)
         .uri("/health")
         .body(Body::empty())
         .unwrap();
-    
+
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    
+
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let health: Value = serde_json::from_slice(&body).unwrap();
-    
+
     assert_eq!(health["status"], "ok");
 }
 
 #[tokio::test]
 async fn test_vectorizer_cache_eviction() {
-    let mut config = nexus_core::vectorizer_cache::CacheConfig::default();
-    config.max_entries = 2; // Small cache for testing
+    let config = nexus_core::vectorizer_cache::CacheConfig {
+        max_entries: 2, // Small cache for testing
+        ..Default::default()
+    };
     let cache = VectorizerCache::with_config(config);
-    
+
     let vectorizer = MockVectorizer::new();
-    
+
     // Add entries to fill cache
     for i in 0..3 {
-        let results = vectorizer.search("test_collection", &format!("query {}", i), Some(5), Some(0.8)).await.unwrap();
-        
+        let results = vectorizer
+            .search(
+                "test_collection",
+                &format!("query {}", i),
+                Some(5),
+                Some(0.8),
+            )
+            .await
+            .unwrap();
+
         let query_metadata = QueryMetadata {
             query_type: "semantic".to_string(),
             collection: "test_collection".to_string(),
@@ -832,26 +993,29 @@ async fn test_vectorizer_cache_eviction() {
             limit: Some(5),
             filters: None,
         };
-        
-        cache.put(
-            format!("key_{}", i),
-            serde_json::to_value(&results).unwrap(),
-            query_metadata,
-            None,
-        ).await.unwrap();
+
+        cache
+            .put(
+                format!("key_{}", i),
+                serde_json::to_value(&results).unwrap(),
+                query_metadata,
+                None,
+            )
+            .await
+            .unwrap();
     }
-    
+
     // First key should be evicted (LRU)
     let result = cache.get("key_0").await.unwrap();
     assert!(result.is_none());
-    
+
     // Other keys should still be there
     let result = cache.get("key_1").await.unwrap();
     assert!(result.is_some());
-    
+
     let result = cache.get("key_2").await.unwrap();
     assert!(result.is_some());
-    
+
     // Verify eviction statistics
     let stats = cache.get_statistics().await;
     assert!(stats.evictions > 0);
@@ -861,42 +1025,58 @@ async fn test_vectorizer_cache_eviction() {
 async fn test_vectorizer_cache_warming() {
     let cache = VectorizerCache::new();
     let vectorizer = MockVectorizer::new();
-    
+
     // Prepare warming data
     let warming_queries = vec![
-        ("warm_key_1".to_string(), 
-         serde_json::to_value(vectorizer.search("test_collection", "machine learning", Some(5), Some(0.8)).await.unwrap()).unwrap(),
-         QueryMetadata {
-             query_type: "semantic".to_string(),
-             collection: "test_collection".to_string(),
-             query_string: "machine learning".to_string(),
-             threshold: Some(0.8),
-             limit: Some(5),
-             filters: None,
-         }),
-        ("warm_key_2".to_string(),
-         serde_json::to_value(vectorizer.search("test_collection", "graph database", Some(5), Some(0.8)).await.unwrap()).unwrap(),
-         QueryMetadata {
-             query_type: "semantic".to_string(),
-             collection: "test_collection".to_string(),
-             query_string: "graph database".to_string(),
-             threshold: Some(0.8),
-             limit: Some(5),
-             filters: None,
-         }),
+        (
+            "warm_key_1".to_string(),
+            serde_json::to_value(
+                vectorizer
+                    .search("test_collection", "machine learning", Some(5), Some(0.8))
+                    .await
+                    .unwrap(),
+            )
+            .unwrap(),
+            QueryMetadata {
+                query_type: "semantic".to_string(),
+                collection: "test_collection".to_string(),
+                query_string: "machine learning".to_string(),
+                threshold: Some(0.8),
+                limit: Some(5),
+                filters: None,
+            },
+        ),
+        (
+            "warm_key_2".to_string(),
+            serde_json::to_value(
+                vectorizer
+                    .search("test_collection", "graph database", Some(5), Some(0.8))
+                    .await
+                    .unwrap(),
+            )
+            .unwrap(),
+            QueryMetadata {
+                query_type: "semantic".to_string(),
+                collection: "test_collection".to_string(),
+                query_string: "graph database".to_string(),
+                threshold: Some(0.8),
+                limit: Some(5),
+                filters: None,
+            },
+        ),
     ];
-    
+
     // Warm the cache
     cache.warm_cache(warming_queries).await.unwrap();
-    
+
     // Verify warming statistics
     let stats = cache.get_statistics().await;
     assert_eq!(stats.warming_operations, 1);
-    
+
     // Verify cached data is accessible
     let result = cache.get("warm_key_1").await.unwrap();
     assert!(result.is_some());
-    
+
     let result = cache.get("warm_key_2").await.unwrap();
     assert!(result.is_some());
 }
@@ -905,9 +1085,12 @@ async fn test_vectorizer_cache_warming() {
 async fn test_vectorizer_cache_invalidation() {
     let cache = VectorizerCache::new();
     let vectorizer = MockVectorizer::new();
-    
+
     // Add some test data
-    let results = vectorizer.search("test_collection", "test", Some(5), Some(0.8)).await.unwrap();
+    let results = vectorizer
+        .search("test_collection", "test", Some(5), Some(0.8))
+        .await
+        .unwrap();
     let query_metadata = QueryMetadata {
         query_type: "semantic".to_string(),
         collection: "test_collection".to_string(),
@@ -916,22 +1099,46 @@ async fn test_vectorizer_cache_invalidation() {
         limit: Some(5),
         filters: None,
     };
-    
-    cache.put("test_key_1".to_string(), serde_json::to_value(&results).unwrap(), query_metadata.clone(), None).await.unwrap();
-    cache.put("test_key_2".to_string(), serde_json::to_value(&results).unwrap(), query_metadata.clone(), None).await.unwrap();
-    cache.put("other_key".to_string(), serde_json::to_value(&results).unwrap(), query_metadata, None).await.unwrap();
-    
+
+    cache
+        .put(
+            "test_key_1".to_string(),
+            serde_json::to_value(&results).unwrap(),
+            query_metadata.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    cache
+        .put(
+            "test_key_2".to_string(),
+            serde_json::to_value(&results).unwrap(),
+            query_metadata.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    cache
+        .put(
+            "other_key".to_string(),
+            serde_json::to_value(&results).unwrap(),
+            query_metadata,
+            None,
+        )
+        .await
+        .unwrap();
+
     // Invalidate keys with pattern
     let invalidated = cache.invalidate_pattern("test_key").await.unwrap();
     assert_eq!(invalidated, 2);
-    
+
     // Verify invalidation
     let result = cache.get("test_key_1").await.unwrap();
     assert!(result.is_none());
-    
+
     let result = cache.get("test_key_2").await.unwrap();
     assert!(result.is_none());
-    
+
     let result = cache.get("other_key").await.unwrap();
     assert!(result.is_some());
 }
@@ -943,8 +1150,9 @@ async fn test_vectorizer_cache_invalidation() {
 /// Test that vectorizer integration doesn't break existing functionality
 #[tokio::test]
 async fn test_vectorizer_integration_backwards_compatibility() {
-    let (app, _server, _vectorizer): (Router, Arc<NexusServer>, Arc<MockVectorizer>) = create_vectorizer_test_server().await;
-    
+    let (app, _server, _vectorizer): (Router, Arc<NexusServer>, Arc<MockVectorizer>) =
+        create_vectorizer_test_server().await;
+
     // Test all major endpoints still work
     let endpoints = vec![
         ("/", Method::GET),
@@ -955,16 +1163,16 @@ async fn test_vectorizer_integration_backwards_compatibility() {
         ("/schema/rel_types", Method::GET),
         ("/clustering/algorithms", Method::GET),
     ];
-    
+
     for (endpoint, method) in endpoints {
         let request = Request::builder()
-            .method(method)
+            .method(&method)
             .uri(endpoint)
             .body(Body::empty())
             .unwrap();
-        
+
         let response = app.clone().oneshot(request).await.unwrap();
-        
+
         // Most endpoints should return 200 or 400 (for missing parameters)
         assert!(
             response.status().is_success() || response.status() == StatusCode::BAD_REQUEST,
@@ -980,18 +1188,22 @@ async fn test_vectorizer_integration_backwards_compatibility() {
 #[tokio::test]
 async fn test_vectorizer_error_propagation() {
     let vectorizer = MockVectorizer::new();
-    
+
     // Test various error conditions
     let error_cases = vec![
         ("nonexistent_collection", "query", "CollectionNotFound"),
         ("test_collection", "", "InvalidQuery"), // Empty query might be invalid
     ];
-    
+
     for (collection, query, expected_error) in error_cases {
-        let result = vectorizer.search(collection, query, Some(5), Some(0.8)).await;
-        
+        let result = vectorizer
+            .search(collection, query, Some(5), Some(0.8))
+            .await;
+
         match result {
-            Err(VectorizerError::CollectionNotFound(_)) if expected_error == "CollectionNotFound" => {
+            Err(VectorizerError::CollectionNotFound(_))
+                if expected_error == "CollectionNotFound" =>
+            {
                 // Expected error
             }
             Err(VectorizerError::InvalidQuery(_)) if expected_error == "InvalidQuery" => {

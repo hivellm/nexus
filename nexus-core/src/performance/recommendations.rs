@@ -571,7 +571,7 @@ mod tests {
     async fn test_recommendations_creation() {
         let config = RecommendationsConfig::default();
         let recommendations = PerformanceRecommendations::new(config);
-        assert!(recommendations.recommendation_rules.len() > 0);
+        assert!(!recommendations.recommendation_rules.is_empty());
     }
 
     #[tokio::test]
