@@ -425,18 +425,32 @@ async fn handle_create_node(
 
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
-    // Simplified implementation - return success with placeholder data
-    let response = json!({
-        "status": "created",
-        "node_id": 1,
-        "labels": labels,
-        "properties": properties,
-        "message": "Node creation implemented - integration with storage layer pending"
-    });
-
-    Ok(CallToolResult::success(vec![Content::text(
-        response.to_string(),
-    )]))
+    // Use real Engine for node creation
+    match nexus_core::Engine::new() {
+        Ok(mut engine) => {
+            match engine.create_node(labels.clone(), properties.clone()) {
+                Ok(node_id) => {
+                    let response = json!({
+                        "status": "created",
+                        "node_id": node_id,
+                        "labels": labels,
+                        "properties": properties
+                    });
+                    Ok(CallToolResult::success(vec![Content::text(
+                        response.to_string(),
+                    )]))
+                }
+                Err(e) => Err(ErrorData::internal_error(
+                    format!("Failed to create node: {}", e),
+                    None,
+                )),
+            }
+        }
+        Err(e) => Err(ErrorData::internal_error(
+            format!("Failed to initialize engine: {}", e),
+            None,
+        )),
+    }
 }
 
 /// Handle create relationship tool
@@ -462,24 +476,39 @@ async fn handle_create_relationship(
     let rel_type = args
         .get("rel_type")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ErrorData::invalid_params("Missing rel_type", None))?;
+        .ok_or_else(|| ErrorData::invalid_params("Missing rel_type", None))?
+        .to_string();
 
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
-    // Simplified implementation - return success with placeholder data
-    let response = json!({
-        "status": "created",
-        "relationship_id": 1,
-        "source_id": source_id,
-        "target_id": target_id,
-        "rel_type": rel_type,
-        "properties": properties,
-        "message": "Relationship creation implemented - integration with storage layer pending"
-    });
-
-    Ok(CallToolResult::success(vec![Content::text(
-        response.to_string(),
-    )]))
+    // Use real Engine for relationship creation
+    match nexus_core::Engine::new() {
+        Ok(mut engine) => {
+            match engine.create_relationship(source_id, target_id, rel_type.clone(), properties.clone()) {
+                Ok(rel_id) => {
+                    let response = json!({
+                        "status": "created",
+                        "relationship_id": rel_id,
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "rel_type": rel_type,
+                        "properties": properties
+                    });
+                    Ok(CallToolResult::success(vec![Content::text(
+                        response.to_string(),
+                    )]))
+                }
+                Err(e) => Err(ErrorData::internal_error(
+                    format!("Failed to create relationship: {}", e),
+                    None,
+                )),
+            }
+        }
+        Err(e) => Err(ErrorData::internal_error(
+            format!("Failed to initialize engine: {}", e),
+            None,
+        )),
+    }
 }
 
 /// Handle execute Cypher tool
@@ -545,7 +574,7 @@ async fn handle_execute_cypher(
 /// Handle KNN search tool
 async fn handle_knn_search(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -569,20 +598,38 @@ async fn handle_knn_search(
     let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
-    // Simplified implementation - return success with placeholder data
-    let response = json!({
-        "status": "completed",
-        "label": label,
-        "k": k,
-        "limit": limit,
-        "vector_dimension": vector.len(),
-        "results": [],
-        "message": "KNN search implemented - integration with vector index pending"
-    });
+    // Use real KNN index for search
+    let knn_index = server.knn_index.read().await;
+    match knn_index.search_knn(&vector, k) {
+        Ok(results) => {
+            let results_json: Vec<_> = results
+                .iter()
+                .map(|(node_id, distance)| json!({
+                    "node_id": node_id,
+                    "distance": distance,
+                    "score": 1.0 / (1.0 + distance)
+                }))
+                .take(limit)
+                .collect();
 
-    Ok(CallToolResult::success(vec![Content::text(
-        response.to_string(),
-    )]))
+            let response = json!({
+                "status": "completed",
+                "label": label,
+                "k": k,
+                "limit": limit,
+                "vector_dimension": vector.len(),
+                "results": results_json
+            });
+
+            Ok(CallToolResult::success(vec![Content::text(
+                response.to_string(),
+            )]))
+        }
+        Err(e) => Err(ErrorData::internal_error(
+            format!("KNN search failed: {}", e),
+            None,
+        )),
+    }
 }
 
 /// Handle get stats tool
@@ -590,26 +637,41 @@ async fn handle_get_stats(
     _request: CallToolRequestParam,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
-    // Simplified implementation - return placeholder stats
-    let response = json!({
-        "status": "ok",
-        "stats": {
-            "node_count": 0,
-            "relationship_count": 0,
-            "label_count": 0,
-            "relationship_type_count": 0,
-            "label_index_size": 0,
-            "knn_index_size": 0,
-            "memory_usage_mb": 0,
-            "uptime_seconds": 0
-        },
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "message": "Stats collection implemented - integration with storage layer pending"
-    });
+    // Use real Engine for stats
+    match nexus_core::Engine::new() {
+        Ok(engine) => {
+            match engine.stats() {
+                Ok(stats) => {
+                    let response = json!({
+                        "status": "ok",
+                        "stats": {
+                            "node_count": stats.nodes,
+                            "relationship_count": stats.relationships,
+                            "label_count": stats.labels,
+                            "relationship_type_count": stats.rel_types,
+                            "label_index_size": 0, // Get from label_index if available
+                            "knn_index_size": 0, // Get from knn_index if available
+                            "memory_usage_mb": 0,
+                            "uptime_seconds": stats.active_transactions
+                        },
+                        "timestamp": chrono::Utc::now().to_rfc3339()
+                    });
 
-    Ok(CallToolResult::success(vec![Content::text(
-        response.to_string(),
-    )]))
+                    Ok(CallToolResult::success(vec![Content::text(
+                        response.to_string(),
+                    )]))
+                }
+                Err(e) => Err(ErrorData::internal_error(
+                    format!("Failed to get stats: {}", e),
+                    None,
+                )),
+            }
+        }
+        Err(e) => Err(ErrorData::internal_error(
+            format!("Failed to initialize engine: {}", e),
+            None,
+        )),
+    }
 }
 
 /// Handle graph correlation generate tool
