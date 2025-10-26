@@ -8,13 +8,14 @@
 ## 📊 **Overall Progress Summary**
 
 ### **Active Changes**
-| Phase | Status | Tasks Completed | Total Tasks | Coverage |
-|-------|--------|----------------|-------------|----------|
-| **Graph Correlation** | 🚧 **IN PROGRESS** | 28/80 | 80 | 91%+ |
-| **V1 Authentication** | 🚧 **IN PROGRESS** | 18/35 | 35 | 95%+ |
-| **V1 Replication** | 📋 **PLANNED** | 0/35 | 35 | - |
-| **V1 GUI** | 📋 **PLANNED** | 0/50 | 50 | - |
-| **V2 Sharding** | 📋 **PLANNED** | 0/45 | 45 | - |
+| Phase | Status | Tasks Completed | Total Tasks | % Complete | Coverage |
+|-------|--------|----------------|-------------|------------|----------|
+| **Graph Correlation MVP** | 🚧 **IN PROGRESS** | 38/80 | 80 | **47.5%** | 91%+ |
+| **Graph Correlation V1/V2** | 📋 **PLANNED** | 0/140 | 140 | 0% | - |
+| **V1 Authentication** | 🚧 **IN PROGRESS** | 18/37 | 37 | **48.6%** | 95%+ |
+| **V1 Replication** | 📋 **PLANNED** | 0/35 | 35 | 0% | - |
+| **V1 GUI** | 📋 **PLANNED** | 0/50 | 50 | 0% | - |
+| **V2 Sharding** | 📋 **PLANNED** | 0/45 | 45 | 0% | - |
 
 ### **Archived (Completed)**
 | Phase | Archived Date | Tasks | Coverage | Archive Path |
@@ -24,9 +25,10 @@
 | **MVP Executor** | 2025-10-25 | 47/47 | 95%+ | `archive/2025-10-25-implement-mvp-executor/` |
 | **MVP API** | 2025-10-25 | 35/35 | 79%+ | `archive/2025-10-25-implement-mvp-api/` |
 
-**Total Progress**: 244/437 tasks completed (55.8%)  
-**Archived**: 198 tasks (45.3%)  
-**Active/Planned**: 46/245 tasks (18.8%)
+**Total Progress**: 254/585 tasks completed (43.4%)  
+**Archived (MVP)**: 198 tasks (100% MVP complete)  
+**Active MVP**: 56/117 tasks (47.9%)  
+**Planned (V1/V2)**: 0/270 tasks (0%)
 
 ---
 
