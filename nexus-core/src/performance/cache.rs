@@ -19,7 +19,7 @@ pub struct CacheOptimizer {
 
 impl CacheOptimizer {
     /// Create a new cache optimizer
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
             cache_metrics: RwLock::new(std::collections::HashMap::new()),
             optimization_config: CacheConfig::default(),

@@ -49,7 +49,7 @@ pub struct PerformanceOptimizer {
 
 impl PerformanceOptimizer {
     /// Create a new performance optimizer
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
             profiler: QueryProfiler::new()?,
             memory_optimizer: MemoryOptimizer::new()?,

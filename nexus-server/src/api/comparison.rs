@@ -336,3 +336,338 @@ pub async fn health_check() -> std::result::Result<ResponseJson<serde_json::Valu
 
     Ok(ResponseJson(response))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Json;
+    use axum::http::StatusCode;
+    use nexus_core::Graph;
+    use nexus_core::graph_comparison::ComparisonOptions;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    /// Test helper to create a simple graph for testing
+    fn create_test_graph() -> Arc<Mutex<Graph>> {
+        use nexus_core::catalog::Catalog;
+        use nexus_core::storage::RecordStore;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let store = RecordStore::new(temp_dir.path()).unwrap();
+        let catalog = Arc::new(Catalog::new(temp_dir.path().join("catalog")).unwrap());
+        let graph = Graph::new(store, catalog);
+
+        Arc::new(Mutex::new(graph))
+    }
+
+    #[tokio::test]
+    async fn test_compare_graphs_success() {
+        // Initialize graphs
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        init_graphs(graph_a, graph_b).unwrap();
+
+        // Test comparison
+        let request = CompareGraphsRequest {
+            options: ComparisonOptions::default(),
+        };
+
+        let result = compare_graphs(Json(request)).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.0.success);
+        assert!(response.0.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_compare_graphs_not_initialized() {
+        // Don't initialize graphs
+        let request = CompareGraphsRequest {
+            options: ComparisonOptions::default(),
+        };
+
+        let result = compare_graphs(Json(request)).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_similarity_success() {
+        // Initialize graphs
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        init_graphs(graph_a, graph_b).unwrap();
+
+        // Test similarity calculation
+        let request = CalculateSimilarityRequest {
+            options: ComparisonOptions::default(),
+        };
+
+        let result = calculate_similarity(Json(request)).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.0.success);
+        assert!(response.0.error.is_none());
+        assert!(response.0.similarity >= 0.0 && response.0.similarity <= 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_similarity_not_initialized() {
+        // Don't initialize graphs
+        let request = CalculateSimilarityRequest {
+            options: ComparisonOptions::default(),
+        };
+
+        let result = calculate_similarity(Json(request)).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_get_graph_stats_success_a() {
+        // Initialize graphs
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        init_graphs(graph_a, graph_b).unwrap();
+
+        // Test getting stats for graph A
+        let request = GetGraphStatsRequest {
+            graph_id: "A".to_string(),
+        };
+
+        let result = get_graph_stats(Json(request)).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.0.success);
+        assert!(response.0.error.is_none());
+        assert!(response.0.stats.contains_key("total_nodes"));
+        assert!(response.0.stats.contains_key("total_edges"));
+    }
+
+    #[tokio::test]
+    async fn test_get_graph_stats_success_b() {
+        // Initialize graphs
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        init_graphs(graph_a, graph_b).unwrap();
+
+        // Test getting stats for graph B
+        let request = GetGraphStatsRequest {
+            graph_id: "B".to_string(),
+        };
+
+        let result = get_graph_stats(Json(request)).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.0.success);
+        assert!(response.0.error.is_none());
+        assert!(response.0.stats.contains_key("total_nodes"));
+        assert!(response.0.stats.contains_key("total_edges"));
+    }
+
+    #[tokio::test]
+    async fn test_get_graph_stats_invalid_id() {
+        // Initialize graphs
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        init_graphs(graph_a, graph_b).unwrap();
+
+        // Test with invalid graph ID
+        let request = GetGraphStatsRequest {
+            graph_id: "C".to_string(),
+        };
+
+        let result = get_graph_stats(Json(request)).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(!response.0.success);
+        assert!(response.0.error.is_some());
+        assert!(response.0.error.unwrap().contains("Invalid graph ID"));
+    }
+
+    #[tokio::test]
+    async fn test_get_graph_stats_not_initialized() {
+        // Don't initialize graphs
+        let request = GetGraphStatsRequest {
+            graph_id: "A".to_string(),
+        };
+
+        let result = get_graph_stats(Json(request)).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_healthy() {
+        // Initialize graphs
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        init_graphs(graph_a, graph_b).unwrap();
+
+        let result = health_check().await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let status = response.0.get("status").unwrap().as_str().unwrap();
+        assert_eq!(status, "healthy");
+
+        let graph_a_available = response
+            .0
+            .get("graph_a_available")
+            .unwrap()
+            .as_bool()
+            .unwrap();
+        let graph_b_available = response
+            .0
+            .get("graph_b_available")
+            .unwrap()
+            .as_bool()
+            .unwrap();
+        assert!(graph_a_available);
+        assert!(graph_b_available);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_unhealthy() {
+        // Don't initialize graphs
+        let result = health_check().await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let status = response.0.get("status").unwrap().as_str().unwrap();
+        assert_eq!(status, "unhealthy");
+
+        let graph_a_available = response
+            .0
+            .get("graph_a_available")
+            .unwrap()
+            .as_bool()
+            .unwrap();
+        let graph_b_available = response
+            .0
+            .get("graph_b_available")
+            .unwrap()
+            .as_bool()
+            .unwrap();
+        assert!(!graph_a_available);
+        assert!(!graph_b_available);
+    }
+
+    #[tokio::test]
+    async fn test_init_graphs_success() {
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        let result = init_graphs(graph_a, graph_b);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_init_graphs_already_initialized() {
+        let graph_a = create_test_graph();
+        let graph_b = create_test_graph();
+
+        // Initialize first time
+        let result1 = init_graphs(graph_a, graph_b);
+        assert!(result1.is_ok());
+
+        // Try to initialize again
+        let graph_a2 = create_test_graph();
+        let graph_b2 = create_test_graph();
+        let result2 = init_graphs(graph_a2, graph_b2);
+        assert!(result2.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_request_structures() {
+        // Test CompareGraphsRequest
+        let compare_request = CompareGraphsRequest {
+            options: ComparisonOptions::default(),
+        };
+        // Test that the request can be created
+        assert!(matches!(compare_request.options, ComparisonOptions { .. }));
+
+        // Test CalculateSimilarityRequest
+        let similarity_request = CalculateSimilarityRequest {
+            options: ComparisonOptions::default(),
+        };
+        // Test that the request can be created
+        assert!(matches!(
+            similarity_request.options,
+            ComparisonOptions { .. }
+        ));
+
+        // Test GetGraphStatsRequest
+        let stats_request = GetGraphStatsRequest {
+            graph_id: "A".to_string(),
+        };
+        assert_eq!(stats_request.graph_id, "A");
+    }
+
+    #[tokio::test]
+    async fn test_response_structures() {
+        // Test CompareGraphsResponse
+        let compare_response = CompareGraphsResponse {
+            diff: nexus_core::graph_comparison::GraphDiff {
+                added_nodes: vec![],
+                removed_nodes: vec![],
+                modified_nodes: vec![],
+                added_edges: vec![],
+                removed_edges: vec![],
+                modified_edges: vec![],
+                summary: nexus_core::graph_comparison::DiffSummary {
+                    nodes_count_original: 0,
+                    nodes_count_modified: 0,
+                    edges_count_original: 0,
+                    edges_count_modified: 0,
+                    nodes_added: 0,
+                    nodes_removed: 0,
+                    nodes_modified: 0,
+                    edges_added: 0,
+                    edges_removed: 0,
+                    edges_modified: 0,
+                },
+            },
+            success: true,
+            error: None,
+        };
+        assert!(compare_response.success);
+        assert!(compare_response.error.is_none());
+
+        // Test CalculateSimilarityResponse
+        let similarity_response = CalculateSimilarityResponse {
+            similarity: 0.5,
+            success: true,
+            error: None,
+        };
+        assert!(similarity_response.success);
+        assert_eq!(similarity_response.similarity, 0.5);
+        assert!(similarity_response.error.is_none());
+
+        // Test GetGraphStatsResponse
+        let mut stats = HashMap::new();
+        stats.insert("total_nodes".to_string(), json!(10));
+        let stats_response = GetGraphStatsResponse {
+            stats,
+            success: true,
+            error: None,
+        };
+        assert!(stats_response.success);
+        assert!(stats_response.stats.contains_key("total_nodes"));
+        assert!(stats_response.error.is_none());
+    }
+}

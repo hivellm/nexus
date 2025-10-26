@@ -1120,6 +1120,781 @@ impl Default for GraphCorrelationManager {
     }
 }
 
+// ============================================================================
+// Collection Query Interfaces
+// ============================================================================
+
+/// Trait for different types of collection queries
+pub trait CollectionQuery {
+    /// Execute the query and return results
+    #[allow(async_fn_in_trait)]
+    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult>;
+
+    /// Get the collection name for this query
+    fn collection(&self) -> &str;
+
+    /// Get query parameters as JSON
+    fn parameters(&self) -> serde_json::Value;
+}
+
+/// Enum wrapper for different collection query types
+pub enum CollectionQueryEnum {
+    Semantic(SemanticQuery),
+    Metadata(MetadataQuery),
+    Hybrid(HybridQuery),
+}
+
+impl CollectionQuery for CollectionQueryEnum {
+    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+        match self {
+            CollectionQueryEnum::Semantic(query) => query.execute(executor).await,
+            CollectionQueryEnum::Metadata(query) => query.execute(executor).await,
+            CollectionQueryEnum::Hybrid(query) => query.execute(executor).await,
+        }
+    }
+
+    fn collection(&self) -> &str {
+        match self {
+            CollectionQueryEnum::Semantic(query) => query.collection(),
+            CollectionQueryEnum::Metadata(query) => query.collection(),
+            CollectionQueryEnum::Hybrid(query) => query.collection(),
+        }
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        match self {
+            CollectionQueryEnum::Semantic(query) => query.parameters(),
+            CollectionQueryEnum::Metadata(query) => query.parameters(),
+            CollectionQueryEnum::Hybrid(query) => query.parameters(),
+        }
+    }
+}
+
+/// Semantic search query for finding similar content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticQuery {
+    /// Collection to search
+    pub collection: String,
+    /// Search query text
+    pub query: String,
+    /// Maximum number of results
+    pub limit: Option<usize>,
+    /// Similarity threshold (0.0 to 1.0)
+    pub threshold: Option<f32>,
+    /// Additional filters
+    pub filters: Option<HashMap<String, serde_json::Value>>,
+}
+
+impl SemanticQuery {
+    /// Create a new semantic query
+    pub fn new(collection: String, query: String) -> Self {
+        Self {
+            collection,
+            query,
+            limit: None,
+            threshold: None,
+            filters: None,
+        }
+    }
+
+    /// Set the maximum number of results
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Set the similarity threshold
+    pub fn with_threshold(mut self, threshold: f32) -> Self {
+        self.threshold = Some(threshold);
+        self
+    }
+
+    /// Add a filter to the query
+    pub fn with_filter(mut self, key: String, value: serde_json::Value) -> Self {
+        if self.filters.is_none() {
+            self.filters = Some(HashMap::new());
+        }
+        if let Some(ref mut filters) = self.filters {
+            filters.insert(key, value);
+        }
+        self
+    }
+}
+
+impl CollectionQuery for SemanticQuery {
+    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+        executor.execute_semantic_query(self).await
+    }
+
+    fn collection(&self) -> &str {
+        &self.collection
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        let mut params = serde_json::json!({
+            "query": self.query,
+            "type": "semantic"
+        });
+
+        if let Some(limit) = self.limit {
+            params["limit"] = serde_json::Value::Number(serde_json::Number::from(limit));
+        }
+
+        if let Some(threshold) = self.threshold {
+            params["threshold"] =
+                serde_json::Value::Number(serde_json::Number::from_f64(threshold as f64).unwrap());
+        }
+
+        if let Some(ref filters) = self.filters {
+            params["filters"] = serde_json::Value::Object(
+                filters
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            );
+        }
+
+        params
+    }
+}
+
+/// Metadata-based query for filtering by specific fields
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataQuery {
+    /// Collection to search
+    pub collection: String,
+    /// Field filters
+    pub filters: HashMap<String, serde_json::Value>,
+    /// Maximum number of results
+    pub limit: Option<usize>,
+    /// Sort by field
+    pub sort_by: Option<String>,
+    /// Sort order (asc/desc)
+    pub sort_order: Option<SortOrder>,
+}
+
+/// Sort order for queries
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SortOrder {
+    /// Ascending order
+    Asc,
+    /// Descending order
+    Desc,
+}
+
+impl MetadataQuery {
+    /// Create a new metadata query
+    pub fn new(collection: String) -> Self {
+        Self {
+            collection,
+            filters: HashMap::new(),
+            limit: None,
+            sort_by: None,
+            sort_order: None,
+        }
+    }
+
+    /// Add a field filter
+    pub fn with_filter(mut self, field: String, value: serde_json::Value) -> Self {
+        self.filters.insert(field, value);
+        self
+    }
+
+    /// Set the maximum number of results
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Set sorting
+    pub fn with_sort(mut self, field: String, order: SortOrder) -> Self {
+        self.sort_by = Some(field);
+        self.sort_order = Some(order);
+        self
+    }
+}
+
+impl CollectionQuery for MetadataQuery {
+    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+        executor.execute_metadata_query(self).await
+    }
+
+    fn collection(&self) -> &str {
+        &self.collection
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        let mut params = serde_json::json!({
+            "type": "metadata",
+            "filters": self.filters
+        });
+
+        if let Some(limit) = self.limit {
+            params["limit"] = serde_json::Value::Number(serde_json::Number::from(limit));
+        }
+
+        if let Some(ref sort_by) = self.sort_by {
+            params["sort_by"] = serde_json::Value::String(sort_by.clone());
+        }
+
+        if let Some(sort_order) = self.sort_order {
+            params["sort_order"] = serde_json::Value::String(
+                match sort_order {
+                    SortOrder::Asc => "asc",
+                    SortOrder::Desc => "desc",
+                }
+                .to_string(),
+            );
+        }
+
+        params
+    }
+}
+
+/// Hybrid query combining semantic and metadata search
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HybridQuery {
+    /// Collection to search
+    pub collection: String,
+    /// Semantic search query
+    pub semantic_query: String,
+    /// Metadata filters
+    pub metadata_filters: HashMap<String, serde_json::Value>,
+    /// Maximum number of results
+    pub limit: Option<usize>,
+    /// Similarity threshold for semantic search
+    pub threshold: Option<f32>,
+    /// Weight for semantic vs metadata results (0.0 to 1.0)
+    pub semantic_weight: f32,
+}
+
+impl HybridQuery {
+    /// Create a new hybrid query
+    pub fn new(collection: String, semantic_query: String) -> Self {
+        Self {
+            collection,
+            semantic_query,
+            metadata_filters: HashMap::new(),
+            limit: None,
+            threshold: None,
+            semantic_weight: 0.7, // Default 70% semantic, 30% metadata
+        }
+    }
+
+    /// Add a metadata filter
+    pub fn with_metadata_filter(mut self, field: String, value: serde_json::Value) -> Self {
+        self.metadata_filters.insert(field, value);
+        self
+    }
+
+    /// Set the maximum number of results
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Set the similarity threshold
+    pub fn with_threshold(mut self, threshold: f32) -> Self {
+        self.threshold = Some(threshold);
+        self
+    }
+
+    /// Set the semantic weight
+    pub fn with_semantic_weight(mut self, weight: f32) -> Self {
+        self.semantic_weight = weight.clamp(0.0, 1.0);
+        self
+    }
+}
+
+impl CollectionQuery for HybridQuery {
+    async fn execute(&self, executor: &mut QueryExecutor) -> Result<QueryResult> {
+        executor.execute_hybrid_query(self).await
+    }
+
+    fn collection(&self) -> &str {
+        &self.collection
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        let mut params = serde_json::json!({
+            "type": "hybrid",
+            "semantic_query": self.semantic_query,
+            "metadata_filters": self.metadata_filters,
+            "semantic_weight": self.semantic_weight
+        });
+
+        if let Some(limit) = self.limit {
+            params["limit"] = serde_json::Value::Number(serde_json::Number::from(limit));
+        }
+
+        if let Some(threshold) = self.threshold {
+            params["threshold"] =
+                serde_json::Value::Number(serde_json::Number::from_f64(threshold as f64).unwrap());
+        }
+
+        params
+    }
+}
+
+/// Query result containing search results and metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryResult {
+    /// Search results
+    pub results: Vec<serde_json::Value>,
+    /// Total number of results found
+    pub total: usize,
+    /// Query execution time in milliseconds
+    pub execution_time_ms: u64,
+    /// Query metadata
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+impl QueryResult {
+    /// Create a new query result
+    pub fn new(results: Vec<serde_json::Value>, total: usize, execution_time_ms: u64) -> Self {
+        Self {
+            results,
+            total,
+            execution_time_ms,
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Add metadata to the result
+    pub fn with_metadata(mut self, key: String, value: serde_json::Value) -> Self {
+        self.metadata.insert(key, value);
+        self
+    }
+
+    /// Check if the result is empty
+    pub fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+
+    /// Get the number of results
+    pub fn len(&self) -> usize {
+        self.results.len()
+    }
+}
+
+/// Query builder for constructing complex queries
+#[derive(Debug, Clone)]
+pub struct QueryBuilder {
+    collection: String,
+    query_type: QueryType,
+    semantic_query: Option<String>,
+    metadata_filters: HashMap<String, serde_json::Value>,
+    limit: Option<usize>,
+    threshold: Option<f32>,
+    sort_by: Option<String>,
+    sort_order: Option<SortOrder>,
+    semantic_weight: f32,
+}
+
+/// Types of queries that can be built
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryType {
+    /// Semantic search only
+    Semantic,
+    /// Metadata filtering only
+    Metadata,
+    /// Hybrid search
+    Hybrid,
+}
+
+impl QueryBuilder {
+    /// Create a new query builder
+    pub fn new(collection: String) -> Self {
+        Self {
+            collection,
+            query_type: QueryType::Semantic,
+            semantic_query: None,
+            metadata_filters: HashMap::new(),
+            limit: None,
+            threshold: None,
+            sort_by: None,
+            sort_order: None,
+            semantic_weight: 0.7,
+        }
+    }
+
+    /// Set the query type
+    pub fn query_type(mut self, query_type: QueryType) -> Self {
+        self.query_type = query_type;
+        self
+    }
+
+    /// Set the semantic query
+    pub fn semantic_query(mut self, query: String) -> Self {
+        self.semantic_query = Some(query);
+        self
+    }
+
+    /// Add a metadata filter
+    pub fn metadata_filter(mut self, field: String, value: serde_json::Value) -> Self {
+        self.metadata_filters.insert(field, value);
+        self
+    }
+
+    /// Set the maximum number of results
+    pub fn limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Set the similarity threshold
+    pub fn threshold(mut self, threshold: f32) -> Self {
+        self.threshold = Some(threshold);
+        self
+    }
+
+    /// Set sorting
+    pub fn sort(mut self, field: String, order: SortOrder) -> Self {
+        self.sort_by = Some(field);
+        self.sort_order = Some(order);
+        self
+    }
+
+    /// Set the semantic weight for hybrid queries
+    pub fn semantic_weight(mut self, weight: f32) -> Self {
+        self.semantic_weight = weight.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Build the query
+    pub fn build(self) -> Result<CollectionQueryEnum> {
+        match self.query_type {
+            QueryType::Semantic => {
+                let query = self.semantic_query.ok_or_else(|| {
+                    Error::GraphCorrelation(
+                        "Semantic query is required for semantic search".to_string(),
+                    )
+                })?;
+
+                let mut semantic_query = SemanticQuery::new(self.collection, query);
+                if let Some(limit) = self.limit {
+                    semantic_query = semantic_query.with_limit(limit);
+                }
+                if let Some(threshold) = self.threshold {
+                    semantic_query = semantic_query.with_threshold(threshold);
+                }
+                for (key, value) in self.metadata_filters {
+                    semantic_query = semantic_query.with_filter(key, value);
+                }
+
+                Ok(CollectionQueryEnum::Semantic(semantic_query))
+            }
+            QueryType::Metadata => {
+                let mut metadata_query = MetadataQuery::new(self.collection);
+                for (key, value) in self.metadata_filters {
+                    metadata_query = metadata_query.with_filter(key, value);
+                }
+                if let Some(limit) = self.limit {
+                    metadata_query = metadata_query.with_limit(limit);
+                }
+                if let (Some(sort_by), Some(sort_order)) = (self.sort_by, self.sort_order) {
+                    metadata_query = metadata_query.with_sort(sort_by, sort_order);
+                }
+
+                Ok(CollectionQueryEnum::Metadata(metadata_query))
+            }
+            QueryType::Hybrid => {
+                let query = self.semantic_query.ok_or_else(|| {
+                    Error::GraphCorrelation(
+                        "Semantic query is required for hybrid search".to_string(),
+                    )
+                })?;
+
+                let mut hybrid_query = HybridQuery::new(self.collection, query);
+                for (key, value) in self.metadata_filters {
+                    hybrid_query = hybrid_query.with_metadata_filter(key, value);
+                }
+                if let Some(limit) = self.limit {
+                    hybrid_query = hybrid_query.with_limit(limit);
+                }
+                if let Some(threshold) = self.threshold {
+                    hybrid_query = hybrid_query.with_threshold(threshold);
+                }
+                hybrid_query = hybrid_query.with_semantic_weight(self.semantic_weight);
+
+                Ok(CollectionQueryEnum::Hybrid(hybrid_query))
+            }
+        }
+    }
+}
+
+/// Query executor for running queries via MCP
+#[derive(Debug, Clone)]
+pub struct QueryExecutor {
+    /// MCP client for vectorizer communication
+    mcp_client: Option<serde_json::Value>,
+    /// Cache for query results
+    query_cache: std::collections::HashMap<String, QueryResult>,
+    /// Cache TTL in seconds
+    cache_ttl_seconds: u64,
+    /// Cache timestamps
+    cache_timestamps: std::collections::HashMap<String, std::time::SystemTime>,
+}
+
+impl QueryExecutor {
+    /// Create a new query executor
+    pub fn new() -> Self {
+        Self {
+            mcp_client: None,
+            query_cache: std::collections::HashMap::new(),
+            cache_ttl_seconds: 3600, // 1 hour default
+            cache_timestamps: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Set the MCP client
+    pub fn set_mcp_client(&mut self, client: serde_json::Value) {
+        self.mcp_client = Some(client);
+    }
+
+    /// Set the cache TTL
+    pub fn set_cache_ttl(&mut self, ttl_seconds: u64) {
+        self.cache_ttl_seconds = ttl_seconds;
+    }
+
+    /// Execute a semantic query
+    pub async fn execute_semantic_query(&mut self, query: &SemanticQuery) -> Result<QueryResult> {
+        let cache_key = format!("semantic:{}:{}", query.collection, query.query);
+
+        // Check cache first
+        if let Some(cached_result) = self.get_cached_result(&cache_key) {
+            return Ok(cached_result);
+        }
+
+        let start_time = std::time::SystemTime::now();
+
+        // Execute the query via MCP
+        let results = self
+            .perform_mcp_semantic_search(
+                &query.collection,
+                &query.query,
+                query.limit,
+                query.threshold,
+            )
+            .await?;
+
+        let execution_time = start_time.elapsed().unwrap_or_default();
+        let execution_time_ms = execution_time.as_millis() as u64;
+
+        let result = QueryResult::new(results.clone(), results.len(), execution_time_ms)
+            .with_metadata(
+                "query_type".to_string(),
+                serde_json::Value::String("semantic".to_string()),
+            )
+            .with_metadata(
+                "collection".to_string(),
+                serde_json::Value::String(query.collection.clone()),
+            );
+
+        // Cache the result
+        self.cache_result(cache_key, result.clone());
+
+        Ok(result)
+    }
+
+    /// Execute a metadata query
+    pub async fn execute_metadata_query(&mut self, query: &MetadataQuery) -> Result<QueryResult> {
+        let cache_key = format!(
+            "metadata:{}:{}",
+            query.collection,
+            serde_json::to_string(&query.filters).unwrap_or_default()
+        );
+
+        // Check cache first
+        if let Some(cached_result) = self.get_cached_result(&cache_key) {
+            return Ok(cached_result);
+        }
+
+        let start_time = std::time::SystemTime::now();
+
+        // Execute the query via MCP
+        let results = self
+            .perform_mcp_metadata_search(
+                &query.collection,
+                &query.filters,
+                query.limit,
+                &query.sort_by,
+                &query.sort_order,
+            )
+            .await?;
+
+        let execution_time = start_time.elapsed().unwrap_or_default();
+        let execution_time_ms = execution_time.as_millis() as u64;
+
+        let result = QueryResult::new(results.clone(), results.len(), execution_time_ms)
+            .with_metadata(
+                "query_type".to_string(),
+                serde_json::Value::String("metadata".to_string()),
+            )
+            .with_metadata(
+                "collection".to_string(),
+                serde_json::Value::String(query.collection.clone()),
+            );
+
+        // Cache the result
+        self.cache_result(cache_key, result.clone());
+
+        Ok(result)
+    }
+
+    /// Execute a hybrid query
+    pub async fn execute_hybrid_query(&mut self, query: &HybridQuery) -> Result<QueryResult> {
+        let cache_key = format!(
+            "hybrid:{}:{}:{}",
+            query.collection,
+            query.semantic_query,
+            serde_json::to_string(&query.metadata_filters).unwrap_or_default()
+        );
+
+        // Check cache first
+        if let Some(cached_result) = self.get_cached_result(&cache_key) {
+            return Ok(cached_result);
+        }
+
+        let start_time = std::time::SystemTime::now();
+
+        // Execute both semantic and metadata queries
+        let semantic_results = self
+            .perform_mcp_semantic_search(
+                &query.collection,
+                &query.semantic_query,
+                query.limit,
+                query.threshold,
+            )
+            .await?;
+        let metadata_results = self
+            .perform_mcp_metadata_search(
+                &query.collection,
+                &query.metadata_filters,
+                query.limit,
+                &None,
+                &None,
+            )
+            .await?;
+
+        // Combine results using RRF (Reciprocal Rank Fusion)
+        let combined_results =
+            self.combine_results(semantic_results, metadata_results, query.semantic_weight);
+
+        let execution_time = start_time.elapsed().unwrap_or_default();
+        let execution_time_ms = execution_time.as_millis() as u64;
+
+        let result = QueryResult::new(
+            combined_results.clone(),
+            combined_results.len(),
+            execution_time_ms,
+        )
+        .with_metadata(
+            "query_type".to_string(),
+            serde_json::Value::String("hybrid".to_string()),
+        )
+        .with_metadata(
+            "collection".to_string(),
+            serde_json::Value::String(query.collection.clone()),
+        )
+        .with_metadata(
+            "semantic_weight".to_string(),
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(query.semantic_weight as f64).unwrap(),
+            ),
+        );
+
+        // Cache the result
+        self.cache_result(cache_key, result.clone());
+
+        Ok(result)
+    }
+
+    /// Get a cached result if it's still valid
+    fn get_cached_result(&self, cache_key: &str) -> Option<QueryResult> {
+        if let Some(timestamp) = self.cache_timestamps.get(cache_key) {
+            if let Ok(elapsed) = timestamp.elapsed() {
+                if elapsed.as_secs() < self.cache_ttl_seconds {
+                    return self.query_cache.get(cache_key).cloned();
+                }
+            }
+        }
+        None
+    }
+
+    /// Cache a query result
+    fn cache_result(&mut self, cache_key: String, result: QueryResult) {
+        self.query_cache.insert(cache_key.clone(), result);
+        self.cache_timestamps
+            .insert(cache_key, std::time::SystemTime::now());
+    }
+
+    /// Perform MCP semantic search (placeholder implementation)
+    async fn perform_mcp_semantic_search(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _limit: Option<usize>,
+        _threshold: Option<f32>,
+    ) -> Result<Vec<serde_json::Value>> {
+        // This is a placeholder implementation
+        // In a real implementation, this would use the MCP client to call vectorizer tools
+        // For now, return empty results
+        Ok(vec![])
+    }
+
+    /// Perform MCP metadata search (placeholder implementation)
+    async fn perform_mcp_metadata_search(
+        &self,
+        _collection: &str,
+        _filters: &HashMap<String, serde_json::Value>,
+        _limit: Option<usize>,
+        _sort_by: &Option<String>,
+        _sort_order: &Option<SortOrder>,
+    ) -> Result<Vec<serde_json::Value>> {
+        // This is a placeholder implementation
+        // In a real implementation, this would use the MCP client to call vectorizer tools
+        // For now, return empty results
+        Ok(vec![])
+    }
+
+    /// Combine semantic and metadata results using RRF
+    fn combine_results(
+        &self,
+        semantic_results: Vec<serde_json::Value>,
+        metadata_results: Vec<serde_json::Value>,
+        _semantic_weight: f32,
+    ) -> Vec<serde_json::Value> {
+        // Simple RRF implementation
+        // In a real implementation, this would use proper RRF scoring
+        let mut combined = semantic_results;
+        combined.extend(metadata_results);
+
+        // Remove duplicates based on ID field
+        let mut seen_ids = std::collections::HashSet::new();
+        combined.retain(|item| {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                seen_ids.insert(id.to_string())
+            } else {
+                true
+            }
+        });
+
+        // Limit results if needed
+        if combined.len() > 1000 {
+            combined.truncate(1000);
+        }
+
+        combined
+    }
+}
+
+impl Default for QueryExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2803,10 +3578,7 @@ impl VectorizerGraphExtractor {
         let cache_key = format!("{}:{}", collection, query);
         if self.config.enable_caching {
             if let Some(cached_result) = self.query_cache.get(&cache_key) {
-                return Ok(cached_result
-                    .as_array()
-                    .unwrap_or(&vec![])
-                    .to_vec());
+                return Ok(cached_result.as_array().unwrap_or(&vec![]).to_vec());
             }
         }
 

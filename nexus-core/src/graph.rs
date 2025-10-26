@@ -7,8 +7,87 @@ use crate::graph_simple::PropertyValue;
 use crate::storage::{NodeRecord, RecordStore, RelationshipRecord};
 use crate::{Error, Result};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Property record for storage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PropertyRecord {
+    /// Key of the property
+    key: String,
+    /// Value of the property
+    value: PropertyValue,
+    /// Pointer to next property in chain (u64::MAX if last)
+    next_ptr: u64,
+}
+
+/// Property storage for managing property chains
+#[derive(Debug)]
+struct PropertyStore {
+    /// In-memory property storage (in real implementation, this would be persistent)
+    properties: HashMap<u64, PropertyRecord>,
+    /// Next available property pointer
+    next_ptr: u64,
+}
+
+impl PropertyStore {
+    fn new() -> Self {
+        Self {
+            properties: HashMap::new(),
+            next_ptr: 1,
+        }
+    }
+
+    /// Store a property chain and return the head pointer
+    fn store_properties(&mut self, properties: HashMap<String, PropertyValue>) -> u64 {
+        if properties.is_empty() {
+            return u64::MAX;
+        }
+
+        let mut current_ptr = u64::MAX;
+
+        // Store properties in reverse order to maintain chain structure
+        let mut prop_vec: Vec<_> = properties.into_iter().collect();
+        prop_vec.reverse();
+
+        for (key, value) in prop_vec {
+            let ptr = self.next_ptr;
+            self.next_ptr += 1;
+
+            let record = PropertyRecord {
+                key,
+                value,
+                next_ptr: current_ptr,
+            };
+
+            self.properties.insert(ptr, record);
+            current_ptr = ptr;
+        }
+
+        current_ptr
+    }
+
+    /// Load properties from a property chain
+    fn load_properties(&self, head_ptr: u64) -> Result<HashMap<String, PropertyValue>> {
+        let mut properties = HashMap::new();
+        let mut current_ptr = head_ptr;
+
+        while current_ptr != u64::MAX {
+            if let Some(record) = self.properties.get(&current_ptr) {
+                properties.insert(record.key.clone(), record.value.clone());
+                current_ptr = record.next_ptr;
+            } else {
+                return Err(Error::Storage(format!(
+                    "Property record not found at pointer {}",
+                    current_ptr
+                )));
+            }
+        }
+
+        Ok(properties)
+    }
+}
 
 /// A unique identifier for nodes in the graph
 #[derive(
@@ -253,6 +332,8 @@ pub struct Graph {
     node_cache: Arc<RwLock<HashMap<NodeId, Node>>>,
     /// Cache of loaded edges (in-memory)
     edge_cache: Arc<RwLock<HashMap<EdgeId, Edge>>>,
+    /// Property storage for managing property chains
+    property_store: Arc<RwLock<PropertyStore>>,
 }
 
 impl Graph {
@@ -263,6 +344,7 @@ impl Graph {
             catalog,
             node_cache: Arc::new(RwLock::new(HashMap::new())),
             edge_cache: Arc::new(RwLock::new(HashMap::new())),
+            property_store: Arc::new(RwLock::new(PropertyStore::new())),
         }
     }
 
@@ -358,16 +440,19 @@ impl Graph {
             .read_node(node.id.value())
             .unwrap_or_else(|_| NodeRecord::new());
 
+        // Store properties in the property store
+        let prop_ptr = if node.properties.is_empty() {
+            existing_record.prop_ptr // Keep existing properties if no new ones
+        } else {
+            let mut property_store = self.property_store.write();
+            property_store.store_properties(node.properties.clone())
+        };
+
         // Create updated record preserving existing relationships and properties
         let record = NodeRecord {
             label_bits,
             first_rel_ptr: existing_record.first_rel_ptr, // Preserve existing relationships
-            prop_ptr: if node.properties.is_empty() {
-                existing_record.prop_ptr // Keep existing properties if no new ones
-            } else {
-                // For now, use a simple approach - in full implementation would store properties
-                node.id.value() * 1000 // Placeholder for new property pointer
-            },
+            prop_ptr,
             ..existing_record
         };
 
@@ -515,18 +600,21 @@ impl Graph {
             .unwrap_or_else(|_| RelationshipRecord::new(0, 0, 0));
 
         // Create updated record preserving relationship chain pointers
+        // Store properties in the property store
+        let prop_ptr = if edge.properties.is_empty() {
+            existing_record.prop_ptr // Keep existing properties if no new ones
+        } else {
+            let mut property_store = self.property_store.write();
+            property_store.store_properties(edge.properties.clone())
+        };
+
         let record = RelationshipRecord {
             src_id: edge.source.value(),
             dst_id: edge.target.value(),
             type_id,
             next_src_ptr: existing_record.next_src_ptr, // Preserve existing relationship chain
             next_dst_ptr: existing_record.next_dst_ptr, // Preserve existing relationship chain
-            prop_ptr: if edge.properties.is_empty() {
-                existing_record.prop_ptr // Keep existing properties if no new ones
-            } else {
-                // For now, use a simple approach - in full implementation would store properties
-                edge.id.value() * 1000 // Placeholder for new property pointer
-            },
+            prop_ptr,
             ..existing_record
         };
 
@@ -992,21 +1080,15 @@ impl Graph {
     }
 
     /// Load properties from the property chain
-    fn load_properties(&self, _prop_ptr: u64) -> Result<HashMap<String, PropertyValue>> {
-        let properties = HashMap::new();
+    fn load_properties(&self, prop_ptr: u64) -> Result<HashMap<String, PropertyValue>> {
+        // If prop_ptr is u64::MAX, there are no properties
+        if prop_ptr == u64::MAX {
+            return Ok(HashMap::new());
+        }
 
-        // For now, we'll implement a simple property loading mechanism
-        // In a full implementation, this would traverse the property chain
-        // and load all properties from the storage layer
-
-        // TODO: Implement full property chain traversal
-        // This would involve:
-        // 1. Reading property records from storage
-        // 2. Deserializing property values
-        // 3. Building the properties HashMap
-
-        // For now, return empty properties to avoid compilation errors
-        Ok(properties)
+        // Use the property store to load properties from the chain
+        let property_store = self.property_store.read();
+        property_store.load_properties(prop_ptr)
     }
 
     /// Get the first relationship for a node in the specified direction
@@ -1408,6 +1490,47 @@ mod tests {
     }
 
     #[test]
+    fn test_property_chain_traversal() {
+        let (graph, _dir) = create_test_graph();
+
+        // Create a node with properties
+        let node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
+        let mut node = graph.get_node(node_id).unwrap().unwrap();
+
+        // Set multiple properties
+        node.set_property(
+            "name".to_string(),
+            PropertyValue::String("Alice".to_string()),
+        );
+        node.set_property("age".to_string(), PropertyValue::Int64(30));
+        node.set_property("active".to_string(), PropertyValue::Bool(true));
+
+        // Update the node to store properties
+        graph.update_node(node).unwrap();
+
+        // Retrieve the node and verify properties are loaded from the chain
+        let retrieved_node = graph.get_node(node_id).unwrap().unwrap();
+
+        // The properties should be loaded from the property chain
+        assert!(retrieved_node.has_property("name"));
+        assert!(retrieved_node.has_property("age"));
+        assert!(retrieved_node.has_property("active"));
+
+        assert_eq!(
+            retrieved_node.get_property("name"),
+            Some(&PropertyValue::String("Alice".to_string()))
+        );
+        assert_eq!(
+            retrieved_node.get_property("age"),
+            Some(&PropertyValue::Int64(30))
+        );
+        assert_eq!(
+            retrieved_node.get_property("active"),
+            Some(&PropertyValue::Bool(true))
+        );
+    }
+
+    #[test]
     fn test_node_is_empty() {
         let (graph, _dir) = create_test_graph();
 
@@ -1442,9 +1565,10 @@ mod tests {
     fn test_clear_cache() {
         let (graph, _dir) = create_test_graph();
 
-        let _node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
+        let node_id1 = graph.create_node(vec!["Person".to_string()]).unwrap();
+        let node_id2 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let _edge_id = graph
-            .create_edge(NodeId::new(0), NodeId::new(1), "KNOWS".to_string())
+            .create_edge(node_id1, node_id2, "KNOWS".to_string())
             .unwrap();
 
         // Verify cache has entries

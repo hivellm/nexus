@@ -18,7 +18,7 @@ pub struct QueryProfiler {
 
 impl QueryProfiler {
     /// Create a new query profiler
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
             query_history: RwLock::new(Vec::new()),
             slow_query_threshold: Duration::from_millis(100),

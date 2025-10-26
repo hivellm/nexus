@@ -15,6 +15,8 @@ pub enum Error {
     /// LMDB/heed database errors
     #[error("Database error: {0}")]
     Database(#[from] heed::Error),
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
 
     /// Storage-related errors
     #[error("Storage error: {0}")]
