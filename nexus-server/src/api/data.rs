@@ -394,14 +394,13 @@ pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateN
     // Implement actual node update
     match create_engine() {
         Ok(mut engine) => {
-            // For now, we'll create a new node with the updated properties
-            // In a full implementation, we'd need to implement proper node updating
-            match engine.create_node(
-                vec!["Updated".to_string()],
+            match engine.update_node(
+                request.node_id,
+                vec!["Updated".to_string()], // TODO: Allow updating labels
                 serde_json::Value::Object(request.properties.into_iter().collect()),
             ) {
-                Ok(_node_id) => {
-                    tracing::info!("Node updated successfully");
+                Ok(_) => {
+                    tracing::info!("Node {} updated successfully", request.node_id);
                     Json(UpdateNodeResponse {
                         message: "Node updated successfully".to_string(),
                         error: None,
@@ -444,20 +443,15 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
     // Implement actual node deletion
     match create_engine() {
         Ok(mut engine) => {
-            // For now, we'll just check if the node exists
-            // In a full implementation, we'd need to implement proper node deletion
-            match engine.get_node(request.node_id) {
-                Ok(Some(_node)) => {
-                    tracing::info!(
-                        "Node {} found (deletion not fully implemented)",
-                        request.node_id
-                    );
+            match engine.delete_node(request.node_id) {
+                Ok(true) => {
+                    tracing::info!("Node {} deleted successfully", request.node_id);
                     Json(DeleteNodeResponse {
-                        message: "Node found (deletion not fully implemented)".to_string(),
+                        message: "Node deleted successfully".to_string(),
                         error: None,
                     })
                 }
-                Ok(None) => {
+                Ok(false) => {
                     tracing::warn!("Node {} not found", request.node_id);
                     Json(DeleteNodeResponse {
                         message: "Node not found".to_string(),
@@ -465,10 +459,10 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
                     })
                 }
                 Err(e) => {
-                    tracing::error!("Failed to check node: {}", e);
+                    tracing::error!("Failed to delete node: {}", e);
                     Json(DeleteNodeResponse {
                         message: "".to_string(),
-                        error: Some(format!("Failed to check node: {}", e)),
+                        error: Some(format!("Failed to delete node: {}", e)),
                     })
                 }
             }

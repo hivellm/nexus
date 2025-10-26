@@ -455,6 +455,39 @@ impl Catalog {
         let next_id = self.next_type_id.read();
         *next_id as u64
     }
+
+    /// Convert a label bitmap to a vector of label names
+    pub fn get_labels_from_bitmap(&self, bitmap: u64) -> Result<Vec<String>> {
+        let mut labels = Vec::new();
+        
+        // Check each bit in the bitmap (up to 64 labels)
+        for bit in 0..64 {
+            if (bitmap & (1u64 << bit)) != 0 {
+                let label_id = bit as LabelId;
+                if let Some(label_name) = self.get_label_name(label_id)? {
+                    labels.push(label_name);
+                }
+            }
+        }
+        
+        Ok(labels)
+    }
+
+    /// Get label ID by ID (for internal use)
+    pub fn get_label_id_by_id(&self, id: LabelId) -> Result<LabelId> {
+        // This is a simple identity function for now
+        // In a full implementation, this might do validation
+        Ok(id)
+    }
+
+    /// Get label ID by name
+    pub fn get_label_id(&self, label: &str) -> Result<LabelId> {
+        let rtxn = self.env.read_txn()?;
+        match self.label_name_to_id.get(&rtxn, label)? {
+            Some(id) => Ok(id),
+            None => Err(Error::NotFound(format!("Label '{}' not found", label))),
+        }
+    }
 }
 
 impl Default for Catalog {

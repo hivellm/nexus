@@ -209,25 +209,132 @@ impl Engine {
         self.storage.get_relationship(&tx, id)
     }
 
+    /// Update a node with new labels and properties
+    pub fn update_node(
+        &mut self,
+        id: u64,
+        labels: Vec<String>,
+        properties: serde_json::Value,
+    ) -> Result<()> {
+        // Check if node exists
+        if self.get_node(id)?.is_none() {
+            return Err(Error::NotFound(format!("Node {} not found", id)));
+        }
+
+        // Get or create label IDs
+        let mut label_bits = 0u64;
+        for label in &labels {
+            let label_id = self.catalog.get_or_create_label(label)?;
+            if label_id < 64 {
+                label_bits |= 1u64 << label_id;
+            }
+        }
+
+        // Create updated node record
+        let mut node_record = storage::NodeRecord::new();
+        node_record.label_bits = label_bits;
+        // TODO: Add property storage when property store is implemented
+        // node_record.prop_ptr = self.store_properties(properties)?;
+
+        // Write updated record
+        let mut tx = self.transaction_manager.begin_write()?;
+        self.storage.write_node(id, &node_record)?;
+        self.transaction_manager.commit(&mut tx)?;
+
+        // Update statistics
+        for label in &labels {
+            if let Ok(label_id) = self.catalog.get_or_create_label(label) {
+                self.catalog.increment_node_count(label_id)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Delete a node by ID
+    pub fn delete_node(&mut self, id: u64) -> Result<bool> {
+        // Check if node exists
+        if let Ok(Some(node_record)) = self.get_node(id) {
+            // Mark node as deleted
+            let mut deleted_record = node_record;
+            deleted_record.mark_deleted();
+            
+            let mut tx = self.transaction_manager.begin_write()?;
+            self.storage.write_node(id, &deleted_record)?;
+            self.transaction_manager.commit(&mut tx)?;
+
+            // Update statistics
+            for bit in 0..64 {
+                if (node_record.label_bits & (1u64 << bit)) != 0 {
+                    if let Ok(label_id) = self.catalog.get_label_id_by_id(bit as u32) {
+                        self.catalog.decrement_node_count(label_id)?;
+                    }
+                }
+            }
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Perform KNN search
     pub fn knn_search(&self, label: &str, vector: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
         self.indexes.knn_search(label, vector, k)
     }
 
     /// Perform node clustering on the graph
-    pub fn cluster_nodes(&self, config: ClusteringConfig) -> Result<ClusteringResult> {
-        // Create a temporary simple graph for clustering
-        let _temp_dir = tempfile::tempdir()?;
-        let simple_graph = graph_simple::Graph::new();
-        
-        // For now, return empty result as we need to implement proper conversion
-        // TODO: Implement proper conversion from storage to simple graph
+    pub fn cluster_nodes(&mut self, config: ClusteringConfig) -> Result<ClusteringResult> {
+        // Convert storage to simple graph for clustering
+        let simple_graph = self.convert_to_simple_graph()?;
         let engine = ClusteringEngine::new(config);
         engine.cluster(&simple_graph)
     }
 
+    /// Convert the storage to a simple graph for clustering and analysis
+    pub fn convert_to_simple_graph(&mut self) -> Result<graph_simple::Graph> {
+        let mut simple_graph = graph_simple::Graph::new();
+        
+        // Scan all nodes and add them to the simple graph
+        for node_id in 0..self.storage.node_count() {
+            if let Ok(Some(node_record)) = self.get_node(node_id) {
+                // Convert labels from bitmap to vector
+                let labels = self.catalog.get_labels_from_bitmap(node_record.label_bits)?;
+                
+                // Create node in simple graph
+                let simple_node_id = graph_simple::NodeId::new(node_id);
+                let node = graph_simple::Node::new(simple_node_id, labels);
+                
+                // TODO: Add properties when property store is implemented
+                // if node_record.prop_ptr != 0 {
+                //     // Load properties from property store
+                // }
+                
+                simple_graph.update_node(node)?;
+            }
+        }
+        
+        // Scan all relationships and add them to the simple graph
+        for rel_id in 0..self.storage.relationship_count() {
+            if let Ok(Some(rel_record)) = self.get_relationship(rel_id) {
+                // Get relationship type name
+                let rel_type = self.catalog.get_type_name(rel_record.type_id)
+                    .unwrap_or_else(|_| Some("UNKNOWN".to_string()))
+                    .unwrap_or_else(|| "UNKNOWN".to_string());
+                
+                // Create edge in simple graph
+                let source_id = graph_simple::NodeId::new(rel_record.src_id);
+                let target_id = graph_simple::NodeId::new(rel_record.dst_id);
+                
+                simple_graph.create_edge(source_id, target_id, rel_type)?;
+            }
+        }
+        
+        Ok(simple_graph)
+    }
+
     /// Perform label-based grouping of nodes
-    pub fn group_nodes_by_labels(&self) -> Result<ClusteringResult> {
+    pub fn group_nodes_by_labels(&mut self) -> Result<ClusteringResult> {
         let config = ClusteringConfig {
             algorithm: ClusteringAlgorithm::LabelBased,
             feature_strategy: FeatureStrategy::LabelBased,
@@ -238,7 +345,7 @@ impl Engine {
     }
 
     /// Perform property-based grouping of nodes
-    pub fn group_nodes_by_property(&self, property_key: &str) -> Result<ClusteringResult> {
+    pub fn group_nodes_by_property(&mut self, property_key: &str) -> Result<ClusteringResult> {
         let config = ClusteringConfig {
             algorithm: ClusteringAlgorithm::PropertyBased {
                 property_key: property_key.to_string(),
@@ -253,7 +360,7 @@ impl Engine {
     }
 
     /// Perform K-means clustering on nodes
-    pub fn kmeans_cluster_nodes(&self, k: usize, max_iterations: usize) -> Result<ClusteringResult> {
+    pub fn kmeans_cluster_nodes(&mut self, k: usize, max_iterations: usize) -> Result<ClusteringResult> {
         let config = ClusteringConfig {
             algorithm: ClusteringAlgorithm::KMeans {
                 k,
@@ -267,7 +374,7 @@ impl Engine {
     }
 
     /// Perform community detection on nodes
-    pub fn detect_communities(&self) -> Result<ClusteringResult> {
+    pub fn detect_communities(&mut self) -> Result<ClusteringResult> {
         let config = ClusteringConfig {
             algorithm: ClusteringAlgorithm::CommunityDetection,
             feature_strategy: FeatureStrategy::Structural,
