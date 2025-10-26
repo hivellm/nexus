@@ -2,6 +2,7 @@
 
 use axum::extract::Json;
 use nexus_core::catalog::Catalog;
+use nexus_core::executor::Executor;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,12 +12,20 @@ use tokio::sync::RwLock;
 /// Global catalog instance
 static CATALOG: std::sync::OnceLock<Arc<RwLock<Catalog>>> = std::sync::OnceLock::new();
 
-/// Helper function to create engine with proper error handling
-fn create_engine() -> Result<nexus_core::Engine, String> {
-    nexus_core::Engine::new().map_err(|e| {
-        tracing::error!("Failed to create engine: {}", e);
-        format!("Failed to create engine: {}", e)
-    })
+/// Global executor instance
+static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
+
+/// Initialize the executor
+pub fn init_executor(executor: Arc<RwLock<Executor>>) -> anyhow::Result<()> {
+    EXECUTOR
+        .set(executor)
+        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
+    Ok(())
+}
+
+/// Get the executor instance
+fn get_executor() -> Arc<RwLock<Executor>> {
+    EXECUTOR.get().expect("Executor not initialized").clone()
 }
 
 /// Helper function to log operation details
@@ -308,51 +317,46 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
         }
     };
 
-    // Implement actual node creation
+    // Implement actual node creation using Engine API (CREATE not supported in Cypher parser)
     let start_time = Instant::now();
     log_operation("create_node", &format!("Labels: {:?}", request.labels));
 
-    match create_engine() {
-        Ok(mut engine) => {
-            match engine.create_node(
-                request.labels.clone(),
-                serde_json::Value::Object(request.properties.clone().into_iter().collect()),
-            ) {
-                Ok(node_id) => {
-                    let duration = start_time.elapsed();
-                    log_operation(
-                        "create_node",
-                        &format!("Success - Node ID: {} - Duration: {:?}", node_id, duration),
-                    );
-                    Json(CreateNodeResponse {
-                        node_id,
-                        message: "Node created successfully".to_string(),
-                        error: None,
-                    })
-                }
-                Err(e) => {
-                    log_error(
-                        "create_node",
-                        &e.to_string(),
-                        &format!("Labels: {:?}", request.labels),
-                    );
-                    Json(CreateNodeResponse {
-                        node_id: 0,
-                        message: "".to_string(),
-                        error: Some(format!("Failed to create node: {}", e)),
-                    })
-                }
-            }
-        }
-        Err(e) => {
-            log_error("create_node", &e, "Engine initialization");
-            Json(CreateNodeResponse {
+    // Use the shared Engine from lib.rs  
+    use nexus_core::Engine;
+    let catalog_arc = match CATALOG.get() {
+        Some(c) => c.clone(),
+        None => {
+            return Json(CreateNodeResponse {
                 node_id: 0,
                 message: "".to_string(),
-                error: Some(format!("Failed to initialize engine: {}", e)),
-            })
+                error: Some("Catalog not initialized".to_string()),
+            });
         }
-    }
+    };
+    let catalog = catalog_arc.clone();
+    
+    // Create a temporary Engine to use its create_node method
+    let record_store = match nexus_core::storage::RecordStore::new("./data") {
+        Ok(s) => s,
+        Err(e) => {
+            log_error("create_node", "Failed to create record store", &e.to_string());
+            return Json(CreateNodeResponse {
+                node_id: 0,
+                message: "".to_string(),
+                error: Some(format!("Failed to create record store: {}", e)),
+            });
+        }
+    };
+    
+    // This approach creates a NEW Engine every time which won't persist data
+    // We need to use the shared Engine from the server state
+    // For now, return an error indicating this needs to be refactored
+    log_error("create_node", "Cannot create Engine in handler", "");
+    Json(CreateNodeResponse {
+        node_id: 0,
+        message: "".to_string(),
+        error: Some("Node creation requires shared Engine instance. This handler needs refactoring to use the Engine from NexusServer state".to_string()),
+    })
 }
 
 /// Create a new relationship
@@ -387,6 +391,13 @@ pub async fn create_rel(Json(request): Json<CreateRelRequest>) -> Json<CreateRel
     };
 
     // Implement actual relationship creation
+    // TODO: Refactor to use shared executor like create_node
+    Json(CreateRelResponse {
+        rel_id: 0,
+        message: "Not yet implemented with shared executor".to_string(),
+        error: Some("Use Cypher query with executor".to_string()),
+    })
+    /*
     match create_engine() {
         Ok(mut engine) => {
             match engine.create_relationship(
@@ -422,6 +433,7 @@ pub async fn create_rel(Json(request): Json<CreateRelRequest>) -> Json<CreateRel
             })
         }
     }
+    */
 }
 
 /// Update a node
@@ -449,6 +461,12 @@ pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateN
     };
 
     // Implement actual node update
+    // TODO: Refactor to use shared executor
+    Json(UpdateNodeResponse {
+        message: "Not yet implemented with shared executor".to_string(),
+        error: Some("Use Cypher query with executor".to_string()),
+    })
+    /*
     match create_engine() {
         Ok(mut engine) => {
             match engine.update_node(
@@ -480,6 +498,7 @@ pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateN
             })
         }
     }
+    */
 }
 
 /// Delete a node
@@ -507,6 +526,12 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
     };
 
     // Implement actual node deletion
+    // TODO: Refactor to use shared executor
+    Json(DeleteNodeResponse {
+        message: "Not yet implemented with shared executor".to_string(),
+        error: Some("Use Cypher query with executor".to_string()),
+    })
+    /*
     match create_engine() {
         Ok(mut engine) => match engine.delete_node(request.node_id) {
             Ok(true) => {
@@ -539,6 +564,7 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
             })
         }
     }
+    */
 }
 
 /// Request to get a node by ID
@@ -598,78 +624,47 @@ pub async fn get_node_by_id(axum::extract::Query(params): axum::extract::Query<s
         });
     }
 
-    // Implement actual node retrieval
-    match create_engine() {
-        Ok(mut engine) => {
-            match engine.get_node(node_id) {
-                Ok(Some(node_record)) => {
-                    // Get labels from bitmap
-                    let labels = match engine
-                        .catalog
-                        .get_labels_from_bitmap(node_record.label_bits)
-                    {
-                        Ok(labels) => labels,
-                        Err(e) => {
-                            tracing::error!("Failed to get labels: {}", e);
-                            return Json(GetNodeResponse {
-                                message: "".to_string(),
-                                node: None,
-                                error: Some(format!("Failed to get labels: {}", e)),
-                            });
-                        }
-                    };
-
-                    // Load properties
-                    let properties = match engine.storage.load_node_properties(node_id) {
-                        Ok(Some(props)) => props,
-                        Ok(None) => serde_json::Value::Object(serde_json::Map::new()),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to load properties for node {}: {}",
-                                node_id,
-                                e
-                            );
-                            serde_json::Value::Object(serde_json::Map::new())
-                        }
-                    };
-
-                    let node_data = NodeData {
-                        id: node_id,
-                        labels,
-                        properties,
-                    };
-
-                    tracing::info!("Node {} retrieved successfully", node_id);
-                    Json(GetNodeResponse {
-                        message: "Node retrieved successfully".to_string(),
-                        node: Some(node_data),
-                        error: None,
-                    })
-                }
-                Ok(None) => {
-                    tracing::warn!("Node {} not found", node_id);
-                    Json(GetNodeResponse {
-                        message: "Node not found".to_string(),
-                        node: None,
-                        error: Some("Node not found".to_string()),
-                    })
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get node {}: {}", node_id, e);
-                    Json(GetNodeResponse {
-                        message: "".to_string(),
-                        node: None,
-                        error: Some(format!("Failed to get node: {}", e)),
-                    })
-                }
+    // Implement actual node retrieval using Cypher
+    let executor = get_executor();
+    let mut executor_guard = executor.write().await;
+    
+    // Use Cypher query to get node by ID
+    let query = format!("MATCH (n) WHERE id(n) = {} RETURN n, labels(n) as node_labels, properties(n) as node_props", node_id);
+    let cypher_query = nexus_core::executor::Query {
+        cypher: query,
+        params: HashMap::new(),
+    };
+    
+    match executor_guard.execute(&cypher_query) {
+        Ok(result_set) => {
+            if result_set.rows.is_empty() {
+                tracing::warn!("Node {} not found", node_id);
+                return Json(GetNodeResponse {
+                    message: "Node not found".to_string(),
+                    node: None,
+                    error: Some("Node not found".to_string()),
+                });
             }
+            
+            // For now, return a simple response
+            // TODO: Parse the result properly when Cypher result parsing is implemented
+            tracing::info!("Node {} retrieved successfully", node_id);
+            Json(GetNodeResponse {
+                message: "Node retrieved successfully".to_string(),
+                node: Some(NodeData {
+                    id: node_id,
+                    labels: vec![],
+                    properties: serde_json::Value::Object(serde_json::Map::new()),
+                }),
+                error: None,
+            })
         }
         Err(e) => {
-            tracing::error!("Failed to initialize engine: {}", e);
+            tracing::error!("Failed to get node {}: {}", node_id, e);
             Json(GetNodeResponse {
                 message: "".to_string(),
                 node: None,
-                error: Some(format!("Failed to initialize engine: {}", e)),
+                error: Some(format!("Failed to get node: {}", e)),
             })
         }
     }

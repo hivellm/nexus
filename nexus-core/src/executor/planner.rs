@@ -42,6 +42,11 @@ impl<'a> QueryPlanner<'a> {
                         where_clauses.push(where_clause.expression.clone());
                     }
                 }
+                Clause::Create(create_clause) => {
+                    patterns.push(create_clause.pattern.clone());
+                    // CREATE is handled by creating nodes/relationships
+                    // For now, just store the pattern for executor to handle
+                }
                 Clause::Where(where_clause) => {
                     where_clauses.push(where_clause.expression.clone());
                 }

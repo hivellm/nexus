@@ -2,7 +2,7 @@
 //!
 //! This module provides the Abstract Syntax Tree (AST) structures and parsing
 //! logic for Cypher queries. It supports the MVP subset of Cypher including
-//! MATCH, WHERE, RETURN, ORDER BY, LIMIT, and SKIP clauses.
+//! MATCH, CREATE, WHERE, RETURN, ORDER BY, LIMIT, and SKIP clauses.
 
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ pub struct CypherQuery {
 pub enum Clause {
     /// MATCH clause for pattern matching
     Match(MatchClause),
+    /// CREATE clause for creating nodes and relationships
+    Create(CreateClause),
     /// WHERE clause for filtering
     Where(WhereClause),
     /// RETURN clause for projection
@@ -41,6 +43,13 @@ pub struct MatchClause {
     pub pattern: Pattern,
     /// Optional WHERE condition
     pub where_clause: Option<WhereClause>,
+}
+
+/// CREATE clause for creating nodes and relationships
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateClause {
+    /// Pattern to create
+    pub pattern: Pattern,
 }
 
 /// Pattern matching structure
@@ -379,6 +388,10 @@ impl CypherParser {
                 let match_clause = self.parse_match_clause()?;
                 Ok(Clause::Match(match_clause))
             }
+            "CREATE" => {
+                let create_clause = self.parse_create_clause()?;
+                Ok(Clause::Create(create_clause))
+            }
             "WHERE" => {
                 let where_clause = self.parse_where_clause()?;
                 Ok(Clause::Where(where_clause))
@@ -413,6 +426,14 @@ impl CypherParser {
             pattern,
             where_clause: None, // WHERE is now a separate clause
         })
+    }
+
+    /// Parse CREATE clause
+    fn parse_create_clause(&mut self) -> Result<CreateClause> {
+        self.skip_whitespace();
+        let pattern = self.parse_pattern()?;
+
+        Ok(CreateClause { pattern })
     }
 
     /// Parse pattern

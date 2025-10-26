@@ -63,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize new API modules
     api::schema::init_catalog(catalog_arc.clone())?;
     api::data::init_catalog(catalog_arc.clone())?;
+    api::data::init_executor(api::cypher::get_executor())?;
     api::stats::init_instances(
         catalog_arc.clone(),
         label_index_arc.clone(),
