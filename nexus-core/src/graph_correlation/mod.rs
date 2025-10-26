@@ -1537,6 +1537,78 @@ impl GraphBuilder for DefaultGraphBuilder {
     }
 }
 
+/// Wrapper builders for DataFlow and Component graphs
+pub struct DataFlowGraphBuilder;
+pub struct ComponentGraphBuilder;
+
+impl DataFlowGraphBuilder {
+    pub fn new(_name: String) -> Self {
+        Self
+    }
+}
+
+impl ComponentGraphBuilder {
+    pub fn new(_name: String) -> Self {
+        Self
+    }
+}
+
+impl GraphBuilder for DataFlowGraphBuilder {
+    fn build(&self, source_data: &GraphSourceData) -> Result<CorrelationGraph> {
+        let builder = DefaultGraphBuilder::new("DataFlow".to_string());
+        builder.build_data_flow_graph(source_data)
+    }
+
+    fn graph_type(&self) -> GraphType {
+        GraphType::DataFlow
+    }
+
+    fn name(&self) -> &str {
+        "DataFlow Graph"
+    }
+
+    fn capabilities(&self) -> GraphBuilderCapabilities {
+        GraphBuilderCapabilities {
+            supports_call_graphs: false,
+            supports_dependency_graphs: false,
+            supports_data_flow_graphs: true,
+            supports_component_graphs: false,
+            supports_async: true,
+            supports_parallel: false,
+            supports_caching: false,
+            supports_validation: true,
+        }
+    }
+}
+
+impl GraphBuilder for ComponentGraphBuilder {
+    fn build(&self, source_data: &GraphSourceData) -> Result<CorrelationGraph> {
+        let builder = DefaultGraphBuilder::new("Component".to_string());
+        builder.build_component_graph(source_data)
+    }
+
+    fn graph_type(&self) -> GraphType {
+        GraphType::Component
+    }
+
+    fn name(&self) -> &str {
+        "Component Graph"
+    }
+
+    fn capabilities(&self) -> GraphBuilderCapabilities {
+        GraphBuilderCapabilities {
+            supports_call_graphs: false,
+            supports_dependency_graphs: false,
+            supports_data_flow_graphs: false,
+            supports_component_graphs: true,
+            supports_async: true,
+            supports_parallel: false,
+            supports_caching: false,
+            supports_validation: true,
+        }
+    }
+}
+
 /// Graph correlation manager
 pub struct GraphCorrelationManager {
     /// Available graph builders
@@ -1550,13 +1622,21 @@ impl GraphCorrelationManager {
     pub fn new() -> Self {
         let mut manager = Self {
             builders: HashMap::new(),
-            default_builder: None,
+            default_builder: Some(DefaultGraphBuilder::new(
+                "Default Graph Builder".to_string(),
+            )),
         };
 
-        // Register default builders
+        // Register default builders for all graph types
         manager.register_builder(Box::new(CallGraphBuilder::new("Call Graph".to_string())));
         manager.register_builder(Box::new(DependencyGraphBuilder::new(
             "Dependency Graph".to_string(),
+        )));
+        manager.register_builder(Box::new(DataFlowGraphBuilder::new(
+            "DataFlow Graph".to_string(),
+        )));
+        manager.register_builder(Box::new(ComponentGraphBuilder::new(
+            "Component Graph".to_string(),
         )));
 
         manager

@@ -136,7 +136,7 @@
 
 ### 9. Data Flow Graph Generation
 
-- [ ] 9.1 Implement DataFlowGraphBuilder
+- [x] 9.1 Implement DataFlowGraphBuilder
 - [ ] 9.2 Create variable usage tracking
 - [ ] 9.3 Add data transformation analysis
 - [ ] 9.4 Implement flow-based graph layout
@@ -149,7 +149,7 @@
 
 ### 10. Component Graph Generation
 
-- [ ] 10.1 Implement ComponentGraphBuilder
+- [x] 10.1 Implement ComponentGraphBuilder
 - [ ] 10.2 Create class and interface analysis
 - [ ] 10.3 Add inheritance and composition tracking
 - [ ] 10.4 Implement object-oriented hierarchy layout
