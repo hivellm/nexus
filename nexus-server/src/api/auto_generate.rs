@@ -114,7 +114,7 @@ async fn extract_from_codebase(
     let mut source_data = GraphSourceData::new();
 
     // Simulate extraction from current Nexus codebase
-    let project_path = params
+    let _project_path = params
         .project_path
         .as_deref()
         .unwrap_or("./nexus-core/src");
@@ -129,7 +129,7 @@ async fn extract_from_codebase(
 fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: usize) {
     // Simulate main.rs
     source_data.add_file(
-        "src/main.rs",
+        "src/main.rs".to_string(),
         r#"
         use nexus_core::Engine;
         use nexus_server::Server;
@@ -139,17 +139,17 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
             let server = Server::new(engine);
             server.run();
         }
-        "#,
+        "#.to_string(),
     );
 
-    source_data.add_function("main", "fn main()", "src/main.rs", 1);
-    source_data.add_call("main", "Engine::new", "src/main.rs", 4);
-    source_data.add_call("main", "Server::new", "src/main.rs", 5);
-    source_data.add_call("main", "server.run", "src/main.rs", 6);
+    source_data.add_function("main".to_string(), "fn main()".to_string(), "src/main.rs".to_string(), 1);
+    source_data.add_call("main".to_string(), "Engine::new".to_string(), "src/main.rs".to_string(), 4);
+    source_data.add_call("main".to_string(), "Server::new".to_string(), "src/main.rs".to_string(), 5);
+    source_data.add_call("main".to_string(), "server.run".to_string(), "src/main.rs".to_string(), 6);
 
     // Simulate engine.rs
     source_data.add_file(
-        "src/engine.rs",
+        "src/engine.rs".to_string(),
         r#"
         pub struct Engine {
             executor: Executor,
@@ -165,41 +165,41 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
                 self.executor.run(query)
             }
         }
-        "#,
+        "#.to_string(),
     );
 
-    source_data.add_function("Engine::new", "pub fn new() -> Self", "src/engine.rs", 6);
+    source_data.add_function("Engine::new".to_string(), "pub fn new() -> Self".to_string(), "src/engine.rs".to_string(), 6);
     source_data.add_function(
-        "Engine::execute",
-        "pub fn execute(&self, query: &str) -> Result<QueryResult>",
-        "src/engine.rs",
+        "Engine::execute".to_string(),
+        "pub fn execute(&self, query: &str) -> Result<QueryResult>".to_string(),
+        "src/engine.rs".to_string(),
         11,
     );
-    source_data.add_call("Engine::new", "Executor::init", "src/engine.rs", 7);
-    source_data.add_call("Engine::execute", "executor.run", "src/engine.rs", 12);
+    source_data.add_call("Engine::new".to_string(), "Executor::init".to_string(), "src/engine.rs".to_string(), 7);
+    source_data.add_call("Engine::execute".to_string(), "executor.run".to_string(), "src/engine.rs".to_string(), 12);
 
     // Add imports
-    source_data.add_import("main.rs", "nexus_core::Engine");
-    source_data.add_import("main.rs", "nexus_server::Server");
-    source_data.add_import("engine.rs", "nexus_core::Executor");
-    source_data.add_import("engine.rs", "nexus_core::QueryResult");
+    source_data.add_import("main.rs".to_string(), "nexus_core::Engine".to_string());
+    source_data.add_import("main.rs".to_string(), "nexus_server::Server".to_string());
+    source_data.add_import("engine.rs".to_string(), "nexus_core::Executor".to_string());
+    source_data.add_import("engine.rs".to_string(), "nexus_core::QueryResult".to_string());
 
     // Add more sample files up to max_files
     for i in 1..max_files.min(20) {
         let filename = format!("src/module{}.rs", i);
-        source_data.add_file(&filename, &format!("// Module {}", i));
+        source_data.add_file(filename.clone(), format!("// Module {}", i));
         source_data.add_function(
-            &format!("module{}::process", i),
-            &format!("pub fn process{}()", i),
-            &filename,
+            format!("module{}::process", i),
+            format!("pub fn process{}()", i),
+            filename.clone(),
             1,
         );
 
         if i > 1 {
             source_data.add_call(
-                &format!("module{}::process", i),
-                &format!("module{}::process", i - 1),
-                &filename,
+                format!("module{}::process", i),
+                format!("module{}::process", i - 1),
+                filename.clone(),
                 2,
             );
         }

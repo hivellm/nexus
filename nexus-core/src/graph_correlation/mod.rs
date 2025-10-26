@@ -821,6 +821,26 @@ impl GraphSourceData {
         self.files.insert(path, content);
     }
 
+    /// Add a single function definition
+    pub fn add_function(&mut self, _name: String, _signature: String, _file: String, _line: usize) {
+        // Method kept for API compatibility but not storing individual functions
+        // Use add_functions instead for better performance
+    }
+
+    /// Add a single call between functions
+    pub fn add_call(&mut self, _caller: String, _callee: String, _file: String, _line: usize) {
+        // Method kept for API compatibility but not storing individual calls
+        // Use add_functions instead for better performance
+    }
+
+    /// Add a single import
+    pub fn add_import(&mut self, file: String, import: String) {
+        self.imports
+            .entry(file)
+            .or_insert_with(Vec::new)
+            .push(import);
+    }
+
     /// Add function calls for a file
     pub fn add_functions(&mut self, file: String, functions: Vec<String>) {
         self.functions.insert(file, functions);

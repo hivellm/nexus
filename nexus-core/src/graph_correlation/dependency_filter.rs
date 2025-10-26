@@ -178,19 +178,18 @@ pub fn filter_dependency_graph(
         true
     });
 
-    // Get remaining node IDs
-    let _remaining_nodes: HashSet<_> = filtered_graph.nodes.iter().map(|n| n.id.clone()).collect();
-
     // Apply depth filter if specified
-    if let Some(max_depth) = filter.max_depth {
+    let remaining_nodes: HashSet<String> = if let Some(max_depth) = filter.max_depth {
         let nodes_by_depth = calculate_node_depths(&filtered_graph, max_depth);
         filtered_graph
             .nodes
             .retain(|n| nodes_by_depth.contains_key(&n.id));
-    }
-
-    // Update remaining nodes after depth filter
-    let _remaining_nodes: HashSet<_> = filtered_graph.nodes.iter().map(|n| n.id.clone()).collect();
+        // Get remaining node IDs after depth filter
+        filtered_graph.nodes.iter().map(|n| n.id.clone()).collect()
+    } else {
+        // Get remaining node IDs without depth filter
+        filtered_graph.nodes.iter().map(|n| n.id.clone()).collect()
+    };
 
     // Filter edges by edge type and node existence
     filtered_graph.edges.retain(|edge| {

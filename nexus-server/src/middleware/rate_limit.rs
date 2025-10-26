@@ -4,8 +4,7 @@
 
 use axum::{
     extract::ConnectInfo,
-    http::{Request, StatusCode},
-    middleware::Next,
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use std::{
@@ -172,11 +171,11 @@ pub enum RateLimitResult {
 }
 
 /// Rate limiting middleware
-pub async fn rate_limit_middleware<B>(
+pub async fn rate_limit_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     limiter: axum::extract::State<RateLimiter>,
-    request: Request<B>,
-    next: Next<B>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
 ) -> Response {
     let key = addr.ip().to_string();
 

@@ -11,7 +11,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::Query;
 use axum::response::Json;
 use rmcp::ServerHandler;
 use rmcp::model::{

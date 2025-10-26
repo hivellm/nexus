@@ -115,8 +115,8 @@ async fn main() -> anyhow::Result<()> {
     ));
     api::graph_correlation::init_manager(graph_manager)?;
 
-    // Initialize rate limiter
-    let rate_limiter = RateLimiter::new();
+    // Initialize rate limiter (for future use)
+    let _rate_limiter = RateLimiter::new();
 
     // Build main router
     let app = Router::new()
@@ -199,8 +199,7 @@ async fn main() -> anyhow::Result<()> {
         }))
         // MCP StreamableHTTP endpoint
         .nest("/mcp", mcp_router)
-        .layer(TraceLayer::new_for_http())
-        .with_state(rate_limiter);
+        .layer(TraceLayer::new_for_http());
 
     // Start server
     let listener = tokio::net::TcpListener::bind(&config.addr).await?;
