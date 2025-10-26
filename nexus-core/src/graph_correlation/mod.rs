@@ -21,6 +21,11 @@
 
 use crate::vectorizer_cache::{QueryMetadata, VectorizerCache};
 use crate::{Error, Result};
+pub use pattern_recognition::{
+    ArchitecturalPatternDetector, DetectedPattern, EventDrivenPatternDetector,
+    PatternDetectionResult, PatternDetector, PatternStatistics, PatternType,
+    PipelinePatternDetector,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -29,6 +34,9 @@ pub mod hierarchical_layout;
 
 /// Call graph filtering and search functionality
 pub mod call_graph_filtering;
+
+/// Pattern recognition for architectural and design patterns
+pub mod pattern_recognition;
 
 /// Graph types supported by the correlation analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
