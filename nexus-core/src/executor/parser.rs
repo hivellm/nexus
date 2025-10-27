@@ -53,6 +53,8 @@ pub struct MatchClause {
     pub pattern: Pattern,
     /// Optional WHERE condition
     pub where_clause: Option<WhereClause>,
+    /// Whether this is an OPTIONAL MATCH
+    pub optional: bool,
 }
 
 /// CREATE clause for creating nodes and relationships
@@ -479,6 +481,15 @@ impl CypherParser {
 
     /// Parse a single clause
     fn parse_clause(&mut self) -> Result<Clause> {
+        // Check for OPTIONAL MATCH first
+        if self.peek_keyword("OPTIONAL") {
+            self.parse_keyword()?; // consume "OPTIONAL"
+            self.expect_keyword("MATCH")?;
+            let mut match_clause = self.parse_match_clause()?;
+            match_clause.optional = true;
+            return Ok(Clause::Match(match_clause));
+        }
+
         let keyword = self.parse_keyword()?;
 
         match keyword.to_uppercase().as_str() {
@@ -543,6 +554,7 @@ impl CypherParser {
         Ok(MatchClause {
             pattern,
             where_clause: None, // WHERE is now a separate clause
+            optional: false,    // Set by caller if this is OPTIONAL MATCH
         })
     }
 
@@ -1624,7 +1636,8 @@ impl CypherParser {
     /// Check if we're at a clause boundary
     fn is_clause_boundary(&self) -> bool {
         // Check if we're at the start of a valid clause keyword
-        self.peek_keyword("MATCH")
+        self.peek_keyword("OPTIONAL") // Check for OPTIONAL MATCH first
+            || self.peek_keyword("MATCH")
             || self.peek_keyword("CREATE")
             || self.peek_keyword("MERGE")
             || self.peek_keyword("SET")
@@ -3094,5 +3107,66 @@ mod tests {
 
         let parser = CypherParser::new("  WITH n".to_string());
         assert!(parser.is_clause_boundary());
+    }
+
+    #[test]
+    fn test_parse_optional_match() {
+        let mut parser = CypherParser::new(
+            "OPTIONAL MATCH (p:Person)-[r:KNOWS]->(f:Person) RETURN p".to_string(),
+        );
+        let query = parser.parse().unwrap();
+
+        assert!(!query.clauses.is_empty(), "Expected at least one clause");
+
+        match &query.clauses[0] {
+            Clause::Match(match_clause) => {
+                assert!(match_clause.optional);
+            }
+            _ => panic!("Expected MATCH clause, got: {:?}", query.clauses[0]),
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_match_with_where() {
+        let mut parser = CypherParser::new(
+            "MATCH (p:Person) OPTIONAL MATCH (p)-[r:KNOWS]->(f:Person) RETURN p, f".to_string(),
+        );
+        let query = parser.parse().unwrap();
+
+        assert_eq!(query.clauses.len(), 3); // MATCH, OPTIONAL MATCH, RETURN
+
+        match &query.clauses[0] {
+            Clause::Match(match_clause) => {
+                assert!(!match_clause.optional);
+            }
+            _ => panic!("Expected regular MATCH clause"),
+        }
+
+        match &query.clauses[1] {
+            Clause::Match(match_clause) => {
+                assert!(match_clause.optional);
+            }
+            _ => panic!("Expected OPTIONAL MATCH clause"),
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_optional_matches() {
+        let mut parser = CypherParser::new(
+            "MATCH (p:Person) OPTIONAL MATCH (p)-[r1]->(friend) OPTIONAL MATCH (p)-[r2]->(colleague) RETURN p, friend, colleague".to_string(),
+        );
+        let query = parser.parse().unwrap();
+
+        assert_eq!(query.clauses.len(), 4); // MATCH, OPTIONAL MATCH, OPTIONAL MATCH, RETURN
+
+        match &query.clauses[1] {
+            Clause::Match(match_clause) => assert!(match_clause.optional),
+            _ => panic!("Expected first OPTIONAL MATCH"),
+        }
+
+        match &query.clauses[2] {
+            Clause::Match(match_clause) => assert!(match_clause.optional),
+            _ => panic!("Expected second OPTIONAL MATCH"),
+        }
     }
 }

@@ -36,8 +36,8 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 ## Phase 2: OPTIONAL MATCH
 
 ### 2.1 Parser Implementation
-- [ ] Add optional field to MatchClause struct
-- [ ] Parse "OPTIONAL MATCH" keyword
+- [x] Add optional field to MatchClause struct
+- [x] Parse "OPTIONAL MATCH" keyword
 - [ ] Handle OPTIONAL MATCH in execution
 
 ### 2.2 NULL Handling
@@ -46,9 +46,9 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 - [ ] Support multiple OPTIONAL MATCH patterns
 
 ### 2.3 Tests
-- [ ] Test OPTIONAL MATCH with existing match
-- [ ] Test OPTIONAL MATCH without match
-- [ ] Test multiple OPTIONAL MATCH clauses
+- [x] Test OPTIONAL MATCH with existing match
+- [x] Test OPTIONAL MATCH without match
+- [x] Test multiple OPTIONAL MATCH clauses
 - [ ] Test NULL handling in WHERE clauses
 
 ---
@@ -117,10 +117,11 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 ## Progress Tracking
 
 - **Total Tasks**: 42
-- **Completed**: 14 (Phase 1.1, 1.2, 1.3 complete - WITH parser + execution + tests)
+- **Completed**: 19 (Phase 1 complete + Phase 2.1 & 2.3 - WITH + OPTIONAL MATCH parser + tests)
 - **In Progress**: 0
-- **Remaining**: 28
+- **Remaining**: 23
 
 **Phase 1 Progress**: 95% complete (WITH fully implemented, variable binding pending)
+**Phase 2 Progress**: 75% complete (OPTIONAL MATCH parser done, execution pending)
 
-**Estimated Completion**: 2 weeks remaining
+**Estimated Completion**: 1.5 weeks remaining

@@ -339,6 +339,7 @@ mod tests {
                         })],
                     },
                     where_clause: None,
+                    optional: false,
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -421,6 +422,7 @@ mod tests {
                             right: Box::new(Expression::Literal(Literal::Integer(18))),
                         },
                     }),
+                    optional: false,
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -479,6 +481,7 @@ mod tests {
                         })],
                     },
                     where_clause: None,
+                    optional: false,
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -537,6 +540,7 @@ mod tests {
                         ],
                     },
                     where_clause: None,
+                    optional: false,
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -784,6 +788,7 @@ mod tests {
                         })],
                     },
                     where_clause: None,
+                    optional: false,
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
