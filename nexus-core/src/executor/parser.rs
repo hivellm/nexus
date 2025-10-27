@@ -32,6 +32,8 @@ pub enum Clause {
     Delete(DeleteClause),
     /// REMOVE clause for removing properties and labels
     Remove(RemoveClause),
+    /// WITH clause for query composition and projection
+    With(WithClause),
     /// WHERE clause for filtering
     Where(WhereClause),
     /// RETURN clause for projection
@@ -216,6 +218,18 @@ pub struct PropertyMap {
 pub struct WhereClause {
     /// Boolean expression
     pub expression: Expression,
+}
+
+/// WITH clause for query composition and projection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithClause {
+    /// With items (expressions to project)
+    pub items: Vec<ReturnItem>,
+    /// DISTINCT modifier
+    pub distinct: bool,
+    /// Optional WHERE clause for filtering
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub where_clause: Option<WhereClause>,
 }
 
 /// RETURN clause for projection
@@ -491,6 +505,10 @@ impl CypherParser {
             "REMOVE" => {
                 let remove_clause = self.parse_remove_clause()?;
                 Ok(Clause::Remove(remove_clause))
+            }
+            "WITH" => {
+                let with_clause = self.parse_with_clause()?;
+                Ok(Clause::With(with_clause))
             }
             "WHERE" => {
                 let where_clause = self.parse_where_clause()?;
@@ -1081,6 +1099,48 @@ impl CypherParser {
         Ok(SkipClause { count })
     }
 
+    /// Parse WITH clause
+    fn parse_with_clause(&mut self) -> Result<WithClause> {
+        self.skip_whitespace();
+
+        let distinct = if self.peek_keyword("DISTINCT") {
+            self.parse_keyword()?;
+            true
+        } else {
+            false
+        };
+
+        self.skip_whitespace();
+
+        let mut items = Vec::new();
+
+        loop {
+            let item = self.parse_return_item()?;
+            items.push(item);
+
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            } else {
+                break;
+            }
+        }
+
+        // Check for WHERE clause in WITH
+        let where_clause = if self.peek_keyword("WHERE") {
+            self.parse_keyword()?;
+            Some(self.parse_where_clause()?.clone())
+        } else {
+            None
+        };
+
+        Ok(WithClause {
+            items,
+            distinct,
+            where_clause,
+        })
+    }
+
     /// Parse expression
     /// Parse expression (simplified for MVP)
     pub fn parse_expression(&mut self) -> Result<Expression> {
@@ -1570,6 +1630,7 @@ impl CypherParser {
             || self.peek_keyword("SET")
             || self.peek_keyword("DELETE")
             || self.peek_keyword("REMOVE")
+            || self.peek_keyword("WITH")
             || self.peek_keyword("WHERE")
             || self.peek_keyword("RETURN")
             || self.peek_keyword("ORDER")
@@ -2963,5 +3024,76 @@ mod tests {
         let mut parser = CypherParser::new("  MATCH  ".to_string());
         let keyword = parser.parse_keyword().unwrap();
         assert_eq!(keyword, "MATCH");
+    }
+
+    #[test]
+    fn test_parse_with_clause() {
+        let mut parser = CypherParser::new("WITH n, m.age AS age RETURN age".to_string());
+        let query = parser.parse().unwrap();
+
+        assert_eq!(query.clauses.len(), 2);
+
+        match &query.clauses[0] {
+            Clause::With(with_clause) => {
+                assert_eq!(with_clause.items.len(), 2);
+                assert!(!with_clause.distinct);
+                assert!(with_clause.where_clause.is_none());
+
+                match &with_clause.items[0].expression {
+                    Expression::Variable(name) => assert_eq!(name, "n"),
+                    _ => panic!("Expected variable expression"),
+                }
+
+                match &with_clause.items[1].expression {
+                    Expression::PropertyAccess { variable, property } => {
+                        assert_eq!(variable, "m");
+                        assert_eq!(property, "age");
+                    }
+                    _ => panic!("Expected property access expression"),
+                }
+
+                assert_eq!(with_clause.items[1].alias, Some("age".to_string()));
+            }
+            _ => panic!("Expected WITH clause"),
+        }
+    }
+
+    #[test]
+    fn test_parse_with_distinct() {
+        let mut parser = CypherParser::new("WITH DISTINCT n, m RETURN n".to_string());
+        let query = parser.parse().unwrap();
+
+        match &query.clauses[0] {
+            Clause::With(with_clause) => {
+                assert!(with_clause.distinct);
+                assert_eq!(with_clause.items.len(), 2);
+            }
+            _ => panic!("Expected WITH clause"),
+        }
+    }
+
+    #[test]
+    fn test_parse_with_where() {
+        let mut parser =
+            CypherParser::new("WITH n WHERE n.age > 30 RETURN n".to_string());
+        let query = parser.parse().unwrap();
+
+        assert_eq!(query.clauses.len(), 2);
+
+        match &query.clauses[0] {
+            Clause::With(with_clause) => {
+                assert!(with_clause.where_clause.is_some());
+            }
+            _ => panic!("Expected WITH clause"),
+        }
+    }
+
+    #[test]
+    fn test_with_clause_boundary() {
+        let parser = CypherParser::new("WITH n".to_string());
+        assert!(parser.is_clause_boundary());
+
+        let parser = CypherParser::new("  WITH n".to_string());
+        assert!(parser.is_clause_boundary());
     }
 }

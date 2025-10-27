@@ -1,25 +1,126 @@
-# Tasks
+# Implementation Tasks - Cypher Query Composition (Phase 2)
 
-## 1. WITH Clause
-- [ ] Parser implementation
-- [ ] Execution logic
-- [ ] Tests
+## Overview
+Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition and result combination.
 
-## 2. OPTIONAL MATCH
-- [ ] Parser implementation  
-- [ ] NULL handling
-- [ ] Tests
+**Priority**: 🔴 CRITICAL  
+**Duration**: 2-3 weeks  
+**Status**: 🟢 IN PROGRESS
 
-## 3. UNWIND
-- [ ] Parser implementation
-- [ ] List expansion
-- [ ] Tests
+---
 
-## 4. UNION
-- [ ] Parser implementation
-- [ ] Result combination
-- [ ] Tests
+## Phase 1: WITH Clause (IN PROGRESS)
 
-## 5. Quality
-- [ ] 95%+ coverage
-- [ ] Documentation
+### 1.1 Parser Implementation
+- [x] Add WithClause to Clause enum
+- [x] Add WithClause struct definition  
+- [x] Implement parse_with_clause() in CypherParser
+- [x] Add WITH to is_clause_boundary() check
+- [x] Add WITH to parse_clause() match statement
+
+### 1.2 Execution Logic
+- [ ] Add WITH handling to executor/mod.rs
+- [ ] Implement intermediate result projection
+- [ ] Implement WHERE filtering in WITH
+- [ ] Support DISTINCT in WITH clause
+- [ ] Variable binding between clauses
+
+### 1.3 Tests
+- [x] Test basic WITH projection
+- [x] Test WITH with WHERE filtering
+- [x] Test WITH DISTINCT
+- [ ] Test WITH in query chains
+
+---
+
+## Phase 2: OPTIONAL MATCH
+
+### 2.1 Parser Implementation
+- [ ] Add optional field to MatchClause struct
+- [ ] Parse "OPTIONAL MATCH" keyword
+- [ ] Handle OPTIONAL MATCH in execution
+
+### 2.2 NULL Handling
+- [ ] Implement LEFT OUTER JOIN semantics
+- [ ] Handle NULL values for unmatched patterns
+- [ ] Support multiple OPTIONAL MATCH patterns
+
+### 2.3 Tests
+- [ ] Test OPTIONAL MATCH with existing match
+- [ ] Test OPTIONAL MATCH without match
+- [ ] Test multiple OPTIONAL MATCH clauses
+- [ ] Test NULL handling in WHERE clauses
+
+---
+
+## Phase 3: UNWIND
+
+### 3.1 Parser Implementation
+- [ ] Add UnwindClause to Clause enum
+- [ ] Add UnwindClause struct definition
+- [ ] Implement parse_unwind_clause()
+- [ ] Add UNWIND to clause boundary checks
+
+### 3.2 List Expansion
+- [ ] Implement list-to-row expansion
+- [ ] Handle UNWIND with WHERE filtering
+- [ ] Support expression-based UNWIND
+
+### 3.3 Tests
+- [ ] Test basic UNWIND with list literal
+- [ ] Test UNWIND with variable reference
+- [ ] Test UNWIND with WHERE
+- [ ] Test UNWIND in complex queries
+
+---
+
+## Phase 4: UNION
+
+### 4.1 Parser Implementation
+- [ ] Add UnionClause to Clause enum
+- [ ] Add UnionClause and UnionType enums
+- [ ] Implement parse_union_clause()
+- [ ] Update CypherQuery to support UNION queries
+
+### 4.2 Result Combination
+- [ ] Implement UNION (distinct results)
+- [ ] Implement UNION ALL (keep duplicates)
+- [ ] Column compatibility checking
+- [ ] Combine multiple query results
+
+### 4.3 Tests
+- [ ] Test UNION with compatible columns
+- [ ] Test UNION ALL with duplicates
+- [ ] Test column count mismatch error
+- [ ] Test complex UNION queries
+
+---
+
+## Phase 5: Quality & Documentation
+
+### 5.1 Code Quality
+- [ ] Run full test suite (100% pass)
+- [ ] Achieve 95%+ coverage
+- [ ] Run clippy with -D warnings
+- [ ] Run cargo fmt --all
+
+### 5.2 Documentation
+- [ ] Update docs/specs/cypher-subset.md
+- [ ] Add WITH examples
+- [ ] Add OPTIONAL MATCH examples
+- [ ] Add UNWIND examples
+- [ ] Add UNION examples
+- [ ] Update CHANGELOG.md
+
+---
+
+## Progress Tracking
+
+- **Total Tasks**: 42
+- **Completed**: 10 (Phase 1.1 & 1.3 complete - WITH parser + tests)
+- **In Progress**: 4 (Phase 1.2 - Execution logic)
+- **Remaining**: 28
+
+**Phase 1 Progress**: 67% complete (WITH parser done, execution pending)
+
+**Estimated Completion**: 2.5 weeks remaining
