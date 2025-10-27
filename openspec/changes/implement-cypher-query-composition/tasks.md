@@ -56,10 +56,10 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 ## Phase 3: UNWIND
 
 ### 3.1 Parser Implementation
-- [ ] Add UnwindClause to Clause enum
-- [ ] Add UnwindClause struct definition
-- [ ] Implement parse_unwind_clause()
-- [ ] Add UNWIND to clause boundary checks
+- [x] Add UnwindClause to Clause enum
+- [x] Add UnwindClause struct definition
+- [x] Implement parse_unwind_clause()
+- [x] Add UNWIND to clause boundary checks
 
 ### 3.2 List Expansion
 - [ ] Implement list-to-row expansion
@@ -67,7 +67,7 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 - [ ] Support expression-based UNWIND
 
 ### 3.3 Tests
-- [ ] Test basic UNWIND with list literal
+- [x] Test basic UNWIND with list literal
 - [ ] Test UNWIND with variable reference
 - [ ] Test UNWIND with WHERE
 - [ ] Test UNWIND in complex queries
@@ -117,11 +117,12 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 ## Progress Tracking
 
 - **Total Tasks**: 42
-- **Completed**: 24 (Phase 1 complete + Phase 2 complete - WITH + OPTIONAL MATCH fully implemented)
+- **Completed**: 28 (Phase 1, 2 complete + Phase 3.1 & 3.3 parser - UNWIND parser + tests)
 - **In Progress**: 0
-- **Remaining**: 18
+- **Remaining**: 14
 
 **Phase 1 Progress**: 95% complete (WITH fully implemented, variable binding pending)
 **Phase 2 Progress**: 100% complete (OPTIONAL MATCH fully implemented)
+**Phase 3 Progress**: 50% complete (UNWIND parser done, execution pending)
 
-**Estimated Completion**: 1 week remaining
+**Estimated Completion**: 5 days remaining

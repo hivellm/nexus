@@ -34,6 +34,8 @@ pub enum Clause {
     Remove(RemoveClause),
     /// WITH clause for query composition and projection
     With(WithClause),
+    /// UNWIND clause for list expansion
+    Unwind(UnwindClause),
     /// WHERE clause for filtering
     Where(WhereClause),
     /// RETURN clause for projection
@@ -232,6 +234,15 @@ pub struct WithClause {
     /// Optional WHERE clause for filtering
     #[serde(skip_serializing_if = "Option::is_none")]
     pub where_clause: Option<WhereClause>,
+}
+
+/// UNWIND clause for list expansion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnwindClause {
+    /// Expression to unwind (list)
+    pub expression: Expression,
+    /// Variable to bind each item to
+    pub variable: String,
 }
 
 /// RETURN clause for projection
@@ -520,6 +531,10 @@ impl CypherParser {
             "WITH" => {
                 let with_clause = self.parse_with_clause()?;
                 Ok(Clause::With(with_clause))
+            }
+            "UNWIND" => {
+                let unwind_clause = self.parse_unwind_clause()?;
+                Ok(Clause::Unwind(unwind_clause))
             }
             "WHERE" => {
                 let where_clause = self.parse_where_clause()?;
@@ -1153,6 +1168,29 @@ impl CypherParser {
         })
     }
 
+    /// Parse UNWIND clause
+    fn parse_unwind_clause(&mut self) -> Result<UnwindClause> {
+        self.skip_whitespace();
+
+        // Parse the expression (list to unwind)
+        let expression = self.parse_expression()?;
+
+        self.skip_whitespace();
+
+        // Expect AS keyword
+        self.expect_keyword("AS")?;
+
+        self.skip_whitespace();
+
+        // Parse the variable name
+        let variable = self.parse_identifier()?;
+
+        Ok(UnwindClause {
+            expression,
+            variable,
+        })
+    }
+
     /// Parse expression
     /// Parse expression (simplified for MVP)
     pub fn parse_expression(&mut self) -> Result<Expression> {
@@ -1644,6 +1682,7 @@ impl CypherParser {
             || self.peek_keyword("DELETE")
             || self.peek_keyword("REMOVE")
             || self.peek_keyword("WITH")
+            || self.peek_keyword("UNWIND")
             || self.peek_keyword("WHERE")
             || self.peek_keyword("RETURN")
             || self.peek_keyword("ORDER")
@@ -3168,5 +3207,31 @@ mod tests {
             Clause::Match(match_clause) => assert!(match_clause.optional),
             _ => panic!("Expected second OPTIONAL MATCH"),
         }
+    }
+
+    #[test]
+    fn test_parse_unwind_clause() {
+        let mut parser = CypherParser::new("UNWIND [1, 2, 3] AS x RETURN x".to_string());
+        let query = parser.parse().unwrap();
+
+        assert!(!query.clauses.is_empty());
+
+        match &query.clauses[0] {
+            Clause::Unwind(unwind_clause) => {
+                // Check that expression is parsed correctly
+                assert!(matches!(&unwind_clause.expression, Expression::List(_)));
+                assert_eq!(unwind_clause.variable, "x");
+            }
+            _ => panic!("Expected UNWIND clause"),
+        }
+    }
+
+    #[test]
+    fn test_unwind_clause_boundary() {
+        let parser = CypherParser::new("UNWIND [1, 2, 3] AS x".to_string());
+        assert!(parser.is_clause_boundary());
+
+        let parser = CypherParser::new("  UNWIND [1, 2, 3] AS x".to_string());
+        assert!(parser.is_clause_boundary());
     }
 }
