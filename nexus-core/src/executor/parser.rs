@@ -26,6 +26,8 @@ pub enum Clause {
     Create(CreateClause),
     /// MERGE clause for match-or-create
     Merge(MergeClause),
+    /// SET clause for updating properties and labels
+    Set(SetClause),
     /// WHERE clause for filtering
     Where(WhereClause),
     /// RETURN clause for projection
@@ -59,6 +61,34 @@ pub struct CreateClause {
 pub struct MergeClause {
     /// Pattern to match or create
     pub pattern: Pattern,
+}
+
+/// SET clause for updating properties and adding labels
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetClause {
+    /// Items to set (property assignments and label additions)
+    pub items: Vec<SetItem>,
+}
+
+/// SET item (property assignment or label addition)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SetItem {
+    /// Set a property value
+    Property {
+        /// Target (variable)
+        target: String,
+        /// Property key
+        property: String,
+        /// Value to set
+        value: Expression,
+    },
+    /// Add a label
+    Label {
+        /// Target variable
+        target: String,
+        /// Label to add
+        label: String,
+    },
 }
 
 /// Pattern matching structure
@@ -405,6 +435,10 @@ impl CypherParser {
                 let merge_clause = self.parse_merge_clause()?;
                 Ok(Clause::Merge(merge_clause))
             }
+            "SET" => {
+                let set_clause = self.parse_set_clause()?;
+                Ok(Clause::Set(set_clause))
+            }
             "WHERE" => {
                 let where_clause = self.parse_where_clause()?;
                 Ok(Clause::Where(where_clause))
@@ -455,6 +489,53 @@ impl CypherParser {
         let pattern = self.parse_pattern()?;
 
         Ok(MergeClause { pattern })
+    }
+
+    /// Parse SET clause
+    fn parse_set_clause(&mut self) -> Result<SetClause> {
+        self.skip_whitespace();
+        let mut items = Vec::new();
+
+        loop {
+            // Parse identifier (variable name)
+            let target = self.parse_identifier()?;
+            self.skip_whitespace();
+
+            // Check if we have a property assignment (node.property = value)
+            if self.peek_char() == Some('.') {
+                self.consume_char();
+                let property = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_char('=')?;
+                self.skip_whitespace();
+                let value = self.parse_expression()?;
+                items.push(SetItem::Property {
+                    target,
+                    property,
+                    value,
+                });
+            } else if self.peek_char() == Some(':') {
+                // Label addition (node:Label)
+                self.consume_char();
+                let label = self.parse_identifier()?;
+                items.push(SetItem::Label { target, label });
+            } else {
+                return Err(Error::storage(
+                    "SET clause: expected property assignment or label".to_string(),
+                ));
+            }
+
+            // Check for more items
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            } else {
+                break;
+            }
+        }
+
+        Ok(SetClause { items })
     }
 
     /// Parse pattern
@@ -1334,6 +1415,7 @@ impl CypherParser {
         self.peek_keyword("MATCH")
             || self.peek_keyword("CREATE")
             || self.peek_keyword("MERGE")
+            || self.peek_keyword("SET")
             || self.peek_keyword("WHERE")
             || self.peek_keyword("RETURN")
             || self.peek_keyword("ORDER")
