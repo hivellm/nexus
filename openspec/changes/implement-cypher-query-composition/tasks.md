@@ -5,7 +5,13 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 
 **Priority**: 🔴 CRITICAL  
 **Duration**: 2-3 weeks  
-**Status**: 🟢 IN PROGRESS
+**Status**: 🟢 IN PROGRESS - Phase 3 UNWIND in progress (parser complete, execution pending)
+
+**Last Update**: Phase 3.1 Parser implementation complete
+- ✅ WITH clause fully implemented (Phase 1)
+- ✅ OPTIONAL MATCH fully implemented (Phase 2)  
+- 🟡 UNWIND parser complete, execution logic pending (Phase 3)
+- ⏸️ UNION not started (Phase 4)
 
 ---
 
@@ -116,13 +122,28 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 
 ## Progress Tracking
 
+### Summary
 - **Total Tasks**: 42
-- **Completed**: 28 (Phase 1, 2 complete + Phase 3.1 & 3.3 parser - UNWIND parser + tests)
+- **Completed**: 28 (67%)
 - **In Progress**: 0
-- **Remaining**: 14
+- **Remaining**: 14 (33%)
 
-**Phase 1 Progress**: 95% complete (WITH fully implemented, variable binding pending)
-**Phase 2 Progress**: 100% complete (OPTIONAL MATCH fully implemented)
-**Phase 3 Progress**: 50% complete (UNWIND parser done, execution pending)
+### Phase Completion
+- ✅ **Phase 1 (WITH)**: 95% complete - Parser + Execution done, variable binding pending
+- ✅ **Phase 2 (OPTIONAL MATCH)**: 100% complete - Fully implemented
+- 🟡 **Phase 3 (UNWIND)**: 50% complete - Parser done, execution logic pending
+- ⏸️ **Phase 4 (UNION)**: 0% complete - Not started
+- ⏸️ **Phase 5 (Quality/Docs)**: 0% complete - Not started
+
+### Recent Progress
+- ✅ Phase 1.1-1.3: WITH clause parser + execution + tests (10 tasks)
+- ✅ Phase 2.1-2.3: OPTIONAL MATCH parser + execution + tests (10 tasks)
+- ✅ Phase 3.1 + 3.3 (part): UNWIND parser + basic tests (6 tasks)
+
+### Next Steps
+1. Phase 3.2: UNWIND execution logic (list-to-row expansion)
+2. Phase 3.3: Complete UNWIND tests
+3. Phase 4: UNION implementation (parser + execution)
+4. Phase 5: Documentation and final quality checks
 
 **Estimated Completion**: 5 days remaining
