@@ -5,10 +5,10 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.1] - 2025-10-27
 
 ### Fixed
-- **Data Source Unification** (2025-10-27) ✅
+- **Data Source Unification** ✅
   - Fixed MATCH queries returning empty results by ensuring label_index is updated when creating nodes
   - Engine::create_node now automatically updates label_index after node creation
   - Fixed Engine and Executor data synchronization issue

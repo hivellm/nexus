@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.9.1"
 edition = "2024"
 authors = ["HiveLLM Contributors <team@hivellm.org>"]
 license = "MIT"
