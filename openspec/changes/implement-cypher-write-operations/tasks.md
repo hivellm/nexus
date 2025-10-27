@@ -44,7 +44,7 @@
 - [x] 2.1 Add SetClause to parser ✅ (v0.9.1)
 - [x] 2.2 Implement property updates ✅ (v0.9.2 - uses variable_context)
 - [x] 2.3 Implement label addition ✅ (v0.9.2 - uses variable_context)
-- [ ] 2.4 Add SET tests
+- [x] 2.4 Add SET tests ✅ (v0.9.2 - 2 tests added)
 
 **Implemented in**:
 - Commit: 2b1c93b (SET parser)
@@ -55,7 +55,7 @@
 - [x] 3.1 Add DeleteClause to parser ✅ (v0.9.1)
 - [x] 3.2 Implement node deletion ✅ (v0.9.2 - uses variable_context)
 - [x] 3.3 Implement DETACH DELETE ⚠️ (detected but not yet fully implemented)
-- [ ] 3.4 Add DELETE tests
+- [x] 3.4 Add DELETE tests ✅ (v0.9.2 - 2 tests added)
 
 **Implemented in**:
 - Commit: cbd3467 (DELETE parser)
@@ -65,7 +65,7 @@
 ## 4. REMOVE Clause
 - [x] 4.1 Add RemoveClause to parser ✅ (v0.9.1)
 - [x] 4.2 Implement property/label removal ✅ (v0.9.2 - uses variable_context)
-- [ ] 4.3 Add REMOVE tests
+- [x] 4.3 Add REMOVE tests ✅ (v0.9.2 - 2 tests added)
 
 **Implemented in**:
 - Commit: cbd3467 (REMOVE parser)
@@ -79,15 +79,16 @@
 
 ---
 
-**Progress**: 17/23 tasks (74% complete) ✅  
+**Progress**: 20/23 tasks (87% complete) ✅✅✅  
 **Completed**:
 1. ✅ CREATE clause (Tasks 0.1-0.6)
 2. ✅ MERGE clause parser and execution (Tasks 1.1, 1.2, 1.4)
-3. ✅ SET clause parser and execution (Tasks 2.1, 2.2, 2.3)
-4. ✅ DELETE clause parser and execution (Tasks 3.1, 3.2)
-5. ✅ REMOVE clause parser and execution (Tasks 4.1, 4.2)
+3. ✅ SET clause parser, execution, and tests (Tasks 2.1-2.4)
+4. ✅ DELETE clause parser, execution, and tests (Tasks 3.1, 3.2, 3.4)
+5. ✅ REMOVE clause parser, execution, and tests (Tasks 4.1-4.3)
 6. ✅ Variable context infrastructure (HashMap for variable bindings)
 7. ✅ Full execution logic for SET, DELETE, and REMOVE
+8. ✅ Comprehensive test coverage for all write operations
 
 **Recent Implementation (2025-10-27 v0.9.2)**:
 - SET clause execution: Updates node properties and adds labels
@@ -95,10 +96,8 @@
 - REMOVE clause execution: Removes properties and labels from nodes
 - All clauses use variable_context for node lookups
 - Properties loaded, modified, and saved atomically
+- Added 6 comprehensive tests for SET, DELETE, and REMOVE (21 tests total)
 
 **Remaining Tasks**:
 1. Implement DETACH DELETE fully (Task 3.3 - currently detected but not fully implemented)
-2. Add SET tests (Task 2.4)
-3. Add DELETE tests (Task 3.4)
-4. Add REMOVE tests (Task 4.3)
-5. Add ON CREATE/ON MATCH support for MERGE (Task 1.3)
+2. Add ON CREATE/ON MATCH support for MERGE (Task 1.3)
