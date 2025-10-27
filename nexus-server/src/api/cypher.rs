@@ -60,13 +60,15 @@ pub fn get_executor() -> Arc<RwLock<Executor>> {
 fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> serde_json::Value {
     match expr {
         nexus_core::executor::parser::Expression::Literal(lit) => match lit {
-            nexus_core::executor::parser::Literal::String(s) => serde_json::Value::String(s.clone()),
-            nexus_core::executor::parser::Literal::Integer(i) => serde_json::Value::Number((*i).into()),
-            nexus_core::executor::parser::Literal::Float(f) => {
-                serde_json::Number::from_f64(*f)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
+            nexus_core::executor::parser::Literal::String(s) => {
+                serde_json::Value::String(s.clone())
             }
+            nexus_core::executor::parser::Literal::Integer(i) => {
+                serde_json::Value::Number((*i).into())
+            }
+            nexus_core::executor::parser::Literal::Float(f) => serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
             nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
             nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
         },
@@ -135,11 +137,11 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
             // Execute all clauses sequentially using Engine
             let mut engine = engine.write().await;
-            
+
             // Create a context map to store variable bindings between clauses
             // For now, we'll use a simple map: variable_name -> node_id
             let mut variable_context: HashMap<String, Vec<u64>> = HashMap::new();
-            
+
             for clause in &ast.clauses {
                 // Handle CREATE clause
                 if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
@@ -188,11 +190,17 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                             // Create node using Engine
                             match engine.create_node(labels, properties) {
                                 Ok(node_id) => {
-                                    tracing::info!("Node created successfully via Engine with ID: {}", node_id);
-                                    
+                                    tracing::info!(
+                                        "Node created successfully via Engine with ID: {}",
+                                        node_id
+                                    );
+
                                     // Store node_id in variable context if variable exists
                                     if let Some(var_name) = &node_pattern.variable {
-                                        variable_context.entry(var_name.clone()).or_default().push(node_id);
+                                        variable_context
+                                            .entry(var_name.clone())
+                                            .or_default()
+                                            .push(node_id);
                                     }
                                 }
                                 Err(e) => {
@@ -258,18 +266,26 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                             let mut found_node = false;
                             if let Some(first_label) = labels.first() {
                                 // Get label ID
-                                if let Ok(label_id) = engine.catalog.get_or_create_label(first_label) {
+                                if let Ok(label_id) =
+                                    engine.catalog.get_or_create_label(first_label)
+                                {
                                     // Get all nodes with this label from label_index
-                                    if let Ok(node_ids) = engine.indexes.label_index.get_nodes(label_id) {
+                                    if let Ok(node_ids) =
+                                        engine.indexes.label_index.get_nodes(label_id)
+                                    {
                                         // Iterate through nodes and check if properties match
                                         for node_id in node_ids {
-                                            if let Ok(Some(existing_props)) = engine.storage.load_node_properties(node_id as u64) {
+                                            if let Ok(Some(existing_props)) =
+                                                engine.storage.load_node_properties(node_id as u64)
+                                            {
                                                 // Check if all properties from MERGE match existing properties
                                                 let props_obj = properties.as_object().unwrap();
                                                 let mut all_match = true;
-                                                
+
                                                 for (key, value) in props_obj {
-                                                    if let Some(existing_value) = existing_props.get(key) {
+                                                    if let Some(existing_value) =
+                                                        existing_props.get(key)
+                                                    {
                                                         if existing_value != value {
                                                             all_match = false;
                                                             break;
@@ -279,17 +295,23 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                                         break;
                                                     }
                                                 }
-                                                
+
                                                 if all_match && !props_obj.is_empty() {
                                                     // Found matching node, don't create
                                                     let existing_node_id = node_id as u64;
-                                                    tracing::info!("MERGE: Found existing node {} with matching properties", existing_node_id);
-                                                    
+                                                    tracing::info!(
+                                                        "MERGE: Found existing node {} with matching properties",
+                                                        existing_node_id
+                                                    );
+
                                                     // Store node_id in variable context if variable exists
                                                     if let Some(var_name) = &node_pattern.variable {
-                                                        variable_context.entry(var_name.clone()).or_default().push(existing_node_id);
+                                                        variable_context
+                                                            .entry(var_name.clone())
+                                                            .or_default()
+                                                            .push(existing_node_id);
                                                     }
-                                                    
+
                                                     found_node = true;
                                                     break;
                                                 }
@@ -298,22 +320,33 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                     }
                                 }
                             }
-                            
+
                             // If no matching node found, create new one
                             if !found_node {
-                                match engine.create_node(labels, serde_json::Value::Object(props.clone())) {
+                                match engine
+                                    .create_node(labels, serde_json::Value::Object(props.clone()))
+                                {
                                     Ok(node_id) => {
-                                        tracing::info!("MERGE: Created new node {} via Engine", node_id);
-                                        
+                                        tracing::info!(
+                                            "MERGE: Created new node {} via Engine",
+                                            node_id
+                                        );
+
                                         // Store node_id in variable context if variable exists
                                         if let Some(var_name) = &node_pattern.variable {
-                                            variable_context.entry(var_name.clone()).or_default().push(node_id);
+                                            variable_context
+                                                .entry(var_name.clone())
+                                                .or_default()
+                                                .push(node_id);
                                         }
-                                        
+
                                         // Execute ON CREATE clause if provided
                                         if let Some(on_create_set) = &merge_clause.on_create {
                                             if let Some(_var_name) = &node_pattern.variable {
-                                                tracing::info!("Executing ON CREATE clause for node {}", node_id);
+                                                tracing::info!(
+                                                    "Executing ON CREATE clause for node {}",
+                                                    node_id
+                                                );
                                                 // Execute SET operations from ON CREATE
                                                 for item in &on_create_set.items {
                                                     match item {
@@ -324,7 +357,7 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                                             };
                                                             let json_value = expression_to_json_value(value);
                                                             properties.insert(property.clone(), json_value);
-                                                            
+
                                                             if let Ok(Some(node_record)) = engine.get_node(node_id) {
                                                                 let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
                                                                 let _ = engine.update_node(node_id, labels, serde_json::Value::Object(properties));
@@ -349,7 +382,8 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                         }
                                     }
                                     Err(e) => {
-                                        let execution_time = start_time.elapsed().as_millis() as u64;
+                                        let execution_time =
+                                            start_time.elapsed().as_millis() as u64;
                                         tracing::error!("Failed to merge node: {}", e);
                                         return Json(CypherResponse {
                                             columns: vec![],
@@ -366,7 +400,10 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                         // Get the node_id we found earlier from variable context
                                         if let Some(node_ids) = variable_context.get(var_name) {
                                             for node_id in node_ids {
-                                                tracing::info!("Executing ON MATCH clause for node {}", node_id);
+                                                tracing::info!(
+                                                    "Executing ON MATCH clause for node {}",
+                                                    node_id
+                                                );
                                                 // Execute SET operations from ON MATCH
                                                 for item in &on_match_set.items {
                                                     match item {
@@ -377,7 +414,7 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                                             };
                                                             let json_value = expression_to_json_value(value);
                                                             properties.insert(property.clone(), json_value);
-                                                            
+
                                                             if let Ok(Some(node_record)) = engine.get_node(*node_id) {
                                                                 let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
                                                                 let _ = engine.update_node(*node_id, labels, serde_json::Value::Object(properties));
@@ -411,33 +448,54 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                     tracing::info!("SET clause detected: {} items", set_clause.items.len());
                     for item in &set_clause.items {
                         match item {
-                            nexus_core::executor::parser::SetItem::Property { target, property, value } => {
+                            nexus_core::executor::parser::SetItem::Property {
+                                target,
+                                property,
+                                value,
+                            } => {
                                 // Look up nodes from variable context
                                 if let Some(node_ids) = variable_context.get(target) {
                                     for node_id in node_ids {
                                         // Load existing properties
-                                        let mut properties = match engine.storage.load_node_properties(*node_id) {
-                                            Ok(Some(props)) => {
-                                                props.as_object().unwrap().clone()
-                                            }
+                                        let mut properties = match engine
+                                            .storage
+                                            .load_node_properties(*node_id)
+                                        {
+                                            Ok(Some(props)) => props.as_object().unwrap().clone(),
                                             _ => serde_json::Map::new(),
                                         };
-                                        
+
                                         // Convert expression to JSON value
                                         let json_value = expression_to_json_value(value);
-                                        
+
                                         // Update or add the property
                                         properties.insert(property.clone(), json_value);
-                                        
+
                                         // Load existing labels
                                         if let Ok(Some(node_record)) = engine.get_node(*node_id) {
-                                            let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
-                                            
+                                            let labels = engine
+                                                .catalog
+                                                .get_labels_from_bitmap(node_record.label_bits)
+                                                .unwrap_or_default();
+
                                             // Update the node with new properties
-                                            if let Err(e) = engine.update_node(*node_id, labels, serde_json::Value::Object(properties)) {
-                                                tracing::error!("Failed to update node {}: {}", node_id, e);
+                                            if let Err(e) = engine.update_node(
+                                                *node_id,
+                                                labels,
+                                                serde_json::Value::Object(properties),
+                                            ) {
+                                                tracing::error!(
+                                                    "Failed to update node {}: {}",
+                                                    node_id,
+                                                    e
+                                                );
                                             } else {
-                                                tracing::info!("SET {}.{} on node {}", target, property, node_id);
+                                                tracing::info!(
+                                                    "SET {}.{} on node {}",
+                                                    target,
+                                                    property,
+                                                    node_id
+                                                );
                                             }
                                         }
                                     }
@@ -451,24 +509,43 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                     for node_id in node_ids {
                                         // Load existing node to get current labels
                                         if let Ok(Some(node_record)) = engine.get_node(*node_id) {
-                                            let mut labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
-                                            
+                                            let mut labels = engine
+                                                .catalog
+                                                .get_labels_from_bitmap(node_record.label_bits)
+                                                .unwrap_or_default();
+
                                             // Add new label if not already present
                                             if !labels.contains(label) {
                                                 labels.push(label.clone());
                                             }
-                                            
+
                                             // Load properties
-                                            let properties = match engine.storage.load_node_properties(*node_id) {
-                                                Ok(Some(props)) => props,
-                                                _ => serde_json::Value::Object(serde_json::Map::new()),
-                                            };
-                                            
+                                            let properties =
+                                                match engine.storage.load_node_properties(*node_id)
+                                                {
+                                                    Ok(Some(props)) => props,
+                                                    _ => serde_json::Value::Object(
+                                                        serde_json::Map::new(),
+                                                    ),
+                                                };
+
                                             // Update the node with new labels
-                                            if let Err(e) = engine.update_node(*node_id, labels, properties) {
-                                                tracing::error!("Failed to update node {} with label {}: {}", node_id, label, e);
+                                            if let Err(e) =
+                                                engine.update_node(*node_id, labels, properties)
+                                            {
+                                                tracing::error!(
+                                                    "Failed to update node {} with label {}: {}",
+                                                    node_id,
+                                                    label,
+                                                    e
+                                                );
                                             } else {
-                                                tracing::info!("SET {}:{} on node {}", target, label, node_id);
+                                                tracing::info!(
+                                                    "SET {}:{} on node {}",
+                                                    target,
+                                                    label,
+                                                    node_id
+                                                );
                                             }
                                         }
                                     }
@@ -481,41 +558,62 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                 }
                 // Handle DELETE clause
                 else if let nexus_core::executor::parser::Clause::Delete(delete_clause) = clause {
-                    tracing::info!("DELETE clause detected: {} items, detach={}", delete_clause.items.len(), delete_clause.detach);
+                    tracing::info!(
+                        "DELETE clause detected: {} items, detach={}",
+                        delete_clause.items.len(),
+                        delete_clause.detach
+                    );
                     for item in &delete_clause.items {
                         // Look up nodes from variable context
                         if let Some(node_ids) = variable_context.get(item) {
-                             for node_id in node_ids {
+                            for node_id in node_ids {
                                 if delete_clause.detach {
                                     // DETACH DELETE: Remove all relationships before deleting
                                     let mut deleted_rels = 0;
                                     let total_rels = engine.storage.relationship_count();
-                                    
+
                                     // Scan all relationships
                                     for rel_id in 0..total_rels {
-                                        if let Ok(Some(rel_record)) = engine.get_relationship(rel_id) {
+                                        if let Ok(Some(rel_record)) =
+                                            engine.get_relationship(rel_id)
+                                        {
                                             // Check if this relationship is connected to the node we're deleting
-                                            if rel_record.src_id == *node_id || rel_record.dst_id == *node_id {
+                                            if rel_record.src_id == *node_id
+                                                || rel_record.dst_id == *node_id
+                                            {
                                                 // Delete the relationship by marking it as deleted
-                                                let mut tx = engine.transaction_manager.begin_write().unwrap();
+                                                let mut tx = engine
+                                                    .transaction_manager
+                                                    .begin_write()
+                                                    .unwrap();
                                                 let mut deleted_record = rel_record;
                                                 deleted_record.mark_deleted();
-                                                engine.storage.write_rel(rel_id, &deleted_record).unwrap();
+                                                engine
+                                                    .storage
+                                                    .write_rel(rel_id, &deleted_record)
+                                                    .unwrap();
                                                 engine.transaction_manager.commit(&mut tx).unwrap();
                                                 deleted_rels += 1;
                                             }
                                         }
                                     }
-                                    tracing::info!("DETACH DELETE: Removed {} relationships from node {}", deleted_rels, node_id);
+                                    tracing::info!(
+                                        "DETACH DELETE: Removed {} relationships from node {}",
+                                        deleted_rels,
+                                        node_id
+                                    );
                                 }
-                                
+
                                 // Delete the node
                                 match engine.delete_node(*node_id) {
                                     Ok(deleted) => {
                                         if deleted {
                                             tracing::info!("DELETE node {}", node_id);
                                         } else {
-                                            tracing::warn!("Node {} not found for deletion", node_id);
+                                            tracing::warn!(
+                                                "Node {} not found for deletion",
+                                                node_id
+                                            );
                                         }
                                     }
                                     Err(e) => {
@@ -530,27 +628,51 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                 }
                 // Handle REMOVE clause
                 else if let nexus_core::executor::parser::Clause::Remove(remove_clause) = clause {
-                    tracing::info!("REMOVE clause detected: {} items", remove_clause.items.len());
+                    tracing::info!(
+                        "REMOVE clause detected: {} items",
+                        remove_clause.items.len()
+                    );
                     for item in &remove_clause.items {
                         match item {
-                            nexus_core::executor::parser::RemoveItem::Property { target, property } => {
+                            nexus_core::executor::parser::RemoveItem::Property {
+                                target,
+                                property,
+                            } => {
                                 // Look up nodes from variable context
                                 if let Some(node_ids) = variable_context.get(target) {
                                     for node_id in node_ids {
                                         // Load existing properties
-                                        if let Ok(Some(mut properties)) = engine.storage.load_node_properties(*node_id) {
+                                        if let Ok(Some(mut properties)) =
+                                            engine.storage.load_node_properties(*node_id)
+                                        {
                                             let props = properties.as_object_mut().unwrap();
                                             props.remove(property);
-                                            
+
                                             // Load existing labels
-                                            if let Ok(Some(node_record)) = engine.get_node(*node_id) {
-                                                let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
-                                                
+                                            if let Ok(Some(node_record)) = engine.get_node(*node_id)
+                                            {
+                                                let labels = engine
+                                                    .catalog
+                                                    .get_labels_from_bitmap(node_record.label_bits)
+                                                    .unwrap_or_default();
+
                                                 // Update the node with removed property
-                                                if let Err(e) = engine.update_node(*node_id, labels, properties) {
-                                                    tracing::error!("Failed to remove property {} from node {}: {}", property, node_id, e);
+                                                if let Err(e) =
+                                                    engine.update_node(*node_id, labels, properties)
+                                                {
+                                                    tracing::error!(
+                                                        "Failed to remove property {} from node {}: {}",
+                                                        property,
+                                                        node_id,
+                                                        e
+                                                    );
                                                 } else {
-                                                    tracing::info!("REMOVE {}.{} from node {}", target, property, node_id);
+                                                    tracing::info!(
+                                                        "REMOVE {}.{} from node {}",
+                                                        target,
+                                                        property,
+                                                        node_id
+                                                    );
                                                 }
                                             }
                                         }
@@ -565,22 +687,41 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                     for node_id in node_ids {
                                         // Load existing node to get current labels
                                         if let Ok(Some(node_record)) = engine.get_node(*node_id) {
-                                            let mut labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
-                                            
+                                            let mut labels = engine
+                                                .catalog
+                                                .get_labels_from_bitmap(node_record.label_bits)
+                                                .unwrap_or_default();
+
                                             // Remove the label if present
                                             labels.retain(|l| l != label);
-                                            
+
                                             // Load properties
-                                            let properties = match engine.storage.load_node_properties(*node_id) {
-                                                Ok(Some(props)) => props,
-                                                _ => serde_json::Value::Object(serde_json::Map::new()),
-                                            };
-                                            
+                                            let properties =
+                                                match engine.storage.load_node_properties(*node_id)
+                                                {
+                                                    Ok(Some(props)) => props,
+                                                    _ => serde_json::Value::Object(
+                                                        serde_json::Map::new(),
+                                                    ),
+                                                };
+
                                             // Update the node with removed label
-                                            if let Err(e) = engine.update_node(*node_id, labels, properties) {
-                                                tracing::error!("Failed to remove label {} from node {}: {}", label, node_id, e);
+                                            if let Err(e) =
+                                                engine.update_node(*node_id, labels, properties)
+                                            {
+                                                tracing::error!(
+                                                    "Failed to remove label {} from node {}: {}",
+                                                    label,
+                                                    node_id,
+                                                    e
+                                                );
                                             } else {
-                                                tracing::info!("REMOVE {}:{} from node {}", target, label, node_id);
+                                                tracing::info!(
+                                                    "REMOVE {}:{} from node {}",
+                                                    target,
+                                                    label,
+                                                    node_id
+                                                );
                                             }
                                         }
                                     }
@@ -595,7 +736,11 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
             let execution_time = start_time.elapsed().as_millis() as u64;
             let clause_type = if is_merge_query { "MERGE" } else { "CREATE" };
-            tracing::info!("{} query executed successfully in {}ms", clause_type, execution_time);
+            tracing::info!(
+                "{} query executed successfully in {}ms",
+                clause_type,
+                execution_time
+            );
 
             return Json(CypherResponse {
                 columns: vec![],

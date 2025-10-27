@@ -622,7 +622,7 @@ impl CypherParser {
     /// Parse DELETE clause
     fn parse_delete_clause(&mut self) -> Result<DeleteClause> {
         self.skip_whitespace();
-        
+
         // Check for DETACH keyword
         let detach = if self.peek_keyword("DETACH") {
             self.parse_keyword()?;
@@ -631,14 +631,14 @@ impl CypherParser {
         } else {
             false
         };
-        
+
         // Parse list of variables to delete
         let mut items = Vec::new();
-        
+
         loop {
             let variable = self.parse_identifier()?;
             items.push(variable);
-            
+
             self.skip_whitespace();
             if self.peek_char() == Some(',') {
                 self.consume_char();
@@ -647,7 +647,7 @@ impl CypherParser {
                 break;
             }
         }
-        
+
         Ok(DeleteClause { items, detach })
     }
 
@@ -1680,7 +1680,9 @@ impl CypherParser {
 
         // Check if keyword matches
         let remaining = &self.input[pos..];
-        remaining.to_uppercase().starts_with(&keyword.to_uppercase())
+        remaining
+            .to_uppercase()
+            .starts_with(&keyword.to_uppercase())
     }
 
     fn peek_keyword(&self, keyword: &str) -> bool {

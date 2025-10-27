@@ -349,7 +349,12 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
     // Create the node using the engine
     match engine.create_node(
         request.labels.clone(),
-        serde_json::Value::Object(request.properties.into_iter().collect()),
+        serde_json::Value::Object(
+            request
+                .properties
+                .into_iter()
+                .collect(),
+        ),
     ) {
         Ok(node_id) => {
             tracing::info!("Node created successfully with ID: {}", node_id);
