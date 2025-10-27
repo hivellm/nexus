@@ -404,11 +404,28 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                     for item in &delete_clause.items {
                         // Look up nodes from variable context
                         if let Some(node_ids) = variable_context.get(item) {
-                            for node_id in node_ids {
+                             for node_id in node_ids {
                                 if delete_clause.detach {
-                                    // TODO: Implement DETACH DELETE
-                                    // For now, just delete without detaching relationships
-                                    tracing::warn!("DETACH DELETE not fully implemented yet");
+                                    // DETACH DELETE: Remove all relationships before deleting
+                                    let mut deleted_rels = 0;
+                                    let total_rels = engine.storage.relationship_count();
+                                    
+                                    // Scan all relationships
+                                    for rel_id in 0..total_rels {
+                                        if let Ok(Some(rel_record)) = engine.get_relationship(rel_id) {
+                                            // Check if this relationship is connected to the node we're deleting
+                                            if rel_record.src_id == *node_id || rel_record.dst_id == *node_id {
+                                                // Delete the relationship by marking it as deleted
+                                                let mut tx = engine.transaction_manager.begin_write().unwrap();
+                                                let mut deleted_record = rel_record;
+                                                deleted_record.mark_deleted();
+                                                engine.storage.write_rel(rel_id, &deleted_record).unwrap();
+                                                engine.transaction_manager.commit(&mut tx).unwrap();
+                                                deleted_rels += 1;
+                                            }
+                                        }
+                                    }
+                                    tracing::info!("DETACH DELETE: Removed {} relationships from node {}", deleted_rels, node_id);
                                 }
                                 
                                 // Delete the node
