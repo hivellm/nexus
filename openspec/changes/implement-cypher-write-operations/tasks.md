@@ -32,7 +32,7 @@
 
 - [x] 1.1 Add MergeClause to parser AST ✅ (v0.9.0)
 - [x] 1.2 Implement match-or-create semantics ✅ (v0.9.1 with property matching)
-- [ ] 1.3 Add ON CREATE/ON MATCH support
+- [x] 1.3 Add ON CREATE/ON MATCH support ✅ (v0.9.2 - fully implemented)
 - [x] 1.4 Add MERGE tests ✅ (basic execution works, dedicated MERGE tests added)
 
 **Implemented in**:
@@ -54,7 +54,7 @@
 ## 3. DELETE Clause
 - [x] 3.1 Add DeleteClause to parser ✅ (v0.9.1)
 - [x] 3.2 Implement node deletion ✅ (v0.9.2 - uses variable_context)
-- [x] 3.3 Implement DETACH DELETE ⚠️ (detected but not yet fully implemented)
+- [x] 3.3 Implement DETACH DELETE ✅ (v0.9.2 - fully implemented)
 - [x] 3.4 Add DELETE tests ✅ (v0.9.2 - 2 tests added)
 
 **Implemented in**:
@@ -79,7 +79,7 @@
 
 ---
 
-**Progress**: 20/23 tasks (87% complete) ✅✅✅  
+**Progress**: 23/23 tasks (100% complete) ✅✅✅  
 **Completed**:
 1. ✅ CREATE clause (Tasks 0.1-0.6)
 2. ✅ MERGE clause parser and execution (Tasks 1.1, 1.2, 1.4)
@@ -99,5 +99,6 @@
 - Added 6 comprehensive tests for SET, DELETE, and REMOVE (21 tests total)
 
 **Remaining Tasks**:
-1. Implement DETACH DELETE fully (Task 3.3 - currently detected but not fully implemented)
-2. Add ON CREATE/ON MATCH support for MERGE (Task 1.3)
+- ✅ All tasks completed! (100% implementation)
+- ON CREATE/ON MATCH fully implemented with execution support
+- DETACH DELETE fully implemented with relationship deletion
