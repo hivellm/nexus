@@ -68,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
     api::schema::init_catalog(catalog_arc.clone())?;
     api::data::init_catalog(catalog_arc.clone())?;
     api::data::init_executor(api::cypher::get_executor())?;
+    api::data::init_engine(engine_arc.clone())?; // Add engine initialization for data API
     api::stats::init_instances(
         catalog_arc.clone(),
         label_index_arc.clone(),

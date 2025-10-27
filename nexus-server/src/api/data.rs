@@ -15,11 +15,22 @@ static CATALOG: std::sync::OnceLock<Arc<RwLock<Catalog>>> = std::sync::OnceLock:
 /// Global executor instance
 static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
 
+/// Global engine instance
+static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
+
 /// Initialize the executor
 pub fn init_executor(executor: Arc<RwLock<Executor>>) -> anyhow::Result<()> {
     EXECUTOR
         .set(executor)
         .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
+    Ok(())
+}
+
+/// Initialize the engine
+pub fn init_engine(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
+    ENGINE
+        .set(engine.clone())
+        .map_err(|_| anyhow::anyhow!("Failed to set engine"))?;
     Ok(())
 }
 
@@ -321,44 +332,42 @@ pub async fn create_node(Json(request): Json<CreateNodeRequest>) -> Json<CreateN
     let _start_time = Instant::now();
     log_operation("create_node", &format!("Labels: {:?}", request.labels));
 
-    let catalog_arc = match CATALOG.get() {
-        Some(c) => c.clone(),
+    // Use the shared Engine instance to create the node
+    let engine_guard = match ENGINE.get() {
+        Some(engine) => engine,
         None => {
             return Json(CreateNodeResponse {
                 node_id: 0,
                 message: "".to_string(),
-                error: Some("Catalog not initialized".to_string()),
+                error: Some("Engine not initialized".to_string()),
             });
         }
     };
-    let _catalog = catalog_arc.clone();
 
-    // Create a temporary Engine to use its create_node method
-    let _record_store = match nexus_core::storage::RecordStore::new("./data") {
-        Ok(s) => s,
+    let mut engine = engine_guard.write().await;
+
+    // Create the node using the engine
+    match engine.create_node(
+        request.labels.clone(),
+        serde_json::Value::Object(request.properties.into_iter().collect()),
+    ) {
+        Ok(node_id) => {
+            tracing::info!("Node created successfully with ID: {}", node_id);
+            Json(CreateNodeResponse {
+                node_id,
+                message: "Node created successfully".to_string(),
+                error: None,
+            })
+        }
         Err(e) => {
-            log_error(
-                "create_node",
-                "Failed to create record store",
-                &e.to_string(),
-            );
-            return Json(CreateNodeResponse {
+            log_error("create_node", "Failed to create node", &e.to_string());
+            Json(CreateNodeResponse {
                 node_id: 0,
                 message: "".to_string(),
-                error: Some(format!("Failed to create record store: {}", e)),
-            });
+                error: Some(format!("Failed to create node: {}", e)),
+            })
         }
-    };
-
-    // This approach creates a NEW Engine every time which won't persist data
-    // We need to use the shared Engine from the server state
-    // For now, return an error indicating this needs to be refactored
-    log_error("create_node", "Cannot create Engine in handler", "");
-    Json(CreateNodeResponse {
-        node_id: 0,
-        message: "".to_string(),
-        error: Some("Node creation requires shared Engine instance. This handler needs refactoring to use the Engine from NexusServer state".to_string()),
-    })
+    }
 }
 
 /// Create a new relationship

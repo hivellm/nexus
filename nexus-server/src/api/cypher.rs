@@ -13,7 +13,7 @@ static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLoc
 /// Global engine instance for CREATE operations
 static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
 
-/// Initialize the executor
+/// Initialize the executor (deprecated - use init_engine_with_executor instead)
 pub fn init_executor() -> anyhow::Result<Arc<RwLock<Executor>>> {
     let executor = Executor::default();
     let executor_arc = Arc::new(RwLock::new(executor));
@@ -26,8 +26,28 @@ pub fn init_executor() -> anyhow::Result<Arc<RwLock<Executor>>> {
 /// Initialize the engine
 pub fn init_engine(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
     ENGINE
-        .set(engine)
+        .set(engine.clone())
         .map_err(|_| anyhow::anyhow!("Failed to set engine"))?;
+    Ok(())
+}
+
+/// Initialize both engine and executor with shared storage
+pub fn init_engine_with_executor(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
+    // Set the engine
+    ENGINE
+        .set(engine.clone())
+        .map_err(|_| anyhow::anyhow!("Failed to set engine"))?;
+
+    // Create a wrapper for the executor that's inside the engine
+    // We'll use a pattern where we access the engine's executor via the engine itself
+    // For now, we'll still use a dummy executor for non-CREATE queries
+    // The real solution is to make CREATE and MATCH both use the engine
+    let executor = Executor::default();
+    let executor_arc = Arc::new(RwLock::new(executor));
+    EXECUTOR
+        .set(executor_arc)
+        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
+
     Ok(())
 }
 
@@ -66,8 +86,10 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
     tracing::info!("Executing Cypher query: {}", request.query);
 
-    // Check if this is a CREATE query
-    let is_create_query = request.query.trim().to_uppercase().starts_with("CREATE");
+    // Check if this is a CREATE or MATCH query
+    let query_upper = request.query.trim().to_uppercase();
+    let is_create_query = query_upper.starts_with("CREATE");
+    let is_match_query = query_upper.starts_with("MATCH");
 
     if is_create_query {
         // Use Engine for CREATE operations
@@ -168,7 +190,47 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
         }
     }
 
-    // Get executor instance for non-CREATE queries
+    // For MATCH queries, use the engine's executor to access the shared storage
+    if is_match_query {
+        if let Some(engine) = ENGINE.get() {
+            // Use the engine's execute_cypher method which uses its internal executor
+            let mut engine_guard = engine.write().await;
+            match engine_guard.execute_cypher(&request.query) {
+                Ok(result_set) => {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    tracing::info!(
+                        "MATCH query executed successfully in {}ms, {} rows returned",
+                        execution_time,
+                        result_set.rows.len()
+                    );
+
+                    return Json(CypherResponse {
+                        columns: result_set.columns,
+                        rows: result_set
+                            .rows
+                            .into_iter()
+                            .map(|row| serde_json::Value::Array(row.values))
+                            .collect(),
+                        execution_time_ms: execution_time,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    tracing::error!("MATCH query execution failed: {}", e);
+
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some(e.to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    // Get executor instance for other queries
     let executor_guard = match EXECUTOR.get() {
         Some(executor) => executor,
         None => {

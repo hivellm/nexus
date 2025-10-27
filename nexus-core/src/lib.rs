@@ -191,17 +191,23 @@ impl Engine {
 
         // Create labels in catalog and get their IDs
         let mut label_bits = 0u64;
+        let mut label_ids = Vec::new();
         for label in &labels {
             let label_id = self.catalog.get_or_create_label(label)?;
             if label_id < 64 {
                 label_bits |= 1u64 << label_id;
             }
+            label_ids.push(label_id);
         }
 
         let node_id = self
             .storage
             .create_node_with_label_bits(&mut tx, label_bits, properties)?;
         self.transaction_manager.commit(&mut tx)?;
+
+        // Update label_index to track this node
+        self.indexes.label_index.add_node(node_id, &label_ids)?;
+
         Ok(node_id)
     }
 
