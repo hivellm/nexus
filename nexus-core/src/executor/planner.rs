@@ -55,6 +55,15 @@ impl<'a> QueryPlanner<'a> {
                 Clause::Where(where_clause) => {
                     where_clauses.push(where_clause.expression.clone());
                 }
+                Clause::With(with_clause) => {
+                    // WITH is similar to RETURN but for intermediate results
+                    // Store the WITH items as new projection columns
+                    return_items = with_clause.items.clone();
+                    // Apply WHERE filtering if present in WITH clause
+                    if let Some(where_clause) = &with_clause.where_clause {
+                        where_clauses.push(where_clause.expression.clone());
+                    }
+                }
                 Clause::Return(return_clause) => {
                     return_items = return_clause.items.clone();
                 }
