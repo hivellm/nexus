@@ -86,10 +86,11 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
     tracing::info!("Executing Cypher query: {}", request.query);
 
-    // Check if this is a CREATE, MERGE, or MATCH query
+    // Check if this is a CREATE, MERGE, SET, or MATCH query
     let query_upper = request.query.trim().to_uppercase();
     let is_create_query = query_upper.starts_with("CREATE");
     let is_merge_query = query_upper.starts_with("MERGE");
+    let is_set_query = query_upper.starts_with("SET");
     let is_match_query = query_upper.starts_with("MATCH");
 
     if is_create_query || is_merge_query {

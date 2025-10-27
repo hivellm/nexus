@@ -41,10 +41,15 @@
 - Match-or-create semantics: Searches for nodes with matching labels and properties via label_index. Creates new node only if no match is found.
 
 ## 2. SET Clause
-- [ ] 2.1 Add SetClause to parser
-- [ ] 2.2 Implement property updates
-- [ ] 2.3 Implement label addition
+- [x] 2.1 Add SetClause to parser ✅ (v0.9.1)
+- [ ] 2.2 Implement property updates ⏳ (requires execution context with variables from MATCH)
+- [ ] 2.3 Implement label addition ⏳ (requires execution context with variables from MATCH)
 - [ ] 2.4 Add SET tests
+
+**Implemented in**:
+- Commit: 2b1c93b (SET parser)
+- Files: `nexus-core/src/executor/parser.rs`
+- Note: Parser supports SET clause with property updates and label additions. Execution logic pending (requires binding to variables from MATCH clause).
 
 ## 3. DELETE Clause
 - [ ] 3.1 Add DeleteClause to parser
@@ -64,8 +69,9 @@
 
 ---
 
-**Progress**: 9/23 tasks (39% complete)  
+**Progress**: 10/23 tasks (43% complete)  
 **Next Priority**: 
-1. ✅ MERGE match-or-create semantics completed with property matching (Task 1.2)
-2. ✅ MERGE tests added (Task 1.4)
-3. Implement SET clause for property updates (Task 2)
+1. ✅ MERGE match-or-create semantics completed (Task 1.2, 1.4)
+2. ✅ SET clause parser completed (Task 2.1)
+3. Implement SET clause execution for property updates (Task 2.2, 2.3) - requires execution context
+4. Then proceed to DELETE clause
