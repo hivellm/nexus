@@ -5,6 +5,41 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Data Source Unification** (2025-10-27) ✅
+  - Fixed MATCH queries returning empty results by ensuring label_index is updated when creating nodes
+  - Engine::create_node now automatically updates label_index after node creation
+  - Fixed Engine and Executor data synchronization issue
+  - MATCH queries via Engine now correctly find nodes by label
+  - /data/nodes endpoint refactored to use shared Engine instance
+
+### Added
+- **Engine-Executor Integration** (2025-10-27) ✅
+  - MATCH queries now use engine.execute_cypher() to access shared storage
+  - /data/nodes endpoint now uses ENGINE.get() shared instance
+  - Added init_engine() function to data.rs module
+  - CREATE and MATCH operations share the same catalog, storage, and label_index
+
+### Testing
+- **Full Integration Testing** (2025-10-27) ✅
+  - Tested CREATE via Cypher: Nodes persist correctly ✅
+  - Tested MATCH via Cypher: Returns nodes correctly ✅
+  - Tested /data/nodes: Creates nodes successfully ✅
+  - Tested multiple nodes creation: All counted in stats ✅
+  - Tested ORDER BY in MATCH: Query executed successfully ✅
+
+**Test Results** (2025-10-27):
+```
+✅ CREATE (p:Person {name: "Alice", age: 30}) → Success
+✅ MATCH (p:Person) RETURN p → Returns 2 nodes
+✅ POST /data/nodes → Creates node with node_id returned
+✅ GET /stats → Accurately reflects all created nodes
+✅ MATCH with ORDER BY → Works correctly
+✅ All 1041 tests passing
+```
+
 ## [0.9.0] - 2025-10-26
 
 ### Fixed
