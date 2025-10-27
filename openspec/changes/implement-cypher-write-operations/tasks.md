@@ -86,8 +86,18 @@
 3. ✅ SET clause parser (Task 2.1)
 4. ✅ DELETE clause parser (Task 3.1)
 5. ✅ REMOVE clause parser (Task 4.1)
+6. ✅ Variable context infrastructure (HashMap for variable bindings)
+7. ✅ SET/DELETE/REMOVE clause handlers added (detection working, execution pending)
+
+**Recent Implementation (2025-10-27 v0.9.1)**:
+- Added `variable_context: HashMap<String, Vec<u64>>` to store node_id bindings
+- CREATE and MERGE now store node_id in variable context
+- SET/DELETE/REMOVE clause handlers added with logging
+- Helper function `expression_to_json_value()` for value conversion
 
 **Next Priority**:
-1. Implement execution context for variable binding from MATCH clauses
-2. Implement SET, DELETE, and REMOVE execution logic (Tasks 2.2-2.3, 3.2-3.3, 4.2)
-3. Add comprehensive tests for all write operations
+1. ✅ Variable context infrastructure added (progress update)
+2. Implement actual execution logic for SET (Tasks 2.2-2.3)
+3. Implement actual execution logic for DELETE (Tasks 3.2-3.3)
+4. Implement actual execution logic for REMOVE (Task 4.2)
+5. Add comprehensive tests for all write operations

@@ -5,6 +5,33 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2025-10-27
+
+### Added
+- **Cypher Write Operations Parser Support** ✅
+  - Added SET clause parsing for property updates and label additions
+  - Added DELETE clause parsing (including DETACH DELETE support)
+  - Added REMOVE clause parsing for property and label removal
+  - All write operation parsers now complete and functional
+
+- **MERGE Clause Complete Implementation** ✅
+  - Implemented full match-or-create semantics with property matching
+  - MERGE searches existing nodes by label and properties
+  - Creates new node only if no matching node found
+  - Added variable context tracking for created nodes
+  - Added comprehensive MERGE tests
+
+- **Variable Context Infrastructure** ✅
+  - Added `variable_context` HashMap to store node_id bindings between clauses
+  - CREATE and MERGE operations now store node_id in variable context
+  - SET/DELETE/REMOVE clause handlers added with detection
+  - Foundation ready for implementing multi-clause queries (e.g., MATCH + SET)
+
+### Published
+- **Progress**: Cypher Write Operations now 52% complete (12/23 tasks)
+- **Parsers**: 100% complete (CREATE, MERGE, SET, DELETE, REMOVE)
+- **Execution**: 40% complete (CREATE, MERGE working; SET/DELETE/REMOVE pending)
+
 ## [0.9.1] - 2025-10-27
 
 ### Fixed
