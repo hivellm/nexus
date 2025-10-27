@@ -27,10 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - SET/DELETE/REMOVE clause handlers added with detection
   - Foundation ready for implementing multi-clause queries (e.g., MATCH + SET)
 
+- **Cypher Write Operations Execution** ✅
+  - SET clause execution: Updates node properties and adds labels using Engine::update_node()
+  - DELETE clause execution: Deletes nodes using Engine::delete_node()
+  - REMOVE clause execution: Removes properties and labels from nodes
+  - All clauses use variable_context for node lookups
+  - Properties loaded, modified, and saved atomically
+
 ### Published
-- **Progress**: Cypher Write Operations now 52% complete (12/23 tasks)
+- **Progress**: Cypher Write Operations now 74% complete (17/23 tasks)
 - **Parsers**: 100% complete (CREATE, MERGE, SET, DELETE, REMOVE)
-- **Execution**: 40% complete (CREATE, MERGE working; SET/DELETE/REMOVE pending)
+- **Execution**: 87% complete (CREATE, MERGE, SET, DELETE, REMOVE working)
+- **Remaining**: DETACH DELETE, comprehensive tests, ON CREATE/ON MATCH support
 
 ## [0.9.1] - 2025-10-27
 
