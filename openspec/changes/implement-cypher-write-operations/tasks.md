@@ -31,14 +31,14 @@
 ## 1. MERGE Clause
 
 - [x] 1.1 Add MergeClause to parser AST ✅ (v0.9.0)
-- [ ] 1.2 Implement match-or-create semantics ⏳ (simplified version done, TODO: add property matching)
+- [x] 1.2 Implement match-or-create semantics ✅ (v0.9.1 with property matching)
 - [ ] 1.3 Add ON CREATE/ON MATCH support
-- [ ] 1.4 Add MERGE tests ⚠️ (basic execution works, need dedicated MERGE tests)
+- [x] 1.4 Add MERGE tests ✅ (basic execution works, dedicated MERGE tests added)
 
 **Implemented in**:
 - Commit: v0.9.1 (MERGE execution)
-- Files: `nexus-server/src/api/cypher.rs` (lines 182-244)
-- Note: Currently MERGE just creates nodes without checking if they exist. Full match-or-create semantics (Task 1.2) still pending.
+- Files: `nexus-server/src/api/cypher.rs` (lines 182-284)
+- Match-or-create semantics: Searches for nodes with matching labels and properties via label_index. Creates new node only if no match is found.
 
 ## 2. SET Clause
 - [ ] 2.1 Add SetClause to parser
@@ -64,8 +64,8 @@
 
 ---
 
-**Progress**: 7/23 tasks (30% complete)  
+**Progress**: 9/23 tasks (39% complete)  
 **Next Priority**: 
-1. Implement MERGE match-or-create semantics (Task 1.2)
-2. Add MERGE tests (Task 1.4)
-3. Then proceed to SET clause implementation
+1. ✅ MERGE match-or-create semantics completed with property matching (Task 1.2)
+2. ✅ MERGE tests added (Task 1.4)
+3. Implement SET clause for property updates (Task 2)

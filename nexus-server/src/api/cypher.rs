@@ -220,23 +220,63 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                 }
                             }
 
-                            let properties = serde_json::Value::Object(props);
+                            let properties = serde_json::Value::Object(props.clone());
 
-                            // MERGE: For now, just create the node (simplified MERGE without property matching)
-                            // TODO: Implement proper match-or-create semantics with property matching
-                            match engine.create_node(labels, properties) {
-                                Ok(_node_id) => {
-                                    tracing::info!("Node merged successfully via Engine");
+                            // MERGE: Try to find existing node, or create new one
+                            // First, try to find an existing node with matching labels
+                            let mut found_node = false;
+                            if let Some(first_label) = labels.first() {
+                                // Get label ID
+                                if let Ok(label_id) = engine.catalog.get_or_create_label(first_label) {
+                                    // Get all nodes with this label from label_index
+                                    if let Ok(node_ids) = engine.indexes.label_index.get_nodes(label_id) {
+                                        // Iterate through nodes and check if properties match
+                                        for node_id in node_ids {
+                                            if let Ok(Some(existing_props)) = engine.storage.load_node_properties(node_id as u64) {
+                                                // Check if all properties from MERGE match existing properties
+                                                let props_obj = properties.as_object().unwrap();
+                                                let mut all_match = true;
+                                                
+                                                for (key, value) in props_obj {
+                                                    if let Some(existing_value) = existing_props.get(key) {
+                                                        if existing_value != value {
+                                                            all_match = false;
+                                                            break;
+                                                        }
+                                                    } else {
+                                                        all_match = false;
+                                                        break;
+                                                    }
+                                                }
+                                                
+                                                if all_match && !props_obj.is_empty() {
+                                                    // Found matching node, don't create
+                                                    tracing::info!("MERGE: Found existing node {} with matching properties", node_id);
+                                                    found_node = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                                Err(e) => {
-                                    let execution_time = start_time.elapsed().as_millis() as u64;
-                                    tracing::error!("Failed to merge node: {}", e);
-                                    return Json(CypherResponse {
-                                        columns: vec![],
-                                        rows: vec![],
-                                        execution_time_ms: execution_time,
-                                        error: Some(format!("Failed to merge node: {}", e)),
-                                    });
+                            }
+                            
+                            // If no matching node found, create new one
+                            if !found_node {
+                                match engine.create_node(labels, serde_json::Value::Object(props)) {
+                                    Ok(node_id) => {
+                                        tracing::info!("MERGE: Created new node {} via Engine", node_id);
+                                    }
+                                    Err(e) => {
+                                        let execution_time = start_time.elapsed().as_millis() as u64;
+                                        tracing::error!("Failed to merge node: {}", e);
+                                        return Json(CypherResponse {
+                                            columns: vec![],
+                                            rows: vec![],
+                                            execution_time_ms: execution_time,
+                                            error: Some(format!("Failed to merge node: {}", e)),
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -521,5 +561,27 @@ mod tests {
 
         let _response = execute_cypher(Json(request)).await;
         // Should handle long query gracefully
+    }
+
+    #[tokio::test]
+    async fn test_merge_node() {
+        let request = CypherRequest {
+            query: "MERGE (n:Person {name: \"Alice\", age: 30})".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+    }
+
+    #[tokio::test]
+    async fn test_merge_node_without_properties() {
+        let request = CypherRequest {
+            query: "MERGE (n:Person)".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
     }
 }
