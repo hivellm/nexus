@@ -3074,8 +3074,7 @@ mod tests {
 
     #[test]
     fn test_parse_with_where() {
-        let mut parser =
-            CypherParser::new("WITH n WHERE n.age > 30 RETURN n".to_string());
+        let mut parser = CypherParser::new("WITH n WHERE n.age > 30 RETURN n".to_string());
         let query = parser.parse().unwrap();
 
         assert_eq!(query.clauses.len(), 2);
