@@ -56,6 +56,24 @@ pub fn get_executor() -> Arc<RwLock<Executor>> {
     EXECUTOR.get().expect("Executor not initialized").clone()
 }
 
+/// Helper function to convert Expression to JSON Value
+fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> serde_json::Value {
+    match expr {
+        nexus_core::executor::parser::Expression::Literal(lit) => match lit {
+            nexus_core::executor::parser::Literal::String(s) => serde_json::Value::String(s.clone()),
+            nexus_core::executor::parser::Literal::Integer(i) => serde_json::Value::Number((*i).into()),
+            nexus_core::executor::parser::Literal::Float(f) => {
+                serde_json::Number::from_f64(*f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            }
+            nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
+            nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
+        },
+        _ => serde_json::Value::Null,
+    }
+}
+
 /// Cypher query request
 #[derive(Debug, Deserialize)]
 pub struct CypherRequest {
@@ -115,8 +133,13 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                 }
             };
 
-            // Execute CREATE or MERGE clauses using Engine
+            // Execute all clauses sequentially using Engine
             let mut engine = engine.write().await;
+            
+            // Create a context map to store variable bindings between clauses
+            // For now, we'll use a simple map: variable_name -> node_id
+            let mut variable_context: HashMap<String, Vec<u64>> = HashMap::new();
+            
             for clause in &ast.clauses {
                 // Handle CREATE clause
                 if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
@@ -164,8 +187,13 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
                             // Create node using Engine
                             match engine.create_node(labels, properties) {
-                                Ok(_node_id) => {
-                                    tracing::info!("Node created successfully via Engine");
+                                Ok(node_id) => {
+                                    tracing::info!("Node created successfully via Engine with ID: {}", node_id);
+                                    
+                                    // Store node_id in variable context if variable exists
+                                    if let Some(var_name) = &node_pattern.variable {
+                                        variable_context.entry(var_name.clone()).or_insert_with(Vec::new).push(node_id);
+                                    }
                                 }
                                 Err(e) => {
                                     let execution_time = start_time.elapsed().as_millis() as u64;
@@ -254,7 +282,14 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                                 
                                                 if all_match && !props_obj.is_empty() {
                                                     // Found matching node, don't create
-                                                    tracing::info!("MERGE: Found existing node {} with matching properties", node_id);
+                                                    let existing_node_id = node_id as u64;
+                                                    tracing::info!("MERGE: Found existing node {} with matching properties", existing_node_id);
+                                                    
+                                                    // Store node_id in variable context if variable exists
+                                                    if let Some(var_name) = &node_pattern.variable {
+                                                        variable_context.entry(var_name.clone()).or_insert_with(Vec::new).push(existing_node_id);
+                                                    }
+                                                    
                                                     found_node = true;
                                                     break;
                                                 }
@@ -266,9 +301,14 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                             
                             // If no matching node found, create new one
                             if !found_node {
-                                match engine.create_node(labels, serde_json::Value::Object(props)) {
+                                match engine.create_node(labels, serde_json::Value::Object(props.clone())) {
                                     Ok(node_id) => {
                                         tracing::info!("MERGE: Created new node {} via Engine", node_id);
+                                        
+                                        // Store node_id in variable context if variable exists
+                                        if let Some(var_name) = &node_pattern.variable {
+                                            variable_context.entry(var_name.clone()).or_insert_with(Vec::new).push(node_id);
+                                        }
                                     }
                                     Err(e) => {
                                         let execution_time = start_time.elapsed().as_millis() as u64;
@@ -281,6 +321,48 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                         });
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+                // Handle SET clause
+                else if let nexus_core::executor::parser::Clause::Set(set_clause) = clause {
+                    tracing::info!("SET clause detected: {} items", set_clause.items.len());
+                    // TODO: Implement SET clause execution
+                    // This requires variable context to be populated from MATCH/CREATE/MERGE
+                    // For now, just log that it was detected
+                    for item in &set_clause.items {
+                        match item {
+                            nexus_core::executor::parser::SetItem::Property { target, property, value } => {
+                                tracing::info!("SET {}.{} = {:?}", target, property, value);
+                            }
+                            nexus_core::executor::parser::SetItem::Label { target, label } => {
+                                tracing::info!("SET {}:{}", target, label);
+                            }
+                        }
+                    }
+                }
+                // Handle DELETE clause
+                else if let nexus_core::executor::parser::Clause::Delete(delete_clause) = clause {
+                    tracing::info!("DELETE clause detected: {} items, detach={}", delete_clause.items.len(), delete_clause.detach);
+                    // TODO: Implement DELETE clause execution
+                    // This requires variable context to be populated from MATCH
+                    for item in &delete_clause.items {
+                        tracing::info!("DELETE {} (detach={})", item, delete_clause.detach);
+                    }
+                }
+                // Handle REMOVE clause
+                else if let nexus_core::executor::parser::Clause::Remove(remove_clause) = clause {
+                    tracing::info!("REMOVE clause detected: {} items", remove_clause.items.len());
+                    // TODO: Implement REMOVE clause execution
+                    // This requires variable context to be populated from MATCH
+                    for item in &remove_clause.items {
+                        match item {
+                            nexus_core::executor::parser::RemoveItem::Property { target, property } => {
+                                tracing::info!("REMOVE {}.{}", target, property);
+                            }
+                            nexus_core::executor::parser::RemoveItem::Label { target, label } => {
+                                tracing::info!("REMOVE {}:{}", target, label);
                             }
                         }
                     }
