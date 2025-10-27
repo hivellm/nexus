@@ -328,16 +328,72 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                 // Handle SET clause
                 else if let nexus_core::executor::parser::Clause::Set(set_clause) = clause {
                     tracing::info!("SET clause detected: {} items", set_clause.items.len());
-                    // TODO: Implement SET clause execution
-                    // This requires variable context to be populated from MATCH/CREATE/MERGE
-                    // For now, just log that it was detected
                     for item in &set_clause.items {
                         match item {
                             nexus_core::executor::parser::SetItem::Property { target, property, value } => {
-                                tracing::info!("SET {}.{} = {:?}", target, property, value);
+                                // Look up nodes from variable context
+                                if let Some(node_ids) = variable_context.get(target) {
+                                    for node_id in node_ids {
+                                        // Load existing properties
+                                        let mut properties = match engine.storage.load_node_properties(*node_id) {
+                                            Ok(Some(props)) => {
+                                                props.as_object().unwrap().clone()
+                                            }
+                                            _ => serde_json::Map::new(),
+                                        };
+                                        
+                                        // Convert expression to JSON value
+                                        let json_value = expression_to_json_value(value);
+                                        
+                                        // Update or add the property
+                                        properties.insert(property.clone(), json_value);
+                                        
+                                        // Load existing labels
+                                        if let Ok(Some(node_record)) = engine.get_node(*node_id) {
+                                            let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                            
+                                            // Update the node with new properties
+                                            if let Err(e) = engine.update_node(*node_id, labels, serde_json::Value::Object(properties)) {
+                                                tracing::error!("Failed to update node {}: {}", node_id, e);
+                                            } else {
+                                                tracing::info!("SET {}.{} on node {}", target, property, node_id);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    tracing::warn!("Variable {} not found in context", target);
+                                }
                             }
                             nexus_core::executor::parser::SetItem::Label { target, label } => {
-                                tracing::info!("SET {}:{}", target, label);
+                                // Look up nodes from variable context
+                                if let Some(node_ids) = variable_context.get(target) {
+                                    for node_id in node_ids {
+                                        // Load existing node to get current labels
+                                        if let Ok(Some(node_record)) = engine.get_node(*node_id) {
+                                            let mut labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                            
+                                            // Add new label if not already present
+                                            if !labels.contains(&label) {
+                                                labels.push(label.clone());
+                                            }
+                                            
+                                            // Load properties
+                                            let properties = match engine.storage.load_node_properties(*node_id) {
+                                                Ok(Some(props)) => props,
+                                                _ => serde_json::Value::Object(serde_json::Map::new()),
+                                            };
+                                            
+                                            // Update the node with new labels
+                                            if let Err(e) = engine.update_node(*node_id, labels, properties) {
+                                                tracing::error!("Failed to update node {} with label {}: {}", node_id, label, e);
+                                            } else {
+                                                tracing::info!("SET {}:{} on node {}", target, label, node_id);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    tracing::warn!("Variable {} not found in context", target);
+                                }
                             }
                         }
                     }
@@ -345,24 +401,94 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                 // Handle DELETE clause
                 else if let nexus_core::executor::parser::Clause::Delete(delete_clause) = clause {
                     tracing::info!("DELETE clause detected: {} items, detach={}", delete_clause.items.len(), delete_clause.detach);
-                    // TODO: Implement DELETE clause execution
-                    // This requires variable context to be populated from MATCH
                     for item in &delete_clause.items {
-                        tracing::info!("DELETE {} (detach={})", item, delete_clause.detach);
+                        // Look up nodes from variable context
+                        if let Some(node_ids) = variable_context.get(item) {
+                            for node_id in node_ids {
+                                if delete_clause.detach {
+                                    // TODO: Implement DETACH DELETE
+                                    // For now, just delete without detaching relationships
+                                    tracing::warn!("DETACH DELETE not fully implemented yet");
+                                }
+                                
+                                // Delete the node
+                                match engine.delete_node(*node_id) {
+                                    Ok(deleted) => {
+                                        if deleted {
+                                            tracing::info!("DELETE node {}", node_id);
+                                        } else {
+                                            tracing::warn!("Node {} not found for deletion", node_id);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to delete node {}: {}", node_id, e);
+                                    }
+                                }
+                            }
+                        } else {
+                            tracing::warn!("Variable {} not found in context", item);
+                        }
                     }
                 }
                 // Handle REMOVE clause
                 else if let nexus_core::executor::parser::Clause::Remove(remove_clause) = clause {
                     tracing::info!("REMOVE clause detected: {} items", remove_clause.items.len());
-                    // TODO: Implement REMOVE clause execution
-                    // This requires variable context to be populated from MATCH
                     for item in &remove_clause.items {
                         match item {
                             nexus_core::executor::parser::RemoveItem::Property { target, property } => {
-                                tracing::info!("REMOVE {}.{}", target, property);
+                                // Look up nodes from variable context
+                                if let Some(node_ids) = variable_context.get(target) {
+                                    for node_id in node_ids {
+                                        // Load existing properties
+                                        if let Ok(Some(mut properties)) = engine.storage.load_node_properties(*node_id) {
+                                            let props = properties.as_object_mut().unwrap();
+                                            props.remove(property);
+                                            
+                                            // Load existing labels
+                                            if let Ok(Some(node_record)) = engine.get_node(*node_id) {
+                                                let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                                
+                                                // Update the node with removed property
+                                                if let Err(e) = engine.update_node(*node_id, labels, properties) {
+                                                    tracing::error!("Failed to remove property {} from node {}: {}", property, node_id, e);
+                                                } else {
+                                                    tracing::info!("REMOVE {}.{} from node {}", target, property, node_id);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    tracing::warn!("Variable {} not found in context", target);
+                                }
                             }
                             nexus_core::executor::parser::RemoveItem::Label { target, label } => {
-                                tracing::info!("REMOVE {}:{}", target, label);
+                                // Look up nodes from variable context
+                                if let Some(node_ids) = variable_context.get(target) {
+                                    for node_id in node_ids {
+                                        // Load existing node to get current labels
+                                        if let Ok(Some(node_record)) = engine.get_node(*node_id) {
+                                            let mut labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                            
+                                            // Remove the label if present
+                                            labels.retain(|l| l != label);
+                                            
+                                            // Load properties
+                                            let properties = match engine.storage.load_node_properties(*node_id) {
+                                                Ok(Some(props)) => props,
+                                                _ => serde_json::Value::Object(serde_json::Map::new()),
+                                            };
+                                            
+                                            // Update the node with removed label
+                                            if let Err(e) = engine.update_node(*node_id, labels, properties) {
+                                                tracing::error!("Failed to remove label {} from node {}: {}", label, node_id, e);
+                                            } else {
+                                                tracing::info!("REMOVE {}:{} from node {}", target, label, node_id);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    tracing::warn!("Variable {} not found in context", target);
+                                }
                             }
                         }
                     }
