@@ -309,6 +309,44 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                         if let Some(var_name) = &node_pattern.variable {
                                             variable_context.entry(var_name.clone()).or_insert_with(Vec::new).push(node_id);
                                         }
+                                        
+                                        // Execute ON CREATE clause if provided
+                                        if let Some(on_create_set) = &merge_clause.on_create {
+                                            if let Some(_var_name) = &node_pattern.variable {
+                                                tracing::info!("Executing ON CREATE clause for node {}", node_id);
+                                                // Execute SET operations from ON CREATE
+                                                for item in &on_create_set.items {
+                                                    match item {
+                                                        nexus_core::executor::parser::SetItem::Property { target: _, property, value } => {
+                                                            let mut properties = match engine.storage.load_node_properties(node_id) {
+                                                                Ok(Some(props)) => props.as_object().unwrap().clone(),
+                                                                _ => serde_json::Map::new(),
+                                                            };
+                                                            let json_value = expression_to_json_value(value);
+                                                            properties.insert(property.clone(), json_value);
+                                                            
+                                                            if let Ok(Some(node_record)) = engine.get_node(node_id) {
+                                                                let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                                                let _ = engine.update_node(node_id, labels, serde_json::Value::Object(properties));
+                                                            }
+                                                        }
+                                                        nexus_core::executor::parser::SetItem::Label { target: _, label } => {
+                                                            if let Ok(Some(node_record)) = engine.get_node(node_id) {
+                                                                let mut labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                                                if !labels.contains(&label) {
+                                                                    labels.push(label.clone());
+                                                                }
+                                                                let properties = match engine.storage.load_node_properties(node_id) {
+                                                                    Ok(Some(props)) => props,
+                                                                    _ => serde_json::Value::Object(serde_json::Map::new()),
+                                                                };
+                                                                let _ = engine.update_node(node_id, labels, properties);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                     Err(e) => {
                                         let execution_time = start_time.elapsed().as_millis() as u64;
@@ -319,6 +357,14 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                             execution_time_ms: execution_time,
                                             error: Some(format!("Failed to merge node: {}", e)),
                                         });
+                                    }
+                                }
+                            } else {
+                                // Node found, execute ON MATCH clause if provided
+                                if let Some(_on_match_set) = &merge_clause.on_match {
+                                    if let Some(_var_name) = &node_pattern.variable {
+                                        tracing::info!("ON MATCH clause detected but not yet implemented");
+                                        // TODO: Implement ON MATCH execution similar to ON CREATE
                                     }
                                 }
                             }

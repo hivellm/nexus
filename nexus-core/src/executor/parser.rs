@@ -65,6 +65,12 @@ pub struct CreateClause {
 pub struct MergeClause {
     /// Pattern to match or create
     pub pattern: Pattern,
+    /// SET operations to execute when creating a new node
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_create: Option<SetClause>,
+    /// SET operations to execute when matching an existing node
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_match: Option<SetClause>,
 }
 
 /// SET clause for updating properties and adding labels
@@ -535,7 +541,35 @@ impl CypherParser {
         self.skip_whitespace();
         let pattern = self.parse_pattern()?;
 
-        Ok(MergeClause { pattern })
+        // Check for ON CREATE clause
+        let on_create = if self.peek_keyword("ON") && self.peek_keyword_at(1, "CREATE") {
+            self.skip_whitespace();
+            self.parse_keyword()?; // "ON"
+            self.skip_whitespace();
+            self.parse_keyword()?; // "CREATE"
+            self.skip_whitespace();
+            Some(self.parse_set_clause()?)
+        } else {
+            None
+        };
+
+        // Check for ON MATCH clause
+        let on_match = if self.peek_keyword("ON") && self.peek_keyword_at(1, "MATCH") {
+            self.skip_whitespace();
+            self.parse_keyword()?; // "ON"
+            self.skip_whitespace();
+            self.parse_keyword()?; // "MATCH"
+            self.skip_whitespace();
+            Some(self.parse_set_clause()?)
+        } else {
+            None
+        };
+
+        Ok(MergeClause {
+            pattern,
+            on_create,
+            on_match,
+        })
     }
 
     /// Parse SET clause
@@ -1608,6 +1642,47 @@ impl CypherParser {
     }
 
     /// Check if next token is keyword
+    fn peek_keyword_at(&self, offset: usize, keyword: &str) -> bool {
+        let start = self.pos;
+        let mut pos = start;
+
+        // Skip first n keywords (offset)
+        for _ in 0..offset {
+            // Skip whitespace
+            while pos < self.input.len() {
+                let ch = self.input.chars().nth(pos).unwrap();
+                if ch.is_whitespace() {
+                    pos += 1;
+                } else {
+                    break;
+                }
+            }
+            // Skip word
+            while pos < self.input.len() {
+                let ch = self.input.chars().nth(pos).unwrap();
+                if ch.is_alphanumeric() || ch == '_' {
+                    pos += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Skip whitespace before the target keyword
+        while pos < self.input.len() {
+            let ch = self.input.chars().nth(pos).unwrap();
+            if ch.is_whitespace() {
+                pos += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Check if keyword matches
+        let remaining = &self.input[pos..];
+        remaining.to_uppercase().starts_with(&keyword.to_uppercase())
+    }
+
     fn peek_keyword(&self, keyword: &str) -> bool {
         let start = self.pos;
         let mut pos = start;
