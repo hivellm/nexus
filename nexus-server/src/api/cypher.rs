@@ -795,4 +795,70 @@ mod tests {
         let _response = execute_cypher(Json(request)).await;
         // Test passes if no panic occurs
     }
+
+    #[tokio::test]
+    async fn test_set_property() {
+        let request = CypherRequest {
+            query: "CREATE (n:Person {name: \"Alice\"}) SET n.age = 30".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+    }
+
+    #[tokio::test]
+    async fn test_set_label() {
+        let request = CypherRequest {
+            query: "CREATE (n:Person) SET n:Employee".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+    }
+
+    #[tokio::test]
+    async fn test_delete_node() {
+        let request = CypherRequest {
+            query: "CREATE (n:Person {name: \"Bob\"}) DELETE n".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+    }
+
+    #[tokio::test]
+    async fn test_detach_delete() {
+        let request = CypherRequest {
+            query: "CREATE (n:Person {name: \"Charlie\"}) DETACH DELETE n".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs (DETACH DELETE partially supported)
+    }
+
+    #[tokio::test]
+    async fn test_remove_property() {
+        let request = CypherRequest {
+            query: "CREATE (n:Person {name: \"David\", age: 25}) REMOVE n.age".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+    }
+
+    #[tokio::test]
+    async fn test_remove_label() {
+        let request = CypherRequest {
+            query: "CREATE (n:Person:Employee) REMOVE n:Employee".to_string(),
+            params: HashMap::new(),
+        };
+
+        let _response = execute_cypher(Json(request)).await;
+        // Test passes if no panic occurs
+    }
 }
