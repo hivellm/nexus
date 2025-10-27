@@ -52,15 +52,25 @@
 - Note: Parser supports SET clause with property updates and label additions. Execution logic pending (requires binding to variables from MATCH clause).
 
 ## 3. DELETE Clause
-- [ ] 3.1 Add DeleteClause to parser
-- [ ] 3.2 Implement node/relationship deletion
-- [ ] 3.3 Implement DETACH DELETE
+- [x] 3.1 Add DeleteClause to parser ✅ (v0.9.1)
+- [ ] 3.2 Implement node/relationship deletion ⏳ (requires execution context with variables)
+- [ ] 3.3 Implement DETACH DELETE ⏳ (requires execution context)
 - [ ] 3.4 Add DELETE tests
 
+**Implemented in**:
+- Commit: cbd3467 (DELETE parser)
+- Files: `nexus-core/src/executor/parser.rs`
+- Note: Parser supports DELETE and DETACH DELETE syntax. Execution logic pending (requires binding to variables from MATCH clause).
+
 ## 4. REMOVE Clause
-- [ ] 4.1 Add RemoveClause to parser
-- [ ] 4.2 Implement property/label removal
+- [x] 4.1 Add RemoveClause to parser ✅ (v0.9.1)
+- [ ] 4.2 Implement property/label removal ⏳ (requires execution context with variables)
 - [ ] 4.3 Add REMOVE tests
+
+**Implemented in**:
+- Commit: cbd3467 (REMOVE parser)
+- Files: `nexus-core/src/executor/parser.rs`
+- Note: Parser supports REMOVE for properties and labels. Execution logic pending (requires binding to variables from MATCH clause).
 
 ## 5. Quality
 - [ ] 5.1 95%+ coverage
@@ -69,9 +79,15 @@
 
 ---
 
-**Progress**: 10/23 tasks (43% complete)  
-**Next Priority**: 
-1. ✅ MERGE match-or-create semantics completed (Task 1.2, 1.4)
-2. ✅ SET clause parser completed (Task 2.1)
-3. Implement SET clause execution for property updates (Task 2.2, 2.3) - requires execution context
-4. Then proceed to DELETE clause
+**Progress**: 12/23 tasks (52% complete)  
+**Completed**:
+1. ✅ CREATE clause (Tasks 0.1-0.6)
+2. ✅ MERGE clause parser and execution (Tasks 1.1, 1.2, 1.4)
+3. ✅ SET clause parser (Task 2.1)
+4. ✅ DELETE clause parser (Task 3.1)
+5. ✅ REMOVE clause parser (Task 4.1)
+
+**Next Priority**:
+1. Implement execution context for variable binding from MATCH clauses
+2. Implement SET, DELETE, and REMOVE execution logic (Tasks 2.2-2.3, 3.2-3.3, 4.2)
+3. Add comprehensive tests for all write operations
