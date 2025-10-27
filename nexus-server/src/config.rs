@@ -118,10 +118,22 @@ mod tests {
         assert_eq!(config.addr.port(), 15474);
         assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         assert_eq!(config.data_dir, "./data");
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
     }
 
     #[test]
     fn test_config_from_env_custom() {
+        // Clean up any existing environment variables first
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
+
         // Set custom environment variables
         unsafe {
             std::env::set_var("NEXUS_ADDR", "192.168.1.50:3000");
@@ -142,6 +154,12 @@ mod tests {
 
     #[test]
     fn test_config_from_env_partial() {
+        // Clean up any existing environment variables first
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
+
         // Set only one environment variable
         unsafe {
             std::env::set_var("NEXUS_DATA_DIR", "/custom/data");
@@ -154,6 +172,7 @@ mod tests {
 
         // Clean up
         unsafe {
+            std::env::remove_var("NEXUS_ADDR");
             std::env::remove_var("NEXUS_DATA_DIR");
         }
     }
