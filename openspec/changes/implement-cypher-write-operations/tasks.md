@@ -4,12 +4,13 @@
 
 **Recent Implementation (2025-10-27)**:
 - ✅ CREATE clause parsing and execution (v0.9.0)
-- ✅ MergeClause added to parser AST
-- ✅ Engine integration for node persistence
+- ✅ MergeClause added to parser AST (v0.9.0)
+- ✅ Engine integration for node persistence (v0.9.0)
 - ✅ MATCH queries now return results (v0.9.1)
 - ✅ Engine-Executor data synchronization (v0.9.1)
 - ✅ label_index auto-update in create_node (v0.9.1)
-- ⏳ MERGE semantics implementation pending
+- ✅ MERGE clause execution (v0.9.1 - simplified, creates without checking existing)
+- ⏳ MERGE match-or-create semantics pending (Task 1.2)
 - ⏳ SET, DELETE, REMOVE clauses pending
 
 ## 0. CREATE Clause (COMPLETED ✅)
@@ -30,9 +31,14 @@
 ## 1. MERGE Clause
 
 - [x] 1.1 Add MergeClause to parser AST ✅ (v0.9.0)
-- [ ] 1.2 Implement match-or-create semantics
+- [ ] 1.2 Implement match-or-create semantics ⏳ (simplified version done, TODO: add property matching)
 - [ ] 1.3 Add ON CREATE/ON MATCH support
-- [ ] 1.4 Add MERGE tests
+- [ ] 1.4 Add MERGE tests ⚠️ (basic execution works, need dedicated MERGE tests)
+
+**Implemented in**:
+- Commit: v0.9.1 (MERGE execution)
+- Files: `nexus-server/src/api/cypher.rs` (lines 182-244)
+- Note: Currently MERGE just creates nodes without checking if they exist. Full match-or-create semantics (Task 1.2) still pending.
 
 ## 2. SET Clause
 - [ ] 2.1 Add SetClause to parser
@@ -58,5 +64,8 @@
 
 ---
 
-**Progress**: 6/23 tasks (26% complete)  
-**Next Priority**: Implement MERGE match-or-create semantics (Task 1.2)
+**Progress**: 7/23 tasks (30% complete)  
+**Next Priority**: 
+1. Implement MERGE match-or-create semantics (Task 1.2)
+2. Add MERGE tests (Task 1.4)
+3. Then proceed to SET clause implementation
