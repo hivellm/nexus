@@ -28,6 +28,10 @@ pub enum Clause {
     Merge(MergeClause),
     /// SET clause for updating properties and labels
     Set(SetClause),
+    /// DELETE clause for deleting nodes and relationships
+    Delete(DeleteClause),
+    /// REMOVE clause for removing properties and labels
+    Remove(RemoveClause),
     /// WHERE clause for filtering
     Where(WhereClause),
     /// RETURN clause for projection
@@ -87,6 +91,41 @@ pub enum SetItem {
         /// Target variable
         target: String,
         /// Label to add
+        label: String,
+    },
+}
+
+/// DELETE clause for deleting nodes and relationships
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteClause {
+    /// Items to delete (variables)
+    pub items: Vec<String>,
+    /// Whether to use DETACH DELETE (remove relationships before deleting)
+    pub detach: bool,
+}
+
+/// REMOVE clause for removing properties and labels
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveClause {
+    /// Items to remove (property names or labels)
+    pub items: Vec<RemoveItem>,
+}
+
+/// REMOVE item (property or label removal)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RemoveItem {
+    /// Remove a property
+    Property {
+        /// Target variable
+        target: String,
+        /// Property key to remove
+        property: String,
+    },
+    /// Remove a label
+    Label {
+        /// Target variable
+        target: String,
+        /// Label to remove
         label: String,
     },
 }
@@ -439,6 +478,14 @@ impl CypherParser {
                 let set_clause = self.parse_set_clause()?;
                 Ok(Clause::Set(set_clause))
             }
+            "DELETE" => {
+                let delete_clause = self.parse_delete_clause()?;
+                Ok(Clause::Delete(delete_clause))
+            }
+            "REMOVE" => {
+                let remove_clause = self.parse_remove_clause()?;
+                Ok(Clause::Remove(remove_clause))
+            }
             "WHERE" => {
                 let where_clause = self.parse_where_clause()?;
                 Ok(Clause::Where(where_clause))
@@ -536,6 +583,77 @@ impl CypherParser {
         }
 
         Ok(SetClause { items })
+    }
+
+    /// Parse DELETE clause
+    fn parse_delete_clause(&mut self) -> Result<DeleteClause> {
+        self.skip_whitespace();
+        
+        // Check for DETACH keyword
+        let detach = if self.peek_keyword("DETACH") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+        
+        // Parse list of variables to delete
+        let mut items = Vec::new();
+        
+        loop {
+            let variable = self.parse_identifier()?;
+            items.push(variable);
+            
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            } else {
+                break;
+            }
+        }
+        
+        Ok(DeleteClause { items, detach })
+    }
+
+    /// Parse REMOVE clause
+    fn parse_remove_clause(&mut self) -> Result<RemoveClause> {
+        self.skip_whitespace();
+        let mut items = Vec::new();
+
+        loop {
+            // Parse identifier (variable name)
+            let target = self.parse_identifier()?;
+            self.skip_whitespace();
+
+            // Check if we have a property removal (node.property)
+            if self.peek_char() == Some('.') {
+                self.consume_char();
+                let property = self.parse_identifier()?;
+                items.push(RemoveItem::Property { target, property });
+            } else if self.peek_char() == Some(':') {
+                // Label removal (node:Label)
+                self.consume_char();
+                let label = self.parse_identifier()?;
+                items.push(RemoveItem::Label { target, label });
+            } else {
+                return Err(Error::storage(
+                    "REMOVE clause: expected property or label removal".to_string(),
+                ));
+            }
+
+            // Check for more items
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            } else {
+                break;
+            }
+        }
+
+        Ok(RemoveClause { items })
     }
 
     /// Parse pattern
@@ -1416,6 +1534,8 @@ impl CypherParser {
             || self.peek_keyword("CREATE")
             || self.peek_keyword("MERGE")
             || self.peek_keyword("SET")
+            || self.peek_keyword("DELETE")
+            || self.peek_keyword("REMOVE")
             || self.peek_keyword("WHERE")
             || self.peek_keyword("RETURN")
             || self.peek_keyword("ORDER")
