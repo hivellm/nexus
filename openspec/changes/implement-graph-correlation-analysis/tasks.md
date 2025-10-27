@@ -92,11 +92,14 @@
 - [ ] 6.1.14 Implement MCP tool caching strategies
 - [ ] 6.1.15 Add MCP tool usage metrics
 
-**Recent Fixes (v0.9.0)**:
-- ✅ graph_correlation_analyze now accepts partial graphs with auto-normalization
-- ✅ create_node tool returns node_id correctly via Engine integration
-- ✅ All MCP tools now use Engine for persistence
-- Commits: a2857da, 417be25
+**Recent Fixes (v0.9.0 & v0.9.1)**:
+- ✅ graph_correlation_analyze now accepts partial graphs with auto-normalization (v0.9.0)
+- ✅ create_node tool returns node_id correctly via Engine integration (v0.9.0)
+- ✅ All MCP tools now use Engine for persistence (v0.9.0)
+- ✅ Engine-Executor data synchronization fixed (v0.9.1)
+- ✅ MATCH queries now return results correctly (v0.9.1)
+- ✅ label_index automatically updated in create_node (v0.9.1)
+- Commits: a2857da, 417be25, ede99eb
 
 ### 6.2 UMICP Protocol Integration
 

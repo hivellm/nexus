@@ -1,11 +1,14 @@
 # Implementation Tasks - Cypher Write Operations
 
-**Status**: ⚠️ PARTIALLY STARTED (v0.9.0)
+**Status**: ⚠️ PARTIALLY STARTED (v0.9.1)
 
-**Recent Implementation (2025-10-26)**:
+**Recent Implementation (2025-10-27)**:
 - ✅ CREATE clause parsing and execution (v0.9.0)
 - ✅ MergeClause added to parser AST
 - ✅ Engine integration for node persistence
+- ✅ MATCH queries now return results (v0.9.1)
+- ✅ Engine-Executor data synchronization (v0.9.1)
+- ✅ label_index auto-update in create_node (v0.9.1)
 - ⏳ MERGE semantics implementation pending
 - ⏳ SET, DELETE, REMOVE clauses pending
 
@@ -21,7 +24,8 @@
 **Implemented in**:
 - Commit: 51bbb32 (parser fixes)
 - Commit: 417be25 (CREATE persistence)
-- Files: `nexus-core/src/executor/parser.rs`, `nexus-server/src/api/cypher.rs`
+- Commit: ede99eb (data unification v0.9.1)
+- Files: `nexus-core/src/executor/parser.rs`, `nexus-core/src/lib.rs`, `nexus-server/src/api/cypher.rs`, `nexus-server/src/api/data.rs`
 
 ## 1. MERGE Clause
 
