@@ -136,30 +136,7 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
         .to_string(),
     );
 
-    source_data.add_function(
-        "main".to_string(),
-        "fn main()".to_string(),
-        "src/main.rs".to_string(),
-        1,
-    );
-    source_data.add_call(
-        "main".to_string(),
-        "Engine::new".to_string(),
-        "src/main.rs".to_string(),
-        4,
-    );
-    source_data.add_call(
-        "main".to_string(),
-        "Server::new".to_string(),
-        "src/main.rs".to_string(),
-        5,
-    );
-    source_data.add_call(
-        "main".to_string(),
-        "server.run".to_string(),
-        "src/main.rs".to_string(),
-        6,
-    );
+    source_data.add_functions("src/main.rs".to_string(), vec!["main".to_string()]);
 
     // Simulate engine.rs
     source_data.add_file(
@@ -183,30 +160,7 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
         .to_string(),
     );
 
-    source_data.add_function(
-        "Engine::new".to_string(),
-        "pub fn new() -> Self".to_string(),
-        "src/engine.rs".to_string(),
-        6,
-    );
-    source_data.add_function(
-        "Engine::execute".to_string(),
-        "pub fn execute(&self, query: &str) -> Result<QueryResult>".to_string(),
-        "src/engine.rs".to_string(),
-        11,
-    );
-    source_data.add_call(
-        "Engine::new".to_string(),
-        "Executor::init".to_string(),
-        "src/engine.rs".to_string(),
-        7,
-    );
-    source_data.add_call(
-        "Engine::execute".to_string(),
-        "executor.run".to_string(),
-        "src/engine.rs".to_string(),
-        12,
-    );
+    source_data.add_functions("src/engine.rs".to_string(), vec!["Engine::new".to_string(), "Engine::execute".to_string()]);
 
     // Add imports
     source_data.add_import("main.rs".to_string(), "nexus_core::Engine".to_string());
@@ -221,21 +175,7 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
     for i in 1..max_files.min(20) {
         let filename = format!("src/module{}.rs", i);
         source_data.add_file(filename.clone(), format!("// Module {}", i));
-        source_data.add_function(
-            format!("module{}::process", i),
-            format!("pub fn process{}()", i),
-            filename.clone(),
-            1,
-        );
-
-        if i > 1 {
-            source_data.add_call(
-                format!("module{}::process", i),
-                format!("module{}::process", i - 1),
-                filename.clone(),
-                2,
-            );
-        }
+        source_data.add_functions(filename.clone(), vec![format!("module{}::process", i)]);
     }
 }
 

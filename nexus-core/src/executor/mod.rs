@@ -1790,10 +1790,10 @@ mod tests {
     fn test_parse_invalid_query() {
         let (executor, _dir) = create_test_executor();
 
-        let result = executor.parse_and_plan("CREATE (n:Person)");
-        // CREATE is not a supported clause, so parser should return empty query
-        // or planner should fail because there's no MATCH clause
-        assert!(result.is_err() || result.unwrap().is_empty());
+        // Test with actually invalid query syntax
+        let result = executor.parse_and_plan("INVALID SYNTAX!!!");
+        // Invalid syntax should return an error
+        assert!(result.is_err());
     }
 
     #[test]

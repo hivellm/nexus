@@ -365,15 +365,21 @@ impl PerformanceRecommendations {
             // Apply rules
             for rule in &self.recommendation_rules {
                 if rule.matches(&modified_recommendation) {
-                    if rule.action == RuleAction::Exclude {
-                        should_include = false;
-                        break;
-                    } else if rule.action == RuleAction::Modify {
-                        // Apply modifications
-                        modified_recommendation =
-                            rule.modify_recommendation(modified_recommendation);
-                        should_include = false;
-                        break;
+                    match rule.action {
+                        RuleAction::Include => {
+                            // Explicitly include this recommendation
+                            should_include = true;
+                        }
+                        RuleAction::Exclude => {
+                            should_include = false;
+                            break;
+                        }
+                        RuleAction::Modify => {
+                            // Apply modifications but don't exclude
+                            if let Some(ref modifier) = rule.modifier {
+                                modified_recommendation = modifier(modified_recommendation);
+                            }
+                        }
                     }
                 }
             }

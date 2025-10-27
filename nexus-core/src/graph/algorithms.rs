@@ -417,13 +417,22 @@ impl Graph {
     }
 
     /// DFS helper for connected components
+    /// For directed graphs, treat edges as bidirectional (undirected)
     fn dfs_component(&self, node: u64, visited: &mut HashSet<u64>, component_nodes: &mut Vec<u64>) {
         visited.insert(node);
         component_nodes.push(node);
 
+        // Follow outgoing edges
         for &(neighbor, _) in self.get_neighbors(node) {
             if !visited.contains(&neighbor) {
                 self.dfs_component(neighbor, visited, component_nodes);
+            }
+        }
+
+        // Also follow incoming edges (treat as undirected graph)
+        for (from_node, neighbors) in &self.adjacency {
+            if neighbors.iter().any(|(to, _)| *to == node) && !visited.contains(from_node) {
+                self.dfs_component(*from_node, visited, component_nodes);
             }
         }
     }
