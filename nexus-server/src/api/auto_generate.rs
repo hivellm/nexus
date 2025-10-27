@@ -160,7 +160,10 @@ fn add_sample_rust_code_structure(source_data: &mut GraphSourceData, max_files: 
         .to_string(),
     );
 
-    source_data.add_functions("src/engine.rs".to_string(), vec!["Engine::new".to_string(), "Engine::execute".to_string()]);
+    source_data.add_functions(
+        "src/engine.rs".to_string(),
+        vec!["Engine::new".to_string(), "Engine::execute".to_string()],
+    );
 
     // Add imports
     source_data.add_import("main.rs".to_string(), "nexus_core::Engine".to_string());
