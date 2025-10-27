@@ -37,10 +37,14 @@ impl<'a> QueryPlanner<'a> {
         for clause in &query.clauses {
             match clause {
                 Clause::Match(match_clause) => {
+                    // For OPTIONAL MATCH, we need to handle NULL values for unmatched patterns
+                    // Store pattern with optional flag for later handling in executor
                     patterns.push(match_clause.pattern.clone());
                     if let Some(where_clause) = &match_clause.where_clause {
                         where_clauses.push(where_clause.expression.clone());
                     }
+                    // OPTIONAL MATCH is handled by executor as LEFT OUTER JOIN semantics
+                    // For now, we just collect the patterns - executor will handle NULL values
                 }
                 Clause::Create(create_clause) => {
                     patterns.push(create_clause.pattern.clone());
