@@ -36,6 +36,8 @@ pub enum Clause {
     With(WithClause),
     /// UNWIND clause for list expansion
     Unwind(UnwindClause),
+    /// UNION clause for combining multiple query results
+    Union(UnionClause),
     /// WHERE clause for filtering
     Where(WhereClause),
     /// RETURN clause for projection
@@ -243,6 +245,22 @@ pub struct UnwindClause {
     pub expression: Expression,
     /// Variable to bind each item to
     pub variable: String,
+}
+
+/// UNION clause for combining query results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnionClause {
+    /// Union type (distinct or all)
+    pub union_type: UnionType,
+}
+
+/// Union type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnionType {
+    /// UNION - distinct results only
+    Distinct,
+    /// UNION ALL - keep duplicates
+    All,
 }
 
 /// RETURN clause for projection
@@ -535,6 +553,10 @@ impl CypherParser {
             "UNWIND" => {
                 let unwind_clause = self.parse_unwind_clause()?;
                 Ok(Clause::Unwind(unwind_clause))
+            }
+            "UNION" => {
+                let union_clause = self.parse_union_clause()?;
+                Ok(Clause::Union(union_clause))
             }
             "WHERE" => {
                 let where_clause = self.parse_where_clause()?;
@@ -1191,6 +1213,21 @@ impl CypherParser {
         })
     }
 
+    /// Parse UNION clause
+    fn parse_union_clause(&mut self) -> Result<UnionClause> {
+        self.skip_whitespace();
+
+        // Check for ALL keyword
+        let union_type = if self.peek_keyword("ALL") {
+            self.parse_keyword()?;
+            UnionType::All
+        } else {
+            UnionType::Distinct
+        };
+
+        Ok(UnionClause { union_type })
+    }
+
     /// Parse expression
     /// Parse expression (simplified for MVP)
     pub fn parse_expression(&mut self) -> Result<Expression> {
@@ -1683,6 +1720,7 @@ impl CypherParser {
             || self.peek_keyword("REMOVE")
             || self.peek_keyword("WITH")
             || self.peek_keyword("UNWIND")
+            || self.peek_keyword("UNION")
             || self.peek_keyword("WHERE")
             || self.peek_keyword("RETURN")
             || self.peek_keyword("ORDER")
@@ -3232,6 +3270,57 @@ mod tests {
         assert!(parser.is_clause_boundary());
 
         let parser = CypherParser::new("  UNWIND [1, 2, 3] AS x".to_string());
+        assert!(parser.is_clause_boundary());
+    }
+
+    #[test]
+    fn test_parse_union_clause() {
+        let mut parser = CypherParser::new(
+            "MATCH (n:Person) RETURN n UNION MATCH (m:Company) RETURN m".to_string(),
+        );
+        let query = parser.parse().unwrap();
+
+        // UNION splits into two separate queries
+        assert_eq!(query.clauses.len(), 5); // MATCH, RETURN, UNION, MATCH, RETURN
+
+        match &query.clauses[2] {
+            Clause::Union(union_clause) => {
+                assert_eq!(union_clause.union_type, UnionType::Distinct);
+            }
+            _ => panic!("Expected UNION clause"),
+        }
+    }
+
+    #[test]
+    fn test_parse_union_all_clause() {
+        let mut parser = CypherParser::new(
+            "MATCH (n:Person) RETURN n UNION ALL MATCH (m:Company) RETURN m".to_string(),
+        );
+        let query = parser.parse().unwrap();
+
+        // UNION ALL splits into two separate queries
+        assert_eq!(query.clauses.len(), 5); // MATCH, RETURN, UNION ALL, MATCH, RETURN
+
+        // Check that UNION ALL clause is parsed
+        let has_union = query.clauses.iter().any(|c| matches!(c, Clause::Union(_)));
+        assert!(has_union, "Expected UNION ALL clause in query");
+
+        // Find the UNION clause and check its type
+        for clause in &query.clauses {
+            if let Clause::Union(union_clause) = clause {
+                assert_eq!(union_clause.union_type, UnionType::All);
+                return;
+            }
+        }
+        panic!("Expected UNION ALL clause");
+    }
+
+    #[test]
+    fn test_union_clause_boundary() {
+        let parser = CypherParser::new("UNION MATCH (n) RETURN n".to_string());
+        assert!(parser.is_clause_boundary());
+
+        let parser = CypherParser::new("  UNION ALL MATCH (n) RETURN n".to_string());
         assert!(parser.is_clause_boundary());
     }
 }
