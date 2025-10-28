@@ -68,7 +68,7 @@ impl<'a> QueryPlanner<'a> {
                         where_clauses.push(where_clause.expression.clone());
                     }
                 }
-                Clause::Unwind(unwind_clause) => {
+                Clause::Unwind(_unwind_clause) => {
                     // UNWIND expands a list into rows
                     // For now, we'll just track this - executor will handle list expansion
                     // UNWIND is typically used early in query pipelines
