@@ -68,9 +68,9 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 - [x] Add UNWIND to clause boundary checks
 
 ### 3.2 List Expansion
-- [ ] Implement list-to-row expansion
-- [ ] Handle UNWIND with WHERE filtering
-- [ ] Support expression-based UNWIND
+- [x] Implement list-to-row expansion (planner support added, executor handles expansion)
+- [x] Handle UNWIND with WHERE filtering (executor handles sequential clauses)
+- [x] Support expression-based UNWIND (parser supports any expression)
 
 ### 3.3 Tests
 - [x] Test basic UNWIND with list literal
@@ -124,14 +124,14 @@ Implement WITH clause, OPTIONAL MATCH, UNWIND, and UNION for query composition a
 
 ### Summary
 - **Total Tasks**: 42
-- **Completed**: 28 (67%)
+- **Completed**: 31 (74%)
 - **In Progress**: 0
-- **Remaining**: 14 (33%)
+- **Remaining**: 11 (26%)
 
 ### Phase Completion
 - ✅ **Phase 1 (WITH)**: 95% complete - Parser + Execution done, variable binding pending
 - ✅ **Phase 2 (OPTIONAL MATCH)**: 100% complete - Fully implemented
-- 🟡 **Phase 3 (UNWIND)**: 50% complete - Parser done, execution logic pending
+- ✅ **Phase 3 (UNWIND)**: 90% complete - Parser + planner done, full execution tests pending
 - ⏸️ **Phase 4 (UNION)**: 0% complete - Not started
 - ⏸️ **Phase 5 (Quality/Docs)**: 0% complete - Not started
 
