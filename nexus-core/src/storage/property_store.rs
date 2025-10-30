@@ -366,6 +366,14 @@ impl PropertyStore {
 
         Ok(())
     }
+
+    /// Flush all pending writes to disk
+    ///
+    /// Forces the memory-mapped property file to sync with disk.
+    pub fn flush(&mut self) -> Result<()> {
+        self.mmap.flush().map_err(|e| Error::storage(format!("Failed to flush properties: {}", e)))?;
+        Ok(())
+    }
 }
 
 impl EntityType {

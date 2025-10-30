@@ -2,7 +2,8 @@ use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement,
     RelationshipDirection, ReturnItem,
 };
-use super::{Direction, Operator};
+use super::{Aggregation, Direction, Operator, ProjectionItem};
+use std::collections::HashSet;
 use crate::catalog::Catalog;
 use crate::index::{KnnIndex, LabelIndex};
 use crate::{Error, Result};
@@ -121,6 +122,14 @@ impl<'a> QueryPlanner<'a> {
                             label_id,
                             variable: variable.clone(),
                         });
+                    } else {
+                        // No label specified - need to scan all nodes
+                        // For now, use label_id 0 as a fallback (this might need lower-level storage access)
+                        // TODO: Add a proper AllNodesScan operator for better performance
+                        operators.push(Operator::NodeByLabel {
+                            label_id: 0, // Temporary: scan all (will need proper implementation)
+                            variable: variable.clone(),
+                        });
                     }
                 }
             }
@@ -136,21 +145,183 @@ impl<'a> QueryPlanner<'a> {
             });
         }
 
-        // Add projection operator for RETURN clause
+        // Add projection or aggregation operator for RETURN clause
         if !return_items.is_empty() {
-            let columns: Vec<String> = return_items
-                .iter()
-                .map(|item| -> String {
-                    if let Some(alias) = &item.alias {
-                        alias.clone()
-                    } else {
+            // Check if any return items contain aggregate functions
+            let mut has_aggregation = false;
+            let mut aggregations = Vec::new();
+            let mut group_by_columns = Vec::new();
+
+        let mut non_aggregate_aliases: Vec<String> = Vec::new();
+
+        for item in return_items {
+                match &item.expression {
+                    Expression::FunctionCall { name, args } => {
+                        let func_name = name.to_lowercase();
+                        match func_name.as_str() {
+                            "count" => {
+                                has_aggregation = true;
+                                let column = if args.is_empty() {
+                                    None // COUNT(*)
+                                } else if let Some(Expression::Variable(var)) = args.first() {
+                                    Some(var.clone())
+                                } else {
+                                    None
+                                };
+                                aggregations.push(Aggregation::Count {
+                                    column,
+                                    alias: item.alias.clone().unwrap_or_else(|| "count".to_string()),
+                                });
+                            }
+                            "sum" => {
+                                has_aggregation = true;
+                                if let Some(Expression::Variable(var)) = args.first() {
+                                    aggregations.push(Aggregation::Sum {
+                                        column: var.clone(),
+                                        alias: item.alias.clone().unwrap_or_else(|| "sum".to_string()),
+                                    });
+                                }
+                            }
+                            "avg" => {
+                                has_aggregation = true;
+                                if let Some(Expression::Variable(var)) = args.first() {
+                                    aggregations.push(Aggregation::Avg {
+                                        column: var.clone(),
+                                        alias: item.alias.clone().unwrap_or_else(|| "avg".to_string()),
+                                    });
+                                }
+                            }
+                            "min" => {
+                                has_aggregation = true;
+                                if let Some(Expression::Variable(var)) = args.first() {
+                                    aggregations.push(Aggregation::Min {
+                                        column: var.clone(),
+                                        alias: item.alias.clone().unwrap_or_else(|| "min".to_string()),
+                                    });
+                                }
+                            }
+                            "max" => {
+                                has_aggregation = true;
+                                if let Some(Expression::Variable(var)) = args.first() {
+                                    aggregations.push(Aggregation::Max {
+                                        column: var.clone(),
+                                        alias: item.alias.clone().unwrap_or_else(|| "max".to_string()),
+                                    });
+                                }
+                            }
+                            _ => {
+                                // Not an aggregate function, treat as regular column for GROUP BY
+                            let alias = item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            });
+                            non_aggregate_aliases.push(alias);
+                            }
+                        }
+                    }
+                    _ => {
+                        // Non-aggregate expression, add to GROUP BY if there are aggregations
+                    let alias = item.alias.clone().unwrap_or_else(|| {
                         self.expression_to_string(&item.expression)
                             .unwrap_or_default()
+                    });
+                    non_aggregate_aliases.push(alias);
                     }
-                })
-                .collect();
+                }
+            }
 
-            operators.push(Operator::Project { columns });
+            if has_aggregation {
+            if group_by_columns.is_empty() {
+                group_by_columns = non_aggregate_aliases.clone();
+            } else {
+                for alias in &non_aggregate_aliases {
+                    if !group_by_columns.contains(alias) {
+                        group_by_columns.push(alias.clone());
+                    }
+                }
+            }
+
+                let mut projection_items: Vec<ProjectionItem> = Vec::new();
+                let mut required_columns: HashSet<String> = HashSet::new();
+
+                for item in return_items {
+                    match &item.expression {
+                        Expression::FunctionCall { name, args } => {
+                            let func_name = name.to_lowercase();
+                            match func_name.as_str() {
+                                "count" | "sum" | "avg" | "min" | "max" => {
+                                    if let Some(Expression::Variable(var)) = args.first() {
+                                        required_columns.insert(var.clone());
+                                    }
+                                }
+                                _ => {
+                                    let alias = item
+                                        .alias
+                                        .clone()
+                                        .unwrap_or_else(|| {
+                                            self.expression_to_string(&item.expression)
+                                                .unwrap_or_default()
+                                        });
+                                    projection_items.push(ProjectionItem {
+                                        alias,
+                                        expression: item.expression.clone(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            let alias = item
+                                .alias
+                                .clone()
+                                .unwrap_or_else(|| {
+                                    self.expression_to_string(&item.expression)
+                                        .unwrap_or_default()
+                                });
+                            projection_items.push(ProjectionItem {
+                                alias,
+                                expression: item.expression.clone(),
+                            });
+                        }
+                    }
+                }
+
+                for column in required_columns {
+                    if !projection_items.iter().any(|item| item.alias == column) {
+                        projection_items.push(ProjectionItem {
+                            alias: column.clone(),
+                            expression: Expression::Variable(column),
+                        });
+                    }
+                }
+
+                if !projection_items.is_empty() {
+                    operators.push(Operator::Project { items: projection_items });
+                }
+
+                operators.push(Operator::Aggregate {
+                    group_by: group_by_columns,
+                    aggregations,
+                });
+            } else {
+                // Regular projection
+                let projection_items: Vec<ProjectionItem> = return_items
+                    .iter()
+                    .map(|item| ProjectionItem {
+                        alias: item
+                            .alias
+                            .clone()
+                            .unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            }),
+                        expression: item.expression.clone(),
+                    })
+                    .collect();
+
+                operators.push(Operator::Project {
+                    items: projection_items,
+                });
+            }
         }
 
         // Add limit operator if specified
@@ -181,21 +352,57 @@ impl<'a> QueryPlanner<'a> {
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         for pattern in patterns {
-            for element in &pattern.elements {
-                if let PatternElement::Relationship(rel) = element {
-                    let direction = match rel.direction {
-                        RelationshipDirection::Outgoing => Direction::Outgoing,
-                        RelationshipDirection::Incoming => Direction::Incoming,
-                        RelationshipDirection::Both => Direction::Both,
-                    };
+            // Track previous node variable for relationship expansion
+            let mut prev_node_var: Option<String> = None;
+            
+            for (idx, element) in pattern.elements.iter().enumerate() {
+                match element {
+                    PatternElement::Node(node_pattern) => {
+                        // Update previous node variable
+                        if let Some(var) = &node_pattern.variable {
+                            prev_node_var = Some(var.clone());
+                        }
+                    }
+                    PatternElement::Relationship(rel) => {
+                        let direction = match rel.direction {
+                            RelationshipDirection::Outgoing => Direction::Outgoing,
+                            RelationshipDirection::Incoming => Direction::Incoming,
+                            RelationshipDirection::Both => Direction::Both,
+                        };
 
-                    operators.push(Operator::Expand {
-                        type_id: Some(0),           // MVP: use default type
-                        source_var: "".to_string(), // MVP: will be filled by executor
-                        target_var: "".to_string(), // MVP: will be filled by executor
-                        rel_var: rel.variable.clone().unwrap_or_default(),
-                        direction,
-                    });
+                        // Determine source and target variables
+                        let source_var = prev_node_var.clone().unwrap_or_else(|| "".to_string());
+                        // Target will be the next node in the pattern
+                        let target_var = if idx + 1 < pattern.elements.len() {
+                            if let PatternElement::Node(next_node) = &pattern.elements[idx + 1] {
+                                next_node.variable.clone().unwrap_or_else(|| "".to_string())
+                            } else {
+                                "".to_string()
+                            }
+                        } else {
+                            "".to_string()
+                        };
+
+                        // Get type_id from relationship types
+                        let type_id = if let Some(first_type) = rel.types.first() {
+                            // Try to get type_id from catalog
+                            match self.catalog.get_type_id(first_type)? {
+                                Some(id) => Some(id),
+                                None => None, // Type doesn't exist yet - will match no relationships
+                            }
+                        } else {
+                            // No type specified - match all types
+                            None
+                        };
+
+                        operators.push(Operator::Expand {
+                            type_id,
+                            source_var,
+                            target_var,
+                            rel_var: rel.variable.clone().unwrap_or_default(),
+                            direction,
+                        });
+                    }
                 }
             }
         }
@@ -372,9 +579,9 @@ mod tests {
         }
 
         match &operators[1] {
-            Operator::Project { columns } => {
-                assert_eq!(columns.len(), 1);
-                assert_eq!(columns[0], "n");
+            Operator::Project { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].alias, "n");
             }
             _ => panic!("Expected Project operator"),
         }
@@ -396,7 +603,10 @@ mod tests {
                 predicate: "n.age > 18".to_string(),
             },
             Operator::Project {
-                columns: vec!["n".to_string()],
+                items: vec![ProjectionItem {
+                    alias: "n".to_string(),
+                    expression: Expression::Variable("n".to_string()),
+                }],
             },
         ];
 
@@ -464,9 +674,9 @@ mod tests {
         }
 
         match &operators[2] {
-            Operator::Project { columns } => {
-                assert_eq!(columns.len(), 1);
-                assert_eq!(columns[0], "n");
+            Operator::Project { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].alias, "n");
             }
             _ => panic!("Expected Project operator"),
         }
@@ -707,7 +917,10 @@ mod tests {
                 direction: Direction::Outgoing,
             },
             Operator::Project {
-                columns: vec!["n".to_string()],
+                items: vec![ProjectionItem {
+                    alias: "n".to_string(),
+                    expression: Expression::Variable("n".to_string()),
+                }],
             },
             Operator::Limit { count: 10 },
             Operator::Sort {
@@ -814,11 +1027,12 @@ mod tests {
         assert_eq!(operators.len(), 2);
 
         match &operators[1] {
-            Operator::Project { columns } => {
-                assert_eq!(columns.len(), 1);
-                assert_eq!(columns[0], "person");
+            Operator::Project { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].alias, "person");
             }
             _ => panic!("Expected Project operator with alias"),
         }
     }
 }
+

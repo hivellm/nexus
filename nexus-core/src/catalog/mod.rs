@@ -313,6 +313,12 @@ impl Catalog {
         Ok(self.type_id_to_name.get(&rtxn, &id)?.map(|s| s.to_string()))
     }
 
+    /// Get type ID by name (returns None if type doesn't exist)
+    pub fn get_type_id(&self, type_name: &str) -> Result<Option<TypeId>> {
+        let rtxn = self.env.read_txn()?;
+        Ok(self.type_name_to_id.get(&rtxn, type_name)?)
+    }
+
     /// Get or create a key ID
     ///
     /// Returns existing ID if key already exists, otherwise creates new ID.

@@ -29,13 +29,7 @@ pub mod middleware;
 pub struct NexusServer {
     /// Executor for Cypher queries
     pub executor: Arc<RwLock<nexus_core::executor::Executor>>,
-    /// Catalog for metadata
-    pub catalog: Arc<RwLock<nexus_core::catalog::Catalog>>,
-    /// Label index
-    pub label_index: Arc<RwLock<nexus_core::index::LabelIndex>>,
-    /// KNN index
-    pub knn_index: Arc<RwLock<nexus_core::index::KnnIndex>>,
-    /// Engine for node creation (mutable operations)
+    /// Engine for all operations (contains Catalog, LabelIndex, KnnIndex, etc.)
     pub engine: Arc<RwLock<nexus_core::Engine>>,
 }
 
@@ -43,16 +37,10 @@ impl NexusServer {
     /// Create a new Nexus server instance
     pub fn new(
         executor: Arc<RwLock<nexus_core::executor::Executor>>,
-        catalog: Arc<RwLock<nexus_core::catalog::Catalog>>,
-        label_index: Arc<RwLock<nexus_core::index::LabelIndex>>,
-        knn_index: Arc<RwLock<nexus_core::index::KnnIndex>>,
         engine: Arc<RwLock<nexus_core::Engine>>,
     ) -> Self {
         Self {
             executor,
-            catalog,
-            label_index,
-            knn_index,
             engine,
         }
     }

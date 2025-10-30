@@ -589,7 +589,12 @@ impl Executor {
         target_var: &str,
         rel_var: &str,
     ) -> Result<()> {
-        let rows = self.materialize_rows_from_variables(context);
+        // Use result_set rows instead of variables to maintain row context from previous operators
+        let rows = if !context.result_set.rows.is_empty() {
+            self.result_set_as_rows(context)
+        } else {
+            self.materialize_rows_from_variables(context)
+        };
         let mut expanded_rows = Vec::new();
 
         // Only apply target filtering if the target variable is already populated
@@ -649,6 +654,7 @@ impl Executor {
                 let target_node = self.read_node_as_value(target_id)?;
 
                 if let Some(ref allowed) = allowed_target_ids {
+                    // Only filter if allowed set is non-empty and doesn't contain target
                     if !allowed.is_empty() && !allowed.contains(&target_id) {
                         continue;
                     }

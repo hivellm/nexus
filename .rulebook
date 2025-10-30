@@ -1,33 +1,33 @@
 {
-  "version": "1.0.0",
-  "installedAt": "2025-10-25T19:33:26.630Z",
-  "updatedAt": "2025-10-25T19:33:26.630Z",
-  "projectId": "6bd666e3-3c08-4dad-8dbd-408e4b4f37c9",
+  "version": "0.13.0",
+  "installedAt": "2025-10-25T19:33:10.194Z",
+  "updatedAt": "2025-10-29T23:11:11.682Z",
+  "projectId": "nexus",
   "features": {
     "openspec": true,
-    "watcher": true,
-    "agent": true,
+    "watcher": false,
+    "agent": false,
     "logging": true,
-    "telemetry": true,
+    "telemetry": false,
     "notifications": false,
     "dryRun": false,
     "gitHooks": false,
     "repl": false,
-    "templates": false,
-    "context": false,
-    "health": false,
+    "templates": true,
+    "context": true,
+    "health": true,
     "plugins": false,
-    "parallel": false,
-    "smartContinue": false
+    "parallel": true,
+    "smartContinue": true
   },
   "coverageThreshold": 95,
   "language": "en",
   "outputLanguage": "en",
   "cliTools": [],
-  "maxParallelTasks": 1,
+  "maxParallelTasks": 5,
   "timeouts": {
-    "taskExecution": 300000,
-    "cliResponse": 60000,
-    "testRun": 120000
+    "taskExecution": 3600000,
+    "cliResponse": 180000,
+    "testRun": 600000
   }
 }

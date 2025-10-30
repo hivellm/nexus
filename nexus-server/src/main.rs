@@ -21,7 +21,6 @@ use axum::{
     routing::{any, delete, get, post, put},
 };
 use std::sync::Arc;
-use tempfile::tempdir;
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -44,7 +43,12 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::default();
 
     // Initialize Engine (contains all core components)
-    let engine = nexus_core::Engine::new()?;
+    // Use persistent data directory instead of tempdir
+    let data_dir = std::env::var("NEXUS_DATA_DIR")
+        .unwrap_or_else(|_| "./data".to_string());
+    std::fs::create_dir_all(&data_dir)?;
+    let engine = nexus_core::Engine::with_data_dir(&data_dir)?;
+    info!("Using persistent data directory: {}", data_dir);
     let engine_arc = Arc::new(RwLock::new(engine));
 
     // Initialize executor
@@ -54,35 +58,19 @@ async fn main() -> anyhow::Result<()> {
     api::knn::init_executor(executor.clone())?;
     api::ingest::init_executor(executor)?;
 
-    // Initialize catalog and indexes for new endpoints
-    let catalog = nexus_core::catalog::Catalog::new(tempdir()?)?;
-    let catalog_arc = Arc::new(RwLock::new(catalog));
-
-    let label_index = nexus_core::index::LabelIndex::new();
-    let label_index_arc = Arc::new(RwLock::new(label_index));
-
-    let knn_index = nexus_core::index::KnnIndex::new(128)?;
-    let knn_index_arc = Arc::new(RwLock::new(knn_index));
-
-    // Initialize new API modules
-    api::schema::init_catalog(catalog_arc.clone())?;
-    api::data::init_catalog(catalog_arc.clone())?;
-    api::data::init_executor(api::cypher::get_executor())?;
-    api::data::init_engine(engine_arc.clone())?; // Add engine initialization for data API
-    api::stats::init_instances(
-        catalog_arc.clone(),
-        label_index_arc.clone(),
-        knn_index_arc.clone(),
-    )?;
+    // The Engine already contains Catalog, LabelIndex, KnnIndex etc.
+    // For the new data endpoints, we'll use the Engine's components directly via engine_arc.
+    // No need to create separate instances - they should all come from Engine.
+    
+    // Initialize engine for all API modules that need it
+    api::data::init_engine(engine_arc.clone())?;
     api::stats::init_engine(engine_arc.clone())?;
+    // Initialize cypher engine
     api::cypher::init_engine(engine_arc.clone())?;
 
-    // Create Nexus server state
+    // Create Nexus server state (simplified - only engine and executor needed)
     let nexus_server = Arc::new(NexusServer {
         executor: api::cypher::get_executor(),
-        catalog: catalog_arc,
-        label_index: label_index_arc,
-        knn_index: knn_index_arc,
         engine: engine_arc,
     });
 

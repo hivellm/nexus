@@ -50,9 +50,18 @@ pub use version_constraints::{
     ConflictSeverity, DependencyVersion, VersionCompatibility, VersionConflict, VersionConstraint,
     analyze_version_constraints,
 };
+pub use visualization::{
+    CacheStats, EdgeInteractionData, EdgeLineStyle, EdgeStyle, GraphRenderer,
+    InteractionData, LayoutAlgorithm, NodeInteractionData, NodeShape, NodeStyle,
+    SvgRenderer, VisualizationCache, VisualizationConfig, apply_layout,
+    create_svg_renderer, generate_interaction_data, render_graph_to_svg,
+};
 
 /// Hierarchical call graph layout algorithms
 pub mod hierarchical_layout;
+
+/// Graph visualization and rendering
+pub mod visualization;
 
 /// Call graph filtering and search functionality
 pub mod call_graph_filtering;

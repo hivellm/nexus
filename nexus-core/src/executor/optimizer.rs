@@ -5,7 +5,7 @@
 
 use crate::catalog::Catalog;
 use crate::error::{Error, Result};
-use crate::executor::{ExecutionPlan, Operator, Query};
+use crate::executor::{ExecutionPlan, Operator, ProjectionItem, Query};
 use crate::index::IndexManager;
 use crate::storage::RecordStore;
 use std::collections::HashMap;
@@ -447,7 +447,10 @@ impl QueryOptimizer {
 
         // Add final projection
         operators.push(Operator::Project {
-            columns: vec!["n".to_string()],
+            items: vec![ProjectionItem {
+                alias: "n".to_string(),
+                expression: crate::executor::parser::Expression::Variable("n".to_string()),
+            }],
         });
 
         Ok(ExecutionPlan { operators })
@@ -488,9 +491,9 @@ impl QueryOptimizer {
                     // Join can increase or decrease rows depending on join type
                     estimated_rows *= 0.5; // Assume 50% reduction
                 }
-                Operator::Project { columns } => {
+                Operator::Project { items } => {
                     let project_cost =
-                        cost_model.cpu_tuple_cost * estimated_rows * columns.len() as f64;
+                        cost_model.cpu_tuple_cost * estimated_rows * items.len() as f64;
                     total_cost += project_cost;
                     // Projection doesn't change row count
                 }

@@ -115,10 +115,21 @@ pub struct Engine {
 
 impl Engine {
     /// Create a new engine instance with all components
+    /// Uses temporary directory (for backward compatibility)
     pub fn new() -> Result<Self> {
         // Create temporary directory for data
         let temp_dir = tempfile::tempdir()?;
         let data_dir = temp_dir.path();
+        Self::with_data_dir(data_dir)
+    }
+
+    /// Create a new engine instance with a specific data directory
+    /// This allows persistent storage instead of temporary directories
+    pub fn with_data_dir<P: AsRef<std::path::Path>>(data_dir: P) -> Result<Self> {
+        let data_dir = data_dir.as_ref();
+
+        // Ensure data directory exists
+        std::fs::create_dir_all(data_dir)?;
 
         // Initialize catalog
         let catalog = catalog::Catalog::new(data_dir.join("catalog.mdb"))?;
@@ -142,7 +153,7 @@ impl Engine {
         let executor =
             executor::Executor::new(&catalog, &storage, &indexes.label_index, &indexes.knn_index)?;
 
-        Ok(Engine {
+        let mut engine = Engine {
             catalog,
             storage,
             page_cache,
@@ -150,7 +161,41 @@ impl Engine {
             transaction_manager,
             indexes,
             executor,
-        })
+        };
+
+        engine.rebuild_indexes_from_storage()?;
+
+        Ok(engine)
+    }
+
+    fn rebuild_indexes_from_storage(&mut self) -> Result<()> {
+        let total_nodes = self.storage.node_count();
+
+        for node_id in 0..total_nodes {
+            let record = match self.storage.read_node(node_id) {
+                Ok(record) => record,
+                Err(_) => continue,
+            };
+
+            if record.is_deleted() {
+                continue;
+            }
+
+            let mut label_ids = Vec::new();
+            for bit in 0..64 {
+                if (record.label_bits & (1u64 << bit)) != 0 {
+                    label_ids.push(bit as u32);
+                }
+            }
+
+            if !label_ids.is_empty() {
+                self.indexes
+                    .label_index
+                    .add_node(node_id, &label_ids)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Create a new engine with default configuration
@@ -204,6 +249,9 @@ impl Engine {
             .storage
             .create_node_with_label_bits(&mut tx, label_bits, properties)?;
         self.transaction_manager.commit(&mut tx)?;
+        
+        // CRITICAL FIX: Flush storage to ensure data is persisted to disk
+        self.storage.flush()?;
 
         // Update label_index to track this node
         self.indexes.label_index.add_node(node_id, &label_ids)?;
@@ -220,10 +268,17 @@ impl Engine {
         properties: serde_json::Value,
     ) -> Result<u64> {
         let mut tx = self.transaction_manager.begin_write()?;
+        let type_id = self.catalog.get_or_create_type(&rel_type)?;
         let rel_id = self
             .storage
-            .create_relationship(&mut tx, from, to, rel_type, properties)?;
+            .create_relationship(&mut tx, from, to, type_id, properties)?;
         self.transaction_manager.commit(&mut tx)?;
+ 
+        // CRITICAL FIX: Flush storage to ensure data is persisted to disk
+        self.storage.flush()?;
+
+        self.catalog.increment_rel_count(type_id)?;
+ 
         Ok(rel_id)
     }
 

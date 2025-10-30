@@ -570,14 +570,17 @@ impl BulkLoader {
 
             // Store relationship
             let mut storage = self.storage.write().await;
+            let type_id = self.catalog.get_or_create_type(&rel_data.rel_type)?;
             let _rel_id = storage.create_relationship(
                 &mut tx,
                 rel_data.source_id,
                 rel_data.target_id,
-                rel_data.rel_type.clone(),
+                type_id,
                 properties,
             )?;
             drop(storage);
+
+            self.catalog.increment_rel_count(type_id)?;
 
             // Update stats
             {

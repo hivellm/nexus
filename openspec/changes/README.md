@@ -83,6 +83,17 @@
 - Point type, spatial indexes
 - Duration: 2-3 weeks
 
+## Critical Bug Fixes
+
+### `fix-data-api-endpoints/` 🔴 CRITICAL
+- **Priority**: CRITICAL - Blocking basic CRUD operations
+- **Status**: Ready to start
+- **Issues**: GET/PUT/DELETE /data/nodes endpoints broken
+- **Impact**: Users cannot retrieve, update, or delete nodes via REST
+- **Solution**: Refactor to use Engine directly (like POST already does)
+- **Timeline**: 3.5-4.5 hours
+- **Blocks**: All other REST API work
+
 ## Other Active Changes
 
 ### `implement-v1-authentication/`
@@ -90,7 +101,7 @@
 - API key auth, RBAC, rate limiting
 
 ### `implement-graph-correlation-analysis/`
-- Status: In progress
+- Status: In progress (57.5% MVP complete)
 - Graph comparison and correlation
 
 ### `implement-v1-replication/`
@@ -107,11 +118,20 @@
 
 ## Implementation Order
 
-1. **START HERE**: `implement-cypher-write-operations` (Phase 1)
-2. Then: `implement-cypher-query-composition` (Phase 2)
-3. Continue sequentially through Phases 3-7 for core Cypher
-4. Phases 8-12 can be prioritized based on need
-5. Phases 13-14 are optional advanced features
+### 🔴 CRITICAL PRIORITY - Fix First
+
+1. **START HERE**: `fix-data-api-endpoints/` - **MUST FIX BEFORE ANYTHING ELSE**
+   - GET/PUT/DELETE /data/nodes endpoints broken
+   - Blocks all REST API CRUD operations
+   - Estimated: 3.5-4.5 hours
+
+### Then Continue with Feature Work
+
+2. `implement-cypher-write-operations` (Phase 1)
+3. `implement-cypher-query-composition` (Phase 2)
+4. Continue sequentially through Phases 3-7 for core Cypher
+5. Phases 8-12 can be prioritized based on need
+6. Phases 13-14 are optional advanced features
 
 ## Archive
 

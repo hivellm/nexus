@@ -99,6 +99,10 @@ pub enum Error {
     #[error("Deadlock detected: {0}")]
     DeadlockDetected(String),
 
+    /// Format/display error
+    #[error("Format error: {0}")]
+    Format(#[from] std::fmt::Error),
+
     /// Lock timeout
     #[error("Lock timeout: {0}")]
     LockTimeout(String),

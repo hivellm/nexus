@@ -236,9 +236,6 @@ impl RecordStore {
             // Check if record is non-empty (any byte is non-zero)
             if slice.iter().any(|&b| b != 0) {
                 next_node_id = (i + 1) as u64;
-            } else {
-                // Found first empty record, stop scanning
-                break;
             }
         }
 
@@ -249,9 +246,6 @@ impl RecordStore {
             // Check if record is non-empty (any byte is non-zero)
             if slice.iter().any(|&b| b != 0) {
                 next_rel_id = (i + 1) as u64;
-            } else {
-                // Found first empty record, stop scanning
-                break;
             }
         }
 
@@ -300,6 +294,21 @@ impl RecordStore {
         let end = start + NODE_RECORD_SIZE;
         self.nodes_mmap[start..end].copy_from_slice(bytemuck::bytes_of(record));
 
+        Ok(())
+    }
+
+    /// Flush all pending writes to disk
+    ///
+    /// This forces the memory-mapped files to sync with disk, ensuring data persistence.
+    /// Should be called after writes to guarantee durability.
+    pub fn flush(&mut self) -> Result<()> {
+        // Flush memory-mapped files to disk
+        self.nodes_mmap.flush().map_err(|e| Error::Storage(format!("Failed to flush nodes: {}", e)))?;
+        self.rels_mmap.flush().map_err(|e| Error::Storage(format!("Failed to flush rels: {}", e)))?;
+        
+        // Also flush the property store
+        self.property_store.flush()?;
+        
         Ok(())
     }
 
@@ -510,22 +519,33 @@ impl RecordStore {
         _tx: &mut crate::transaction::Transaction,
         from: u64,
         to: u64,
-        rel_type: String,
+        type_id: u32,
         properties: serde_json::Value,
     ) -> Result<u64> {
         let rel_id = self.next_rel_id;
         self.next_rel_id += 1;
 
-        // Create relationship record
-        let mut record = RelationshipRecord::new(from, to, 0);
+        let mut record = RelationshipRecord::new(from, to, type_id);
 
-        // Set source and destination node IDs
-        record.src_id = from;
-        record.dst_id = to;
+        // Populate next pointers using existing relationship chains
+        let mut source_prev_ptr = 0u64;
+        if let Ok(mut source_node) = self.read_node(from) {
+            source_prev_ptr = source_node.first_rel_ptr;
+            source_node.first_rel_ptr = rel_id + 1;
+            self.write_node(from, &source_node)?;
+        }
 
-        // Set relationship type ID (for now, use a simple hash)
-        // In a full implementation, this would map type names to IDs via catalog
-        record.type_id = rel_type.len() as u32; // Simple placeholder
+        let mut target_prev_ptr = 0u64;
+        if to == from {
+            target_prev_ptr = source_prev_ptr;
+        } else if let Ok(mut target_node) = self.read_node(to) {
+            target_prev_ptr = target_node.first_rel_ptr;
+            target_node.first_rel_ptr = rel_id + 1;
+            self.write_node(to, &target_node)?;
+        }
+
+        record.next_src_ptr = source_prev_ptr;
+        record.next_dst_ptr = target_prev_ptr;
 
         // Store properties and get property pointer
         record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
@@ -537,11 +557,6 @@ impl RecordStore {
         } else {
             0
         };
-
-        // Set relationship chain pointers to 0 (for now)
-        // In a full implementation, this would link to existing relationships
-        record.next_src_ptr = 0;
-        record.next_dst_ptr = 0;
 
         // Write the record to storage
         self.write_rel(rel_id, &record)?;

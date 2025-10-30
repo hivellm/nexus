@@ -460,56 +460,75 @@ pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateN
         });
     }
 
-    let _catalog_guard = match CATALOG.get() {
-        Some(catalog) => catalog,
+    // Check if Engine is initialized
+    let engine_guard = match ENGINE.get() {
+        Some(engine) => engine,
         None => {
-            tracing::error!("Catalog not initialized");
+            tracing::error!("Engine not initialized");
             return Json(UpdateNodeResponse {
                 message: "".to_string(),
-                error: Some("Catalog not initialized".to_string()),
+                error: Some("Engine not initialized".to_string()),
             });
         }
     };
 
-    // Implement actual node update
-    // TODO: Refactor to use shared executor
-    Json(UpdateNodeResponse {
-        message: "Not yet implemented with shared executor".to_string(),
-        error: Some("Use Cypher query with executor".to_string()),
-    })
-    /*
-    match create_engine() {
-        Ok(mut engine) => {
-            match engine.update_node(
-                request.node_id,
-                vec!["Updated".to_string()], // TODO: Allow updating labels
-                serde_json::Value::Object(request.properties.into_iter().collect()),
-            ) {
-                Ok(_) => {
-                    tracing::info!("Node {} updated successfully", request.node_id);
-                    Json(UpdateNodeResponse {
-                        message: "Node updated successfully".to_string(),
-                        error: None,
-                    })
-                }
-                Err(e) => {
-                    tracing::error!("Failed to update node: {}", e);
-                    Json(UpdateNodeResponse {
-                        message: "".to_string(),
-                        error: Some(format!("Failed to update node: {}", e)),
-                    })
+    // Get current node to preserve labels
+    let mut engine = engine_guard.write().await;
+
+    // Get current labels from existing node
+    let current_labels = match engine.get_node(request.node_id) {
+        Ok(Some(node_record)) => {
+            let label_ids = node_record.get_labels();
+            let mut labels = Vec::new();
+            for label_id in label_ids {
+                if let Ok(Some(label_name)) = engine.catalog.get_label_name(label_id) {
+                    labels.push(label_name);
                 }
             }
+            labels
+        }
+        Ok(None) => {
+            tracing::warn!("Node {} not found", request.node_id);
+            return Json(UpdateNodeResponse {
+                message: "".to_string(),
+                error: Some("Node not found".to_string()),
+            });
         }
         Err(e) => {
-            tracing::error!("Failed to initialize engine: {}", e);
+            tracing::error!("Failed to get node {}: {}", request.node_id, e);
+            return Json(UpdateNodeResponse {
+                message: "".to_string(),
+                error: Some(format!("Failed to get node: {}", e)),
+            });
+        }
+    };
+
+    // Convert properties HashMap to serde_json::Value
+    let properties = serde_json::Value::Object(
+        request
+            .properties
+            .into_iter()
+            .map(|(k, v)| (k, v))
+            .collect(),
+    );
+
+    // Update node using Engine (preserve existing labels)
+    match engine.update_node(request.node_id, current_labels, properties) {
+        Ok(_) => {
+            tracing::info!("Node {} updated successfully", request.node_id);
+            Json(UpdateNodeResponse {
+                message: "Node updated successfully".to_string(),
+                error: None,
+            })
+        }
+        Err(e) => {
+            tracing::error!("Failed to update node {}: {}", request.node_id, e);
             Json(UpdateNodeResponse {
                 message: "".to_string(),
-                error: Some(format!("Failed to initialize engine: {}", e)),
+                error: Some(format!("Failed to update node: {}", e)),
             })
         }
     }
-    */
 }
 
 /// Delete a node
@@ -525,57 +544,44 @@ pub async fn delete_node(Json(request): Json<DeleteNodeRequest>) -> Json<DeleteN
         });
     }
 
-    let _catalog_guard = match CATALOG.get() {
-        Some(catalog) => catalog,
+    // Check if Engine is initialized
+    let engine_guard = match ENGINE.get() {
+        Some(engine) => engine,
         None => {
-            tracing::error!("Catalog not initialized");
+            tracing::error!("Engine not initialized");
             return Json(DeleteNodeResponse {
                 message: "".to_string(),
-                error: Some("Catalog not initialized".to_string()),
+                error: Some("Engine not initialized".to_string()),
             });
         }
     };
 
-    // Implement actual node deletion
-    // TODO: Refactor to use shared executor
-    Json(DeleteNodeResponse {
-        message: "Not yet implemented with shared executor".to_string(),
-        error: Some("Use Cypher query with executor".to_string()),
-    })
-    /*
-    match create_engine() {
-        Ok(mut engine) => match engine.delete_node(request.node_id) {
-            Ok(true) => {
-                tracing::info!("Node {} deleted successfully", request.node_id);
-                Json(DeleteNodeResponse {
-                    message: "Node deleted successfully".to_string(),
-                    error: None,
-                })
-            }
-            Ok(false) => {
-                tracing::warn!("Node {} not found", request.node_id);
-                Json(DeleteNodeResponse {
-                    message: "Node not found".to_string(),
-                    error: Some("Node not found".to_string()),
-                })
-            }
-            Err(e) => {
-                tracing::error!("Failed to delete node: {}", e);
-                Json(DeleteNodeResponse {
-                    message: "".to_string(),
-                    error: Some(format!("Failed to delete node: {}", e)),
-                })
-            }
-        },
+    // Delete node using Engine directly
+    let mut engine = engine_guard.write().await;
+
+    match engine.delete_node(request.node_id) {
+        Ok(true) => {
+            tracing::info!("Node {} deleted successfully", request.node_id);
+            Json(DeleteNodeResponse {
+                message: "Node deleted successfully".to_string(),
+                error: None,
+            })
+        }
+        Ok(false) => {
+            tracing::warn!("Node {} not found", request.node_id);
+            Json(DeleteNodeResponse {
+                message: "Node not found".to_string(),
+                error: Some("Node not found".to_string()),
+            })
+        }
         Err(e) => {
-            tracing::error!("Failed to initialize engine: {}", e);
+            tracing::error!("Failed to delete node {}: {}", request.node_id, e);
             Json(DeleteNodeResponse {
                 message: "".to_string(),
-                error: Some(format!("Failed to initialize engine: {}", e)),
+                error: Some(format!("Failed to delete node: {}", e)),
             })
         }
     }
-    */
 }
 
 /// Request to get a node by ID
@@ -629,52 +635,57 @@ pub async fn get_node_by_id(
         });
     }
 
-    // Check if catalog is initialized
-    if CATALOG.get().is_none() {
-        tracing::error!("Catalog not initialized");
-        return Json(GetNodeResponse {
-            message: "".to_string(),
-            node: None,
-            error: Some("Catalog not initialized".to_string()),
-        });
-    }
-
-    // Implement actual node retrieval using Cypher
-    let executor = get_executor();
-    let mut executor_guard = executor.write().await;
-
-    // Use Cypher query to get node by ID
-    let query = format!(
-        "MATCH (n) WHERE id(n) = {} RETURN n, labels(n) as node_labels, properties(n) as node_props",
-        node_id
-    );
-    let cypher_query = nexus_core::executor::Query {
-        cypher: query,
-        params: HashMap::new(),
+    // Check if Engine is initialized
+    let engine_guard = match ENGINE.get() {
+        Some(engine) => engine,
+        None => {
+            tracing::error!("Engine not initialized");
+            return Json(GetNodeResponse {
+                message: "".to_string(),
+                node: None,
+                error: Some("Engine not initialized".to_string()),
+            });
+        }
     };
 
-    match executor_guard.execute(&cypher_query) {
-        Ok(result_set) => {
-            if result_set.rows.is_empty() {
-                tracing::warn!("Node {} not found", node_id);
-                return Json(GetNodeResponse {
-                    message: "Node not found".to_string(),
-                    node: None,
-                    error: Some("Node not found".to_string()),
-                });
+    // Get node using Engine directly
+    let mut engine = engine_guard.write().await;
+
+    match engine.get_node(node_id) {
+        Ok(Some(node_record)) => {
+            // Extract labels from label_bits
+            let label_ids = node_record.get_labels();
+            let mut labels = Vec::new();
+            for label_id in label_ids {
+                if let Ok(Some(label_name)) = engine.catalog.get_label_name(label_id) {
+                    labels.push(label_name);
+                }
             }
 
-            // For now, return a simple response
-            // TODO: Parse the result properly when Cypher result parsing is implemented
+            // Load properties from storage
+            let properties = engine
+                .storage
+                .load_node_properties(node_id)
+                .unwrap_or(None)
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+
             tracing::info!("Node {} retrieved successfully", node_id);
             Json(GetNodeResponse {
                 message: "Node retrieved successfully".to_string(),
                 node: Some(NodeData {
                     id: node_id,
-                    labels: vec![],
-                    properties: serde_json::Value::Object(serde_json::Map::new()),
+                    labels,
+                    properties,
                 }),
                 error: None,
+            })
+        }
+        Ok(None) => {
+            tracing::warn!("Node {} not found", node_id);
+            Json(GetNodeResponse {
+                message: "Node not found".to_string(),
+                node: None,
+                error: Some("Node not found".to_string()),
             })
         }
         Err(e) => {
@@ -812,7 +823,7 @@ mod tests {
 
         let response = update_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.error.as_ref().unwrap(), "Engine not initialized");
     }
 
     #[tokio::test]
@@ -824,7 +835,7 @@ mod tests {
 
         let response = update_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.error.as_ref().unwrap(), "Engine not initialized");
     }
 
     #[tokio::test]
@@ -861,7 +872,7 @@ mod tests {
 
         let response = delete_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.error.as_ref().unwrap(), "Engine not initialized");
     }
 
     #[tokio::test]
@@ -892,6 +903,237 @@ mod tests {
 
         let response = delete_node(Json(request)).await;
         assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        assert_eq!(response.error.as_ref().unwrap(), "Engine not initialized");
+    }
+
+    // Helper function to create a test engine
+    fn create_test_engine() -> Result<Arc<RwLock<nexus_core::Engine>>, nexus_core::Error> {
+        let engine = nexus_core::Engine::new()?;
+        Ok(Arc::new(RwLock::new(engine)))
+    }
+
+    #[tokio::test]
+    async fn test_get_node_by_id_with_engine() {
+        // Initialize engine (may fail if already initialized by another test, which is OK)
+        let test_engine = create_test_engine().unwrap();
+        let _ = init_engine(test_engine.clone());
+
+        // Get the actual engine instance (may be the one we created or already existing)
+        let global_engine = ENGINE.get().expect("Engine should be initialized");
+        
+        // Create nodes - first one will have ID 0, create a dummy to get ID 1
+        let mut engine = global_engine.write().await;
+        let _dummy_id = engine
+            .create_node(
+                vec!["Dummy".to_string()],
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let node_id = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::json!({"name": "Alice", "age": 30}),
+            )
+            .unwrap();
+        drop(engine);
+
+        // Test getting the node via REST endpoint
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), node_id.to_string());
+
+        let response = get_node_by_id(axum::extract::Query(params)).await;
+
+        assert!(response.error.is_none(), "Expected no error, got: {:?}", response.error);
+        assert!(response.node.is_some());
+        let node = response.node.as_ref().unwrap();
+        assert_eq!(node.id, node_id);
+        assert_eq!(node.labels, vec!["Person"]);
+        assert_eq!(node.properties["name"], json!("Alice"));
+        assert_eq!(node.properties["age"], json!(30));
+    }
+
+    #[tokio::test]
+    async fn test_get_node_by_id_not_found() {
+        // Initialize engine
+        let engine = create_test_engine().unwrap();
+        let _ = init_engine(engine.clone());
+
+        // Try to get non-existent node
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), "9999".to_string());
+
+        let response = get_node_by_id(axum::extract::Query(params)).await;
+
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Node not found");
+        assert!(response.node.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_node_by_id_without_engine() {
+        // Don't initialize engine
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), "1".to_string());
+
+        let response = get_node_by_id(axum::extract::Query(params)).await;
+
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Engine not initialized");
+        assert!(response.node.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_node_with_engine() {
+        // Initialize engine (may fail if already initialized by another test, which is OK)
+        let test_engine = create_test_engine().unwrap();
+        let _ = init_engine(test_engine.clone());
+
+        // Get the actual engine instance (may be the one we created or already existing)
+        let global_engine = ENGINE.get().expect("Engine should be initialized");
+        
+        // Create nodes - first one will have ID 0, create a dummy to get ID 1
+        let mut engine = global_engine.write().await;
+        let _dummy_id = engine
+            .create_node(
+                vec!["Dummy".to_string()],
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let node_id = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::json!({"name": "Alice"}),
+            )
+            .unwrap();
+        drop(engine);
+
+        // Update the node
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), json!("Bob"));
+        properties.insert("age".to_string(), json!(25));
+
+        let request = UpdateNodeRequest {
+            node_id,
+            properties,
+        };
+
+        let response = update_node(Json(request)).await;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.message, "Node updated successfully");
+
+        // Verify the update by getting the node
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), node_id.to_string());
+        let get_response = get_node_by_id(axum::extract::Query(params)).await;
+        assert!(get_response.node.is_some());
+        let node = get_response.node.as_ref().unwrap();
+        assert_eq!(node.properties["name"], json!("Bob"));
+        assert_eq!(node.properties["age"], json!(25));
+    }
+
+    #[tokio::test]
+    async fn test_update_node_not_found() {
+        // Initialize engine
+        let engine = create_test_engine().unwrap();
+        let _ = init_engine(engine.clone());
+
+        // Try to update non-existent node
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), json!("Bob"));
+
+        let request = UpdateNodeRequest {
+            node_id: 9999,
+            properties,
+        };
+
+        let response = update_node(Json(request)).await;
+
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Node not found");
+    }
+
+    #[tokio::test]
+    async fn test_update_node_without_engine() {
+        // Don't initialize engine
+        let mut properties = HashMap::new();
+        properties.insert("name".to_string(), json!("Bob"));
+
+        let request = UpdateNodeRequest {
+            node_id: 1,
+            properties,
+        };
+
+        let response = update_node(Json(request)).await;
+
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Engine not initialized");
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_with_engine() {
+        // Initialize engine (may fail if already initialized by another test, which is OK)
+        let engine = create_test_engine().unwrap();
+        let _ = init_engine(engine.clone());
+
+        // Get the actual engine instance (may be the one we created or already existing)
+        let engine_guard = ENGINE.get().unwrap();
+        let mut engine = engine_guard.write().await;
+
+        // Create nodes - first one will have ID 0, create a dummy to get ID 1
+        let _dummy_id = engine
+            .create_node(
+                vec!["Dummy".to_string()],
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let node_id = engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::json!({"name": "Alice"}),
+            )
+            .unwrap();
+        drop(engine);
+
+        // Delete the node
+        let request = DeleteNodeRequest { node_id };
+
+        let response = delete_node(Json(request)).await;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.message, "Node deleted successfully");
+
+        // Verify the node is deleted by trying to get it
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), node_id.to_string());
+        let get_response = get_node_by_id(axum::extract::Query(params)).await;
+        assert!(get_response.error.is_some());
+        assert_eq!(get_response.error.as_ref().unwrap(), "Node not found");
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_not_found() {
+        // Initialize engine
+        let engine = create_test_engine().unwrap();
+        let _ = init_engine(engine.clone());
+
+        // Try to delete non-existent node
+        let request = DeleteNodeRequest { node_id: 9999 };
+
+        let response = delete_node(Json(request)).await;
+
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Node not found");
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_without_engine() {
+        // Don't initialize engine
+        let request = DeleteNodeRequest { node_id: 1 };
+
+        let response = delete_node(Json(request)).await;
+
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap(), "Engine not initialized");
     }
 }

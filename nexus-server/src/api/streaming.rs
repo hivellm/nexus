@@ -684,6 +684,22 @@ async fn handle_knn_search(
     let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
+    // TODO: Access KNN index from Engine instead of separate instance
+    // For now, return a placeholder response
+    let response = json!({
+        "status": "not_implemented",
+        "message": "KNN traverse requires refactoring to use Engine's IndexManager",
+        "label": label,
+        "k": k,
+        "limit": limit,
+        "vector_dimension": vector.len()
+    });
+
+    Ok(CallToolResult::success(vec![Content::text(
+        response.to_string(),
+    )]))
+
+    /* COMMENTED OUT - needs refactoring to use Engine's indexes
     // Use real KNN index for search
     let knn_index = server.knn_index.read().await;
     match knn_index.search_knn(&vector, k) {
@@ -718,6 +734,7 @@ async fn handle_knn_search(
             None,
         )),
     }
+    */
 }
 
 /// Handle get stats tool
@@ -725,29 +742,34 @@ async fn handle_get_stats(
     _request: CallToolRequestParam,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
-    // Get stats from shared components
-    let catalog = server.catalog.read().await;
-    let knn_index = server.knn_index.read().await;
-    let knn_stats = knn_index.get_stats();
+    // Get stats from Engine
+    let engine = server.engine.read().await;
+    match engine.stats() {
+        Ok(stats) => {
+            let response = json!({
+                "status": "ok",
+                "stats": {
+                    "node_count": stats.nodes,
+                    "relationship_count": stats.relationships,
+                    "label_count": stats.labels,
+                    "relationship_type_count": stats.rel_types,
+                    "label_index_size": 0,
+                    "knn_index_size": 0,
+                    "memory_usage_mb": 0,
+                    "uptime_seconds": 0
+                },
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            });
 
-    let response = json!({
-        "status": "ok",
-        "stats": {
-            "node_count": 0, // TODO: Get from storage layer
-            "relationship_count": 0, // TODO: Get from storage layer
-            "label_count": catalog.label_count(),
-            "relationship_type_count": 0, // TODO: Get from catalog
-            "label_index_size": 0,
-            "knn_index_size": knn_stats.total_vectors,
-            "memory_usage_mb": 0,
-            "uptime_seconds": 0
-        },
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    });
-
-    Ok(CallToolResult::success(vec![Content::text(
-        response.to_string(),
-    )]))
+            Ok(CallToolResult::success(vec![Content::text(
+                response.to_string(),
+            )]))
+        }
+        Err(e) => Err(ErrorData::internal_error(
+            format!("Failed to get stats: {}", e),
+            None,
+        )),
+    }
 }
 
 /// Handle graph correlation generate tool
