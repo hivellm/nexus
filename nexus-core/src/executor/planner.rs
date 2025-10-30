@@ -112,10 +112,33 @@ impl<'a> QueryPlanner<'a> {
         // Start with the most selective pattern
         let start_pattern = self.select_start_pattern(patterns)?;
 
-        // Add NodeByLabel operators for each node pattern
+        // Identify which nodes are pure targets of relationships (should not get NodeByLabel)
+        // Pure target = appears after a relationship AND doesn't have a label
+        let mut target_nodes = std::collections::HashSet::new();
+        for (idx, element) in start_pattern.elements.iter().enumerate() {
+            if let PatternElement::Relationship(_) = element {
+                // The node after a relationship is a target
+                if idx + 1 < start_pattern.elements.len() {
+                    if let PatternElement::Node(node) = &start_pattern.elements[idx + 1] {
+                        if let Some(var) = &node.variable {
+                            // Only mark as pure target if it doesn't have a label
+                            if node.labels.is_empty() {
+                                target_nodes.insert(var.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add NodeByLabel operators for nodes that are NOT pure relationship targets
         for element in &start_pattern.elements {
             if let PatternElement::Node(node) = element {
                 if let Some(variable) = &node.variable {
+                    // Skip if this node is a pure target without labels (will be populated by Expand)
+                    if target_nodes.contains(variable) {
+                        continue;
+                    }
                     if let Some(label) = node.labels.first() {
                         let label_id = self.catalog.get_or_create_label(label)?;
                         operators.push(Operator::NodeByLabel {
