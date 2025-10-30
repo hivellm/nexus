@@ -5,6 +5,15 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2025-10-30
+
+### Fixed
+- **Property Persistence**: Fixed critical issue where properties were not being persisted to disk or loaded after server restart
+  - Enhanced `PropertyStore::flush()` to call `sync_all()` for OS-level file synchronization
+  - Added `refresh_executor()` method to update executor after `create_node()` and `create_relationship()` operations
+  - Fixed executor using separate `PropertyStore` instance that didn't see newly written properties
+  - Properties now correctly persist and load after server restart
+
 ## [0.9.4] - 2025-10-30
 
 ### Fixed
