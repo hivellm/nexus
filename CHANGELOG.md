@@ -5,6 +5,25 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2025-10-30
+
+### Fixed
+- **Query Planner Target Node Handling** ✅
+  - Fixed planner to skip `NodeByLabel` operator for target nodes without labels in relationship patterns
+  - Prevents double-scanning and incorrect filtering when expanding relationships
+  - Queries like `MATCH (d:Document)-[:MENTIONS]->(e)` now work correctly (target `e` populated only by Expand)
+  - Improved test pass rate from 11/20 to 13/20 in comprehensive Neo4j comparison suite
+
+### Changed
+- **Result Set Row Management** ✅
+  - `execute_expand` now uses `result_set.rows` instead of variables when available
+  - Maintains row context from previous operators for better data flow
+
+### Testing
+- Comprehensive test suite comparing Nexus vs Neo4j results (20 test queries)
+- 13/20 tests passing (queries with labels work perfectly)
+- Remaining failures relate to general expansion patterns and property ordering
+
 ## [0.9.3] - 2025-10-30
 
 ### Fixed
