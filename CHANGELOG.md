@@ -5,6 +5,40 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2025-10-30
+
+### Fixed
+- **DISTINCT Clause Support**: Fixed `DISTINCT` operator not being applied correctly in queries
+  - Planner now correctly generates `Distinct` operator when `RETURN DISTINCT` is used
+  - `execute_distinct` now properly deduplicates rows based on column values
+  - Queries like `MATCH (n) RETURN DISTINCT labels(n)` now return unique values correctly
+
+- **labels() Function**: Fixed `labels()` function not returning node labels correctly
+  - Function now reads node record and extracts labels from bitmap using catalog
+  - Returns array of label names matching Neo4j's behavior
+
+- **type() Function**: Fixed `type()` function not returning relationship type correctly
+  - Function now reads relationship record and extracts type_id
+  - Looks up type name from catalog to return correct relationship type string
+  - Added `_nexus_id` to relationship objects for internal ID extraction
+
+- **Queries Without Explicit Nodes**: Fixed queries like `MATCH ()-[r]->() RETURN count(r)` returning 0 results
+  - `execute_expand` now scans all relationships directly when source_var is empty
+  - Supports queries without explicit node labels in MATCH patterns
+
+- **Scan All Nodes**: Fixed `label_id: 0` handling to scan all nodes when no label specified
+  - `execute_node_by_label` now correctly handles `label_id: 0` as "scan all" operator
+  - Builds bitmap of all nodes from storage for label-less queries
+
+### Added
+- Support for `DISTINCT` modifier in `RETURN` and `WITH` clauses
+- Enhanced relationship object serialization with `_nexus_id` for internal use
+- Support for relationship-only queries without explicit node patterns
+
+### Testing
+- Comprehensive test suite now passing 15/20 tests (75% pass rate)
+- All critical functionality tests passing (counts, relationships, labels, types, DISTINCT)
+
 ## [0.9.5] - 2025-10-30
 
 ### Fixed

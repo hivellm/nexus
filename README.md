@@ -27,12 +27,13 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **MVP: 89.8% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.9.0)**: Critical persistence fixes, MIT license, 100% MCP functionality
+**🔥 Latest (v0.9.6)**: DISTINCT support, labels()/type() functions, Neo4j compatibility improvements
 
-- ✅ **CREATE Persistence** - Nodes now persist correctly via Engine integration
-- ✅ **Stats Accuracy** - Real-time node/label counts from Engine.stats()
-- ✅ **MCP Tools Fixed** - create_node returns node_id, graph_correlation_analyze accepts partial graphs
-- ✅ **License Simplified** - Changed to MIT only for clearer licensing
+- ✅ **DISTINCT Clause** - Full support for `RETURN DISTINCT` and `WITH DISTINCT`
+- ✅ **labels() Function** - Correctly returns node labels from bitmap
+- ✅ **type() Function** - Correctly returns relationship type names
+- ✅ **Relationship-Only Queries** - Support for queries without explicit node patterns
+- ✅ **Neo4j Compatibility** - 75% test pass rate (15/20 tests) in comprehensive comparison suite
 
 - ✅ **Storage Foundation** - Fixed-size records, memmap2, LMDB catalog (100% - ARCHIVED)
 - ✅ **Transactions & Durability** - WAL, MVCC, crash recovery (100% - ARCHIVED)

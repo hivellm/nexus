@@ -34,6 +34,7 @@ impl<'a> QueryPlanner<'a> {
         let mut where_clauses = Vec::new();
         let mut return_items = Vec::new();
         let mut limit_count = None;
+        let mut return_distinct = false;
 
         for clause in &query.clauses {
             match clause {
@@ -68,6 +69,7 @@ impl<'a> QueryPlanner<'a> {
                     if let Some(where_clause) = &with_clause.where_clause {
                         where_clauses.push(where_clause.expression.clone());
                     }
+                    return_distinct = with_clause.distinct;
                 }
                 Clause::Unwind(_unwind_clause) => {
                     // UNWIND expands a list into rows
@@ -76,6 +78,7 @@ impl<'a> QueryPlanner<'a> {
                 }
                 Clause::Return(return_clause) => {
                     return_items = return_clause.items.clone();
+                    return_distinct = return_clause.distinct;
                 }
                 Clause::Limit(limit_clause) => {
                     if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
@@ -94,6 +97,7 @@ impl<'a> QueryPlanner<'a> {
             &where_clauses,
             &return_items,
             limit_count,
+            return_distinct,
             &mut operators,
         )?;
 
@@ -107,6 +111,7 @@ impl<'a> QueryPlanner<'a> {
         where_clauses: &[Expression],
         return_items: &[ReturnItem],
         limit_count: Option<usize>,
+        distinct: bool,
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         // Start with the most selective pattern
@@ -344,6 +349,19 @@ impl<'a> QueryPlanner<'a> {
                 operators.push(Operator::Project {
                     items: projection_items,
                 });
+
+                // Add DISTINCT operator if specified
+                if distinct {
+                    let distinct_columns: Vec<String> = return_items
+                        .iter()
+                        .map(|item| {
+                            item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression).unwrap_or_default()
+                            })
+                        })
+                        .collect();
+                    operators.push(Operator::Distinct { columns: distinct_columns });
+                }
             }
         }
 

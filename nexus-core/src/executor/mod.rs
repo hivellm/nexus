@@ -546,7 +546,19 @@ impl Executor {
 
     /// Execute NodeByLabel operator
     fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
-        let bitmap = self.label_index.get_nodes(label_id)?;
+        let bitmap = if label_id == 0 {
+            // Special case: scan all nodes
+            // Get all nodes from storage
+            let total_nodes = self.store.node_count();
+            let mut all_nodes = roaring::RoaringBitmap::new();
+            for node_id in 0..total_nodes.min(u32::MAX as u64) {
+                all_nodes.insert(node_id as u32);
+            }
+            all_nodes
+        } else {
+            self.label_index.get_nodes(label_id)?
+        };
+        
         let mut results = Vec::new();
 
         for node_id in bitmap.iter() {
@@ -597,79 +609,121 @@ impl Executor {
         };
         let mut expanded_rows = Vec::new();
 
-        // Only apply target filtering if the target variable is already populated
-        // (this happens when we're doing a join-like operation, not a pure expansion)
-        let allowed_target_ids: Option<std::collections::HashSet<u64>> = if target_var.is_empty() {
-            None
-        } else {
-            context
-                .get_variable(target_var)
-                .and_then(|value| match value {
-                    Value::Array(values) => {
-                        let ids: std::collections::HashSet<u64> = values
-                            .iter()
-                            .filter_map(|v| Self::extract_entity_id(v))
-                            .collect();
-                        // Only use the set if it's not empty (empty set means "filter everything out")
-                        if ids.is_empty() {
-                            None
-                        } else {
-                            Some(ids)
-                        }
-                    }
-                    _ => None,
-                })
-        };
-
-        for row in rows {
-            let source_value = row
-                .get(source_var)
-                .cloned()
-                .or_else(|| context.get_variable(source_var).cloned())
-                .unwrap_or(Value::Null);
-
-            let source_id = match Self::extract_entity_id(&source_value) {
-                Some(id) => id,
-                None => continue,
-            };
-
-            let relationships = self.find_relationships(source_id, type_id, direction)?;
-            if relationships.is_empty() {
-                continue;
-            }
-
-            for rel_info in relationships {
-                let target_id = match direction {
-                    Direction::Outgoing => rel_info.target_id,
-                    Direction::Incoming => rel_info.source_id,
-                    Direction::Both => {
-                        if rel_info.source_id == source_id {
-                            rel_info.target_id
-                        } else {
-                            rel_info.source_id
-                        }
-                    }
-                };
-
-                let target_node = self.read_node_as_value(target_id)?;
-
-                if let Some(ref allowed) = allowed_target_ids {
-                    // Only filter if allowed set is non-empty and doesn't contain target
-                    if !allowed.is_empty() && !allowed.contains(&target_id) {
+        // Special case: if source_var is empty or rows is empty, scan all relationships directly
+        // This handles queries like MATCH ()-[r:MENTIONS]->() RETURN count(r)
+        if source_var.is_empty() || rows.is_empty() {
+            // Scan all relationships from storage
+            let total_rels = self.store.relationship_count();
+            for rel_id in 0..total_rels {
+                if let Ok(rel_record) = self.store.read_rel(rel_id) {
+                    if rel_record.is_deleted() {
                         continue;
                     }
+
+                    let matches_type = type_id.is_none() || Some(rel_record.type_id) == type_id;
+                    if !matches_type {
+                        continue;
+                    }
+
+                    let rel_info = RelationshipInfo {
+                        id: rel_id,
+                        source_id: rel_record.src_id,
+                        target_id: rel_record.dst_id,
+                        type_id: rel_record.type_id,
+                    };
+
+                    let mut new_row = HashMap::new();
+                    
+                    // Only add target node if target_var is specified
+                    if !target_var.is_empty() {
+                        let target_node = self.read_node_as_value(rel_record.dst_id)?;
+                        new_row.insert(target_var.to_string(), target_node);
+                    }
+
+                    if !rel_var.is_empty() {
+                        let relationship_value = self.read_relationship_as_value(&rel_info)?;
+                        new_row.insert(rel_var.to_string(), relationship_value);
+                    }
+
+                    expanded_rows.push(new_row);
+                }
+            }
+        } else {
+            // Normal case: expand from source nodes
+            // Only apply target filtering if the target variable is already populated
+            // (this happens when we're doing a join-like operation, not a pure expansion)
+            let allowed_target_ids: Option<std::collections::HashSet<u64>> = if target_var.is_empty() {
+                None
+            } else {
+                context
+                    .get_variable(target_var)
+                    .and_then(|value| match value {
+                        Value::Array(values) => {
+                            let ids: std::collections::HashSet<u64> = values
+                                .iter()
+                                .filter_map(|v| Self::extract_entity_id(v))
+                                .collect();
+                            // Only use the set if it's not empty (empty set means "filter everything out")
+                            if ids.is_empty() {
+                                None
+                            } else {
+                                Some(ids)
+                            }
+                        }
+                        _ => None,
+                    })
+            };
+
+            for row in rows {
+                let source_value = row
+                    .get(source_var)
+                    .cloned()
+                    .or_else(|| context.get_variable(source_var).cloned())
+                    .unwrap_or(Value::Null);
+
+                let source_id = match Self::extract_entity_id(&source_value) {
+                    Some(id) => id,
+                    None => continue,
+                };
+
+                let relationships = self.find_relationships(source_id, type_id, direction)?;
+                if relationships.is_empty() {
+                    continue;
                 }
 
-                let mut new_row = row.clone();
-                new_row.insert(source_var.to_string(), source_value.clone());
-                new_row.insert(target_var.to_string(), target_node);
+                for rel_info in relationships {
+                    let target_id = match direction {
+                        Direction::Outgoing => rel_info.target_id,
+                        Direction::Incoming => rel_info.source_id,
+                        Direction::Both => {
+                            if rel_info.source_id == source_id {
+                                rel_info.target_id
+                            } else {
+                                rel_info.source_id
+                            }
+                        }
+                    };
 
-                if !rel_var.is_empty() {
-                    let relationship_value = self.read_relationship_as_value(&rel_info)?;
-                    new_row.insert(rel_var.to_string(), relationship_value);
+                    let target_node = self.read_node_as_value(target_id)?;
+
+                    if let Some(ref allowed) = allowed_target_ids {
+                        // Only filter if allowed set is non-empty and doesn't contain target
+                        if !allowed.is_empty() && !allowed.contains(&target_id) {
+                            continue;
+                        }
+                    }
+
+                    let mut new_row = row.clone();
+                    new_row.insert(source_var.to_string(), source_value.clone());
+                    new_row.insert(target_var.to_string(), target_node);
+
+                    if !rel_var.is_empty() {
+                        let relationship_value = self.read_relationship_as_value(&rel_info)?;
+                        new_row.insert(rel_var.to_string(), relationship_value);
+                    }
+
+                    expanded_rows.push(new_row);
                 }
-
-                expanded_rows.push(new_row);
             }
         }
 
@@ -1770,9 +1824,31 @@ impl Executor {
                     "labels" => {
                         if let Some(arg) = args.first() {
                             let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(obj) = value {
-                                if let Some(Value::Array(labels)) = obj.get("labels") {
-                                    return Ok(Value::Array(labels.clone()));
+                            // Extract node ID from the value
+                            let node_id = if let Value::Object(obj) = &value {
+                                // Try to get _nexus_id from the object
+                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                    id.as_u64()
+                                } else {
+                                    None
+                                }
+                            } else if let Value::String(id_str) = &value {
+                                // Try to parse as string ID
+                                id_str.parse::<u64>().ok()
+                            } else {
+                                None
+                            };
+                            
+                            if let Some(nid) = node_id {
+                                // Read the node record to get labels
+                                if let Ok(node_record) = self.store.read_node(nid) {
+                                    if let Ok(label_names) = self.catalog.get_labels_from_bitmap(node_record.label_bits) {
+                                        let labels: Vec<Value> = label_names
+                                            .into_iter()
+                                            .map(Value::String)
+                                            .collect();
+                                        return Ok(Value::Array(labels));
+                                    }
                                 }
                             }
                         }
@@ -1781,9 +1857,27 @@ impl Executor {
                     "type" => {
                         if let Some(arg) = args.first() {
                             let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(obj) = value {
-                                if let Some(Value::String(type_name)) = obj.get("type") {
-                                    return Ok(Value::String(type_name.clone()));
+                            // Extract relationship ID from the value
+                            let rel_id = if let Value::Object(obj) = &value {
+                                // Try to get _nexus_id from the object
+                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                    id.as_u64()
+                                } else {
+                                    None
+                                }
+                            } else if let Value::String(id_str) = &value {
+                                // Try to parse as string ID
+                                id_str.parse::<u64>().ok()
+                            } else {
+                                None
+                            };
+                            
+                            if let Some(rid) = rel_id {
+                                // Read the relationship record to get type_id
+                                if let Ok(rel_record) = self.store.read_rel(rid) {
+                                    if let Ok(Some(type_name)) = self.catalog.get_type_name(rel_record.type_id) {
+                                        return Ok(Value::String(type_name));
+                                    }
                                 }
                             }
                         }
@@ -1988,8 +2082,12 @@ impl Executor {
             }
         };
 
+        // Add _nexus_id for internal ID extraction (e.g., for type() function)
+        let mut rel_obj = properties_map;
+        rel_obj.insert("_nexus_id".to_string(), Value::Number(rel.id.into()));
+
         // Return only the properties as a flat object, matching Neo4j's format
-        Ok(Value::Object(properties_map))
+        Ok(Value::Object(rel_obj))
     }
 
     fn result_set_as_rows(&self, context: &ExecutionContext) -> Vec<HashMap<String, Value>> {
