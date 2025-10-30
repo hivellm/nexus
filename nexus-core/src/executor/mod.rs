@@ -1548,8 +1548,9 @@ impl Executor {
 
         let properties_value = self
             .store
-            .load_node_properties(node_id)?
-            .unwrap_or_else(|| Value::Object(Map::new()));
+            .load_node_properties(node_id)?;
+        
+        let properties_value = properties_value.unwrap_or_else(|| Value::Object(Map::new()));
 
         let properties_map = match properties_value {
             Value::Object(map) => map,

@@ -478,6 +478,7 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
                             // If no matching node found, create new one
                             if !found_node {
+                                eprintln!("🔍 MERGE creating node with {} properties: {:?}", props.len(), props.keys().collect::<Vec<_>>());
                                 match engine
                                     .create_node(labels, serde_json::Value::Object(props.clone()))
                                 {

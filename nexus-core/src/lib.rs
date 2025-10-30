@@ -198,6 +198,20 @@ impl Engine {
         Ok(())
     }
 
+    /// Refresh the executor to ensure it sees the latest storage state
+    /// This is necessary because the executor uses a cloned RecordStore
+    /// which has its own PropertyStore instance
+    fn refresh_executor(&mut self) -> Result<()> {
+        // Recreate executor with current storage state
+        self.executor = executor::Executor::new(
+            &self.catalog,
+            &self.storage,
+            &self.indexes.label_index,
+            &self.indexes.knn_index,
+        )?;
+        Ok(())
+    }
+
     /// Create a new engine with default configuration
     pub fn new_default() -> Result<Self> {
         Self::new()
@@ -256,6 +270,9 @@ impl Engine {
         // Update label_index to track this node
         self.indexes.label_index.add_node(node_id, &label_ids)?;
 
+        // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
+        self.refresh_executor()?;
+
         Ok(node_id)
     }
 
@@ -278,6 +295,9 @@ impl Engine {
         self.storage.flush()?;
 
         self.catalog.increment_rel_count(type_id)?;
+
+        // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
+        self.refresh_executor()?;
  
         Ok(rel_id)
     }
