@@ -73,7 +73,30 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
             nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
             nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
         },
-        _ => serde_json::Value::Null,
+        nexus_core::executor::parser::Expression::PropertyAccess { variable: _, property: _ } => {
+            eprintln!("⚠️  expression_to_json_value: Property expression not supported in CREATE");
+            serde_json::Value::Null
+        }
+        nexus_core::executor::parser::Expression::Variable(_) => {
+            eprintln!("⚠️  expression_to_json_value: Variable expression not supported in CREATE");
+            serde_json::Value::Null
+        }
+        nexus_core::executor::parser::Expression::Parameter(_) => {
+            eprintln!("⚠️  expression_to_json_value: Parameter expression not supported in CREATE");
+            serde_json::Value::Null
+        }
+        nexus_core::executor::parser::Expression::Map(map) => {
+            // This is a nested map expression - convert it
+            let mut result = serde_json::Map::new();
+            for (key, expr) in map {
+                result.insert(key.clone(), expression_to_json_value(expr));
+            }
+            serde_json::Value::Object(result)
+        }
+        _ => {
+            eprintln!("⚠️  expression_to_json_value: Unsupported expression type: {:?}", expr);
+            serde_json::Value::Null
+        }
     }
 }
 

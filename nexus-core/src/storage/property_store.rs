@@ -247,7 +247,6 @@ impl PropertyStore {
             // Check if this looks like a valid entry (not all zeros)
             if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
                 // Found first empty entry, stop scanning
-                // Don't break here, just continue to set next_offset
                 self.next_offset = offset;
                 break;
             }

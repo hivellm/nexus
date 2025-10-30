@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.4] - 2025-10-30
 
 ### Fixed
+- **Node Property Loading** ✅ **CRITICAL FIX**
+  - Fixed `PropertyStore::load_properties` to correctly load properties from persistent storage
+  - Fixed `PropertyStore::rebuild_index` to properly reconstruct property index on server restart
+  - Properties are now correctly persisted and retrieved for all nodes and relationships
+  - Queries like `MATCH (d:Document) RETURN d` now return full properties (title, domain, file_hash, etc.)
+  - Resolved issue where properties were saved but not loaded during MATCH queries
+
 - **Query Planner Target Node Handling** ✅
   - Fixed planner to skip `NodeByLabel` operator for target nodes without labels in relationship patterns
   - Prevents double-scanning and incorrect filtering when expanding relationships
