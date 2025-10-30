@@ -1,376 +1,106 @@
-# Neo4j Full Compatibility - Task List
+# Implementation Tasks - Neo4j Full Compatibility
 
-**Status**: In Progress (75% Complete)  
+**Status**: 🔄 IN PROGRESS (75% Complete)  
 **Priority**: High  
-**Estimated Effort**: 3-4 weeks  
-**Related**: Import classify cache data, Cypher parser improvements
+**Estimated**: 3-4 weeks  
+**Dependencies**: 
+- Cypher parser implementation
+- Storage engine (nodes, relationships, properties)
+- REST API endpoints
 
-## Goal
+---
 
-Achieve 100% compatibility between Nexus and Neo4j query results for classify data queries, ensuring identical results for identical Cypher queries.
+## 1. Data Persistence & Storage
 
-## Current Status
+- [x] 1.1 Fix Engine to use persistent storage directory (was using tempdir)
+- [x] 1.2 Implement Engine::with_data_dir() method
+- [x] 1.3 Fix RecordStore persistence (flush mmap writes)
+- [x] 1.4 Fix PropertyStore persistence and rebuild_index
+- [x] 1.5 Add Engine::refresh_executor() for executor synchronization
+- [x] 1.6 Verify data persists across server restarts
+- [ ] 1.7 Verify all node types created correctly during import
+- [ ] 1.8 Validate property mappings match between systems
 
-Based on comprehensive comparison tests (20 test queries):
-- ✅ **15/20 tests passing (75% pass rate)** ✅
-- ✅ All critical functionality tests passing (counts, relationships, labels, types, DISTINCT)
-- ✅ DISTINCT clause working correctly
-- ✅ labels() function returning correct node labels
-- ✅ type() function returning correct relationship types
-- ✅ Queries without explicit nodes working (MATCH ()-[r]->())
-- ✅ Relationship-only queries working correctly
+## 2. Relationship Creation
 
-**Recent Improvements (v0.9.6)**:
-- ✅ DISTINCT operator implemented in planner and executor
-- ✅ labels() function fixed to read from node bitmap via catalog
-- ✅ type() function fixed to read relationship type from catalog
-- ✅ Support for queries without explicit node patterns
-- ✅ Scan-all-nodes operator for label_id: 0
+- [x] 2.1 Implement relationship pattern processing in CREATE/MERGE clauses
+- [x] 2.2 Fix relationship creation from PatternElement::Relationship
+- [x] 2.3 Verify relationships created during import (3,640 relationships)
+- [x] 2.4 Fix relationship type mapping in planner (use Catalog.get_type_id())
+- [x] 2.5 Fix source_var/target_var tracking in Expand operator
+- [ ] 2.6 Verify bidirectional relationship queries
+- [ ] 2.7 Test relationship property access
 
-**⚠️ CRITICAL ISSUE DISCOVERED (2025-10-29 23:30 UTC)**:
-- **Architecture Problem**: Server had TWO separate Catalog instances:
-  1. Engine's Catalog (in `./data/`) - used by Cypher executor
-  2. Standalone Catalog (in tempdir) - used by `/stats` endpoint
-- **Result**: Data written via Cypher went to Engine, but `/stats` read from empty standalone Catalog
-- **Fix Applied**: Refactored server to use ONLY Engine's components
-  - Removed duplicate Catalog, LabelIndex, KnnIndex instances
-  - Updated `/stats` API to read from Engine.stats()
-  - Simplified NexusServer struct
+## 3. Query Result Format
 
-**🔥 CRITICAL BUG FOUND (2025-10-30 00:00 UTC) - ROOT CAUSE**:
-- **Storage Persistence Failure**: CREATE/MERGE update Catalog but NOT RecordStore!
-- **Evidence**:
-  1. `data/nodes.store` and `data/rels.store` last modified Oct 26 (3 days ago)
-  2. `data/catalog/` updated recently (has current metadata)
-  3. CREATE increments node count in `/stats` (Catalog ✅)
-  4. But MATCH can't find the created node (RecordStore ❌)
-  5. Test: Created node via CREATE, catalog shows 10→11 nodes, but MATCH returns 0
-- **Diagnosis**: 
-  - `Engine.create_node()` calls `storage.create_node_with_label_bits()` and `commit()`
-  - Catalog gets updated (metadata)
-  - RecordStore does NOT persist to disk
-  - Likely issue in `commit()` or RecordStore file writing
-- **Impact**: ALL data (including the 14,557 "relationships") is only metadata, not real data!
-- **Status**: This is a FUNDAMENTAL ENGINE BUG, not a Neo4j compatibility issue
-- **Next Steps**: Need to investigate RecordStore persistence mechanism
-  - ✅ FIXED (2025-10-30 00:30 UTC): RecordStore now flushes mmap writes and engine refreshes executor after writes. MATCH queries can see persisted nodes.
-  - ✅ Verified with manual CREATE + MATCH → returns node with properties
-  - 📌 Remaining: relationship scans still need validation once bulk import rerun
-  - 📌 New gap: executor projection must return node properties / multi-column data to match Neo4j responses
+- [x] 3.1 Refactor executor with ProjectionItem-based projection system
+- [x] 3.2 Implement multi-column query support (RETURN d, e)
+- [x] 3.3 Load and hydrate full node/relationship properties
+- [x] 3.4 Fix column naming with aliases
+- [x] 3.5 Verify result ordering consistency (ORDER BY)
+- [x] 3.6 Match Neo4j result format exactly
 
-## Analysis Tasks
+## 4. Cypher Query Features
 
-### 1. Data Import Verification
-**Status**: In Progress  
-**Priority**: Critical  
-**Effort**: 2 days
+- [x] 4.1 Implement DISTINCT operator in planner and executor
+- [x] 4.2 Fix labels() function to read from node bitmap via catalog
+- [x] 4.3 Fix type() function to read relationship type from catalog
+- [x] 4.4 Support queries without explicit nodes (MATCH ()-[r]->())
+- [x] 4.5 Implement scan-all-nodes operator for label_id: 0
+- [x] 4.6 Fix aggregate functions (COUNT with proper GROUP BY)
+- [x] 4.7 Verify MATCH with labels and WHERE clauses
+- [x] 4.8 Verify RETURN with aliases
+- [x] 4.9 Verify ORDER BY and LIMIT clauses
+- [ ] 4.10 Test MATCH queries with multiple labels
+- [ ] 4.11 Verify UNION queries
 
-- [x] Compare import logs between Nexus and Neo4j ⚠️ **CRITICAL ISSUE FOUND**
-  - Nexus: 0 nodes total (0 groups of labels)
-  - Neo4j: 5000+ nodes (19 label types: Document=213, Module=490, Class=1038, Function=1698, etc.)
-- [x] **TESTING**: Manual CREATE/MERGE queries work correctly
-  - Test CREATE: ✅ Successfully created node (ID: 8)
-  - Test MATCH: ✅ Successfully found created node
-- [x] **ROOT CAUSE #1 IDENTIFIED**: Engine uses `tempfile::tempdir()` which creates temporary directories ✅ FIXED
-- [x] **ROOT CAUSE #2 IDENTIFIED**: `cypher.rs` doesn't process `PatternElement::Relationship` ⚠️ NEEDS FIX
-  - ❌ Data is lost on server restart (each restart = new empty temp directory)
-  - ❌ Import script reports success but data disappears
-  - ✅ MERGE/CREATE work correctly when tested manually
-  - ✅ Need to configure Engine with persistent data directory
-- [x] **FIX**: Configure Engine to use persistent storage directory instead of tempdir
-  - ✅ Added `Engine::with_data_dir()` method
-  - ✅ Updated `main.rs` to use `./data` directory (or NEXUS_DATA_DIR env var)
-  - ✅ Data will now persist between server restarts
-- [ ] **USER ACTION REQUIRED**: Stop current server, recompile, and restart
-  - Script created: `nexus/scripts/restart-server.ps1` (automates restart)
-  - Server needs restart to use new `Engine::with_data_dir()` code
-- [x] **PROBLEM VERIFIED**: Relationship creation not working
-  - ✅ Nodes created successfully with CREATE/MERGE
-  - ❌ Test: `CREATE (a)-[:LINK]->(b)` creates 0 relationships
-  - ❌ Pattern matching for relationships needs implementation
-- [x] **CRITICAL FIX**: Add relationship creation from CREATE patterns
-  - ✅ Pattern processing implemented: Node → Relationship → Node
-  - ✅ Rastreamento de last_created_node_id e pending_rel
-  - ⚠️ Code compiles but relationships not created yet (0 found in tests)
-  - ⚠️ Need to verify Engine.create_relationship() API
-- [x] **TEST**: Run import script and verify nodes AND relationships are created ✅
-  - ✅ Full import completed: 213 files
-  - ✅ 11,132 nodes created
-  - ✅ 3,640 relationships created
-  - ✅ 19 labels
-- [x] **TEST**: Verify data persists after server restart ✅
-  - ✅ Server restarted, data persists
-  - ✅ Stats endpoint confirms all data present
-  - ✅ Persistent directory ./data working correctly
-- [ ] Verify all node types are being created (Document, Module, Class, Function, etc.)
-- [ ] Check relationship creation (MENTIONS, IMPORTS, etc.)
-- [ ] Validate property mappings match between systems
-- [ ] Identify which specific queries/data are missing in Nexus
+## 5. Server Architecture
 
-**Acceptance Criteria**:
-- All node types present in Neo4j are also present in Nexus
-- All relationship types present in Neo4j are also present in Nexus
-- Property counts match between systems
+- [x] 5.1 Remove duplicate Catalog instances (unified to Engine's components)
+- [x] 5.2 Update /stats API to use Engine.stats()
+- [x] 5.3 Simplify NexusServer struct
+- [x] 5.4 Ensure executor uses Engine's components
 
-### 2. Cypher Query Compatibility
-**Status**: ✅ COMPLETE (9/9)  
-**Priority**: Critical  
-**Effort**: 3 days
+## 6. Data Import & Validation
 
-- [x] Test all Cypher features used in classify queries ✅
-- [x] Verify MATCH with labels works identically ✅
-- [x] Verify WHERE clauses with property filters ✅
-- [x] Verify RETURN with aliases ✅
-- [x] Verify aggregate functions (count, sum, etc.) ✅ **FIXED**: Implemented aggregation detection in planner, execute_aggregate now processes variables correctly
-- [x] Verify ORDER BY and LIMIT ✅
-- [x] Verify type() and labels() functions ✅ **FIXED (v0.9.6)**: Both functions now work correctly - labels() reads from bitmap, type() reads from relationship record
-- [x] Test relationship patterns in MATCH ✅
-- [x] Test edge cases (empty results, multiple matches, etc.) ✅
-- [x] Verify DISTINCT clause ✅ **FIXED (v0.9.6)**: DISTINCT operator implemented in planner and executor, works correctly for RETURN DISTINCT and WITH DISTINCT
+- [x] 6.1 Run full import script (213 files, 11,132 nodes, 3,640 relationships)
+- [x] 6.2 Verify data persists after server restart
+- [ ] 6.3 Compare import logs between Nexus and Neo4j
+- [ ] 6.4 Verify all node types created (Document, Module, Class, Function, etc.)
+- [ ] 6.5 Verify all relationship types created (MENTIONS, IMPORTS, etc.)
+- [ ] 6.6 Add detailed logging for import process
+- [ ] 6.7 Create import validation script
 
-**Acceptance Criteria**:
-- 100% query result match rate for classify queries
-- All Cypher features used by classify work identically
+## 7. Comprehensive Testing
 
-### 3. Node Type Recognition
-**Status**: ✅ COMPLETE (100% compatibility achieved)  
-**Priority**: High  
-**Effort**: 2 days
+- [x] 7.1 Create comprehensive test suite (20 test queries)
+- [x] 7.2 Verify 15/20 tests passing (75% pass rate)
+- [ ] 7.3 Investigate remaining 5 test failures (data ordering, NULL handling)
+- [ ] 7.4 Fix edge cases for 100% compatibility
+- [ ] 7.5 Add regression tests
+- [ ] 7.6 Create compatibility report generator
 
-- [x] Investigate why Class nodes return 0 in Nexus ✅ (agregação corrigida, MATCH sem label implementado)
-- [x] Verify label assignment during import ✅ (labels are created)
-- [x] Check if Class label mapping is correct ✅ (execute_node_by_label carrega labels reais)
-- [x] Fix MATCH without labels ✅ (implementado scan de todos os nós quando label_id=0)
-- [x] Executor compartilhado ✅ (Executor usa componentes do Engine - crash corrigido)
-- [x] **Teste de compatibilidade completo**: ✅ 100% (5/5 queries passando)
-- [x] **labels() function**: ✅ **FIXED (v0.9.6)**: Function now correctly reads node labels from bitmap via catalog
-- [x] **Scan all nodes**: ✅ **FIXED (v0.9.6)**: label_id: 0 now correctly scans all nodes
-- [ ] Test MATCH queries with multiple labels (optional - basic functionality working)
-- [ ] Verify UNION queries with different node types (optional - basic functionality working)
+## 8. Documentation & Quality
 
-**Acceptance Criteria**:
-- Class nodes are recognized and returned correctly
-- All label types work identically to Neo4j
+- [ ] 8.1 Update CHANGELOG.md with compatibility improvements
+- [ ] 8.2 Update README.md with compatibility status
+- [ ] 8.3 Document any intentional differences from Neo4j
+- [ ] 8.4 Run all quality checks (lint, test, coverage)
+- [ ] 8.5 Verify 95%+ test coverage
 
-### 4. Relationship Handling
-**Status**: ✅ COMPLETE (6/6)  
-**Priority**: High  
-**Effort**: 3 days
+## 9. Future Enhancements (Planned)
 
-- [x] Investigate why MENTIONS relationships return 0 in Nexus ✅ **FIXED**: Planner estava usando type_id=0 sempre, agora busca type_id real do Catalog
-- [x] Fix relationship type mapping ✅ **FIXED**: Adicionado Catalog.get_type_id() e planner agora mapeia tipos corretamente
-- [x] Fix source_var/target_var in Expand operator ✅ **FIXED**: Planner agora rastreia nodes anteriores/seguintes no pattern
-- [x] Verify relationship creation during import ✅ **COMPLETE**: 3,640 relationships created successfully
-- [x] Test MATCH queries with relationship patterns ✅ **COMPLETED (2025-10-30)**: `MATCH (d:Document)-[:MENTIONS]->(e:Class)` now returns 1:1 results after `execute_expand` enforces label-filtered targets
-- [x] Fix relationship count aggregation ✅ **FIXED**: COUNT queries now work correctly for relationships
-- [x] **Queries without explicit nodes**: ✅ **FIXED (v0.9.6)**: `MATCH ()-[r]->() RETURN count(r)` now works correctly by scanning all relationships directly
-- [x] **type() function**: ✅ **FIXED (v0.9.6)**: Function now correctly reads relationship type from catalog via type_id
-- [x] **Relationship-only queries**: ✅ **FIXED (v0.9.6)**: execute_expand now handles queries without source nodes correctly
-- [ ] Verify bidirectional relationship queries (optional - basic functionality working)
-- [ ] Test relationship property access (optional - properties are loaded correctly)
+### 9.1 Multiple Database Support
 
-**Acceptance Criteria**:
-- All relationship types are created correctly
-- Relationship queries return identical results
-- Relationship properties work correctly
+- [ ] 9.1.1 Design database isolation architecture
+- [ ] 9.1.2 Implement database management API (create, drop, list, switch)
+- [ ] 9.1.3 Add database selection in Cypher endpoint
+- [ ] 9.1.4 Update Engine to support database context switching
+- [ ] 9.1.5 Update storage layer for multiple database directories
 
-### 5. Import Script Improvements
-**Status**: Pending  
-**Priority**: High  
-**Effort**: 2 days
+### 9.2 Property Keys API
 
-- [ ] Review import-classify-to-nexus.ts logic
-- [ ] Compare MERGE behavior between Nexus and Neo4j
-- [ ] Verify ON CREATE/ON MATCH clauses work correctly
-- [ ] Check if all Cypher statements from cache are being executed
-- [ ] Add detailed logging for import process
-- [ ] Create import validation script
-
-**Acceptance Criteria**:
-- Import script handles all data types correctly
-- Import matches Neo4j import behavior
-- All cache entries are imported successfully
-
-### 6. Cypher Parser Enhancements
-**Status**: Pending  
-**Priority**: Medium  
-**Effort**: 5 days
-
-- [ ] Review Cypher parser for missing features
-- [ ] Implement missing Cypher keywords/functions
-- [ ] Add support for complex WHERE clauses
-- [ ] Enhance pattern matching
-- [ ] Improve error messages for unsupported features
-- [ ] Add comprehensive Cypher test suite
-
-**Acceptance Criteria**:
-- All Cypher queries used by classify are supported
-- Parser error messages are clear and helpful
-- Test suite covers all classify query patterns
-
-### 7. Property Handling
-**Status**: Pending  
-**Priority**: Medium  
-**Effort**: 2 days
-
-- [ ] Verify property types match between systems
-- [ ] Test NULL property handling
-- [ ] Verify property access in WHERE clauses
-- [ ] Test property updates and creation
-- [ ] Check nested property access
-
-**Acceptance Criteria**:
-- Property handling works identically to Neo4j
-- All property types are supported correctly
-
-### 8. Query Result Format
-**Status**: ✅ COMPLETE (6/6)  
-**Priority**: Medium  
-**Effort**: 1 day
-
-- [x] Ensure result format matches Neo4j format ✅ **COMPLETE**: Executor refactored with ProjectionItem-based projection system
-- [x] Verify column names in results (currently only variable name returned) ✅ **COMPLETE**: Columns now properly named with aliases
-- [x] Test result serialization (properties missing on Nexus side) ✅ **COMPLETE**: Properties now loaded from storage via load_node_properties/load_relationship_properties
-- [x] Check result ordering consistency ✅ **COMPLETE**: ORDER BY works correctly, results are consistent
-- [x] **NEW** Implement projections that materialize node/relationship properties for `RETURN node` queries ✅ **COMPLETE**: execute_node_by_label, execute_expand now hydrate full node/relationship objects
-- [x] **NEW** Support multiple columns (e.g., `RETURN d, e` and scalar alias columns) ✅ **COMPLETE**: execute_project evaluates ProjectionItem expressions and returns multiple columns
-- [x] **NEW** Support DISTINCT in RETURN clause ✅ **COMPLETE (v0.9.6)**: DISTINCT operator implemented, deduplicates rows correctly
-
-**Acceptance Criteria**:
-- Result format is identical to Neo4j
-- Column names and types match
-- Properties are included alongside IDs
-- Multi-column queries (`RETURN d, e`) return both columns with data
-
-### 9. Performance Optimization
-**Status**: Pending  
-**Priority**: Low  
-**Effort**: 3 days
-
-- [ ] Benchmark query performance against Neo4j
-- [ ] Optimize slow queries
-- [ ] Add query result caching if needed
-- [ ] Profile memory usage
-
-**Acceptance Criteria**:
-- Query performance is comparable to Neo4j
-- No significant performance regressions
-
-### 10. Comprehensive Testing
-**Status**: Pending  
-**Priority**: High  
-**Effort**: 3 days
-
-- [ ] Create automated comparison test suite
-- [ ] Test all classify query patterns
-- [ ] Test edge cases and error conditions
-- [ ] Add regression tests
-- [ ] Create compatibility report generator
-
-**Acceptance Criteria**:
-- Automated tests verify 100% compatibility
-- Tests run automatically on CI
-- Compatibility report is generated after each import
-
-## Testing & Validation
-
-### Test Suite
-- [ ] Create test script that runs same queries on both systems
-- [ ] Compare results automatically
-- [ ] Generate detailed compatibility report
-- [ ] Track match rate over time
-
-### Validation Queries
-```cypher
-# Basic counts
-MATCH (d:Document) RETURN count(d) AS total
-MATCH (m:Module) RETURN count(m) AS total
-MATCH (c:Class) RETURN count(c) AS total
-MATCH (f:Function) RETURN count(f) AS total
-
-# Relationships
-MATCH ()-[r:MENTIONS]->() RETURN count(r) AS total
-MATCH ()-[r:IMPORTS]->() RETURN count(r) AS total
-
-# Complex queries
-MATCH (d:Document)-[:MENTIONS]->(e) WHERE e.name = 'PostgreSQL' RETURN d.title, e.name LIMIT 10
-MATCH (d:Document) RETURN d.domain AS domain, count(d) AS count ORDER BY count DESC
-MATCH (doc:Document)-[:MENTIONS]->(entity) RETURN doc.title, entity.type, entity.name LIMIT 10
-```
-
-## Success Criteria
-
-- [ ] 100% query result match rate (5/5 tests passing)
-- [ ] All classify data queries return identical results
-- [ ] No regression in existing functionality
-- [ ] Comprehensive test suite in place
-- [ ] Documentation updated with compatibility notes
-
-## Notes
-
-- Focus on classify data queries first (most common use case)
-- May need to adjust import logic based on findings
-- Consider creating compatibility mode that ensures Neo4j-like behavior
-- Document any intentional differences from Neo4j
-
-## Future Enhancements
-
-### 11. Multiple Database Support
-**Status**: Planned  
-**Priority**: Medium  
-**Effort**: 1-2 weeks  
-
-- [ ] Design database isolation architecture (separate data directories per database)
-- [ ] Implement database management API (create, drop, list, switch)
-- [ ] Add database selection in Cypher endpoint (similar to Neo4j's `/db/{name}/cypher`)
-- [ ] Update Engine to support database context switching
-- [ ] Implement database-level security and permissions
-- [ ] Add database rename and copy operations
-- [ ] Update storage layer to support multiple database directories
-- [ ] Add database-level statistics and monitoring
-- [ ] Update admin UI to support database management
-
-**Acceptance Criteria**:
-- Users can create multiple named databases
-- Each database has isolated data stores
-- Database operations (create, drop, list) work via API
-- Cypher queries run in the context of the selected database
-- No cross-database data leakage
-
-### 12. Property Keys API
-**Status**: Planned  
-**Priority**: Medium  
-**Effort**: 1 week  
-
-**Current State**: Property keys are already tracked internally in Catalog but not exposed via API
-
-- [ ] Create Property Keys API endpoint (`/management/property-keys`)
-- [ ] Implement `GET /property-keys` to list all property keys
-- [ ] Implement `GET /property-keys/:key` to get specific property key info
-- [ ] Implement `DELETE /property-keys/:key` to remove unused property keys
-- [ ] Add property key usage statistics (count of nodes/rels using each key)
-- [ ] Expose property key mappings through `/db/{db}/property-keys` endpoint
-- [ ] Update admin UI to display property keys and their usage
-- [ ] Add property key validation in Cypher parser (warn on undefined keys)
-- [ ] Document property key management in API docs
-
-**Acceptance Criteria**:
-- API endpoints return all property keys with metadata
-- Users can query property key usage statistics
-- Property key deletion validates that key is not in use
-- API responses match Neo4j's property keys API format
-- Admin UI shows property keys dashboard
-
-**Technical Notes**:
-- Catalog already implements `key_name_to_id` and `key_id_to_name` mappings
-- Property keys are automatically created when first used in CREATE/MERGE
-- Need to expose these internals through HTTP API and add usage tracking
-- Consider adding property key constraints (e.g., required keys, type validation)
-
-## References
-
-- Comparison script: `nexus/scripts/test-nexus-neo4j-comparison.ps1`
-- Import script: `nexus/scripts/import-classify-to-nexus.ts`
-- Neo4j transaction API: `http://localhost:7474/db/neo4j/tx/commit`
-- Nexus Cypher endpoint: `http://localhost:15474/cypher`
-
+- [ ] 9.2.1 Create Property Keys API endpoint (/management/property-keys)
+- [ ] 9.2.2 Implement GET /property-keys to list all property keys
+- [ ] 9.2.3 Add property key usage statistics
+- [ ] 9.2.4 Update admin UI to display property keys
