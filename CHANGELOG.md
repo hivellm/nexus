@@ -5,6 +5,22 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2025-10-30
+
+### Fixed
+- **Relationship Expansion Parity with Neo4j** ✅
+  - `execute_expand` now respects the target variable's label-filtered bindings, preventing unrelated nodes from surfacing in MATCH clauses
+  - `extract_entity_id` resolves `_nexus_id`, `_element_id`, and string-based IDs so relationship traversals hydrate the intended entities
+  - Comparative regression `npx tsx scripts/compare-nexus-neo4j.ts` returns identical results for `MATCH (d:Document)-[:MENTIONS]->(e:Class) RETURN d, e LIMIT 5`
+
+### Tooling
+- **Import Helper Compatibility** ✅
+  - Added `// @ts-nocheck` to `scripts/import-classify-to-neo4j.ts` so it continues to run via `npx tsx` without requiring Node type definitions
+
+### Testing
+- `cargo test -p nexus-core`
+- `npx tsx scripts/compare-nexus-neo4j.ts`
+
 ## [0.9.2] - 2025-10-27
 
 ### Added

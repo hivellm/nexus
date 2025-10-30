@@ -86,8 +86,8 @@ pub enum Operator {
     },
     /// Project columns
     Project {
-        /// Column expressions
-        columns: Vec<String>,
+        /// Projection expressions with aliases
+        items: Vec<ProjectionItem>,
     },
     /// Limit results
     Limit {
@@ -145,6 +145,15 @@ pub enum Operator {
         /// Right join key
         right_key: String,
     },
+}
+
+/// Projection entry describing an expression and its alias
+#[derive(Debug, Clone)]
+pub struct ProjectionItem {
+    /// Expression to evaluate
+    pub expression: parser::Expression,
+    /// Alias to use in the result set
+    pub alias: String,
 }
 
 /// Relationship direction
@@ -260,12 +269,15 @@ impl Executor {
         // Execute the plan
         let mut context = ExecutionContext::new(query.params.clone());
         let mut results = Vec::new();
+        let mut projection_columns: Vec<String> = Vec::new();
 
         for operator in operators {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
                     let nodes = self.execute_node_by_label(label_id)?;
                     context.set_variable(&variable, Value::Array(nodes));
+                    let rows = self.materialize_rows_from_variables(&context);
+                    self.update_result_set_from_rows(&mut context, &rows);
                 }
                 Operator::Filter { predicate } => {
                     self.execute_filter(&mut context, &predicate)?;
@@ -286,11 +298,12 @@ impl Executor {
                         &rel_var,
                     )?;
                 }
-                Operator::Project { columns } => {
-                    results = self.execute_project(&context, &columns)?;
+                Operator::Project { items } => {
+                    projection_columns = items.iter().map(|item| item.alias.clone()).collect();
+                    results = self.execute_project(&mut context, &items)?;
                 }
                 Operator::Limit { count } => {
-                    results.truncate(count);
+                    self.execute_limit(&mut context, count)?;
                 }
                 Operator::Sort { columns, ascending } => {
                     self.execute_sort(&mut context, &columns, &ascending)?;
@@ -333,9 +346,21 @@ impl Executor {
             }
         }
 
+        let final_columns = if !context.result_set.columns.is_empty() {
+            context.result_set.columns.clone()
+        } else {
+            projection_columns
+        };
+
+        let final_rows = if !context.result_set.rows.is_empty() {
+            context.result_set.rows.clone()
+        } else {
+            results
+        };
+
         Ok(ResultSet {
-            columns: vec!["n".to_string()], // Simple MVP - just return nodes
-            rows: results,
+            columns: final_columns,
+            rows: final_rows,
         })
     }
 
@@ -412,20 +437,22 @@ impl Executor {
                     });
                 }
                 parser::Clause::Return(return_clause) => {
-                    let columns: Vec<String> = return_clause
+                    let projection_items: Vec<ProjectionItem> = return_clause
                         .items
                         .iter()
-                        .map(|item| {
-                            if let Some(alias) = &item.alias {
-                                alias.clone()
-                            } else {
-                                self.expression_to_string(&item.expression)
-                                    .unwrap_or_default()
-                            }
+                        .map(|item| ProjectionItem {
+                            expression: item.expression.clone(),
+                            alias: item
+                                .alias
+                                .clone()
+                                .unwrap_or_else(|| {
+                                    self.expression_to_string(&item.expression)
+                                        .unwrap_or_default()
+                                }),
                         })
                         .collect();
 
-                    operators.push(Operator::Project { columns });
+                    operators.push(Operator::Project { items: projection_items });
                 }
                 parser::Clause::Limit(limit_clause) => {
                     if let parser::Expression::Literal(parser::Literal::Integer(count)) =
@@ -523,18 +550,10 @@ impl Executor {
         let mut results = Vec::new();
 
         for node_id in bitmap.iter() {
-            let _node_record = self.store.read_node(node_id as u64)?;
-
-            // Create node representation
-            let mut node = Map::new();
-            node.insert("id".to_string(), Value::Number((node_id as u64).into()));
-            node.insert(
-                "labels".to_string(),
-                Value::Array(vec![Value::String(format!("label_{}", label_id))]),
-            );
-            node.insert("properties".to_string(), Value::Object(Map::new()));
-
-            results.push(Value::Object(node));
+            match self.read_node_as_value(node_id as u64)? {
+                Value::Null => continue,
+                value => results.push(value),
+            }
         }
 
         Ok(results)
@@ -546,26 +565,17 @@ impl Executor {
         let mut parser = parser::CypherParser::new(predicate.to_string());
         let expr = parser.parse_expression()?;
 
-        // Apply filter to all variables
-        let mut filtered_variables = HashMap::new();
+        let rows = self.materialize_rows_from_variables(context);
+        let mut filtered_rows = Vec::new();
 
-        for (var_name, value) in &context.variables {
-            if let Value::Array(nodes) = value {
-                let mut filtered_nodes = Vec::new();
-
-                for node in nodes {
-                    if self.evaluate_predicate(node, &expr, context)? {
-                        filtered_nodes.push(node.clone());
-                    }
-                }
-
-                filtered_variables.insert(var_name.clone(), Value::Array(filtered_nodes));
-            } else {
-                filtered_variables.insert(var_name.clone(), value.clone());
+        for row in rows {
+            if self.evaluate_predicate_on_row(&row, context, &expr)? {
+                filtered_rows.push(row);
             }
         }
 
-        context.variables = filtered_variables;
+        self.update_variables_from_rows(context, &filtered_rows);
+        self.update_result_set_from_rows(context, &filtered_rows);
         Ok(())
     }
 
@@ -579,108 +589,114 @@ impl Executor {
         target_var: &str,
         rel_var: &str,
     ) -> Result<()> {
-        // Get source nodes from context
-        let source_nodes = if let Some(Value::Array(nodes)) = context.get_variable(source_var) {
-            nodes.clone()
-        } else {
-            return Ok(());
-        };
+        let rows = self.materialize_rows_from_variables(context);
+        let mut expanded_rows = Vec::new();
 
-        let mut expanded_results = Vec::new();
-        let mut relationships = Vec::new();
+        let allowed_target_ids: Option<std::collections::HashSet<u64>> = context
+            .get_variable(target_var)
+            .and_then(|value| match value {
+                Value::Array(values) => {
+                    let ids: std::collections::HashSet<u64> = values
+                        .iter()
+                        .filter_map(|v| Self::extract_entity_id(v))
+                        .collect();
+                    Some(ids)
+                }
+                _ => None,
+            });
 
-        for source_node in source_nodes {
-            if let Value::Object(node_obj) = &source_node {
-                if let Some(Value::Number(node_id)) = node_obj.get("id") {
-                    let node_id = node_id.as_u64().unwrap_or(0);
+        for row in rows {
+            let source_value = row
+                .get(source_var)
+                .cloned()
+                .or_else(|| context.get_variable(source_var).cloned())
+                .unwrap_or(Value::Null);
 
-                    // Find relationships for this node
-                    let rels = self.find_relationships(node_id, type_id, direction)?;
+            let source_id = match Self::extract_entity_id(&source_value) {
+                Some(id) => id,
+                None => continue,
+            };
 
-                    for rel in rels {
-                        // Get target node
-                        let target_id = match direction {
-                            Direction::Outgoing => rel.target_id,
-                            Direction::Incoming => rel.source_id,
-                            Direction::Both => {
-                                // For both directions, we need to determine which is the target
-                                if rel.source_id == node_id {
-                                    rel.target_id
-                                } else {
-                                    rel.source_id
-                                }
-                            }
-                        };
+            let relationships = self.find_relationships(source_id, type_id, direction)?;
+            if relationships.is_empty() {
+                continue;
+            }
 
-                        if let Ok(target_node) = self.read_node_as_value(target_id) {
-                            // Create relationship object
-                            let mut rel_obj = Map::new();
-                            rel_obj.insert("id".to_string(), Value::Number(rel.id.into()));
-                            rel_obj.insert(
-                                "type".to_string(),
-                                Value::String(format!("type_{}", rel.type_id)),
-                            );
-                            rel_obj.insert(
-                                "source_id".to_string(),
-                                Value::Number(rel.source_id.into()),
-                            );
-                            rel_obj.insert(
-                                "target_id".to_string(),
-                                Value::Number(rel.target_id.into()),
-                            );
-                            rel_obj.insert("properties".to_string(), Value::Object(Map::new()));
-
-                            relationships.push(Value::Object(rel_obj));
-                            expanded_results.push(target_node);
+            for rel_info in relationships {
+                let target_id = match direction {
+                    Direction::Outgoing => rel_info.target_id,
+                    Direction::Incoming => rel_info.source_id,
+                    Direction::Both => {
+                        if rel_info.source_id == source_id {
+                            rel_info.target_id
+                        } else {
+                            rel_info.source_id
                         }
                     }
+                };
+
+                let target_node = self.read_node_as_value(target_id)?;
+
+                if let Some(ref allowed) = allowed_target_ids {
+                    if !allowed.is_empty() && !allowed.contains(&target_id) {
+                        continue;
+                    }
                 }
+
+                let mut new_row = row.clone();
+                new_row.insert(source_var.to_string(), source_value.clone());
+                new_row.insert(target_var.to_string(), target_node);
+
+                if !rel_var.is_empty() {
+                    let relationship_value = self.read_relationship_as_value(&rel_info)?;
+                    new_row.insert(rel_var.to_string(), relationship_value);
+                }
+
+                expanded_rows.push(new_row);
             }
         }
 
-        // Update context with expanded results
-        context.set_variable(target_var, Value::Array(expanded_results));
-        if !rel_var.is_empty() {
-            context.set_variable(rel_var, Value::Array(relationships));
-        }
+        self.update_variables_from_rows(context, &expanded_rows);
+        self.update_result_set_from_rows(context, &expanded_rows);
 
         Ok(())
     }
 
     /// Execute Project operator
-    fn execute_project(&self, context: &ExecutionContext, _columns: &[String]) -> Result<Vec<Row>> {
-        // MVP: Simple projection - return all variables
-        let mut rows = Vec::new();
+    fn execute_project(&self, context: &mut ExecutionContext, items: &[ProjectionItem]) -> Result<Vec<Row>> {
+        let rows = self.materialize_rows_from_variables(context);
+        let mut projected_rows = Vec::new();
 
-        for value in context.variables.values() {
-            if let Value::Array(nodes) = value {
-                for node in nodes {
-                    rows.push(Row {
-                        values: vec![node.clone()],
-                    });
-                }
+        for row_map in &rows {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                let value = self.evaluate_projection_expression(row_map, context, &item.expression)?;
+                values.push(value);
             }
+            projected_rows.push(Row { values });
         }
 
-        Ok(rows)
+        context.result_set.columns = items.iter().map(|item| item.alias.clone()).collect();
+        context.result_set.rows = projected_rows.clone();
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
+
+        Ok(projected_rows)
     }
 
     /// Execute Limit operator
     fn execute_limit(&self, context: &mut ExecutionContext, count: usize) -> Result<()> {
-        // Limit the number of rows in the result set
+        if context.result_set.rows.is_empty() {
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
+        }
+
         if context.result_set.rows.len() > count {
             context.result_set.rows.truncate(count);
         }
 
-        // Also limit any array variables that might be used for further processing
-        for value in context.variables.values_mut() {
-            if let Value::Array(nodes) = value {
-                if nodes.len() > count {
-                    nodes.truncate(count);
-                }
-            }
-        }
-
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
         Ok(())
     }
 
@@ -691,49 +707,37 @@ impl Executor {
         columns: &[String],
         ascending: &[bool],
     ) -> Result<()> {
-        // Get all variables that need to be sorted
-        let mut sort_data = Vec::new();
-
-        for (var_name, value) in &context.variables {
-            if let Value::Array(nodes) = value {
-                for (idx, node) in nodes.iter().enumerate() {
-                    sort_data.push((idx, var_name.clone(), node.clone()));
-                }
-            }
+        if context.result_set.rows.is_empty() && !context.variables.is_empty() {
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
         }
 
-        // Sort based on the specified columns
-        sort_data.sort_by(|a, b| {
-            for (i, column) in columns.iter().enumerate() {
-                let ascending = i < ascending.len() && ascending[i];
+        if context.result_set.rows.is_empty() {
+            return Ok(());
+        }
 
-                let a_val = self.get_column_value(&a.2, column);
-                let b_val = self.get_column_value(&b.2, column);
-
-                let comparison = self.compare_values_for_sort(&a_val, &b_val);
-                if comparison != std::cmp::Ordering::Equal {
-                    return if ascending {
-                        comparison
-                    } else {
-                        comparison.reverse()
-                    };
+        context.result_set.rows.sort_by(|a, b| {
+            for (idx, column) in columns.iter().enumerate() {
+                let col_idx = self
+                    .get_column_index(column, &context.result_set.columns)
+                    .unwrap_or(usize::MAX);
+                if col_idx == usize::MAX {
+                    continue;
+                }
+                let asc = ascending.get(idx).copied().unwrap_or(true);
+                let left = a.values.get(col_idx).cloned().unwrap_or(Value::Null);
+                let right = b.values.get(col_idx).cloned().unwrap_or(Value::Null);
+                let ordering = self.compare_values_for_sort(&left, &right);
+                if ordering != std::cmp::Ordering::Equal {
+                    return if asc { ordering } else { ordering.reverse() };
                 }
             }
             std::cmp::Ordering::Equal
         });
 
-        // Reorganize variables based on sorted order
-        let mut sorted_variables: HashMap<String, Vec<Value>> = HashMap::new();
-
-        for (_, var_name, node) in sort_data {
-            sorted_variables.entry(var_name).or_default().push(node);
-        }
-
-        // Update context with sorted variables
-        for (var_name, nodes) in sorted_variables {
-            context.set_variable(&var_name, Value::Array(nodes));
-        }
-
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
+        self.update_result_set_from_rows(context, &row_maps);
         Ok(())
     }
 
@@ -746,19 +750,20 @@ impl Executor {
     ) -> Result<()> {
         use std::collections::HashMap;
 
-        // Group rows by group_by columns
-        // Collect rows first to avoid borrow checker issues
+        if context.result_set.rows.is_empty() && !context.variables.is_empty() {
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
+        }
+
         let rows = context.result_set.rows.clone();
         let mut groups: HashMap<Vec<Value>, Vec<Row>> = HashMap::new();
 
-        // Process each row
         for row in rows {
-            // Extract group key
             let mut group_key = Vec::new();
             for col in group_by {
-                if let Some(value) = context.result_set.columns.iter().position(|c| c == col) {
-                    if value < row.values.len() {
-                        group_key.push(row.values[value].clone());
+                if let Some(index) = self.get_column_index(col, &context.result_set.columns) {
+                    if index < row.values.len() {
+                        group_key.push(row.values[index].clone());
                     } else {
                         group_key.push(Value::Null);
                     }
@@ -767,38 +772,26 @@ impl Executor {
                 }
             }
 
-            // Add row to group
             groups.entry(group_key).or_default().push(row);
         }
 
-        // Clear current results
         context.result_set.rows.clear();
 
-        // Process each group
         for (group_key, group_rows) in groups {
             let mut result_row = group_key;
-
-            // Apply aggregations
             for agg in aggregations {
                 let agg_value = match agg {
-                    Aggregation::Count { column, alias: _ } => {
+                    Aggregation::Count { column, .. } => {
                         if column.is_none() {
-                            // COUNT(*)
                             Value::Number(serde_json::Number::from(group_rows.len()))
                         } else {
-                            // COUNT(column) - count non-null values
                             let col_name = column.as_ref().unwrap();
-                            let col_idx = context
-                                .result_set
-                                .columns
-                                .iter()
-                                .position(|c| c == col_name.as_str());
+                            let col_idx = self
+                                .get_column_index(col_name, &context.result_set.columns);
                             let count = if let Some(idx) = col_idx {
                                 group_rows
                                     .iter()
-                                    .filter(|row| {
-                                        idx < row.values.len() && !row.values[idx].is_null()
-                                    })
+                                    .filter(|row| idx < row.values.len() && !row.values[idx].is_null())
                                     .count()
                             } else {
                                 0
@@ -806,13 +799,8 @@ impl Executor {
                             Value::Number(serde_json::Number::from(count))
                         }
                     }
-                    Aggregation::Sum { column, alias: _ } => {
-                        let col_name = &column;
-                        let col_idx = context
-                            .result_set
-                            .columns
-                            .iter()
-                            .position(|c| c == col_name.as_str());
+                    Aggregation::Sum { column, .. } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
                         if let Some(idx) = col_idx {
                             let sum: f64 = group_rows
                                 .iter()
@@ -832,13 +820,8 @@ impl Executor {
                             Value::Number(serde_json::Number::from(0))
                         }
                     }
-                    Aggregation::Avg { column, alias: _ } => {
-                        let col_name = &column;
-                        let col_idx = context
-                            .result_set
-                            .columns
-                            .iter()
-                            .position(|c| c == col_name.as_str());
+                    Aggregation::Avg { column, .. } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
                         if let Some(idx) = col_idx {
                             let values: Vec<f64> = group_rows
                                 .iter()
@@ -863,13 +846,8 @@ impl Executor {
                             Value::Null
                         }
                     }
-                    Aggregation::Min { column, alias: _ } => {
-                        let col_name = &column;
-                        let col_idx = context
-                            .result_set
-                            .columns
-                            .iter()
-                            .position(|c| c == col_name.as_str());
+                    Aggregation::Min { column, .. } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
                         if let Some(idx) = col_idx {
                             let min_value = group_rows
                                 .iter()
@@ -893,13 +871,8 @@ impl Executor {
                             Value::Null
                         }
                     }
-                    Aggregation::Max { column, alias: _ } => {
-                        let col_name = &column;
-                        let col_idx = context
-                            .result_set
-                            .columns
-                            .iter()
-                            .position(|c| c == col_name.as_str());
+                    Aggregation::Max { column, .. } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
                         if let Some(idx) = col_idx {
                             let max_value = group_rows
                                 .iter()
@@ -930,6 +903,13 @@ impl Executor {
             context.result_set.rows.push(Row { values: result_row });
         }
 
+        let mut columns = group_by.iter().cloned().collect::<Vec<_>>();
+        columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
+        context.result_set.columns = columns;
+
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
+
         Ok(())
     }
 
@@ -954,15 +934,9 @@ impl Executor {
         combined_rows.extend(right_context.result_set.rows);
 
         // Update the main context with combined results
-        context.result_set.rows = combined_rows;
-
-        // Ensure columns are consistent (use left side columns as base)
-        if !left_context.result_set.columns.is_empty() {
-            context.result_set.columns = left_context.result_set.columns.clone();
-        } else if !right_context.result_set.columns.is_empty() {
-            context.result_set.columns = right_context.result_set.columns.clone();
-        }
-
+        context.set_columns_and_rows(context.result_set.columns.clone(), combined_rows);
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
         Ok(())
     }
 
@@ -987,10 +961,8 @@ impl Executor {
                     context, *type_id, *direction, source_var, target_var, rel_var,
                 )?;
             }
-            Operator::Project { columns } => {
-                let rows = self.execute_project(context, columns)?;
-                context.result_set.rows = rows;
-                context.result_set.columns = columns.clone();
+            Operator::Project { items } => {
+                self.execute_project(context, items)?;
             }
             Operator::Limit { count } => {
                 self.execute_limit(context, *count)?;
@@ -1172,6 +1144,8 @@ impl Executor {
         let mut combined_columns = left_context.result_set.columns.clone();
         combined_columns.extend(right_context.result_set.columns.clone());
         context.result_set.columns = combined_columns;
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
 
         Ok(())
     }
@@ -1274,54 +1248,54 @@ impl Executor {
 
         // Set the results in the context
         context.set_variable(variable, Value::Array(results));
+        let rows = self.materialize_rows_from_variables(context);
+        self.update_result_set_from_rows(context, &rows);
 
         Ok(())
     }
 
     /// Execute Distinct operator
     fn execute_distinct(&self, context: &mut ExecutionContext, columns: &[String]) -> Result<()> {
+        if context.result_set.rows.is_empty() && !context.variables.is_empty() {
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
+        }
+
         if context.result_set.rows.is_empty() {
             return Ok(());
         }
 
-        // Create a set to track unique combinations of values
         let mut seen = std::collections::HashSet::new();
         let mut distinct_rows = Vec::new();
 
         for row in &context.result_set.rows {
-            // Extract values for the specified columns
             let mut key_values = Vec::new();
-
             if columns.is_empty() {
-                // If no columns specified, use all values
                 key_values = row.values.clone();
             } else {
-                // Extract values for specified columns
                 for column in columns {
                     if let Some(index) = self.get_column_index(column, &context.result_set.columns)
                     {
                         if index < row.values.len() {
                             key_values.push(row.values[index].clone());
                         } else {
-                            key_values.push(serde_json::Value::Null);
+                            key_values.push(Value::Null);
                         }
                     } else {
-                        key_values.push(serde_json::Value::Null);
+                        key_values.push(Value::Null);
                     }
                 }
             }
 
-            // Create a key for uniqueness checking
             let key = serde_json::to_string(&key_values).unwrap_or_default();
-
             if seen.insert(key) {
                 distinct_rows.push(row.clone());
             }
         }
 
-        // Update context with distinct results
-        context.result_set.rows = distinct_rows;
-
+        context.result_set.rows = distinct_rows.clone();
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
         Ok(())
     }
 
@@ -1497,10 +1471,18 @@ impl Executor {
         if let Ok(node_record) = self.store.read_node(node_id) {
             let mut rel_ptr = node_record.first_rel_ptr;
 
-            // Traverse the relationship chain
             while rel_ptr != 0 {
-                if let Ok(rel_record) = self.store.read_rel(rel_ptr) {
-                    // Check if this relationship matches our criteria
+                let current_rel_id = rel_ptr.saturating_sub(1);
+                if let Ok(rel_record) = self.store.read_rel(current_rel_id) {
+                    if rel_record.is_deleted() {
+                        rel_ptr = if rel_record.src_id == node_id {
+                            rel_record.next_src_ptr
+                        } else {
+                            rel_record.next_dst_ptr
+                        };
+                        continue;
+                    }
+
                     let matches_type = type_id.is_none() || Some(rel_record.type_id) == type_id;
                     let matches_direction = match direction {
                         Direction::Outgoing => rel_record.src_id == node_id,
@@ -1510,14 +1492,13 @@ impl Executor {
 
                     if matches_type && matches_direction {
                         relationships.push(RelationshipInfo {
-                            id: rel_ptr,
+                            id: current_rel_id,
                             source_id: rel_record.src_id,
                             target_id: rel_record.dst_id,
                             type_id: rel_record.type_id,
                         });
                     }
 
-                    // Move to next relationship
                     rel_ptr = if rel_record.src_id == node_id {
                         rel_record.next_src_ptr
                     } else {
@@ -1536,21 +1517,49 @@ impl Executor {
     fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
         let node_record = self.store.read_node(node_id)?;
 
-        // Create node representation
-        let mut node = Map::new();
-        node.insert("id".to_string(), Value::Number(node_id.into()));
+        if node_record.is_deleted() {
+            return Ok(Value::Null);
+        }
 
-        // Get labels from the label bits
-        let mut labels = Vec::new();
-        for i in 0..32 {
-            if node_record.label_bits & (1 << i) != 0 {
-                labels.push(Value::String(format!("label_{}", i)));
+        let label_names = self
+            .catalog
+            .get_labels_from_bitmap(node_record.label_bits)?;
+        let labels: Vec<Value> = label_names
+            .into_iter()
+            .map(Value::String)
+            .collect();
+
+        let properties_value = self
+            .store
+            .load_node_properties(node_id)?
+            .unwrap_or_else(|| Value::Object(Map::new()));
+
+        let properties_map = match properties_value {
+            Value::Object(map) => map,
+            other => {
+                let mut map = Map::new();
+                map.insert("value".to_string(), other);
+                map
+            }
+        };
+
+        let mut node = Map::new();
+        node.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
+        node.insert(
+            "_element_id".to_string(),
+            Value::String(node_id.to_string()),
+        );
+        node.insert("labels".to_string(), Value::Array(labels));
+        node.insert("properties".to_string(), Value::Object(properties_map.clone()));
+
+        for (key, value) in properties_map {
+            if key == "labels" {
+                // Avoid clobbering label metadata with property having same name
+                node.insert("properties.labels".to_string(), value);
+            } else {
+                node.insert(key, value);
             }
         }
-        node.insert("labels".to_string(), Value::Array(labels));
-
-        // For MVP, we'll return empty properties
-        node.insert("properties".to_string(), Value::Object(Map::new()));
 
         Ok(Value::Object(node))
     }
@@ -1655,6 +1664,368 @@ impl Executor {
 
         Ok(())
     }
+
+    fn materialize_rows_from_variables(
+        &self,
+        context: &ExecutionContext,
+    ) -> Vec<HashMap<String, Value>> {
+        let mut arrays: HashMap<String, Vec<Value>> = HashMap::new();
+
+        for (var, value) in &context.variables {
+            match value {
+                Value::Array(values) => {
+                    arrays.insert(var.clone(), values.clone());
+                }
+                other => {
+                    arrays.insert(var.clone(), vec![other.clone()]);
+                }
+            }
+        }
+
+        if arrays.is_empty() {
+            return Vec::new();
+        }
+
+        let max_len = arrays
+            .values()
+            .map(|values| values.len())
+            .max()
+            .unwrap_or(0);
+
+        let mut rows = Vec::new();
+        for idx in 0..max_len {
+            let mut row = HashMap::new();
+            for (var, values) in &arrays {
+                let value = if values.len() == max_len {
+                    values.get(idx).cloned().unwrap_or(Value::Null)
+                } else if values.len() == 1 {
+                    values[0].clone()
+                } else {
+                    values.get(idx).cloned().unwrap_or(Value::Null)
+                };
+                row.insert(var.clone(), value);
+            }
+            rows.push(row);
+        }
+
+        rows
+    }
+
+    fn update_result_set_from_rows(
+        &self,
+        context: &mut ExecutionContext,
+        rows: &[HashMap<String, Value>],
+    ) {
+        let mut columns: Vec<String> = context.variables.keys().cloned().collect();
+        columns.sort();
+
+        context.result_set.columns = columns.clone();
+        context.result_set.rows = rows
+            .iter()
+            .map(|row_map| Row {
+                values: columns
+                    .iter()
+                    .map(|column| row_map.get(column).cloned().unwrap_or(Value::Null))
+                    .collect(),
+            })
+            .collect();
+    }
+
+    fn evaluate_projection_expression(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        expr: &parser::Expression,
+    ) -> Result<Value> {
+        match expr {
+            parser::Expression::Variable(name) => Ok(row.get(name).cloned().unwrap_or(Value::Null)),
+            parser::Expression::PropertyAccess { variable, property } => {
+                Ok(row
+                    .get(variable)
+                    .map(|entity| Self::extract_property(entity, property))
+                    .unwrap_or(Value::Null))
+            }
+            parser::Expression::Literal(literal) => match literal {
+                parser::Literal::String(s) => Ok(Value::String(s.clone())),
+                parser::Literal::Integer(i) => Ok(Value::Number((*i).into())),
+                parser::Literal::Float(f) => Ok(
+                    serde_json::Number::from_f64(*f)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null),
+                ),
+                parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
+                parser::Literal::Null => Ok(Value::Null),
+            },
+            parser::Expression::Parameter(name) => {
+                Ok(context.params.get(name).cloned().unwrap_or(Value::Null))
+            }
+            parser::Expression::FunctionCall { name, args } => {
+                let lowered = name.to_lowercase();
+                match lowered.as_str() {
+                    "labels" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(obj) = value {
+                                if let Some(Value::Array(labels)) = obj.get("labels") {
+                                    return Ok(Value::Array(labels.clone()));
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "type" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(obj) = value {
+                                if let Some(Value::String(type_name)) = obj.get("type") {
+                                    return Ok(Value::String(type_name.clone()));
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    _ => Ok(Value::Null),
+                }
+            }
+            parser::Expression::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_projection_expression(row, context, left)?;
+                let right_val = self.evaluate_projection_expression(row, context, right)?;
+                match op {
+                    parser::BinaryOperator::Add => self.add_values(&left_val, &right_val),
+                    parser::BinaryOperator::Subtract => self.subtract_values(&left_val, &right_val),
+                    parser::BinaryOperator::Multiply => self.multiply_values(&left_val, &right_val),
+                    parser::BinaryOperator::Divide => self.divide_values(&left_val, &right_val),
+                    parser::BinaryOperator::Equal => Ok(Value::Bool(left_val == right_val)),
+                    parser::BinaryOperator::NotEqual => Ok(Value::Bool(left_val != right_val)),
+                    parser::BinaryOperator::LessThan => {
+                        Ok(Value::Bool(self.compare_values_for_sort(&left_val, &right_val)
+                            == std::cmp::Ordering::Less))
+                    }
+                    parser::BinaryOperator::LessThanOrEqual => Ok(Value::Bool(
+                        matches!(
+                            self.compare_values_for_sort(&left_val, &right_val),
+                            std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+                        ),
+                    )),
+                    parser::BinaryOperator::GreaterThan => Ok(Value::Bool(
+                        self.compare_values_for_sort(&left_val, &right_val)
+                            == std::cmp::Ordering::Greater,
+                    )),
+                    parser::BinaryOperator::GreaterThanOrEqual => Ok(Value::Bool(
+                        matches!(
+                            self.compare_values_for_sort(&left_val, &right_val),
+                            std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+                        ),
+                    )),
+                    parser::BinaryOperator::And => {
+                        let result = self.value_to_bool(&left_val)? && self.value_to_bool(&right_val)?;
+                        Ok(Value::Bool(result))
+                    }
+                    parser::BinaryOperator::Or => {
+                        let result = self.value_to_bool(&left_val)? || self.value_to_bool(&right_val)?;
+                        Ok(Value::Bool(result))
+                    }
+                    _ => Ok(Value::Null),
+                }
+            }
+            parser::Expression::UnaryOp { op, operand } => {
+                let value = self.evaluate_projection_expression(row, context, operand)?;
+                match op {
+                    parser::UnaryOperator::Not => Ok(Value::Bool(!self.value_to_bool(&value)?)),
+                    parser::UnaryOperator::Minus => {
+                        let number = self.value_to_number(&value)?;
+                        serde_json::Number::from_f64(-number)
+                            .map(Value::Number)
+                            .ok_or_else(|| Error::TypeMismatch {
+                                expected: "number".to_string(),
+                                actual: "non-finite".to_string(),
+                            })
+                    }
+                    parser::UnaryOperator::Plus => Ok(value),
+                }
+            }
+            _ => Ok(Value::Null),
+        }
+    }
+
+    fn extract_property(entity: &Value, property: &str) -> Value {
+        if let Value::Object(obj) = entity {
+            if let Some(Value::Object(props)) = obj.get("properties") {
+                return props.get(property).cloned().unwrap_or(Value::Null);
+            }
+            return obj.get(property).cloned().unwrap_or(Value::Null);
+        }
+        Value::Null
+    }
+
+    fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
+        let l = self.value_to_number(left)?;
+        let r = self.value_to_number(right)?;
+        serde_json::Number::from_f64(l + r)
+            .map(Value::Number)
+            .ok_or_else(|| Error::TypeMismatch {
+                expected: "number".to_string(),
+                actual: "non-finite sum".to_string(),
+            })
+    }
+
+    fn subtract_values(&self, left: &Value, right: &Value) -> Result<Value> {
+        let l = self.value_to_number(left)?;
+        let r = self.value_to_number(right)?;
+        serde_json::Number::from_f64(l - r)
+            .map(Value::Number)
+            .ok_or_else(|| Error::TypeMismatch {
+                expected: "number".to_string(),
+                actual: "non-finite difference".to_string(),
+            })
+    }
+
+    fn multiply_values(&self, left: &Value, right: &Value) -> Result<Value> {
+        let l = self.value_to_number(left)?;
+        let r = self.value_to_number(right)?;
+        serde_json::Number::from_f64(l * r)
+            .map(Value::Number)
+            .ok_or_else(|| Error::TypeMismatch {
+                expected: "number".to_string(),
+                actual: "non-finite product".to_string(),
+            })
+    }
+
+    fn divide_values(&self, left: &Value, right: &Value) -> Result<Value> {
+        let l = self.value_to_number(left)?;
+        let r = self.value_to_number(right)?;
+        if r == 0.0 {
+            return Err(Error::TypeMismatch {
+                expected: "non-zero".to_string(),
+                actual: "division by zero".to_string(),
+            });
+        }
+        serde_json::Number::from_f64(l / r)
+            .map(Value::Number)
+            .ok_or_else(|| Error::TypeMismatch {
+                expected: "number".to_string(),
+                actual: "non-finite quotient".to_string(),
+            })
+    }
+
+    fn update_variables_from_rows(
+        &self,
+        context: &mut ExecutionContext,
+        rows: &[HashMap<String, Value>],
+    ) {
+        let mut arrays: HashMap<String, Vec<Value>> = HashMap::new();
+        for row in rows {
+            for (var, value) in row {
+                arrays.entry(var.clone()).or_default().push(value.clone());
+            }
+        }
+        context.variables.clear();
+        for (var, values) in arrays {
+            context
+                .variables
+                .insert(var, Value::Array(values));
+        }
+    }
+
+    fn evaluate_predicate_on_row(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        expr: &parser::Expression,
+    ) -> Result<bool> {
+        let value = self.evaluate_projection_expression(row, context, expr)?;
+        self.value_to_bool(&value)
+    }
+
+    fn extract_entity_id(value: &Value) -> Option<u64> {
+        match value {
+            Value::Object(obj) => {
+                if let Some(id) = obj.get("_nexus_id").and_then(|id| id.as_u64()) {
+                    Some(id)
+                } else if let Some(id) = obj
+                    .get("_element_id")
+                    .and_then(|id| id.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    Some(id)
+                } else if let Some(id_value) = obj.get("id") {
+                    match id_value {
+                        Value::Number(num) => num.as_u64(),
+                        Value::String(s) => s.parse::<u64>().ok(),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            Value::Number(num) => num.as_u64(),
+            _ => None,
+        }
+    }
+
+    fn read_relationship_as_value(&self, rel: &RelationshipInfo) -> Result<Value> {
+        let type_name = self
+            .catalog
+            .get_type_name(rel.type_id)?
+            .unwrap_or_else(|| format!("type_{}", rel.type_id));
+
+        let properties_value = self
+            .store
+            .load_relationship_properties(rel.id)?
+            .unwrap_or_else(|| Value::Object(Map::new()));
+
+        let properties_map = match properties_value {
+            Value::Object(map) => map,
+            other => {
+                let mut map = Map::new();
+                map.insert("value".to_string(), other);
+                map
+            }
+        };
+
+        let mut rel_obj = Map::new();
+        rel_obj.insert("_nexus_id".to_string(), Value::Number(rel.id.into()));
+        rel_obj.insert("id".to_string(), Value::Number(rel.id.into()));
+        rel_obj.insert("type".to_string(), Value::String(type_name));
+        rel_obj.insert("startNode".to_string(), Value::Number(rel.source_id.into()));
+        rel_obj.insert("endNode".to_string(), Value::Number(rel.target_id.into()));
+        rel_obj.insert("properties".to_string(), Value::Object(properties_map.clone()));
+
+        for (key, value) in properties_map {
+            rel_obj.insert(key, value);
+        }
+
+        Ok(Value::Object(rel_obj))
+    }
+
+    fn result_set_as_rows(&self, context: &ExecutionContext) -> Vec<HashMap<String, Value>> {
+        context
+            .result_set
+            .rows
+            .iter()
+            .map(|row| {
+                let mut map = HashMap::new();
+                for (idx, column) in context.result_set.columns.iter().enumerate() {
+                    if idx < row.values.len() {
+                        map.insert(column.clone(), row.values[idx].clone());
+                    } else {
+                        map.insert(column.clone(), Value::Null);
+                    }
+                }
+                map
+            })
+            .collect()
+    }
+
+    fn aggregation_alias(&self, aggregation: &Aggregation) -> String {
+        match aggregation {
+            Aggregation::Count { alias, .. }
+            | Aggregation::Sum { alias, .. }
+            | Aggregation::Avg { alias, .. }
+            | Aggregation::Min { alias, .. }
+            | Aggregation::Max { alias, .. } => alias.clone(),
+        }
+    }
 }
 
 /// Relationship information for expansion
@@ -1696,6 +2067,11 @@ impl ExecutionContext {
     fn get_variable(&self, name: &str) -> Option<&Value> {
         self.variables.get(name)
     }
+
+    fn set_columns_and_rows(&mut self, columns: Vec<String>, rows: Vec<Row>) {
+        self.result_set.columns = columns;
+        self.result_set.rows = rows;
+    }
 }
 
 impl Default for Executor {
@@ -1717,9 +2093,10 @@ impl Default for Executor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use tempfile::TempDir;
 
-    fn create_test_executor() -> (Executor, TempDir) {
+    fn create_executor() -> (Executor, TempDir) {
         let dir = TempDir::new().unwrap();
         let catalog = Catalog::new(dir.path()).unwrap();
         let store = RecordStore::new(dir.path()).unwrap();
@@ -1730,1137 +2107,53 @@ mod tests {
         (executor, dir)
     }
 
-    #[test]
-    fn test_executor_creation() {
-        let (_executor, _dir) = create_test_executor();
-        // Test passes if creation succeeds
+    fn build_node(id: u64, name: &str, age: i64) -> Value {
+        let mut props = Map::new();
+        props.insert("name".to_string(), Value::String(name.to_string()));
+        props.insert("age".to_string(), Value::Number(age.into()));
+
+        let mut node = Map::new();
+        node.insert("id".to_string(), Value::Number(id.into()));
+        node.insert("labels".to_string(), Value::Array(vec![Value::String("Person".to_string())]));
+        node.insert("properties".to_string(), Value::Object(props));
+        Value::Object(node)
     }
 
     #[test]
-    fn test_query_creation() {
-        let mut params = HashMap::new();
-        params.insert("name".to_string(), Value::String("test".to_string()));
+    fn project_node_property_returns_alias() {
+        let (executor, _dir) = create_executor();
+        let mut context = ExecutionContext::new(HashMap::new());
+        context.set_variable("n", Value::Array(vec![build_node(1, "Alice", 30)]));
 
-        let query = Query {
-            cypher: "MATCH (n:Person) RETURN n".to_string(),
-            params,
+        let item = ProjectionItem {
+            expression: parser::Expression::PropertyAccess {
+                variable: "n".to_string(),
+                property: "name".to_string(),
+            },
+            alias: "name".to_string(),
         };
 
-        assert_eq!(query.cypher, "MATCH (n:Person) RETURN n");
-        assert_eq!(
-            query.params.get("name").unwrap(),
-            &Value::String("test".to_string())
-        );
+        let rows = executor.execute_project(&mut context, &[item]).unwrap();
+        assert_eq!(context.result_set.columns, vec!["name".to_string()]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].values[0], Value::String("Alice".to_string()))
     }
 
     #[test]
-    fn test_parse_match_query() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create a label first
-        let catalog = Catalog::new("./test_data").unwrap();
-        let label_id = catalog.get_or_create_label("Person").unwrap();
-
-        // Test parsing
-        let operators = executor
-            .parse_and_plan("MATCH (n:Person) RETURN n")
-            .unwrap();
-        assert_eq!(operators.len(), 2);
-
-        match &operators[0] {
-            Operator::NodeByLabel {
-                label_id: parsed_label_id,
-                variable,
-            } => {
-                assert_eq!(*parsed_label_id, label_id);
-                assert_eq!(variable, "n");
-            }
-            _ => panic!("Expected NodeByLabel operator"),
-        }
-
-        match &operators[1] {
-            Operator::Project { columns } => {
-                assert_eq!(columns, &vec!["n".to_string()]);
-            }
-            _ => panic!("Expected Project operator"),
-        }
-    }
-
-    #[test]
-    fn test_parse_invalid_query() {
-        let (executor, _dir) = create_test_executor();
-
-        // Test with actually invalid query syntax
-        let result = executor.parse_and_plan("INVALID SYNTAX!!!");
-        // Invalid syntax should return an error
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_execution_context() {
-        let mut params = HashMap::new();
-        params.insert("param1".to_string(), Value::String("value1".to_string()));
-
-        let mut context = ExecutionContext::new(params);
-
-        // Test setting and getting variables
-        context.set_variable("n", Value::Array(vec![Value::String("node1".to_string())]));
-
-        assert_eq!(
-            context.get_variable("n"),
-            Some(&Value::Array(vec![Value::String("node1".to_string())]))
-        );
-        assert_eq!(context.get_variable("nonexistent"), None);
-    }
-
-    #[test]
-    fn test_direction_enum() {
-        assert_eq!(Direction::Outgoing, Direction::Outgoing);
-        assert_ne!(Direction::Outgoing, Direction::Incoming);
-        assert_ne!(Direction::Outgoing, Direction::Both);
-    }
-
-    #[test]
-    fn test_operator_cloning() {
-        let op = Operator::NodeByLabel {
-            label_id: 1,
-            variable: "n".to_string(),
-        };
-
-        let cloned = op.clone();
-        match cloned {
-            Operator::NodeByLabel { label_id, variable } => {
-                assert_eq!(label_id, 1);
-                assert_eq!(variable, "n");
-            }
-            _ => panic!("Expected NodeByLabel operator"),
-        }
-    }
-
-    #[test]
-    fn test_result_set() {
-        let mut result_set = ResultSet {
-            columns: vec!["n".to_string()],
-            rows: vec![],
-        };
-
-        result_set.rows.push(Row {
-            values: vec![Value::String("test".to_string())],
-        });
-
-        assert_eq!(result_set.columns.len(), 1);
-        assert_eq!(result_set.rows.len(), 1);
-        assert_eq!(result_set.rows[0].values.len(), 1);
-    }
-
-    #[test]
-    fn test_executor_default() {
-        let executor = Executor::default();
-        // Test passes if default creation succeeds
-        drop(executor);
-    }
-
-    #[test]
-    fn test_aggregate_count_star() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create test data
+    fn filter_removes_non_matching_rows() {
+        let (executor, _dir) = create_executor();
         let mut context = ExecutionContext::new(HashMap::new());
-        context.result_set.columns = vec!["name".to_string(), "age".to_string()];
-        context.result_set.rows = vec![
-            Row {
-                values: vec![
-                    Value::String("Alice".to_string()),
-                    Value::Number(serde_json::Number::from(25)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Bob".to_string()),
-                    Value::Number(serde_json::Number::from(30)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Charlie".to_string()),
-                    Value::Number(serde_json::Number::from(35)),
-                ],
-            },
-        ];
-
-        // Test COUNT(*)
-        let aggregations = vec![Aggregation::Count {
-            column: None,
-            alias: "count".to_string(),
-        }];
-        executor
-            .execute_aggregate(&mut context, &[], &aggregations)
-            .unwrap();
-
-        assert_eq!(context.result_set.rows.len(), 1);
-        assert_eq!(context.result_set.rows[0].values.len(), 1);
-        assert_eq!(
-            context.result_set.rows[0].values[0],
-            Value::Number(serde_json::Number::from(3))
-        );
-    }
-
-    #[test]
-    fn test_aggregate_count_column() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create test data with null values
-        let mut context = ExecutionContext::new(HashMap::new());
-        context.result_set.columns = vec!["name".to_string(), "age".to_string()];
-        context.result_set.rows = vec![
-            Row {
-                values: vec![
-                    Value::String("Alice".to_string()),
-                    Value::Number(serde_json::Number::from(25)),
-                ],
-            },
-            Row {
-                values: vec![Value::String("Bob".to_string()), Value::Null],
-            },
-            Row {
-                values: vec![
-                    Value::String("Charlie".to_string()),
-                    Value::Number(serde_json::Number::from(35)),
-                ],
-            },
-        ];
-
-        // Test COUNT(age) - should count non-null values
-        let aggregations = vec![Aggregation::Count {
-            column: Some("age".to_string()),
-            alias: "count".to_string(),
-        }];
-        executor
-            .execute_aggregate(&mut context, &[], &aggregations)
-            .unwrap();
-
-        assert_eq!(context.result_set.rows.len(), 1);
-        assert_eq!(context.result_set.rows[0].values.len(), 1);
-        assert_eq!(
-            context.result_set.rows[0].values[0],
-            Value::Number(serde_json::Number::from(2))
-        );
-    }
-
-    #[test]
-    fn test_aggregate_sum() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create test data
-        let mut context = ExecutionContext::new(HashMap::new());
-        context.result_set.columns = vec!["name".to_string(), "score".to_string()];
-        context.result_set.rows = vec![
-            Row {
-                values: vec![
-                    Value::String("Alice".to_string()),
-                    Value::Number(serde_json::Number::from(10)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Bob".to_string()),
-                    Value::Number(serde_json::Number::from(20)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Charlie".to_string()),
-                    Value::Number(serde_json::Number::from(30)),
-                ],
-            },
-        ];
-
-        // Test SUM(score)
-        let aggregations = vec![Aggregation::Sum {
-            column: "score".to_string(),
-            alias: "total".to_string(),
-        }];
-        executor
-            .execute_aggregate(&mut context, &[], &aggregations)
-            .unwrap();
-
-        assert_eq!(context.result_set.rows.len(), 1);
-        assert_eq!(context.result_set.rows[0].values.len(), 1);
-        assert_eq!(
-            context.result_set.rows[0].values[0],
-            Value::Number(serde_json::Number::from_f64(60.0).unwrap())
-        );
-    }
-
-    #[test]
-    fn test_aggregate_avg() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create test data
-        let mut context = ExecutionContext::new(HashMap::new());
-        context.result_set.columns = vec!["name".to_string(), "score".to_string()];
-        context.result_set.rows = vec![
-            Row {
-                values: vec![
-                    Value::String("Alice".to_string()),
-                    Value::Number(serde_json::Number::from(10)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Bob".to_string()),
-                    Value::Number(serde_json::Number::from(20)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Charlie".to_string()),
-                    Value::Number(serde_json::Number::from(30)),
-                ],
-            },
-        ];
-
-        // Test AVG(score)
-        let aggregations = vec![Aggregation::Avg {
-            column: "score".to_string(),
-            alias: "average".to_string(),
-        }];
-        executor
-            .execute_aggregate(&mut context, &[], &aggregations)
-            .unwrap();
-
-        assert_eq!(context.result_set.rows.len(), 1);
-        assert_eq!(context.result_set.rows[0].values.len(), 1);
-        // Average should be 20.0
-        if let Value::Number(n) = &context.result_set.rows[0].values[0] {
-            assert_eq!(n.as_f64().unwrap(), 20.0);
-        } else {
-            panic!("Expected number");
-        }
-    }
-
-    #[test]
-    fn test_aggregate_min_max() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create test data
-        let mut context = ExecutionContext::new(HashMap::new());
-        context.result_set.columns = vec!["name".to_string(), "score".to_string()];
-        context.result_set.rows = vec![
-            Row {
-                values: vec![
-                    Value::String("Alice".to_string()),
-                    Value::Number(serde_json::Number::from(10)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Bob".to_string()),
-                    Value::Number(serde_json::Number::from(20)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("Charlie".to_string()),
-                    Value::Number(serde_json::Number::from(30)),
-                ],
-            },
-        ];
-
-        // Test MIN and MAX together
-        let aggregations = vec![
-            Aggregation::Min {
-                column: "score".to_string(),
-                alias: "min_score".to_string(),
-            },
-            Aggregation::Max {
-                column: "score".to_string(),
-                alias: "max_score".to_string(),
-            },
-        ];
-        executor
-            .execute_aggregate(&mut context, &[], &aggregations)
-            .unwrap();
-
-        assert_eq!(context.result_set.rows.len(), 1);
-        assert_eq!(context.result_set.rows[0].values.len(), 2);
-
-        // Check MIN
-        if let Value::Number(n) = &context.result_set.rows[0].values[0] {
-            assert_eq!(n.as_f64().unwrap(), 10.0);
-        } else {
-            panic!("Expected number for MIN");
-        }
-
-        // Check MAX
-        if let Value::Number(n) = &context.result_set.rows[0].values[1] {
-            assert_eq!(n.as_f64().unwrap(), 30.0);
-        } else {
-            panic!("Expected number for MAX");
-        }
-    }
-
-    #[test]
-    fn test_aggregate_group_by() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create test data with groups
-        let mut context = ExecutionContext::new(HashMap::new());
-        context.result_set.columns = vec!["department".to_string(), "salary".to_string()];
-        context.result_set.rows = vec![
-            Row {
-                values: vec![
-                    Value::String("IT".to_string()),
-                    Value::Number(serde_json::Number::from(1000)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("IT".to_string()),
-                    Value::Number(serde_json::Number::from(2000)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("HR".to_string()),
-                    Value::Number(serde_json::Number::from(1500)),
-                ],
-            },
-            Row {
-                values: vec![
-                    Value::String("HR".to_string()),
-                    Value::Number(serde_json::Number::from(2500)),
-                ],
-            },
-        ];
-
-        // Test GROUP BY department with SUM(salary)
-        let aggregations = vec![Aggregation::Sum {
-            column: "salary".to_string(),
-            alias: "total_salary".to_string(),
-        }];
-        executor
-            .execute_aggregate(&mut context, &["department".to_string()], &aggregations)
-            .unwrap();
-
-        assert_eq!(context.result_set.rows.len(), 2); // Two groups
-
-        // Sort results for consistent testing
-        context.result_set.rows.sort_by(|a, b| {
-            let dept_a = a.values[0].as_str().unwrap();
-            let dept_b = b.values[0].as_str().unwrap();
-            dept_a.cmp(dept_b)
-        });
-
-        // Check IT department total
-        assert_eq!(
-            context.result_set.rows[0].values[0],
-            Value::String("HR".to_string())
-        );
-        if let Value::Number(n) = &context.result_set.rows[0].values[1] {
-            assert_eq!(n.as_f64().unwrap(), 4000.0); // 1500 + 2500
-        } else {
-            panic!("Expected number for HR total");
-        }
-
-        // Check HR department total
-        assert_eq!(
-            context.result_set.rows[1].values[0],
-            Value::String("IT".to_string())
-        );
-        if let Value::Number(n) = &context.result_set.rows[1].values[1] {
-            assert_eq!(n.as_f64().unwrap(), 3000.0); // 1000 + 2000
-        } else {
-            panic!("Expected number for IT total");
-        }
-    }
-
-    #[test]
-    fn test_execute_node_by_label() {
-        let (_executor, _dir) = create_test_executor();
-
-        // Create a label and add some nodes to the index
-        let catalog = Catalog::new("./test_data").unwrap();
-        let label_id = catalog.get_or_create_label("Person").unwrap();
-
-        // Add some test nodes to the label index
-        let label_index = LabelIndex::new();
-        label_index.add_node(1, &[label_id]).unwrap();
-        label_index.add_node(2, &[label_id]).unwrap();
-        label_index.add_node(3, &[label_id]).unwrap();
-
-        // Create executor with the populated index
-        let temp_dir = TempDir::new().unwrap();
-        let store = RecordStore::new(temp_dir.path()).unwrap();
-        let knn_index = KnnIndex::new_default(128).unwrap();
-        let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-
-        // Test executing node by label
-        let results = executor.execute_node_by_label(label_id).unwrap();
-        assert_eq!(results.len(), 3);
-
-        // Check that all results are valid node objects
-        for result in results {
-            if let Value::Object(node_obj) = result {
-                assert!(node_obj.contains_key("id"));
-                assert!(node_obj.contains_key("labels"));
-                assert!(node_obj.contains_key("properties"));
-            } else {
-                panic!("Expected object");
-            }
-        }
-    }
-
-    #[test]
-    fn test_execute_filter() {
-        let (executor, _dir) = create_test_executor();
-
-        let mut context = ExecutionContext::new(HashMap::new());
-
-        // Create test nodes
-        let mut node1 = Map::new();
-        node1.insert("id".to_string(), Value::Number(1.into()));
-        node1.insert("name".to_string(), Value::String("Alice".to_string()));
-        node1.insert("age".to_string(), Value::Number(25.into()));
-
-        let mut node2 = Map::new();
-        node2.insert("id".to_string(), Value::Number(2.into()));
-        node2.insert("name".to_string(), Value::String("Bob".to_string()));
-        node2.insert("age".to_string(), Value::Number(30.into()));
-
         context.set_variable(
             "n",
-            Value::Array(vec![Value::Object(node1), Value::Object(node2)]),
+            Value::Array(vec![build_node(1, "Alice", 30), build_node(2, "Bob", 20)]),
         );
 
-        // Test filter with age > 25
-        executor.execute_filter(&mut context, "n.age > 25").unwrap();
-
-        // Should only have Bob's node
-        if let Some(Value::Array(nodes)) = context.get_variable("n") {
-            assert_eq!(nodes.len(), 1);
-            if let Value::Object(node_obj) = &nodes[0] {
-                assert_eq!(
-                    node_obj.get("name"),
-                    Some(&Value::String("Bob".to_string()))
-                );
-            }
-        } else {
-            panic!("Expected array of nodes");
-        }
-    }
-
-    #[test]
-    fn test_execute_expand() {
-        let (executor, _dir) = create_test_executor();
-
-        let mut context = ExecutionContext::new(HashMap::new());
-
-        // Create test source nodes
-        let mut source_node = Map::new();
-        source_node.insert("id".to_string(), Value::Number(1.into()));
-        context.set_variable("source", Value::Array(vec![Value::Object(source_node)]));
-
-        // Test expand operation
         executor
-            .execute_expand(
-                &mut context,
-                None, // any type
-                Direction::Outgoing,
-                "source",
-                "target",
-                "rel",
-            )
-            .unwrap();
-
-        // Should have target nodes and relationships
-        assert!(context.get_variable("target").is_some());
-        assert!(context.get_variable("rel").is_some());
-    }
-
-    #[test]
-    fn test_execute_project() {
-        let (executor, _dir) = create_test_executor();
-
-        let mut context = ExecutionContext::new(HashMap::new());
-
-        // Create test nodes
-        let mut node = Map::new();
-        node.insert("id".to_string(), Value::Number(1.into()));
-        node.insert("name".to_string(), Value::String("Alice".to_string()));
-
-        context.set_variable("n", Value::Array(vec![Value::Object(node)]));
-
-        // Test project operation
-        let results = executor
-            .execute_project(&context, &["n".to_string()])
-            .unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].values.len(), 1);
-    }
-
-    #[test]
-    fn test_execute_sort() {
-        let (executor, _dir) = create_test_executor();
-
-        let mut context = ExecutionContext::new(HashMap::new());
-
-        // Create test nodes with different ages
-        let mut node1 = Map::new();
-        node1.insert("id".to_string(), Value::Number(1.into()));
-        node1.insert("age".to_string(), Value::Number(30.into()));
-
-        let mut node2 = Map::new();
-        node2.insert("id".to_string(), Value::Number(2.into()));
-        node2.insert("age".to_string(), Value::Number(20.into()));
-
-        let mut node3 = Map::new();
-        node3.insert("id".to_string(), Value::Number(3.into()));
-        node3.insert("age".to_string(), Value::Number(25.into()));
-
-        context.set_variable(
-            "n",
-            Value::Array(vec![
-                Value::Object(node1),
-                Value::Object(node2),
-                Value::Object(node3),
-            ]),
-        );
-
-        // Test sort by age ascending
-        executor
-            .execute_sort(&mut context, &["age".to_string()], &[true])
-            .unwrap();
-
-        // Check that nodes are sorted by age
-        if let Some(Value::Array(nodes)) = context.get_variable("n") {
-            assert_eq!(nodes.len(), 3);
-            // First node should be youngest (age 20)
-            if let Value::Object(first_node) = &nodes[0] {
-                assert_eq!(first_node.get("age"), Some(&Value::Number(20.into())));
-            }
-            // Middle node should be age 25
-            if let Value::Object(middle_node) = &nodes[1] {
-                assert_eq!(middle_node.get("age"), Some(&Value::Number(25.into())));
-            }
-            // Last node should be oldest (age 30)
-            if let Value::Object(last_node) = &nodes[2] {
-                assert_eq!(last_node.get("age"), Some(&Value::Number(30.into())));
-            }
-        } else {
-            panic!("Expected array of nodes");
-        }
-    }
-
-    #[test]
-    fn test_evaluate_predicate() {
-        let (executor, _dir) = create_test_executor();
-
-        let mut context = ExecutionContext::new(HashMap::new());
-        context
-            .params
-            .insert("min_age".to_string(), Value::Number(25.into()));
-
-        // Create test node
-        let mut node = Map::new();
-        node.insert("id".to_string(), Value::Number(1.into()));
-        node.insert("age".to_string(), Value::Number(30.into()));
-        let node_value = Value::Object(node);
-
-        // Test various predicates
-        let mut parser = parser::CypherParser::new("n.age > $min_age".to_string());
-        let expr = parser.parse_expression().unwrap();
-        let result = executor
-            .evaluate_predicate(&node_value, &expr, &context)
-            .unwrap();
-        assert!(result); // 30 > 25
-
-        let mut parser = parser::CypherParser::new("n.age < 20".to_string());
-        let expr = parser.parse_expression().unwrap();
-        let result = executor
-            .evaluate_predicate(&node_value, &expr, &context)
-            .unwrap();
-        assert!(!result); // 30 < 20 is false
-
-        let mut parser = parser::CypherParser::new("n.age = 30".to_string());
-        let expr = parser.parse_expression().unwrap();
-        let result = executor
-            .evaluate_predicate(&node_value, &expr, &context)
-            .unwrap();
-        assert!(result); // 30 = 30
-    }
-
-    #[test]
-    fn test_evaluate_expression() {
-        let (executor, _dir) = create_test_executor();
-
-        let mut context = ExecutionContext::new(HashMap::new());
-        context
-            .params
-            .insert("param1".to_string(), Value::String("test".to_string()));
-
-        // Create test node
-        let mut node = Map::new();
-        node.insert("id".to_string(), Value::Number(1.into()));
-        node.insert("name".to_string(), Value::String("Alice".to_string()));
-        let node_value = Value::Object(node);
-
-        // Test variable access
-        let mut parser = parser::CypherParser::new("n.name".to_string());
-        let expr = parser.parse_expression().unwrap();
-        let result = executor
-            .evaluate_expression(&node_value, &expr, &context)
-            .unwrap();
-        assert_eq!(result, Value::String("Alice".to_string()));
-
-        // Test parameter access
-        let mut parser = parser::CypherParser::new("$param1".to_string());
-        let expr = parser.parse_expression().unwrap();
-        let result = executor
-            .evaluate_expression(&node_value, &expr, &context)
-            .unwrap();
-        assert_eq!(result, Value::String("test".to_string()));
-
-        // Test literal
-        let mut parser = parser::CypherParser::new("42".to_string());
-        let expr = parser.parse_expression().unwrap();
-        let result = executor
-            .evaluate_expression(&node_value, &expr, &context)
-            .unwrap();
-        assert_eq!(result, Value::Number(42.into()));
-    }
-
-    #[test]
-    fn test_value_conversion() {
-        let (executor, _dir) = create_test_executor();
-
-        // Test value_to_number
-        assert_eq!(
-            executor.value_to_number(&Value::Number(42.into())).unwrap(),
-            42.0
-        );
-        assert_eq!(
-            executor
-                .value_to_number(&Value::String("123".to_string()))
-                .unwrap(),
-            123.0
-        );
-        assert_eq!(executor.value_to_number(&Value::Bool(true)).unwrap(), 1.0);
-        assert_eq!(executor.value_to_number(&Value::Bool(false)).unwrap(), 0.0);
-        assert_eq!(executor.value_to_number(&Value::Null).unwrap(), 0.0);
-
-        // Test value_to_bool
-        assert!(executor.value_to_bool(&Value::Bool(true)).unwrap());
-        assert!(!executor.value_to_bool(&Value::Bool(false)).unwrap());
-        assert!(executor.value_to_bool(&Value::Number(1.into())).unwrap());
-        assert!(!executor.value_to_bool(&Value::Number(0.into())).unwrap());
-        assert!(
-            executor
-                .value_to_bool(&Value::String("hello".to_string()))
-                .unwrap()
-        );
-        assert!(
-            !executor
-                .value_to_bool(&Value::String("".to_string()))
-                .unwrap()
-        );
-        assert!(!executor.value_to_bool(&Value::Null).unwrap());
-    }
-
-    #[test]
-    fn test_compare_values_for_sort() {
-        let (executor, _dir) = create_test_executor();
-
-        use std::cmp::Ordering;
-
-        // Test null comparisons
-        assert_eq!(
-            executor.compare_values_for_sort(&Value::Null, &Value::Null),
-            Ordering::Equal
-        );
-        assert_eq!(
-            executor.compare_values_for_sort(&Value::Null, &Value::Number(1.into())),
-            Ordering::Less
-        );
-        assert_eq!(
-            executor.compare_values_for_sort(&Value::Number(1.into()), &Value::Null),
-            Ordering::Greater
-        );
-
-        // Test number comparisons
-        assert_eq!(
-            executor.compare_values_for_sort(&Value::Number(1.into()), &Value::Number(2.into())),
-            Ordering::Less
-        );
-        assert_eq!(
-            executor.compare_values_for_sort(&Value::Number(2.into()), &Value::Number(1.into())),
-            Ordering::Greater
-        );
-        assert_eq!(
-            executor.compare_values_for_sort(&Value::Number(1.into()), &Value::Number(1.into())),
-            Ordering::Equal
-        );
-
-        // Test string comparisons
-        assert_eq!(
-            executor.compare_values_for_sort(
-                &Value::String("a".to_string()),
-                &Value::String("b".to_string())
-            ),
-            Ordering::Less
-        );
-        assert_eq!(
-            executor.compare_values_for_sort(
-                &Value::String("b".to_string()),
-                &Value::String("a".to_string())
-            ),
-            Ordering::Greater
-        );
-    }
-
-    #[test]
-    fn test_operator_variants() {
-        // Test all operator variants for coverage
-        let node_op = Operator::NodeByLabel {
-            label_id: 1,
-            variable: "n".to_string(),
-        };
-        assert!(matches!(node_op, Operator::NodeByLabel { .. }));
-
-        let filter_op = Operator::Filter {
-            predicate: "n.age > 25".to_string(),
-        };
-        assert!(matches!(filter_op, Operator::Filter { .. }));
-
-        let expand_op = Operator::Expand {
-            type_id: Some(1),
-            direction: Direction::Outgoing,
-            source_var: "n".to_string(),
-            target_var: "m".to_string(),
-            rel_var: "r".to_string(),
-        };
-        assert!(matches!(expand_op, Operator::Expand { .. }));
-
-        let project_op = Operator::Project {
-            columns: vec!["n".to_string()],
-        };
-        assert!(matches!(project_op, Operator::Project { .. }));
-
-        let limit_op = Operator::Limit { count: 10 };
-        assert!(matches!(limit_op, Operator::Limit { .. }));
-
-        let sort_op = Operator::Sort {
-            columns: vec!["n.age".to_string()],
-            ascending: vec![true],
-        };
-        assert!(matches!(sort_op, Operator::Sort { .. }));
-
-        let aggregate_op = Operator::Aggregate {
-            group_by: vec!["dept".to_string()],
-            aggregations: vec![Aggregation::Count {
-                column: None,
-                alias: "count".to_string(),
-            }],
-        };
-        assert!(matches!(aggregate_op, Operator::Aggregate { .. }));
-
-        let union_op = Operator::Union {
-            left: Box::new(node_op.clone()),
-            right: Box::new(node_op.clone()),
-        };
-        assert!(matches!(union_op, Operator::Union { .. }));
-
-        let join_op = Operator::Join {
-            left: Box::new(node_op.clone()),
-            right: Box::new(node_op.clone()),
-            join_type: JoinType::Inner,
-            condition: Some("n.id = m.id".to_string()),
-        };
-        assert!(matches!(join_op, Operator::Join { .. }));
-
-        let index_scan_op = Operator::IndexScan {
-            index_name: "label_Person".to_string(),
-            label: "Person".to_string(),
-        };
-        assert!(matches!(index_scan_op, Operator::IndexScan { .. }));
-
-        let distinct_op = Operator::Distinct {
-            columns: vec!["n.id".to_string()],
-        };
-        assert!(matches!(distinct_op, Operator::Distinct { .. }));
-    }
-
-    #[test]
-    fn test_enum_variants() {
-        // Test Direction enum
-        assert_eq!(Direction::Outgoing, Direction::Outgoing);
-        assert_ne!(Direction::Outgoing, Direction::Incoming);
-        assert_ne!(Direction::Outgoing, Direction::Both);
-
-        // Test JoinType enum
-        assert_eq!(JoinType::Inner, JoinType::Inner);
-        assert_ne!(JoinType::Inner, JoinType::LeftOuter);
-        assert_ne!(JoinType::Inner, JoinType::RightOuter);
-        assert_ne!(JoinType::Inner, JoinType::FullOuter);
-
-        // Test IndexType enum
-        assert_eq!(IndexType::Label, IndexType::Label);
-        assert_ne!(IndexType::Label, IndexType::Property);
-        assert_ne!(IndexType::Label, IndexType::Vector);
-        assert_ne!(IndexType::Label, IndexType::FullText);
-
-        // Test Aggregation enum variants
-        let count_agg = Aggregation::Count {
-            column: None,
-            alias: "count".to_string(),
-        };
-        assert!(matches!(count_agg, Aggregation::Count { .. }));
-
-        let sum_agg = Aggregation::Sum {
-            column: "age".to_string(),
-            alias: "total_age".to_string(),
-        };
-        assert!(matches!(sum_agg, Aggregation::Sum { .. }));
-
-        let avg_agg = Aggregation::Avg {
-            column: "score".to_string(),
-            alias: "avg_score".to_string(),
-        };
-        assert!(matches!(avg_agg, Aggregation::Avg { .. }));
-
-        let min_agg = Aggregation::Min {
-            column: "price".to_string(),
-            alias: "min_price".to_string(),
-        };
-        assert!(matches!(min_agg, Aggregation::Min { .. }));
-
-        let max_agg = Aggregation::Max {
-            column: "price".to_string(),
-            alias: "max_price".to_string(),
-        };
-        assert!(matches!(max_agg, Aggregation::Max { .. }));
-    }
-
-    #[test]
-    fn test_expression_to_string() {
-        let (executor, _dir) = create_test_executor();
-
-        // Test variable
-        let mut parser = parser::CypherParser::new("n".to_string());
-        let expr = parser.parse_expression().unwrap();
-        assert_eq!(executor.expression_to_string(&expr).unwrap(), "n");
-
-        // Test property access
-        let mut parser = parser::CypherParser::new("n.name".to_string());
-        let expr = parser.parse_expression().unwrap();
-        assert_eq!(executor.expression_to_string(&expr).unwrap(), "n.name");
-
-        // Test literals
-        let mut parser = parser::CypherParser::new("\"hello\"".to_string());
-        let expr = parser.parse_expression().unwrap();
-        assert_eq!(executor.expression_to_string(&expr).unwrap(), "\"hello\"");
-
-        let mut parser = parser::CypherParser::new("42".to_string());
-        let expr = parser.parse_expression().unwrap();
-        assert_eq!(executor.expression_to_string(&expr).unwrap(), "42");
-
-        let mut parser = parser::CypherParser::new("true".to_string());
-        let expr = parser.parse_expression().unwrap();
-        assert_eq!(executor.expression_to_string(&expr).unwrap(), "true");
-
-        // Test binary operations
-        let mut parser = parser::CypherParser::new("n.age = 25".to_string());
-        let expr = parser.parse_expression().unwrap();
-        assert_eq!(executor.expression_to_string(&expr).unwrap(), "n.age = 25");
-
-        // Test parameters
-        let mut parser = parser::CypherParser::new("$param1".to_string());
-        let expr = parser.parse_expression().unwrap();
-        assert_eq!(executor.expression_to_string(&expr).unwrap(), "$param1");
-    }
-
-    #[test]
-    fn test_ast_to_operators() {
-        let (executor, _dir) = create_test_executor();
-
-        // Create a catalog with a label
-        let catalog = Catalog::new("./test_data").unwrap();
-        let label_id = catalog.get_or_create_label("Person").unwrap();
-
-        // Test AST to operators conversion
-        let mut parser = parser::CypherParser::new(
-            "MATCH (n:Person) WHERE n.age > 25 RETURN n LIMIT 10".to_string(),
-        );
-        let ast = parser.parse().unwrap();
-        let operators = executor.ast_to_operators(&ast).unwrap();
-
-        assert_eq!(operators.len(), 4); // NodeByLabel, Filter, Project, Limit
-
-        match &operators[0] {
-            Operator::NodeByLabel {
-                label_id: parsed_label_id,
-                variable,
-            } => {
-                assert_eq!(*parsed_label_id, label_id);
-                assert_eq!(variable, "n");
-            }
-            _ => panic!("Expected NodeByLabel operator"),
-        }
-
-        match &operators[1] {
-            Operator::Filter { predicate } => {
-                assert!(predicate.contains("n.age > 25"));
-            }
-            _ => panic!("Expected Filter operator"),
-        }
-
-        match &operators[2] {
-            Operator::Project { columns } => {
-                assert_eq!(columns, &vec!["n".to_string()]);
-            }
-            _ => panic!("Expected Project operator"),
-        }
-
-        match &operators[3] {
-            Operator::Limit { count } => {
-                assert_eq!(*count, 10);
-            }
-            _ => panic!("Expected Limit operator"),
-        }
-    }
-
-    #[test]
-    fn test_mvp_operators() {
-        let (executor, _dir) = create_test_executor();
-
-        let mut context = ExecutionContext::new(HashMap::new());
-
-        // Test Union operator (MVP implementation)
-        let left_op = Operator::NodeByLabel {
-            label_id: 1,
-            variable: "n".to_string(),
-        };
-        let right_op = Operator::NodeByLabel {
-            label_id: 2,
-            variable: "m".to_string(),
-        };
-        executor
-            .execute_union(&mut context, &left_op, &right_op)
-            .unwrap();
-        // Should not panic (MVP implementation does nothing)
-
-        // Test Join operator (MVP implementation)
-        executor
-            .execute_join(
-                &mut context,
-                &left_op,
-                &right_op,
-                JoinType::Inner,
-                Some("n.id = m.id"),
-            )
-            .unwrap();
-        // Should not panic (MVP implementation does nothing)
-
-        // Test IndexScan operator (MVP implementation)
-        executor
-            .execute_index_scan(&mut context, IndexType::Label, "Person", "n")
-            .unwrap();
-        // Should not panic (MVP implementation does nothing)
-
-        // Test Distinct operator (MVP implementation)
-        executor
-            .execute_distinct(&mut context, &["n.id".to_string()])
-            .unwrap();
-        // Should not panic (MVP implementation does nothing)
-    }
-
-    #[test]
-    fn test_row_creation() {
-        let row = Row {
-            values: vec![Value::String("test".to_string()), Value::Number(42.into())],
-        };
-        assert_eq!(row.values.len(), 2);
-    }
-
-    #[test]
-    fn test_result_set_creation() {
-        let result_set = ResultSet {
-            columns: vec!["name".to_string(), "age".to_string()],
-            rows: vec![
-                Row {
-                    values: vec![Value::String("Alice".to_string()), Value::Number(25.into())],
-                },
-                Row {
-                    values: vec![Value::String("Bob".to_string()), Value::Number(30.into())],
-                },
-            ],
-        };
-        assert_eq!(result_set.columns.len(), 2);
-        assert_eq!(result_set.rows.len(), 2);
-    }
-
-    #[test]
-    fn test_join_type_enum() {
-        assert_eq!(JoinType::Inner, JoinType::Inner);
-        assert_ne!(JoinType::Inner, JoinType::LeftOuter);
-        assert_ne!(JoinType::Inner, JoinType::RightOuter);
-        assert_ne!(JoinType::Inner, JoinType::FullOuter);
-    }
-
-    #[test]
-    fn test_index_type_enum() {
-        assert_eq!(IndexType::Label, IndexType::Label);
-        assert_ne!(IndexType::Label, IndexType::Property);
-        assert_ne!(IndexType::Label, IndexType::Vector);
-        assert_ne!(IndexType::Label, IndexType::FullText);
-    }
-
-    #[test]
-    fn test_execution_context_creation() {
-        let mut params = HashMap::new();
-        params.insert("name".to_string(), Value::String("Alice".to_string()));
-        let context = ExecutionContext::new(params);
-        assert!(context.params.contains_key("name"));
-    }
-
-    #[test]
-    fn test_execution_context_variable_operations() {
-        let mut context = ExecutionContext::new(HashMap::new());
-
-        // Set and get variable
-        context.set_variable("test", Value::String("value".to_string()));
-        assert_eq!(
-            context.get_variable("test"),
-            Some(&Value::String("value".to_string()))
-        );
-
-        // Get non-existent variable
-        assert!(context.get_variable("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_execution_context_parameter_operations() {
-        let mut params = HashMap::new();
-        params.insert("param1".to_string(), Value::String("value1".to_string()));
-        let context = ExecutionContext::new(params);
-
-        // Get parameter
-        assert_eq!(
-            context.params.get("param1"),
-            Some(&Value::String("value1".to_string()))
-        );
-
-        // Get non-existent parameter
-        assert!(!context.params.contains_key("nonexistent"));
-    }
-
-    #[test]
-    fn test_execution_context_clear() {
-        let mut context = ExecutionContext::new(HashMap::new());
-        context.set_variable("test", Value::String("value".to_string()));
-        assert!(context.get_variable("test").is_some());
-
-        context.variables.clear();
-        assert!(context.get_variable("test").is_none());
+            .execute_filter(&mut context, "n.age > 25")
+            .expect("filter should succeed");
+
+        assert_eq!(context.result_set.rows.len(), 1);
+        let row = &context.result_set.rows[0];
+        assert_eq!(row.values.len(), context.result_set.columns.len());
     }
 }
