@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use nexus_core::executor::parser::PropertyMap;
 
 /// Global executor instance
 static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
@@ -76,6 +77,101 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
     }
 }
 
+fn property_map_to_json(property_map: &Option<PropertyMap>) -> serde_json::Value {
+    let mut props = serde_json::Map::new();
+
+    if let Some(prop_map) = property_map {
+        for (key, expr) in &prop_map.properties {
+            let value = expression_to_json_value(expr);
+            props.insert(key.clone(), value);
+        }
+    }
+
+    serde_json::Value::Object(props)
+}
+
+fn ensure_node_from_pattern(
+    engine: &mut nexus_core::Engine,
+    node_pattern: &nexus_core::executor::parser::NodePattern,
+    variable_context: &mut HashMap<String, Vec<u64>>,
+) -> Result<Vec<u64>, String> {
+    if let Some(var_name) = &node_pattern.variable {
+        if let Some(existing) = variable_context.get(var_name) {
+            if !existing.is_empty() {
+                return Ok(existing.clone());
+            }
+        }
+    }
+
+    let properties = property_map_to_json(&node_pattern.properties);
+
+    match engine.create_node(node_pattern.labels.clone(), properties) {
+        Ok(node_id) => {
+            if let Some(var_name) = &node_pattern.variable {
+                variable_context
+                    .entry(var_name.clone())
+                    .or_default()
+                    .push(node_id);
+            }
+            Ok(vec![node_id])
+        }
+        Err(e) => Err(format!("Failed to create node: {}", e)),
+    }
+}
+
+fn create_relationship_from_pattern(
+    engine: &mut nexus_core::Engine,
+    rel_pattern: &nexus_core::executor::parser::RelationshipPattern,
+    source_ids: &[u64],
+    target_ids: &[u64],
+) -> Result<(), String> {
+    if source_ids.is_empty() || target_ids.is_empty() {
+        return Ok(());
+    }
+
+    let rel_type = rel_pattern
+        .types
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "RELATIONSHIP".to_string());
+
+    let properties = property_map_to_json(&rel_pattern.properties);
+
+    let mut create_edge = |from: u64, to: u64| {
+        match engine.create_relationship(from, to, rel_type.clone(), properties.clone()) {
+            Ok(_rel_id) => Ok(()),
+            Err(e) => Err(format!("Failed to create relationship: {}", e)),
+        }
+    };
+
+    match rel_pattern.direction {
+        nexus_core::executor::parser::RelationshipDirection::Outgoing => {
+            for &from in source_ids {
+                for &to in target_ids {
+                    create_edge(from, to)?;
+                }
+            }
+        }
+        nexus_core::executor::parser::RelationshipDirection::Incoming => {
+            for &from in source_ids {
+                for &to in target_ids {
+                    create_edge(to, from)?;
+                }
+            }
+        }
+        nexus_core::executor::parser::RelationshipDirection::Both => {
+            for &from in source_ids {
+                for &to in target_ids {
+                    create_edge(from, to)?;
+                    create_edge(to, from)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Cypher query request
 #[derive(Debug, Deserialize)]
 pub struct CypherRequest {
@@ -143,81 +239,117 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
             let mut variable_context: HashMap<String, Vec<u64>> = HashMap::new();
 
             for clause in &ast.clauses {
-                // Handle CREATE clause
                 if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
-                    // Extract pattern and create nodes
-                    for element in &create_clause.pattern.elements {
-                        if let nexus_core::executor::parser::PatternElement::Node(node_pattern) =
-                            element
-                        {
-                            let labels = node_pattern.labels.clone();
+                    let elements = &create_clause.pattern.elements;
+                    let mut index = 0;
+                    while index < elements.len() {
+                        match &elements[index] {
+                            nexus_core::executor::parser::PatternElement::Node(node_pattern) => {
+                                let mut current_nodes = match ensure_node_from_pattern(
+                                    &mut engine,
+                                    node_pattern,
+                                    &mut variable_context,
+                                ) {
+                                    Ok(nodes) => nodes,
+                                    Err(err) => {
+                                        let execution_time = start_time.elapsed().as_millis() as u64;
+                                        tracing::error!("{}", err);
+                                        return Json(CypherResponse {
+                                            columns: vec![],
+                                            rows: vec![],
+                                            execution_time_ms: execution_time,
+                                            error: Some(err),
+                                        });
+                                    }
+                                };
 
-                            // Convert properties
-                            let mut props = serde_json::Map::new();
-                            if let Some(prop_map) = &node_pattern.properties {
-                                for (key, expr) in &prop_map.properties {
-                                    // Convert expression to JSON value
-                                    let value = match expr {
-                                        nexus_core::executor::parser::Expression::Literal(lit) => {
-                                            match lit {
-                                                nexus_core::executor::parser::Literal::String(
-                                                    s,
-                                                ) => serde_json::Value::String(s.clone()),
-                                                nexus_core::executor::parser::Literal::Integer(
-                                                    i,
-                                                ) => serde_json::Value::Number((*i).into()),
-                                                nexus_core::executor::parser::Literal::Float(f) => {
-                                                    serde_json::Number::from_f64(*f)
-                                                        .map(serde_json::Value::Number)
-                                                        .unwrap_or(serde_json::Value::Null)
-                                                }
-                                                nexus_core::executor::parser::Literal::Boolean(
-                                                    b,
-                                                ) => serde_json::Value::Bool(*b),
-                                                nexus_core::executor::parser::Literal::Null => {
-                                                    serde_json::Value::Null
-                                                }
+                                index += 1;
+
+                                while index < elements.len() {
+                                    match &elements[index] {
+                                        nexus_core::executor::parser::PatternElement::Relationship(rel_pattern) => {
+                                            if index + 1 >= elements.len() {
+                                                let execution_time =
+                                                    start_time.elapsed().as_millis() as u64;
+                                                let err = "Relationship pattern missing target node".to_string();
+                                                tracing::error!("{}", err);
+                                                return Json(CypherResponse {
+                                                    columns: vec![],
+                                                    rows: vec![],
+                                                    execution_time_ms: execution_time,
+                                                    error: Some(err),
+                                                });
                                             }
+
+                                            let target_node = match &elements[index + 1] {
+                                                nexus_core::executor::parser::PatternElement::Node(node) => node,
+                                                _ => {
+                                                    let execution_time = start_time
+                                                        .elapsed()
+                                                        .as_millis() as u64;
+                                                    let err = "Relationship pattern must be followed by a node".to_string();
+                                                    tracing::error!("{}", err);
+                                                    return Json(CypherResponse {
+                                                        columns: vec![],
+                                                        rows: vec![],
+                                                        execution_time_ms: execution_time,
+                                                        error: Some(err),
+                                                    });
+                                                }
+                                            };
+
+                                            let target_nodes = match ensure_node_from_pattern(
+                                                &mut engine,
+                                                target_node,
+                                                &mut variable_context,
+                                            ) {
+                                                Ok(nodes) => nodes,
+                                                Err(err) => {
+                                                    let execution_time =
+                                                        start_time.elapsed().as_millis() as u64;
+                                                    tracing::error!("{}", err);
+                                                    return Json(CypherResponse {
+                                                        columns: vec![],
+                                                        rows: vec![],
+                                                        execution_time_ms: execution_time,
+                                                        error: Some(err),
+                                                    });
+                                                }
+                                            };
+
+                                            if let Err(err) = create_relationship_from_pattern(
+                                                &mut engine,
+                                                rel_pattern,
+                                                &current_nodes,
+                                                &target_nodes,
+                                            ) {
+                                                let execution_time =
+                                                    start_time.elapsed().as_millis() as u64;
+                                                tracing::error!("{}", err);
+                                                return Json(CypherResponse {
+                                                    columns: vec![],
+                                                    rows: vec![],
+                                                    execution_time_ms: execution_time,
+                                                    error: Some(err),
+                                                });
+                                            }
+
+                                            current_nodes = target_nodes;
+                                            index += 2;
                                         }
-                                        _ => serde_json::Value::Null,
-                                    };
-                                    props.insert(key.clone(), value);
-                                }
-                            }
-
-                            let properties = serde_json::Value::Object(props);
-
-                            // Create node using Engine
-                            match engine.create_node(labels, properties) {
-                                Ok(node_id) => {
-                                    tracing::info!(
-                                        "Node created successfully via Engine with ID: {}",
-                                        node_id
-                                    );
-
-                                    // Store node_id in variable context if variable exists
-                                    if let Some(var_name) = &node_pattern.variable {
-                                        variable_context
-                                            .entry(var_name.clone())
-                                            .or_default()
-                                            .push(node_id);
+                                        nexus_core::executor::parser::PatternElement::Node(_) => {
+                                            break;
+                                        }
                                     }
                                 }
-                                Err(e) => {
-                                    let execution_time = start_time.elapsed().as_millis() as u64;
-                                    tracing::error!("Failed to create node: {}", e);
-                                    return Json(CypherResponse {
-                                        columns: vec![],
-                                        rows: vec![],
-                                        execution_time_ms: execution_time,
-                                        error: Some(format!("Failed to create node: {}", e)),
-                                    });
-                                }
+                            }
+                            nexus_core::executor::parser::PatternElement::Relationship(_) => {
+                                tracing::warn!("CREATE clause encountered relationship without leading node; skipping");
+                                index += 1;
                             }
                         }
                     }
                 }
-                // Handle MERGE clause
                 else if let nexus_core::executor::parser::Clause::Merge(merge_clause) = clause {
                     // Extract pattern and try to find existing node, or create new one
                     for element in &merge_clause.pattern.elements {

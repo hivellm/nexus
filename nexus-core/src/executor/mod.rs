@@ -592,18 +592,29 @@ impl Executor {
         let rows = self.materialize_rows_from_variables(context);
         let mut expanded_rows = Vec::new();
 
-        let allowed_target_ids: Option<std::collections::HashSet<u64>> = context
-            .get_variable(target_var)
-            .and_then(|value| match value {
-                Value::Array(values) => {
-                    let ids: std::collections::HashSet<u64> = values
-                        .iter()
-                        .filter_map(|v| Self::extract_entity_id(v))
-                        .collect();
-                    Some(ids)
-                }
-                _ => None,
-            });
+        // Only apply target filtering if the target variable is already populated
+        // (this happens when we're doing a join-like operation, not a pure expansion)
+        let allowed_target_ids: Option<std::collections::HashSet<u64>> = if target_var.is_empty() {
+            None
+        } else {
+            context
+                .get_variable(target_var)
+                .and_then(|value| match value {
+                    Value::Array(values) => {
+                        let ids: std::collections::HashSet<u64> = values
+                            .iter()
+                            .filter_map(|v| Self::extract_entity_id(v))
+                            .collect();
+                        // Only use the set if it's not empty (empty set means "filter everything out")
+                        if ids.is_empty() {
+                            None
+                        } else {
+                            Some(ids)
+                        }
+                    }
+                    _ => None,
+                })
+        };
 
         for row in rows {
             let source_value = row
@@ -1524,7 +1535,7 @@ impl Executor {
         let label_names = self
             .catalog
             .get_labels_from_bitmap(node_record.label_bits)?;
-        let labels: Vec<Value> = label_names
+        let _labels: Vec<Value> = label_names
             .into_iter()
             .map(Value::String)
             .collect();
@@ -1543,24 +1554,11 @@ impl Executor {
             }
         };
 
-        let mut node = Map::new();
+        // Return only the properties as a flat object, matching Neo4j's format
+        // But include _nexus_id for internal ID extraction during relationship traversal
+        let mut node = properties_map;
         node.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
-        node.insert(
-            "_element_id".to_string(),
-            Value::String(node_id.to_string()),
-        );
-        node.insert("labels".to_string(), Value::Array(labels));
-        node.insert("properties".to_string(), Value::Object(properties_map.clone()));
-
-        for (key, value) in properties_map {
-            if key == "labels" {
-                // Avoid clobbering label metadata with property having same name
-                node.insert("properties.labels".to_string(), value);
-            } else {
-                node.insert(key, value);
-            }
-        }
-
+        
         Ok(Value::Object(node))
     }
 
@@ -1964,7 +1962,7 @@ impl Executor {
     }
 
     fn read_relationship_as_value(&self, rel: &RelationshipInfo) -> Result<Value> {
-        let type_name = self
+        let _type_name = self
             .catalog
             .get_type_name(rel.type_id)?
             .unwrap_or_else(|| format!("type_{}", rel.type_id));
@@ -1983,19 +1981,8 @@ impl Executor {
             }
         };
 
-        let mut rel_obj = Map::new();
-        rel_obj.insert("_nexus_id".to_string(), Value::Number(rel.id.into()));
-        rel_obj.insert("id".to_string(), Value::Number(rel.id.into()));
-        rel_obj.insert("type".to_string(), Value::String(type_name));
-        rel_obj.insert("startNode".to_string(), Value::Number(rel.source_id.into()));
-        rel_obj.insert("endNode".to_string(), Value::Number(rel.target_id.into()));
-        rel_obj.insert("properties".to_string(), Value::Object(properties_map.clone()));
-
-        for (key, value) in properties_map {
-            rel_obj.insert(key, value);
-        }
-
-        Ok(Value::Object(rel_obj))
+        // Return only the properties as a flat object, matching Neo4j's format
+        Ok(Value::Object(properties_map))
     }
 
     fn result_set_as_rows(&self, context: &ExecutionContext) -> Vec<HashMap<String, Value>> {

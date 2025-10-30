@@ -11,15 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Relationship Expansion Parity with Neo4j** ✅
   - `execute_expand` now respects the target variable's label-filtered bindings, preventing unrelated nodes from surfacing in MATCH clauses
   - `extract_entity_id` resolves `_nexus_id`, `_element_id`, and string-based IDs so relationship traversals hydrate the intended entities
-  - Comparative regression `npx tsx scripts/compare-nexus-neo4j.ts` returns identical results for `MATCH (d:Document)-[:MENTIONS]->(e:Class) RETURN d, e LIMIT 5`
+  - `read_node_as_value` now returns properties in flat format matching Neo4j output (with `_nexus_id` for internal use)
+  - `read_relationship_as_value` simplified to return only properties (no metadata fields)
+  - Fixed duplicate data import issue (removed double import causing 2x node/rel counts)
+
+### Changed
+- **Query Result Format Alignment** ✅
+  - Nodes and relationships now return properties as flat objects matching Neo4j format
+  - Only `_nexus_id` included for internal ID tracking (not exposed in user-facing results)
+  - Property ordering may differ from Neo4j (does not affect functionality)
+
+### Planning
+- **Future Enhancements** 📋
+  - Added task for Multiple Database Support (isolated data directories per database)
+  - Added task for Property Keys API (expose Catalog's property key mappings through REST)
 
 ### Tooling
 - **Import Helper Compatibility** ✅
-  - Added `// @ts-nocheck` to `scripts/import-classify-to-neo4j.ts` so it continues to run via `npx tsx` without requiring Node type definitions
+  - Added `// @ts-nocheck` to `scripts/import-classify-to-neo4j.ts` and `scripts/import-classify-to-nexus.ts`
+  - Import scripts work correctly with single database instance
 
 ### Testing
-- `cargo test -p nexus-core`
-- `npx tsx scripts/compare-nexus-neo4j.ts`
+- `cargo test -p nexus-core` (736 tests passed)
+- `npx tsx scripts/compare-nexus-neo4j.ts` (all queries match Neo4j results)
 
 ## [0.9.2] - 2025-10-27
 

@@ -306,6 +306,60 @@ MATCH (doc:Document)-[:MENTIONS]->(entity) RETURN doc.title, entity.type, entity
 - Consider creating compatibility mode that ensures Neo4j-like behavior
 - Document any intentional differences from Neo4j
 
+## Future Enhancements
+
+### 11. Multiple Database Support
+**Status**: Planned  
+**Priority**: Medium  
+**Effort**: 1-2 weeks  
+
+- [ ] Design database isolation architecture (separate data directories per database)
+- [ ] Implement database management API (create, drop, list, switch)
+- [ ] Add database selection in Cypher endpoint (similar to Neo4j's `/db/{name}/cypher`)
+- [ ] Update Engine to support database context switching
+- [ ] Implement database-level security and permissions
+- [ ] Add database rename and copy operations
+- [ ] Update storage layer to support multiple database directories
+- [ ] Add database-level statistics and monitoring
+- [ ] Update admin UI to support database management
+
+**Acceptance Criteria**:
+- Users can create multiple named databases
+- Each database has isolated data stores
+- Database operations (create, drop, list) work via API
+- Cypher queries run in the context of the selected database
+- No cross-database data leakage
+
+### 12. Property Keys API
+**Status**: Planned  
+**Priority**: Medium  
+**Effort**: 1 week  
+
+**Current State**: Property keys are already tracked internally in Catalog but not exposed via API
+
+- [ ] Create Property Keys API endpoint (`/management/property-keys`)
+- [ ] Implement `GET /property-keys` to list all property keys
+- [ ] Implement `GET /property-keys/:key` to get specific property key info
+- [ ] Implement `DELETE /property-keys/:key` to remove unused property keys
+- [ ] Add property key usage statistics (count of nodes/rels using each key)
+- [ ] Expose property key mappings through `/db/{db}/property-keys` endpoint
+- [ ] Update admin UI to display property keys and their usage
+- [ ] Add property key validation in Cypher parser (warn on undefined keys)
+- [ ] Document property key management in API docs
+
+**Acceptance Criteria**:
+- API endpoints return all property keys with metadata
+- Users can query property key usage statistics
+- Property key deletion validates that key is not in use
+- API responses match Neo4j's property keys API format
+- Admin UI shows property keys dashboard
+
+**Technical Notes**:
+- Catalog already implements `key_name_to_id` and `key_id_to_name` mappings
+- Property keys are automatically created when first used in CREATE/MERGE
+- Need to expose these internals through HTTP API and add usage tracking
+- Consider adding property key constraints (e.g., required keys, type validation)
+
 ## References
 
 - Comparison script: `nexus/scripts/test-nexus-neo4j-comparison.ps1`
