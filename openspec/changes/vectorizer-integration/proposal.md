@@ -1,423 +1,152 @@
 # Vectorizer Integration - Proposal
 
-## Overview
+## Why
 
-Integration of Nexus graph database with Vectorizer to enable bidirectional synchronization, context enrichment from graph relationships, and hybrid search combining graph traversal with semantic similarity.
+Enable bidirectional synchronization between Nexus graph database and Vectorizer to add semantic search capabilities, auto-relationship discovery, and hybrid search combining graph traversal with semantic similarity. This integration addresses Nexus's lack of native embedding-based similarity search and enables automatic relationship discovery based on semantic similarity.
 
-## Motivation
+## What Changes
 
-Current Nexus implementation focuses on graph relationships but lacks:
-- **Semantic Search**: No native embedding-based similarity search beyond KNN
-- **Document Indexing**: Limited full-text search capabilities
-- **Auto-Relationship Discovery**: Manual relationship creation required
-- **Multi-Format Support**: No PDF, DOCX, or document conversion
-- **Semantic Context**: Missing semantic meaning in graph context
+### Core Integration
+- **Vectorizer Client**: HTTP client for Vectorizer REST API with retry logic and circuit breaker
+- **Sync Coordinator**: Event-driven coordinator for bidirectional sync between graph and Vectorizer
+- **Webhook System**: Receive and process Vectorizer events (similarity notifications, document updates)
+- **Configuration System**: Configuration management for Vectorizer integration settings
 
-## Goals
+### Bidirectional Synchronization
+- **Graph Event Hooks**: Listen for node/relationship create/update/delete events
+- **Automatic Vector Creation**: Create vectors in Vectorizer when nodes are created/updated
+- **Context Enrichment**: Enhance embeddings with graph relationship context
+- **Relationship Synchronization**: Sync relationships bidirectionally with Vectorizer metadata
 
-### Primary Goals
-1. **Bidirectional Sync**: Automatic synchronization with Vectorizer
-2. **Context Enrichment**: Enhance graph nodes with semantic embeddings
-3. **Hybrid Search**: Combine Cypher queries with semantic search
-4. **Auto-Relationship Discovery**: Automatically discover relationships via similarity
-5. **Graph-Enhanced Embeddings**: Use graph context to improve embedding quality
+### Hybrid Search
+- **Semantic Search Procedure**: `CALL vector.semantic_search()` Cypher procedure
+- **Hybrid Search**: `CALL vector.hybrid_search()` combining graph traversal with semantic search using RRF
+- **Similarity Edge Builder**: `CALL vector.build_similarity_graph()` to create SIMILAR_TO relationships
+- **Cross-Collection Search**: Search across multiple Vectorizer collections
 
-### Secondary Goals
-1. **Document Ingestion**: Support PDF, DOCX, and other formats via Vectorizer
-2. **Semantic Similarity Edges**: Create edges based on embedding similarity
-3. **Cross-Collection Search**: Search across Vectorizer collections from graph queries
-4. **Impact Analysis**: Enhanced impact analysis using semantic similarity
+### Production Features
+- **Monitoring & Metrics**: Prometheus metrics for sync operations, search performance, error rates
+- **Admin API**: REST endpoints for sync control (enable/disable, status, reconcile)
+- **Reconciliation Tool**: Detect and repair inconsistencies between graph and Vectorizer
+- **Performance Optimization**: Caching, batching, connection pooling
 
-## Architecture
+## Impact
 
-### Components
+### Affected Specs
+- Cypher procedures (`specs/cypher-procedures/spec.md`)
+- Graph storage engine (`specs/storage/spec.md`)
+- API endpoints (`specs/api/spec.md`)
+- Event system (`specs/events/spec.md`)
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        NEXUS                                  │
-│                                                               │
-│  ┌────────────────┐         ┌──────────────────┐            │
-│  │  Graph Engine  │◄───────►│ VectorizerClient │            │
-│  │  (Existing)    │         │     (New)        │            │
-│  └────────┬───────┘         └────────┬─────────┘            │
-│           │                           │                       │
-│  ┌────────▼───────────────────────────▼─────────┐           │
-│  │          SyncCoordinator (New)                │           │
-│  │  - Listen for graph events                    │           │
-│  │  - Trigger Vectorizer updates                 │           │
-│  │  - Manage webhooks                            │           │
-│  └────────────────────────────────────────────────┘          │
-│           │                                                   │
-│  ┌────────▼───────────────────────────────────────┐         │
-│  │     Graph Correlation Analysis (Existing)      │         │
-│  │  - Enhanced with semantic context              │         │
-│  └────────────────────────────────────────────────┘         │
-└───────────────────────────┬──────────────────────────────────┘
-                            │ HTTP/REST + Webhooks
-┌───────────────────────────▼──────────────────────────────────┐
-│                      VECTORIZER                               │
-│                                                               │
-│  ┌────────────────┐         ┌──────────────────┐            │
-│  │  VectorStore   │         │ EmbeddingManager │            │
-│  │  (Existing)    │         │  (Existing)      │            │
-│  └────────────────┘         └──────────────────┘            │
-└───────────────────────────────────────────────────────────────┘
-```
+### Affected Code
+- `nexus-core/src/vectorizer_client/` - New module for Vectorizer API client
+- `nexus-core/src/vectorizer_sync/` - New module for sync coordinator
+- `nexus-core/src/storage/mod.rs` - Add event hooks for sync
+- `nexus-core/src/executor/procedures/vector.rs` - New Cypher procedures
+- `nexus-server/src/api/webhooks/` - New webhook handlers
+- `nexus-server/src/api/admin/` - Admin API endpoints
+- `nexus-server/src/config.rs` - Add VectorizerIntegrationConfig
 
-### Data Flow
-
-#### Nexus → Vectorizer (Node Creation/Update)
-
-```
-1. Node created/updated in Nexus
-   ↓
-2. GraphEventHandler detects change
-   ↓
-3. Extract node properties and text content
-   ↓
-4. Build enriched context from relationships
-   ↓
-5. Call VectorizerClient.upsert_document()
-   ↓
-6. Vectorizer generates embedding
-   ↓
-7. Store in appropriate collection
-   ↓
-8. Return vector_id and store in node properties
-```
-
-#### Vectorizer → Nexus (Webhook for Enrichment)
-
-```
-1. Similar documents found in Vectorizer
-   ↓
-2. Webhook notification to Nexus
-   ↓
-3. SyncCoordinator processes webhook
-   ↓
-4. Query both nodes in graph
-   ↓
-5. Create/update SIMILAR_TO relationship
-   ↓
-6. Update relationship score
-```
-
-## Implementation Plan
-
-### Phase 1: Core Infrastructure (Week 1-2)
-
-**Nexus Changes:**
-- Create `vectorizer_client` module for Vectorizer REST API
-- Implement `SyncCoordinator` for event management
-- Add webhook system for receiving Vectorizer events
-- Create configuration management
-
-**Deliverables:**
-- Vectorizer client with retry logic
-- Event listener for graph changes
-- Webhook receivers
-- Configuration validation
-
-### Phase 2: Bidirectional Sync (Week 3-4)
-
-**Nexus Changes:**
-- Implement graph event hooks (node create/update/delete)
-- Add automatic vector creation on node changes
-- Create relationship synchronization
-- Implement context extraction from graph
-
-**Deliverables:**
-- Auto-sync on graph mutations
-- Context-enriched embeddings
-- Bidirectional relationship sync
-- Error handling and recovery
-
-### Phase 3: Hybrid Search (Week 5-6)
-
-**Nexus Changes:**
-- Extend Cypher with semantic search procedures
-- Implement RRF (Reciprocal Rank Fusion) for hybrid ranking
-- Add cross-collection graph queries
-- Create semantic similarity edge builder
-
-**Deliverables:**
-- `CALL vector.semantic_search()` procedure
-- Hybrid search API endpoints
-- Similarity-based relationship creation
-- Performance optimization
-
-### Phase 4: Production Features (Week 7-8)
-
-**Nexus Changes:**
-- Add monitoring and metrics
-- Implement sync reconciliation tools
-- Create admin API for sync management
-- Add comprehensive error handling
-
-**Deliverables:**
-- Prometheus metrics
-- Reconciliation tool
-- Admin endpoints
-- Production-ready deployment
+### Breaking Changes
+- **None** - All changes are additive, maintaining backward compatibility
 
 ## API Changes
 
 ### New Cypher Procedures
-
 ```cypher
 // Semantic search across Vectorizer collections
-CALL vector.semantic_search(
-  $query_text,
-  $collections,    // Vectorizer collections to search
-  $k,
-  $filters
-) YIELD node, score, collection
+CALL vector.semantic_search($query_text, $collections, $k, $filters)
+YIELD node, score, collection
 
 // Hybrid search (graph + semantic)
-CALL vector.hybrid_search(
-  $query_text,
-  $graph_pattern,
-  $k,
-  $rrf_k
-) YIELD node, graph_score, semantic_score, combined_score
+CALL vector.hybrid_search($query_text, $graph_pattern, $k, $rrf_k)
+YIELD node, graph_score, semantic_score, combined_score
 
-// Create similarity edges from Vectorizer data
-CALL vector.build_similarity_graph(
-  $label,
-  $threshold,
-  $max_edges_per_node
-) YIELD relationships_created, execution_time
+// Build similarity graph
+CALL vector.build_similarity_graph($label, $threshold, $max_edges_per_node)
+YIELD relationships_created, execution_time
 ```
 
 ### New REST Endpoints
-
 ```
 POST   /api/v1/sync/vectorizer/enable       Enable Vectorizer sync
 POST   /api/v1/sync/vectorizer/disable      Disable sync
 GET    /api/v1/sync/vectorizer/status       Get sync status
 POST   /api/v1/sync/vectorizer/reconcile    Reconcile graph with Vectorizer
-
 POST   /webhooks/vectorizer/similarity      Receive similarity notifications
 POST   /webhooks/vectorizer/document        Receive document updates
 ```
 
-### Configuration
+## Success Metrics
+
+- **Sync Performance**: 99% of nodes synced within 10 seconds
+- **Search Latency**: Hybrid search < 100ms p95 latency
+- **Data Consistency**: Zero data loss during sync
+- **Scalability**: Support for 10M+ nodes with vectors
+- **Test Coverage**: 95%+ test coverage
+- **Sync Lag**: Bidirectional sync lag < 2 seconds
+
+## Implementation Tasks
+
+See `tasks.md` for detailed task breakdown and progress tracking.
+
+## Risks & Mitigations
+
+- **Risk**: Vectorizer unavailability causing sync failures
+  - **Mitigation**: Circuit breaker, graceful degradation, queue for later sync
+  
+- **Risk**: Sync lag affecting data consistency
+  - **Mitigation**: Async processing, monitoring, reconciliation tool
+  
+- **Risk**: Performance degradation from sync overhead
+  - **Mitigation**: Batching, caching, connection pooling, async processing
+  
+- **Risk**: Embedding costs from frequent re-embedding
+  - **Mitigation**: Cache embeddings, incremental updates, batch processing
+
+## Timeline
+
+- **Weeks 1-2**: Core infrastructure (Vectorizer client, sync coordinator, webhooks)
+- **Weeks 3-4**: Bidirectional sync (event hooks, automatic vector creation, relationship sync)
+- **Weeks 5-6**: Hybrid search (semantic search procedure, RRF, similarity edge builder)
+- **Weeks 7-8**: Production features (monitoring, admin API, reconciliation tool, documentation)
+
+**Total**: 10-11 weeks
+
+## Dependencies
+
+- Vectorizer server (v1.1.2+)
+- Nexus core (v0.8.0+)
+- Rust 1.85+ (edition 2024)
+- HTTP client library (reqwest) for Vectorizer API calls
+
+## Configuration
 
 ```yaml
-# config.yml
 vectorizer_integration:
   enabled: true
   vectorizer_url: "http://localhost:15002"
   api_key: "${VECTORIZER_API_KEY}"
-  
-  # Sync settings
   sync_mode: "async"
   auto_create_vectors: true
-  auto_update_vectors: true
-  batch_size: 50
-  worker_threads: 2
-  
-  # Collection mapping
   collections:
     Document:
       collection: "documents"
       enabled: true
-    LegalDocument:
-      collection: "legal_documents"
-      enabled: true
-    FinancialDocument:
-      collection: "financial_documents"
-      enabled: true
-  
-  # Context enrichment
   enrichment:
     enabled: true
     include_relationships: true
     max_relationship_depth: 2
-    relationship_types: ["REFERENCES", "SIMILAR_TO", "MENTIONS"]
-  
-  # Similarity settings
   similarity:
     auto_create_edges: true
     threshold: 0.75
     max_edges_per_node: 20
-    edge_type: "SIMILAR_TO"
-  
-  # Webhooks
-  webhooks:
-    enabled: true
-    secret: "${VECTORIZER_WEBHOOK_SECRET}"
 ```
 
-## Data Models
+## Next Steps
 
-### Extended Node Properties
-
-```rust
-// Additional properties added to nodes when synced
-pub struct VectorizerSyncProperties {
-    /// Vectorizer vector ID
-    pub vector_id: Option<String>,
-    
-    /// Vectorizer collection name
-    pub vectorizer_collection: Option<String>,
-    
-    /// Last sync timestamp
-    pub vectorizer_synced_at: Option<DateTime<Utc>>,
-    
-    /// Sync status
-    pub vectorizer_sync_status: Option<SyncStatus>,
-    
-    /// Embedding dimension
-    pub embedding_dimension: Option<usize>,
-}
-```
-
-### VectorizerClient
-
-```rust
-pub struct VectorizerClient {
-    client: reqwest::Client,
-    base_url: String,
-    api_key: Option<String>,
-}
-
-impl VectorizerClient {
-    /// Insert/update document in Vectorizer
-    pub async fn upsert_document(
-        &self,
-        collection: &str,
-        text: &str,
-        metadata: HashMap<String, Value>,
-    ) -> Result<VectorUpsertResponse>;
-    
-    /// Search across collections
-    pub async fn semantic_search(
-        &self,
-        collections: &[String],
-        query: &str,
-        limit: usize,
-        filters: Option<HashMap<String, Value>>,
-    ) -> Result<Vec<SearchResult>>;
-    
-    /// Get similar documents
-    pub async fn get_similar(
-        &self,
-        collection: &str,
-        vector_id: &str,
-        k: usize,
-    ) -> Result<Vec<SimilarDocument>>;
-    
-    /// Delete vector
-    pub async fn delete_vector(
-        &self,
-        collection: &str,
-        vector_id: &str,
-    ) -> Result<()>;
-}
-```
-
-## Testing Strategy
-
-### Unit Tests
-- Vectorizer client communication
-- Context extraction from graph
-- Event handling
-- Webhook validation
-- Configuration parsing
-
-### Integration Tests
-- End-to-end sync flow
-- Hybrid search queries
-- Relationship creation
-- Error recovery
-- Performance benchmarks
-
-### Load Tests
-- 10K node sync
-- Concurrent graph updates
-- Hybrid search performance
-- Webhook throughput
-
-## Metrics
-
-```
-# Sync metrics
-nexus_vectorizer_sync_total{label, status}
-nexus_vectorizer_sync_duration_seconds{label}
-nexus_vectorizer_sync_errors_total{label, error_type}
-
-# Search metrics
-nexus_hybrid_search_total{status}
-nexus_hybrid_search_duration_seconds{component}
-
-# Relationship metrics
-nexus_similarity_edges_created_total
-nexus_similarity_edges_score_distribution
-```
-
-## Security Considerations
-
-1. **API Authentication**: Secure API key management
-2. **Webhook Security**: HMAC signature verification
-3. **Data Privacy**: Respect node-level permissions
-4. **Rate Limiting**: Prevent sync storms
-5. **Audit Logging**: Log all sync operations
-
-## Migration Path
-
-### Existing Graphs
-
-```bash
-# 1. Enable Vectorizer integration
-curl -X POST http://localhost:15474/api/v1/sync/vectorizer/enable \
-  -H "Content-Type: application/json" \
-  -d '{"label": "Document", "collection": "documents"}'
-
-# 2. Trigger batch sync
-curl -X POST http://localhost:15474/api/v1/sync/vectorizer/reconcile \
-  -H "Content-Type: application/json" \
-  -d '{"label": "Document", "batch_size": 100}'
-
-# 3. Build similarity graph
-curl -X POST http://localhost:15474/cypher \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "CALL vector.build_similarity_graph(\"Document\", 0.75, 20)"
-  }'
-```
-
-## Risks & Mitigation
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Vectorizer unavailability | High | Circuit breaker, fallback mode |
-| Sync lag | Medium | Async processing, monitoring |
-| Data inconsistency | High | Reconciliation tool, transactions |
-| Performance degradation | Medium | Caching, batching, indexing |
-| Embedding cost | Low | Cache embeddings, batch processing |
-
-## Success Criteria
-
-1. ✅ 99% of nodes synced within 10 seconds
-2. ✅ Hybrid search < 100ms p95 latency
-3. ✅ Zero data loss during sync
-4. ✅ Support for 10M+ nodes with vectors
-5. ✅ 95%+ test coverage
-6. ✅ Bidirectional sync lag < 2 seconds
-
-## Future Enhancements
-
-1. **Multi-Modal Embeddings**: Support image, audio embeddings
-2. **Dynamic Re-Embedding**: Trigger re-embedding on graph changes
-3. **Federated Search**: Search across multiple Vectorizer instances
-4. **Smart Caching**: Predictive caching of frequently accessed vectors
-5. **ML-Enhanced Relationships**: Use ML to predict relationships
-
-## References
-
-- Vectorizer API Documentation: `vectorizer/README.md`
-- Vectorizer MCP Integration: `vectorizer/docs/specs/MCP_INTEGRATION.md`
-- Nexus Graph Correlation: `nexus/docs/specs/graph-correlation-analysis.md`
-- Hybrid Search Algorithms: RRF, BM25+Vector
-
+1. Review and approve proposal
+2. Begin Phase 1: Core infrastructure implementation
+3. Set up Vectorizer test environment
+4. Create integration test suite
+5. Implement monitoring and metrics from the start
