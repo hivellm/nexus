@@ -382,7 +382,7 @@ impl Executor {
     }
 
     /// Convert AST to physical operators
-    fn ast_to_operators(&self, ast: &parser::CypherQuery) -> Result<Vec<Operator>> {
+    fn ast_to_operators(&mut self, ast: &parser::CypherQuery) -> Result<Vec<Operator>> {
         let mut operators = Vec::new();
 
         for clause in &ast.clauses {
@@ -472,10 +472,173 @@ impl Executor {
     }
 
     /// Execute CREATE pattern to create nodes and relationships
-    fn execute_create_pattern(&self, _pattern: &parser::Pattern) -> Result<()> {
-        // For now, CREATE is not fully implemented in this MVP executor
-        // It requires transaction support which is not yet integrated here
-        // The parser works correctly, but execution is deferred to future implementation
+    fn execute_create_pattern(&mut self, pattern: &parser::Pattern) -> Result<()> {
+        use crate::transaction::TransactionManager;
+        use std::collections::HashMap;
+
+        // Create a transaction manager for this operation
+        let mut tx_mgr = TransactionManager::new()?;
+        let mut tx = tx_mgr.begin_write()?;
+
+        // Map of variable names to created node IDs
+        let mut created_nodes: HashMap<String, u64> = HashMap::new();
+        let mut last_node_id: Option<u64> = None;
+
+        // Process pattern elements in sequence
+        // Pattern alternates: Node -> Relationship -> Node -> Relationship ...
+        for (i, element) in pattern.elements.iter().enumerate() {
+            match element {
+                parser::PatternElement::Node(node) => {
+                    // Build label bitmap
+                    let mut label_bits = 0u64;
+                    for label in &node.labels {
+                        let label_id = self.catalog.get_or_create_label(label)?;
+                        if label_id < 64 {
+                            label_bits |= 1u64 << label_id;
+                        }
+                    }
+
+                    // Extract properties
+                    let properties = if let Some(props_map) = &node.properties {
+                        let mut json_props = serde_json::Map::new();
+                        for (key, value_expr) in &props_map.properties {
+                            let json_value = self.expression_to_json_value(value_expr)?;
+                            json_props.insert(key.clone(), json_value);
+                        }
+                        serde_json::Value::Object(json_props)
+                    } else {
+                        serde_json::Value::Null
+                    };
+
+                    // Create the node
+                    let node_id = self
+                        .store
+                        .create_node_with_label_bits(&mut tx, label_bits, properties)?;
+
+                    // Store node ID if variable exists
+                    if let Some(var) = &node.variable {
+                        created_nodes.insert(var.clone(), node_id);
+                    }
+
+                    // Track last node for relationship creation
+                    last_node_id = Some(node_id);
+                }
+                parser::PatternElement::Relationship(rel) => {
+                    // Get source node (previous element should be a node)
+                    let source_id = if i > 0 {
+                        last_node_id.ok_or_else(|| {
+                            Error::CypherExecution("Relationship must follow a node".to_string())
+                        })?
+                    } else {
+                        return Err(Error::CypherExecution(
+                            "Pattern must start with a node".to_string(),
+                        ));
+                    };
+
+                    // Get target node (next element should be a node)
+                    let target_id = if i + 1 < pattern.elements.len() {
+                        if let parser::PatternElement::Node(target_node) = &pattern.elements[i + 1]
+                        {
+                            // Build label bitmap for target
+                            let mut target_label_bits = 0u64;
+                            for label in &target_node.labels {
+                                let label_id = self.catalog.get_or_create_label(label)?;
+                                if label_id < 64 {
+                                    target_label_bits |= 1u64 << label_id;
+                                }
+                            }
+
+                            // Extract target properties
+                            let target_properties = if let Some(props_map) = &target_node.properties
+                            {
+                                let mut json_props = serde_json::Map::new();
+                                for (key, value_expr) in &props_map.properties {
+                                    let json_value = self.expression_to_json_value(value_expr)?;
+                                    json_props.insert(key.clone(), json_value);
+                                }
+                                serde_json::Value::Object(json_props)
+                            } else {
+                                serde_json::Value::Null
+                            };
+
+                            // Create target node (we'll skip it in the next iteration)
+                            let tid = self.store.create_node_with_label_bits(
+                                &mut tx,
+                                target_label_bits,
+                                target_properties,
+                            )?;
+
+                            // Store target node ID if variable exists
+                            if let Some(var) = &target_node.variable {
+                                created_nodes.insert(var.clone(), tid);
+                            }
+
+                            last_node_id = Some(tid);
+                            tid
+                        } else {
+                            return Err(Error::CypherExecution(
+                                "Relationship must be followed by a node".to_string(),
+                            ));
+                        }
+                    } else {
+                        return Err(Error::CypherExecution(
+                            "Pattern must end with a node".to_string(),
+                        ));
+                    };
+
+                    // Get relationship type
+                    let rel_type = rel.types.first().ok_or_else(|| {
+                        Error::CypherExecution("Relationship must have a type".to_string())
+                    })?;
+
+                    let type_id = self.catalog.get_or_create_type(rel_type)?;
+
+                    // Extract relationship properties
+                    let rel_properties = if let Some(props_map) = &rel.properties {
+                        let mut json_props = serde_json::Map::new();
+                        for (key, value_expr) in &props_map.properties {
+                            let json_value = self.expression_to_json_value(value_expr)?;
+                            json_props.insert(key.clone(), json_value);
+                        }
+                        serde_json::Value::Object(json_props)
+                    } else {
+                        serde_json::Value::Null
+                    };
+
+                    // Create the relationship
+                    self.store.create_relationship(
+                        &mut tx,
+                        source_id,
+                        target_id,
+                        type_id,
+                        rel_properties,
+                    )?;
+                }
+            }
+        }
+
+        // Commit transaction
+        tx_mgr.commit(&mut tx)?;
+
+        // Flush to ensure persistence
+        self.store.flush()?;
+
+        // Update label index with created nodes
+        for node_id in created_nodes.values() {
+            // Read the node to get its labels
+            if let Ok(node_record) = self.store.read_node(*node_id) {
+                let mut label_ids = Vec::new();
+                for bit in 0..64 {
+                    if (node_record.label_bits & (1u64 << bit)) != 0 {
+                        label_ids.push(bit as u32);
+                    }
+                }
+                if !label_ids.is_empty() {
+                    self.label_index.add_node(*node_id, &label_ids)?;
+                }
+            }
+        }
+
         Ok(())
     }
 
