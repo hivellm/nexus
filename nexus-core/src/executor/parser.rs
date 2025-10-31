@@ -1461,14 +1461,23 @@ impl CypherParser {
             self.consume_char(); // consume '('
             let mut args = Vec::new();
 
-            // Parse arguments
-            while self.peek_char() != Some(')') {
-                let arg = self.parse_expression()?;
-                args.push(arg);
+            self.skip_whitespace();
 
-                if self.peek_char() == Some(',') {
-                    self.consume_char();
-                    self.skip_whitespace();
+            // Check for count(*) special case
+            if self.peek_char() == Some('*') {
+                self.consume_char(); // consume '*'
+                self.skip_whitespace();
+                // count(*) has no arguments - empty args list means count all
+            } else {
+                // Parse arguments
+                while self.peek_char() != Some(')') {
+                    let arg = self.parse_expression()?;
+                    args.push(arg);
+
+                    if self.peek_char() == Some(',') {
+                        self.consume_char();
+                        self.skip_whitespace();
+                    }
                 }
             }
 
