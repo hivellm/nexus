@@ -372,6 +372,13 @@ pub enum Expression {
     List(Vec<Expression>),
     /// Map expression
     Map(HashMap<String, Expression>),
+    /// IS NULL / IS NOT NULL check
+    IsNull {
+        /// Expression to check
+        expr: Box<Expression>,
+        /// Whether this is IS NOT NULL (true) or IS NULL (false)
+        negated: bool,
+    },
 }
 
 /// When clause for CASE expressions
@@ -1285,15 +1292,46 @@ impl CypherParser {
         }
 
         // Check for binary operators (including AND, OR)
-        while let Some(op) = self.parse_binary_operator() {
+        loop {
+            // Check for IS NULL / IS NOT NULL before binary operators
             self.skip_whitespace();
-            let right = self.parse_simple_expression()?;
-            left = Expression::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
-            self.skip_whitespace();
+            if self.peek_keyword("IS") {
+                self.parse_keyword()?; // consume "IS"
+                self.skip_whitespace();
+
+                let negated = if self.peek_keyword("NOT") {
+                    self.parse_keyword()?; // consume "NOT"
+                    self.skip_whitespace();
+                    true
+                } else {
+                    false
+                };
+
+                if self.peek_keyword("NULL") {
+                    self.parse_keyword()?; // consume "NULL"
+                    left = Expression::IsNull {
+                        expr: Box::new(left),
+                        negated,
+                    };
+                    continue; // Continue checking for more operators
+                } else {
+                    return Err(self.error("Expected NULL after IS [NOT]"));
+                }
+            }
+
+            // Try to parse binary operator
+            if let Some(op) = self.parse_binary_operator() {
+                self.skip_whitespace();
+                let right = self.parse_simple_expression()?;
+                left = Expression::BinaryOp {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                };
+                self.skip_whitespace();
+            } else {
+                break; // No more operators
+            }
         }
 
         Ok(left)
@@ -3383,5 +3421,89 @@ mod tests {
 
         let parser = CypherParser::new("  UNION ALL MATCH (n) RETURN n".to_string());
         assert!(parser.is_clause_boundary());
+    }
+
+    #[test]
+    fn test_is_null_parsing() {
+        let mut parser = CypherParser::new(
+            "MATCH (n:Node) WHERE n.value IS NOT NULL RETURN count(*) AS count".to_string(),
+        );
+        let query = parser.parse().unwrap();
+
+        assert_eq!(query.clauses.len(), 3); // MATCH, WHERE, RETURN
+
+        // Check WHERE clause contains IsNull expression
+        match &query.clauses[1] {
+            Clause::Where(where_clause) => match &where_clause.expression {
+                Expression::IsNull { expr, negated } => {
+                    assert!(*negated, "Should be IS NOT NULL");
+                    match &**expr {
+                        Expression::PropertyAccess { variable, property } => {
+                            assert_eq!(variable, "n");
+                            assert_eq!(property, "value");
+                        }
+                        _ => panic!("Expected PropertyAccess in IsNull expression"),
+                    }
+                }
+                _ => panic!(
+                    "Expected IsNull expression in WHERE clause, got: {:?}",
+                    where_clause.expression
+                ),
+            },
+            _ => panic!("Expected WHERE clause"),
+        }
+    }
+
+    #[test]
+    fn test_is_null_simple() {
+        let mut parser = CypherParser::new("MATCH (n) WHERE n.prop IS NULL RETURN n".to_string());
+        let query = parser.parse().unwrap();
+
+        match &query.clauses[1] {
+            Clause::Where(where_clause) => match &where_clause.expression {
+                Expression::IsNull { negated, .. } => {
+                    assert!(!*negated, "Should be IS NULL");
+                }
+                _ => panic!("Expected IsNull expression"),
+            },
+            _ => panic!("Expected WHERE clause"),
+        }
+    }
+
+    #[test]
+    fn test_is_null_expression_only() {
+        // Simulate what execute_filter does - parse just the expression
+        let mut parser = CypherParser::new("n.value IS NOT NULL".to_string());
+        let expr = parser.parse_expression().unwrap();
+
+        match expr {
+            Expression::IsNull {
+                expr: inner,
+                negated,
+            } => {
+                assert!(negated, "Should be IS NOT NULL");
+                match *inner {
+                    Expression::PropertyAccess { variable, property } => {
+                        assert_eq!(variable, "n");
+                        assert_eq!(property, "value");
+                    }
+                    _ => panic!("Expected PropertyAccess"),
+                }
+            }
+            _ => panic!("Expected IsNull expression, got: {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_is_null_expression_simple() {
+        let mut parser = CypherParser::new("n.prop IS NULL".to_string());
+        let expr = parser.parse_expression().unwrap();
+
+        match expr {
+            Expression::IsNull { negated, .. } => {
+                assert!(!negated, "Should be IS NULL");
+            }
+            _ => panic!("Expected IsNull expression, got: {:?}", expr),
+        }
     }
 }

@@ -739,6 +739,14 @@ impl<'a> QueryPlanner<'a> {
                 Ok(format!("{} {} {}", left_str, op_str, right_str))
             }
             Expression::Parameter(name) => Ok(format!("${}", name)),
+            Expression::IsNull { expr, negated } => {
+                let expr_str = self.expression_to_string(expr)?;
+                if *negated {
+                    Ok(format!("{} IS NOT NULL", expr_str))
+                } else {
+                    Ok(format!("{} IS NULL", expr_str))
+                }
+            }
             _ => Ok("?".to_string()),
         }
     }

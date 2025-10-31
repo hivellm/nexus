@@ -1909,6 +1909,11 @@ impl Executor {
                     _ => Ok(false),
                 }
             }
+            parser::Expression::IsNull { expr, negated } => {
+                let value = self.evaluate_expression(node, expr, context)?;
+                let is_null = value.is_null();
+                Ok(if *negated { !is_null } else { is_null })
+            }
             _ => {
                 let result = self.evaluate_expression(node, expr, context)?;
                 self.value_to_bool(&result)
@@ -2450,6 +2455,11 @@ impl Executor {
                     }
                     parser::UnaryOperator::Plus => Ok(value),
                 }
+            }
+            parser::Expression::IsNull { expr, negated } => {
+                let value = self.evaluate_projection_expression(row, context, expr)?;
+                let is_null = value.is_null();
+                Ok(Value::Bool(if *negated { !is_null } else { is_null }))
             }
             _ => Ok(Value::Null),
         }
