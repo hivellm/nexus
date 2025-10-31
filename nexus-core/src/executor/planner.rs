@@ -1,6 +1,6 @@
 use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement,
-    RelationshipDirection, ReturnItem,
+    PropertyMap, RelationshipDirection, ReturnItem,
 };
 use super::{Aggregation, Direction, Operator, ProjectionItem};
 use crate::catalog::Catalog;
@@ -215,6 +215,27 @@ impl<'a> QueryPlanner<'a> {
                             label_id: 0, // Temporary: scan all (will need proper implementation)
                             variable: variable.clone(),
                         });
+                    }
+                    
+                    // Add filters for inline properties: MATCH (n {property: value})
+                    if let Some(property_map) = &node.properties {
+                        for (prop_name, prop_value_expr) in &property_map.properties {
+                            // Convert property value expression to string for filter
+                            let value_str = match prop_value_expr {
+                                Expression::Literal(lit) => match lit {
+                                    Literal::String(s) => format!("\"{}\"", s),
+                                    Literal::Integer(i) => i.to_string(),
+                                    Literal::Float(f) => f.to_string(),
+                                    Literal::Boolean(b) => b.to_string(),
+                                    Literal::Null => "null".to_string(),
+                                },
+                                _ => self.expression_to_string(prop_value_expr)?,
+                            };
+                            let filter_expr = format!("{}.{} = {}", variable, prop_name, value_str);
+                            operators.push(Operator::Filter {
+                                predicate: filter_expr,
+                            });
+                        }
                     }
                 }
             }
