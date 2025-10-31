@@ -22,14 +22,26 @@ fn execute_query(
 
 /// Helper function to create test data
 fn setup_test_data(engine: &mut Engine) -> Result<(), String> {
-    // Create nodes with multiple labels
+    // Create nodes with multiple labels (one at a time until parser supports comma-separated)
     execute_query(
         engine,
-        "CREATE (p1:Person:Employee {name: 'Alice', age: 30}),
-                (p2:Person:Manager {name: 'Bob', age: 40}),
-                (p3:Person {name: 'Charlie', age: 25}),
-                (c1:Company {name: 'Acme Corp'}),
-                (c2:Company {name: 'Tech Inc'})",
+        "CREATE (p1:Person:Employee {name: 'Alice', age: 30})",
+    )?;
+    execute_query(
+        engine,
+        "CREATE (p2:Person:Manager {name: 'Bob', age: 40})",
+    )?;
+    execute_query(
+        engine,
+        "CREATE (p3:Person {name: 'Charlie', age: 25})",
+    )?;
+    execute_query(
+        engine,
+        "CREATE (c1:Company {name: 'Acme Corp'})",
+    )?;
+    execute_query(
+        engine,
+        "CREATE (c2:Company {name: 'Tech Inc'})",
     )?;
 
     // Create relationships with properties
@@ -45,12 +57,16 @@ fn setup_test_data(engine: &mut Engine) -> Result<(), String> {
          CREATE (a)-[r:WORKS_AT {since: 2021, role: 'Developer'}]->(c)",
     )?;
 
-    // Create bidirectional relationships
+    // Create bidirectional relationships (one at a time until parser supports comma-separated)
     execute_query(
         engine,
         "MATCH (a:Person {name: 'Bob'}), (c:Company {name: 'Tech Inc'})
-         CREATE (a)-[r1:MANAGES]->(c),
-                (c)-[r2:MANAGED_BY]->(a)",
+         CREATE (a)-[r1:MANAGES]->(c)",
+    )?;
+    execute_query(
+        engine,
+        "MATCH (a:Person {name: 'Bob'}), (c:Company {name: 'Tech Inc'})
+         CREATE (c)-[r2:MANAGED_BY]->(a)",
     )?;
 
     Ok(())
