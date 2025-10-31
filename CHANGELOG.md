@@ -714,6 +714,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.8] - 2025-10-31
+
+### Added
+- **COUNT(DISTINCT ...)**: Full support for distinct counting in aggregations
+  - Parser detects `DISTINCT` keyword in `count()` function calls
+  - HashSet-based deduplication for unique value counting
+  - Works with variables and property access: `COUNT(DISTINCT n.age)`
+- **UNION Deduplication Fix**: Proper deduplication for UNION queries
+  - `distinct` field added to `Operator::Union` enum
+  - HashSet-based row deduplication via JSON serialization
+  - Automatic detection of `UnionType::Distinct` vs `UnionType::All`
+- **PropertyAccess in Aggregations**: Enhanced aggregation support
+  - Planner correctly extracts property expressions from aggregation functions
+  - Required columns tracking for property access patterns
+  - Support for `avg(n.property)`, `min(n.property)`, `max(n.property)`, `sum(n.property)`
+
+### Fixed
+- UNION operator now deduplicates results correctly (was returning all rows like UNION ALL)
+- Aggregation functions now correctly handle `avg(n.property)` syntax
+- Required columns tracking now skips `__DISTINCT__` marker in aggregation args
+- PropertyAccess expressions now correctly registered in required columns
+
+### Improved
+- Neo4j cross-compatibility increased to **88.24%** (15/17 validation tests passing)
+- UNION deduplication matches Neo4j behavior exactly
+- Better property access handling in query planner
+
+### Testing
+- Cross-compatibility validation: **15/17 tests passing (88.24%)**
+- COUNT(DISTINCT) test: ✅ 4 unique values
+- UNION deduplication test: ✅ 5 rows (was 50)
+- All aggregation tests passing ✅
+- Total: 1542+ tests across all suites
+
 ## [0.2.0] - 2025-10-25
 
 ### Added

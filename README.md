@@ -27,7 +27,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **MVP: 89.8% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.9.7)**: Label intersection, UNION operator, id() function, 95% Neo4j compatible, 6/7 tests passing!
+**🔥 Latest (v0.9.8)**: COUNT(DISTINCT), UNION deduplication fixed, 88.24% Neo4j validated (15/17 tests)!
 
 - ✅ **Label Intersection** - `MATCH (n:Person:Employee)` with proper bitmap filtering
 - ✅ **UNION Operator** - Full planner + executor implementation, pipeline execution
