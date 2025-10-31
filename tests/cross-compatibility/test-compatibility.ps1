@@ -184,7 +184,13 @@ function Compare-Results {
     # For count queries, compare the actual count value
     if ($QueryName -like "*Count*" -and $neo4jRowCount -gt 0 -and $nexusRowCount -gt 0) {
         $neo4jCount = $Neo4jResult.data[0].row[0]
-        $nexusCount = $NexusResult.rows[0].values[0]
+        
+        # Nexus returns rows as arrays, not objects with .values
+        $nexusCount = if ($NexusResult.rows[0] -is [array]) {
+            $NexusResult.rows[0][0]
+        } else {
+            $NexusResult.rows[0].values[0]
+        }
         
         Write-Host "Neo4j count: $neo4jCount | Nexus count: $nexusCount"
         
