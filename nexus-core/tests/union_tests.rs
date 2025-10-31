@@ -28,7 +28,7 @@ fn setup_test_data(engine: &Engine) -> Result<(), Error> {
 
 #[test]
 fn test_union_basic() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result = engine.execute_cypher(
@@ -42,7 +42,7 @@ fn test_union_basic() -> Result<(), Error> {
 
 #[test]
 fn test_union_all() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     
     engine.execute_cypher("CREATE (n:A {value: 1})")?;
     engine.execute_cypher("CREATE (n:A {value: 2})")?;
@@ -61,7 +61,7 @@ fn test_union_all() -> Result<(), Error> {
 
 #[test]
 fn test_union_vs_union_all_duplicates() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     
     engine.execute_cypher("CREATE (n:X {val: 10})")?;
     engine.execute_cypher("CREATE (n:X {val: 20})")?;
@@ -85,7 +85,7 @@ fn test_union_vs_union_all_duplicates() -> Result<(), Error> {
 
 #[test]
 fn test_union_empty_left() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result = engine.execute_cypher(
@@ -99,7 +99,7 @@ fn test_union_empty_left() -> Result<(), Error> {
 
 #[test]
 fn test_union_empty_right() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result = engine.execute_cypher(
@@ -113,7 +113,7 @@ fn test_union_empty_right() -> Result<(), Error> {
 
 #[test]
 fn test_union_both_empty() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result = engine.execute_cypher(
@@ -127,7 +127,7 @@ fn test_union_both_empty() -> Result<(), Error> {
 
 #[test]
 fn test_union_three_way() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result = engine.execute_cypher(
@@ -143,7 +143,7 @@ fn test_union_three_way() -> Result<(), Error> {
 
 #[test]
 fn test_union_with_where() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result = engine.execute_cypher(
@@ -159,7 +159,7 @@ fn test_union_with_where() -> Result<(), Error> {
 
 #[test]
 fn test_union_numeric_values() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     
     engine.execute_cypher("CREATE (n:Num1 {val: 10})")?;
     engine.execute_cypher("CREATE (n:Num1 {val: 20})")?;
@@ -178,7 +178,7 @@ fn test_union_numeric_values() -> Result<(), Error> {
 
 #[test]
 fn test_union_multiple_columns() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     
     engine.execute_cypher("CREATE (p:Person {name: 'Alice', age: 30})")?;
     engine.execute_cypher("CREATE (p:Person {name: 'Bob', age: 25})")?;
@@ -199,7 +199,7 @@ fn test_union_multiple_columns() -> Result<(), Error> {
 
 #[test]
 fn test_union_identical_queries() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result = engine.execute_cypher(
@@ -213,7 +213,7 @@ fn test_union_identical_queries() -> Result<(), Error> {
 
 #[test]
 fn test_union_mixed_types() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     
     engine.execute_cypher("CREATE (n:TypeA {value: 'text'})")?;
     engine.execute_cypher("CREATE (n:TypeB {value: 'text'})")?; // Same value
@@ -233,7 +233,7 @@ fn test_union_mixed_types() -> Result<(), Error> {
 
 #[test]
 fn test_union_order_independence() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     setup_test_data(&engine)?;
     
     let result1 = engine.execute_cypher(
@@ -251,7 +251,7 @@ fn test_union_order_independence() -> Result<(), Error> {
 
 #[test]
 fn test_union_with_nulls() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     
     engine.execute_cypher("CREATE (n:NodeA {value: 10})")?;
     engine.execute_cypher("CREATE (n:NodeB {})")?; // No value property
@@ -272,7 +272,7 @@ fn test_union_with_nulls() -> Result<(), Error> {
 
 #[test]
 fn test_union_large_result_sets() -> Result<(), Error> {
-    let (engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _temp_dir) = setup_test_engine()?;
     
     // Create 50 nodes in Set1 with values 0-49
     for i in 0..50 {
