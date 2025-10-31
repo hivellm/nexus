@@ -766,7 +766,7 @@ impl Engine {
         let has_create = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Create(_)));
         let has_delete = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Delete(_)));
         let has_match = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Match(_)));
-        
+
         // Handle DELETE (with or without MATCH)
         if has_delete {
             if has_match {
