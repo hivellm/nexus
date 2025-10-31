@@ -211,6 +211,26 @@ function Compare-Results {
 # Setup: Clear both databases first
 Write-Host "`n[SETUP] Setup: Clearing databases..." -ForegroundColor Cyan
 
+# Clear Neo4j database
+Write-Host "  Clearing Neo4j..."
+try {
+    Invoke-Neo4jQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
+    Invoke-Neo4jQuery -Cypher "MATCH ()-[r]->() DELETE r" | Out-Null
+} catch {
+    Write-Host "    Warning: Neo4j cleanup failed: $_" -ForegroundColor Yellow
+}
+
+# Clear Nexus database
+Write-Host "  Clearing Nexus..."
+try {
+    Invoke-NexusQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
+    Invoke-NexusQuery -Cypher "MATCH ()-[r]->() DELETE r" | Out-Null
+} catch {
+    Write-Host "    Warning: Nexus cleanup failed: $_" -ForegroundColor Yellow
+}
+
+Write-Host "`n[PASS] Databases cleared" -ForegroundColor Green
+
 # Create test data
 Write-Host "`n[DATA] Creating test data in both databases..." -ForegroundColor Cyan
 

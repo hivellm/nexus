@@ -519,6 +519,30 @@ impl CypherParser {
             return Ok(Clause::Match(match_clause));
         }
 
+        // Check for DETACH DELETE
+        if self.peek_keyword("DETACH") {
+            self.parse_keyword()?; // consume "DETACH"
+            self.expect_keyword("DELETE")?;
+            self.skip_whitespace();
+            
+            // Parse list of variables to delete
+            let mut items = Vec::new();
+            loop {
+                let variable = self.parse_identifier()?;
+                items.push(variable);
+
+                self.skip_whitespace();
+                if self.peek_char() == Some(',') {
+                    self.consume_char();
+                    self.skip_whitespace();
+                } else {
+                    break;
+                }
+            }
+            
+            return Ok(Clause::Delete(DeleteClause { items, detach: true }));
+        }
+
         let keyword = self.parse_keyword()?;
 
         match keyword.to_uppercase().as_str() {

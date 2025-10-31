@@ -133,6 +133,16 @@ pub enum Operator {
         /// Pattern to create
         pattern: parser::Pattern,
     },
+    /// Delete nodes (without detaching relationships)
+    Delete {
+        /// Variables to delete
+        variables: Vec<String>,
+    },
+    /// Delete nodes and their relationships
+    DetachDelete {
+        /// Variables to delete
+        variables: Vec<String>,
+    },
     /// Scan using index
     IndexScan {
         /// Index name
@@ -328,6 +338,12 @@ impl Executor {
                 }
                 Operator::Create { pattern } => {
                     self.execute_create_with_context(&mut context, &pattern)?;
+                }
+                Operator::Delete { variables } => {
+                    self.execute_delete(&mut context, &variables, false)?;
+                }
+                Operator::DetachDelete { variables } => {
+                    self.execute_delete(&mut context, &variables, true)?;
                 }
                 Operator::Join {
                     left,
@@ -736,6 +752,13 @@ impl Executor {
         let mut results = Vec::new();
 
         for node_id in bitmap.iter() {
+            // Skip deleted nodes
+            if let Ok(node_record) = self.store.read_node(node_id as u64) {
+                if node_record.is_deleted() {
+                    continue;
+                }
+            }
+            
             match self.read_node_as_value(node_id as u64)? {
                 Value::Null => continue,
                 value => results.push(value),
@@ -937,6 +960,26 @@ impl Executor {
         self.update_variables_from_rows(context, &expanded_rows);
         self.update_result_set_from_rows(context, &expanded_rows);
 
+        Ok(())
+    }
+
+    /// Execute DELETE or DETACH DELETE operator
+    /// Note: This collects node IDs but doesn't actually delete them.
+    /// Actual deletion must be handled at Engine level (lib.rs) before executor runs.
+    fn execute_delete(
+        &self,
+        context: &mut ExecutionContext,
+        _variables: &[String],
+        _detach: bool,
+    ) -> Result<()> {
+        // DELETE is handled at Engine level (lib.rs) like CREATE
+        // This function is called AFTER deletion has already occurred
+        // We just need to clear the result set
+        
+        // Clear the result set since deleted nodes shouldn't be returned
+        context.result_set.rows.clear();
+        context.variables.clear();
+        
         Ok(())
     }
 
@@ -1306,20 +1349,20 @@ impl Executor {
                         if let Some(var) = &node.variable {
                             if !node_ids.contains_key(var) {
                                 // Create new node (not from MATCH)
-                                let labels: Vec<u64> = node
+                                let _labels: Vec<u64> = node
                                     .labels
                                     .iter()
                                     .filter_map(|l| self.catalog.get_or_create_label(l).ok())
                                     .map(|id| id as u64)
                                     .collect();
                                 
-                                let mut label_bits = 0u64;
-                                for label_id in labels {
-                                    label_bits |= 1u64 << label_id;
+                                let mut _label_bits = 0u64;
+                                for label_id in _labels {
+                                    _label_bits |= 1u64 << label_id;
                                 }
                                 
                                 // Extract properties
-                                let properties = if let Some(props_map) = &node.properties {
+                                let _properties = if let Some(props_map) = &node.properties {
                                     JsonValue::Object(
                                         props_map
                                             .properties
@@ -1344,10 +1387,10 @@ impl Executor {
                     parser::PatternElement::Relationship(rel) => {
                         // Create relationship between last_node and next_node
                         if let Some(rel_type) = rel.types.first() {
-                            let type_id = self.catalog.get_or_create_type(rel_type)?;
+                            let _type_id = self.catalog.get_or_create_type(rel_type)?;
                             
                             // Extract relationship properties
-                            let properties = if let Some(props_map) = &rel.properties {
+                            let _properties = if let Some(props_map) = &rel.properties {
                                 JsonValue::Object(
                                     props_map
                                         .properties
@@ -1364,7 +1407,7 @@ impl Executor {
                             // Source is the last_node_var, target will be the next node in pattern
                             // We need to peek ahead to find the target node variable
                             if let Some(source_var) = &last_node_var {
-                                if let Some(source_id) = node_ids.get(source_var) {
+                                if let Some(_source_id) = node_ids.get(source_var) {
                                     // Find target node (next element after this relationship)
                                     let current_idx = pattern.elements
                                         .iter()
@@ -1433,6 +1476,12 @@ impl Executor {
             }
             Operator::Create { pattern } => {
                 self.execute_create_with_context(context, &pattern)?;
+            }
+            Operator::Delete { variables } => {
+                self.execute_delete(context, &variables, false)?;
+            }
+            Operator::DetachDelete { variables } => {
+                self.execute_delete(context, &variables, true)?;
             }
             Operator::Join {
                 left,

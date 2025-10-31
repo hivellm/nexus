@@ -95,6 +95,16 @@ impl<'a> QueryPlanner<'a> {
                         pattern: create_clause.pattern.clone(),
                     });
                 }
+                Clause::Delete(delete_clause) => {
+                    // Extract variables to delete from the delete clause
+                    let variables = delete_clause.items.clone();
+                    
+                    if delete_clause.detach {
+                        operators.push(Operator::DetachDelete { variables });
+                    } else {
+                        operators.push(Operator::Delete { variables });
+                    }
+                }
                 Clause::Merge(merge_clause) => {
                     patterns.push(merge_clause.pattern.clone());
                     // MERGE is handled as match-or-create
@@ -774,6 +784,14 @@ impl<'a> QueryPlanner<'a> {
                 Operator::Create { .. } => {
                     // CREATE operations are moderately expensive
                     total_cost += 50.0;
+                }
+                Operator::Delete { .. } => {
+                    // DELETE operations are moderately expensive
+                    total_cost += 40.0;
+                }
+                Operator::DetachDelete { .. } => {
+                    // DETACH DELETE is more expensive (deletes relationships first)
+                    total_cost += 60.0;
                 }
             }
         }
