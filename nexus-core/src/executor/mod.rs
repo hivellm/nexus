@@ -1884,11 +1884,12 @@ impl Executor {
                             if let Value::Object(obj) = &value {
                                 let mut keys: Vec<String> = obj
                                     .keys()
-                                    .filter(|k| !k.starts_with('_'))  // Exclude internal fields like _nexus_id
+                                    .filter(|k| !k.starts_with('_')) // Exclude internal fields like _nexus_id
                                     .map(|k| k.to_string())
                                     .collect();
                                 keys.sort();
-                                let key_values: Vec<Value> = keys.into_iter().map(Value::String).collect();
+                                let key_values: Vec<Value> =
+                                    keys.into_iter().map(Value::String).collect();
                                 return Ok(Value::Array(key_values));
                             }
                         }

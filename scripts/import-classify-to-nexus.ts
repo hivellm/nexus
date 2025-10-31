@@ -10,6 +10,21 @@ import { join } from 'path';
 const NEXUS_URL = process.env.NEXUS_URL || 'http://127.0.0.1:15474';
 const CLASSIFY_CACHE_DIR = process.env.CLASSIFY_CACHE_DIR || 
   join(process.cwd(), '..', '..', 'classify', '.classify-cache');
+const LOG_FILE = process.env.LOG_FILE || join(process.cwd(), 'import-nexus.log');
+const VERBOSE = process.env.VERBOSE === 'true';
+
+// Import statistics tracking
+interface ImportStats {
+  totalFiles: number;
+  imported: number;
+  failed: number;
+  skipped: number;
+  nodesByType: Record<string, number>;
+  relationshipsByType: Record<string, number>;
+  startTime: number;
+  endTime?: number;
+  errors: Array<{ file: string; error: string; timestamp: number }>;
+}
 
 interface ClassifyResult {
   file?: string;
@@ -42,6 +57,54 @@ interface CacheEntry {
   cachedAt: number;
   accessedAt: number;
   accessCount: number;
+}
+
+/**
+ * Log message with timestamp
+ */
+function log(message: string, level: 'info' | 'warn' | 'error' | 'debug' = 'info'): void {
+  const timestamp = new Date().toISOString();
+  const prefix = {
+    info: '   ',
+    warn: '⚠️ ',
+    error: '❌',
+    debug: '🔍',
+  }[level];
+  
+  console.log(`[${timestamp}] ${prefix} ${message}`);
+}
+
+/**
+ * Log verbose message (only if VERBOSE=true)
+ */
+function logVerbose(message: string): void {
+  if (VERBOSE) {
+    log(message, 'debug');
+  }
+}
+
+/**
+ * Extract entity statistics from Cypher query
+ */
+function extractEntityStats(cypher: string): { nodes: Record<string, number>; relationships: Record<string, number> } {
+  const stats = { nodes: {} as Record<string, number>, relationships: {} as Record<string, number> };
+  
+  // Extract node types from CREATE/MERGE patterns
+  const nodePattern = /(?:CREATE|MERGE)\s+\([^:]+:(\w+)/g;
+  let match;
+  while ((match = nodePattern.exec(cypher)) !== null) {
+    const nodeType = match[1];
+    stats.nodes[nodeType] = (stats.nodes[nodeType] || 0) + 1;
+  }
+  
+  // Extract relationship types
+  const relPattern = /-\[:(\w+)\]->/g;
+  while ((match = relPattern.exec(cypher)) !== null) {
+    const relType = match[1];
+    stats.relationships[relType] = (stats.relationships[relType] || 0) + 1;
+  }
+  
+  return stats;
 }
 
 /**
@@ -125,8 +188,9 @@ async function readCacheFiles(cacheDir: string): Promise<Array<{ path: string; e
  */
 async function importResult(
   result: ClassifyResult,
-  sourceFile: string
-): Promise<{ success: boolean; error?: string }> {
+  sourceFile: string,
+  stats: ImportStats
+): Promise<{ success: boolean; error?: string; entityStats?: { nodes: Record<string, number>; relationships: Record<string, number> } }> {
   if (!result.graphStructure?.cypher) {
     return { success: false, error: 'No Cypher in result' };
   }
@@ -134,6 +198,10 @@ async function importResult(
   // Get hash from cacheInfo or generate one
   const fileHash = result.cacheInfo?.hash || sourceFile.substring(0, 32);
   let cypher = result.graphStructure.cypher;
+
+  // Extract statistics before transformation
+  const entityStats = extractEntityStats(cypher);
+  logVerbose(`Entities in ${sourceFile}: ${JSON.stringify(entityStats)}`);
 
   // Replace CREATE with MERGE for Document nodes (avoid duplicates)
   // NOTE: Nexus parser doesn't support "doc += {...}" syntax, so we include all properties in MERGE pattern
@@ -152,24 +220,43 @@ async function importResult(
   );
 
   try {
+    const start = Date.now();
     const response = await executeCypher(cypher);
+    const duration = Date.now() - start;
     
     // Check if response has error
     if (response.error) {
+      log(`Cypher execution error: ${response.error}`, 'error');
       return { 
         success: false, 
         error: `Cypher execution error: ${response.error}` 
       };
     }
     
-    // Log successful execution
-    console.log(`      ✅ Cypher executed successfully (${response.execution_time_ms}ms)`);
+    // Update statistics
+    for (const [nodeType, count] of Object.entries(entityStats.nodes)) {
+      stats.nodesByType[nodeType] = (stats.nodesByType[nodeType] || 0) + count;
+    }
+    for (const [relType, count] of Object.entries(entityStats.relationships)) {
+      stats.relationshipsByType[relType] = (stats.relationshipsByType[relType] || 0) + count;
+    }
     
-    return { success: true };
+    // Log successful execution
+    logVerbose(`Cypher executed successfully (${duration}ms, response: ${response.execution_time_ms}ms)`);
+    if (VERBOSE && entityStats.nodes) {
+      logVerbose(`Created nodes: ${JSON.stringify(entityStats.nodes)}`);
+    }
+    if (VERBOSE && entityStats.relationships) {
+      logVerbose(`Created relationships: ${JSON.stringify(entityStats.relationships)}`);
+    }
+    
+    return { success: true, entityStats };
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    log(`Import failed: ${errorMsg}`, 'error');
     return { 
       success: false, 
-      error: error instanceof Error ? error.message : String(error) 
+      error: errorMsg
     };
   }
 }
@@ -256,89 +343,177 @@ async function main() {
   console.log('╔═══════════════════════════════════════════════════╗');
   console.log('║  Import Classify Cache to Nexus                  ║');
   console.log('╚═══════════════════════════════════════════════════╝\n');
+  console.log(`Verbose logging: ${VERBOSE ? 'enabled' : 'disabled'} (set VERBOSE=true for detailed output)\n`);
+
+  // Initialize statistics
+  const stats: ImportStats = {
+    totalFiles: 0,
+    imported: 0,
+    failed: 0,
+    skipped: 0,
+    nodesByType: {},
+    relationshipsByType: {},
+    startTime: Date.now(),
+    errors: [],
+  };
 
   // Check Nexus connection
   try {
+    log('Checking Nexus connection...', 'info');
     const healthCheck = await fetch(`${NEXUS_URL}/health`);
     if (!healthCheck.ok) {
       throw new Error(`Nexus health check failed: ${healthCheck.status}`);
     }
-    console.log('✅ Connected to Nexus\n');
+    log(`Connected to Nexus at ${NEXUS_URL}`, 'info');
+    console.log();
   } catch (error) {
-    console.error(`❌ Failed to connect to Nexus: ${error}`);
-    console.error(`   Make sure Nexus is running on ${NEXUS_URL}`);
+    log(`Failed to connect to Nexus: ${error}`, 'error');
+    log(`Make sure Nexus is running on ${NEXUS_URL}`, 'error');
     process.exit(1);
   }
 
   // Read all cache files from .classify-cache directory
-  console.log(`📁 Reading cache from: ${CLASSIFY_CACHE_DIR}\n`);
+  log(`Reading cache from: ${CLASSIFY_CACHE_DIR}`, 'info');
+  console.log();
   
   let cacheEntries: Array<{ path: string; entry: CacheEntry }>;
   try {
     cacheEntries = await readCacheFiles(CLASSIFY_CACHE_DIR);
   } catch (error) {
-    console.error(`❌ Failed to read cache directory: ${error}`);
+    log(`Failed to read cache directory: ${error}`, 'error');
     process.exit(1);
   }
 
-  console.log(`Found ${cacheEntries.length} cache entries\n`);
+  stats.totalFiles = cacheEntries.length;
+  log(`Found ${cacheEntries.length} cache entries`, 'info');
+  console.log();
 
-  // Import each cache entry
-  let imported = 0;
-  let failed = 0;
-  const errors: Array<{ file: string; error: string }> = [];
-
-  for (const { path: cachePath, entry } of cacheEntries) {
+  // Import each cache entry with progress tracking
+  for (let i = 0; i < cacheEntries.length; i++) {
+    const { path: cachePath, entry } = cacheEntries[i];
+    const progress = ((i + 1) / cacheEntries.length * 100).toFixed(1);
+    
     try {
       const result = entry.result;
       const fileName = cachePath.split(/[/\\]/).pop() || 'unknown';
       const sourceFile = result.file || entry.hash || 'unknown';
       
-      console.log(`📄 Importing: ${fileName}`);
+      console.log(`[${i + 1}/${cacheEntries.length}] (${progress}%) 📄 ${fileName}`);
+      logVerbose(`Source file: ${sourceFile}`);
 
-      const importResultData = await importResult(result, sourceFile);
+      const importResultData = await importResult(result, sourceFile, stats);
       
       if (importResultData.success) {
-        imported++;
-        console.log(`   ✅ Imported successfully\n`);
+        stats.imported++;
+        log('Imported successfully', 'info');
+        if (VERBOSE && importResultData.entityStats) {
+          logVerbose(`Nodes: ${JSON.stringify(importResultData.entityStats.nodes)}`);
+          logVerbose(`Relationships: ${JSON.stringify(importResultData.entityStats.relationships)}`);
+        }
+        console.log();
       } else {
-        failed++;
-        errors.push({ file: fileName, error: importResultData.error || 'Unknown error' });
-        console.log(`   ❌ Failed: ${importResultData.error}\n`);
+        stats.failed++;
+        stats.errors.push({ 
+          file: fileName, 
+          error: importResultData.error || 'Unknown error',
+          timestamp: Date.now()
+        });
+        log(`Failed: ${importResultData.error}`, 'error');
+        console.log();
       }
     } catch (error) {
-      failed++;
+      stats.failed++;
       const fileName = cachePath.split(/[/\\]/).pop() || 'unknown';
-      errors.push({ 
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      stats.errors.push({ 
         file: fileName, 
-        error: error instanceof Error ? error.message : String(error) 
+        error: errorMsg,
+        timestamp: Date.now()
       });
-      console.log(`   ❌ Error: ${error}\n`);
+      log(`Error: ${errorMsg}`, 'error');
+      console.log();
     }
   }
 
+  stats.endTime = Date.now();
+
+  // Calculate duration
+  const durationSec = ((stats.endTime - stats.startTime) / 1000).toFixed(2);
+
   // Summary
   console.log('╔═══════════════════════════════════════════════════╗');
-  console.log('║  Import Summary                                  ║');
+  console.log('║  Import Summary                                   ║');
   console.log('╚═══════════════════════════════════════════════════╝\n');
-  console.log(`Total cache entries: ${cacheEntries.length}`);
-  console.log(`✅ Imported: ${imported}`);
-  console.log(`❌ Failed: ${failed}\n`);
+  
+  log(`Total files processed: ${stats.totalFiles}`, 'info');
+  log(`✅ Imported: ${stats.imported}`, 'info');
+  log(`❌ Failed: ${stats.failed}`, stats.failed > 0 ? 'warn' : 'info');
+  log(`Duration: ${durationSec}s`, 'info');
+  log(`Average: ${(stats.imported / parseFloat(durationSec)).toFixed(2)} files/sec`, 'info');
+  console.log();
 
-  if (errors.length > 0) {
-    console.log('Errors:');
-    errors.forEach(({ file, error }) => {
-      console.log(`  - ${file}: ${error}`);
+  // Node statistics
+  if (Object.keys(stats.nodesByType).length > 0) {
+    log('Nodes created by type:', 'info');
+    for (const [nodeType, count] of Object.entries(stats.nodesByType).sort((a, b) => b[1] - a[1])) {
+      log(`  ${nodeType}: ${count}`, 'info');
+    }
+    console.log();
+  }
+
+  // Relationship statistics
+  if (Object.keys(stats.relationshipsByType).length > 0) {
+    log('Relationships created by type:', 'info');
+    for (const [relType, count] of Object.entries(stats.relationshipsByType).sort((a, b) => b[1] - a[1])) {
+      log(`  ${relType}: ${count}`, 'info');
+    }
+    console.log();
+  }
+
+  // Errors
+  if (stats.errors.length > 0) {
+    log('Errors encountered:', 'error');
+    stats.errors.forEach(({ file, error }) => {
+      log(`  ${file}: ${error}`, 'error');
     });
     console.log();
   }
 
+  // Write detailed log to file
+  try {
+    const { writeFile } = await import('fs/promises');
+    const logContent = JSON.stringify({
+      summary: {
+        totalFiles: stats.totalFiles,
+        imported: stats.imported,
+        failed: stats.failed,
+        skipped: stats.skipped,
+        durationSeconds: parseFloat(durationSec),
+        throughput: parseFloat((stats.imported / parseFloat(durationSec)).toFixed(2)),
+      },
+      nodesByType: stats.nodesByType,
+      relationshipsByType: stats.relationshipsByType,
+      errors: stats.errors,
+      timestamp: new Date(stats.startTime).toISOString(),
+    }, null, 2);
+    
+    await writeFile(LOG_FILE, logContent);
+    log(`Detailed log written to: ${LOG_FILE}`, 'info');
+    console.log();
+  } catch (error) {
+    log(`Failed to write log file: ${error}`, 'warn');
+  }
+
   // Run test queries
-  if (imported > 0) {
+  if (stats.imported > 0) {
     await runTestQueries();
   }
 
-  console.log('✨ Import complete!\n');
+  log('✨ Import complete!', 'info');
+  console.log();
+  
+  // Exit with appropriate code
+  process.exit(stats.failed > 0 ? 1 : 0);
 }
 
 main().catch(console.error);
