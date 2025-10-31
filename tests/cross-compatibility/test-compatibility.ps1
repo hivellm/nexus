@@ -28,11 +28,11 @@ $queries = @(
     },
     @{
         name = "Count relationships"
-        cypher = "MATCH ()-[r:KNOWS]->() RETURN count(*) AS count"
+        cypher = 'MATCH ()-[r:KNOWS]->() RETURN count(*) AS count'
     },
     @{
         name = "Relationship properties"
-        cypher = "MATCH (a)-[r:KNOWS]->(b) RETURN a.name AS from, b.name AS to, r.since AS since LIMIT 5"
+        cypher = 'MATCH (a)-[r:KNOWS]->(b) RETURN a.name AS from, b.name AS to, r.since AS since LIMIT 5'
     },
     @{
         name = "Multiple labels"
@@ -72,11 +72,11 @@ $queries = @(
     },
     @{
         name = "Type function"
-        cypher = "MATCH ()-[r]->() RETURN type(r) AS type LIMIT 5"
+        cypher = 'MATCH ()-[r]->() RETURN type(r) AS type LIMIT 5'
     },
     @{
         name = "Bidirectional relationships"
-        cypher = "MATCH (a:Person)-[r:KNOWS]-(b:Person) RETURN count(*) AS count"
+        cypher = 'MATCH (a:Person)-[r:KNOWS]-(b:Person) RETURN count(*) AS count'
     },
     @{
         name = "Count with DISTINCT"
@@ -271,7 +271,7 @@ Write-Host "`n🎯 Pass Rate: $passRate%" -ForegroundColor $(if ($passRate -ge 9
 # Export results
 $reportPath = "cross-compatibility-report.json"
 $results | ConvertTo-Json -Depth 3 | Out-File $reportPath
-Write-Host "`n📄 Report saved to: $reportPath" -ForegroundColor Cyan
+Write-Host "`nReport saved to: $reportPath" -ForegroundColor Cyan
 
 # Exit code
 if ($failed -gt 0) {
