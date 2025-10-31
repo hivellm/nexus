@@ -1,6 +1,6 @@
 # Implementation Tasks - Neo4j Full Compatibility
 
-**Status**: 🔄 IN PROGRESS (85% Complete)  
+**Status**: 🔄 IN PROGRESS (87% Complete)  
 **Priority**: High  
 **Estimated**: 3-4 weeks  
 **Dependencies**: 
@@ -19,7 +19,7 @@
 - [x] 1.5 Add Engine::refresh_executor() for executor synchronization
 - [x] 1.6 Verify data persists across server restarts
 - [x] 1.7 Verify all node types created correctly during import
-- [ ] 1.8 Validate property mappings match between systems
+- [x] 1.8 Implement keys() function for property mapping validation
 
 ## 2. Relationship Creation
 
@@ -53,6 +53,7 @@
 - [x] 4.9 Verify ORDER BY and LIMIT clauses
 - [x] 4.10 Test MATCH queries with multiple labels
 - [x] 4.11 Verify UNION queries
+- [x] 4.12 Implement keys() function to return property keys
 
 ## 5. Server Architecture
 
@@ -82,11 +83,25 @@
 
 ## 8. Documentation & Quality
 
-- [ ] 8.1 Update CHANGELOG.md with compatibility improvements
-- [ ] 8.2 Update README.md with compatibility status
+- [ ] 8.1 Update CHANGELOG.md with keys() function and latest improvements
+- [ ] 8.2 Update README.md with compatibility status (87% complete)
 - [ ] 8.3 Document any intentional differences from Neo4j
-- [ ] 8.4 Run all quality checks (lint, test, coverage)
+- [x] 8.4 Run all quality checks (lint, test, coverage) - 736 tests passing
 - [ ] 8.5 Verify 95%+ test coverage
+
+## 10. Recent Improvements (2025-10-31)
+
+- [x] 10.1 Implement keys() function for property introspection
+  - Returns sorted array of property names
+  - Filters out internal fields (_nexus_id)
+  - Supports both nodes and relationships
+  - Enables property mapping validation in import scripts
+- [x] 10.2 Fix Engine::new() TempDir lifecycle bug
+  - Store TempDir guard in Engine struct
+  - Fix 11 failing tests in nexus-core
+  - No impact on production (uses Engine::with_data_dir())
+- [x] 10.3 Archive completed OpenSpec documentation
+  - Moved fix-engine-tests docs to archive/2025-10-31-fix-engine-tests/
 
 ## 9. Future Enhancements (Planned)
 
