@@ -1,0 +1,219 @@
+﻿{
+    "passed":  20,
+    "timestamp":  "2025-10-31 06:25:15",
+    "total":  35,
+    "results":  [
+                    {
+                        "query":  "MATCH (n:Person) RETURN count(*) AS total",
+                        "name":  "Aggregation - COUNT(*)",
+                        "reason":  "Value mismatch: Neo4j=5, Nexus=8",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN count(n.age) AS count",
+                        "name":  "Aggregation - COUNT property",
+                        "reason":  "Value mismatch: Neo4j=5, Nexus=6",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN count(DISTINCT n.age) AS unique_ages",
+                        "name":  "Aggregation - COUNT DISTINCT",
+                        "reason":  "Value mismatch: Neo4j=5, Nexus=6",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN avg(n.age) AS average_age",
+                        "name":  "Aggregation - AVG",
+                        "reason":  "Value mismatch: Neo4j=30.0, Nexus=22.125 (diff=7.875)",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN min(n.age) AS min_age",
+                        "name":  "Aggregation - MIN",
+                        "reason":  "Value mismatch: Neo4j=25, Nexus=0.0",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN max(n.age) AS max_age",
+                        "name":  "Aggregation - MAX",
+                        "reason":  "Values match",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN sum(n.age) AS total_age",
+                        "name":  "Aggregation - SUM",
+                        "reason":  "Value mismatch: Neo4j=150, Nexus=177.0",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (p:Person) RETURN p.name AS name UNION MATCH (c:Company) RETURN c.name AS name",
+                        "name":  "UNION - Simple",
+                        "reason":  "Row count mismatch: Neo4j=7, Nexus=8",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (p:Person) RETURN p.age AS value UNION ALL MATCH (p:Person) RETURN p.age AS value",
+                        "name":  "UNION ALL - With duplicates",
+                        "reason":  "Row count mismatch: Neo4j=10, Nexus=16",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (p:Person) RETURN p.name AS n, p.age AS a UNION MATCH (e:Employee) RETURN e.name AS n, e.age AS a",
+                        "name":  "UNION - Multiple columns",
+                        "reason":  "Row count mismatch: Neo4j=6, Nexus=8",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (n:Person:Employee) RETURN count(*) AS count",
+                        "name":  "Multiple labels - Intersection",
+                        "reason":  "Value mismatch: Neo4j=2, Nexus=3",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (n:Person) WHERE n.age = 30 RETURN count(*) AS count",
+                        "name":  "WHERE - Property equals",
+                        "reason":  "Values match",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) WHERE n.age \u003e= 30 RETURN count(*) AS count",
+                        "name":  "WHERE - Property comparison",
+                        "reason":  "Values match",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) WHERE n.age \u003e= 25 AND n.age \u003c= 35 RETURN count(*) AS count",
+                        "name":  "WHERE - Multiple conditions AND",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person)-[r:KNOWS]-\u003e(other) RETURN count(r) AS count",
+                        "name":  "Relationships - Outgoing",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person)\u003c-[r:KNOWS]-(other) RETURN count(r) AS count",
+                        "name":  "Relationships - Incoming",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person)-[r:KNOWS]-(other) RETURN count(r) AS count",
+                        "name":  "Relationships - Bidirectional",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH ()-[r:KNOWS]-() WHERE r.since \u003e= 2015 RETURN count(r) AS count",
+                        "name":  "Relationships - Property filter",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN labels(n) AS labels LIMIT 1",
+                        "name":  "Functions - labels()",
+                        "reason":  "Both returned data",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN keys(n) AS keys LIMIT 1",
+                        "name":  "Functions - keys()",
+                        "reason":  "Both returned data",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN id(n) IS NOT NULL AS has_id LIMIT 1",
+                        "name":  "Functions - id()",
+                        "reason":  "Value mismatch: Neo4j=True, Nexus=0",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH ()-[r:KNOWS]-\u003e() RETURN type(r) AS rel_type LIMIT 1",
+                        "name":  "Functions - type()",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person) RETURN p.age AS age ORDER BY age LIMIT 3",
+                        "name":  "ORDER BY - Single column ASC",
+                        "reason":  "Both returned data",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person) RETURN p.age AS age ORDER BY age DESC LIMIT 3",
+                        "name":  "ORDER BY - Single column DESC",
+                        "reason":  "Both returned data",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person) RETURN p.name AS name LIMIT 2",
+                        "name":  "LIMIT - Basic",
+                        "reason":  "Row counts match",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person:Employee) WHERE n.age \u003e 25 RETURN count(*) AS count",
+                        "name":  "Complex - Multiple labels + WHERE + COUNT",
+                        "reason":  "Value mismatch: Neo4j=2, Nexus=3",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (p:Person)-[r:WORKS_AT]-\u003e(c:Company) RETURN p.name AS person, c.name AS company",
+                        "name":  "Complex - Relationships + Properties",
+                        "reason":  "Row count mismatch: Neo4j=2, Nexus=0",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (p:Person) WHERE p.age \u003e= 30 RETURN avg(p.age) AS avg_age",
+                        "name":  "Complex - Aggregation with WHERE",
+                        "reason":  "Values match",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:NonExistentLabel) RETURN count(*) AS count",
+                        "name":  "Edge case - Empty result",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) RETURN count(n.nonexistent) AS count",
+                        "name":  "Edge case - NULL properties",
+                        "reason":  "Values match",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person)-[:KNOWS]-\u003e()-[:KNOWS]-\u003e(end) RETURN count(*) AS count",
+                        "name":  "Pattern - Two hops",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (p:Person) RETURN DISTINCT p.age AS age",
+                        "name":  "DISTINCT - In RETURN",
+                        "reason":  "Row count mismatch: Neo4j=5, Nexus=7",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (p:Person)-[:KNOWS]-\u003e(other:Person) RETURN count(*) AS count",
+                        "name":  "Multiple relationships - Same type",
+                        "reason":  "Both queries executed",
+                        "passed":  true
+                    },
+                    {
+                        "query":  "MATCH (n:Person) WHERE n.age IS NOT NULL RETURN count(*) AS count",
+                        "name":  "Property exists check",
+                        "reason":  "Value mismatch: Neo4j=5, Nexus=@{_nexus_id=0; age=30; city=NYC; name=Alice}",
+                        "passed":  false
+                    },
+                    {
+                        "query":  "MATCH (p:Person) WHERE p.name = \u0027Alice\u0027 RETURN count(*) AS count",
+                        "name":  "String property comparison",
+                        "reason":  "Values match",
+                        "passed":  true
+                    }
+                ],
+    "failed":  15,
+    "passRate":  57.14
+}

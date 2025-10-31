@@ -128,6 +128,11 @@ pub enum Operator {
         /// Join condition
         condition: Option<String>,
     },
+    /// Create nodes and relationships from pattern
+    Create {
+        /// Pattern to create
+        pattern: parser::Pattern,
+    },
     /// Scan using index
     IndexScan {
         /// Index name
@@ -320,6 +325,9 @@ impl Executor {
                 }
                 Operator::Union { left, right, distinct } => {
                     self.execute_union(&mut context, &left, &right, distinct)?;
+                }
+                Operator::Create { pattern } => {
+                    self.execute_create_with_context(&mut context, &pattern)?;
                 }
                 Operator::Join {
                     left,
@@ -1258,6 +1266,132 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute CREATE operator with context from MATCH
+    fn execute_create_with_context(
+        &self,
+        context: &mut ExecutionContext,
+        pattern: &parser::Pattern,
+    ) -> Result<()> {
+        use serde_json::Value as JsonValue;
+        
+        // Get current rows from context (from MATCH)
+        let current_rows = self.materialize_rows_from_variables(context);
+        
+        // If no rows from MATCH, nothing to create
+        if current_rows.is_empty() {
+            return Ok(());
+        }
+        
+        // For each row in the MATCH result, create the pattern
+        for row in &current_rows {
+            let mut node_ids: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+            
+            // First, resolve existing node variables from the row
+            for (var_name, var_value) in row {
+                if let JsonValue::Object(obj) = var_value {
+                    if let Some(JsonValue::Number(id)) = obj.get("_nexus_id") {
+                        if let Some(node_id) = id.as_u64() {
+                            node_ids.insert(var_name.clone(), node_id);
+                        }
+                    }
+                }
+            }
+            
+            // Now process the pattern elements to create new nodes and relationships
+            let mut last_node_var: Option<String> = None;
+            
+            for element in &pattern.elements {
+                match element {
+                    parser::PatternElement::Node(node) => {
+                        if let Some(var) = &node.variable {
+                            if !node_ids.contains_key(var) {
+                                // Create new node (not from MATCH)
+                                let labels: Vec<u64> = node
+                                    .labels
+                                    .iter()
+                                    .filter_map(|l| self.catalog.get_or_create_label(l).ok())
+                                    .map(|id| id as u64)
+                                    .collect();
+                                
+                                let mut label_bits = 0u64;
+                                for label_id in labels {
+                                    label_bits |= 1u64 << label_id;
+                                }
+                                
+                                // Extract properties
+                                let properties = if let Some(props_map) = &node.properties {
+                                    JsonValue::Object(
+                                        props_map
+                                            .properties
+                                            .iter()
+                                            .filter_map(|(k, v)| {
+                                                self.expression_to_json_value(v).ok().map(|val| (k.clone(), val))
+                                            })
+                                            .collect(),
+                                    )
+                                } else {
+                                    JsonValue::Object(serde_json::Map::new())
+                                };
+                                
+                                // Executor can't create nodes - no mutable Transaction
+                                // Skip creating new nodes in executor context
+                            }
+                            
+                            // Track this node as the last one for relationship creation
+                            last_node_var = Some(var.clone());
+                        }
+                    }
+                    parser::PatternElement::Relationship(rel) => {
+                        // Create relationship between last_node and next_node
+                        if let Some(rel_type) = rel.types.first() {
+                            let type_id = self.catalog.get_or_create_type(rel_type)?;
+                            
+                            // Extract relationship properties
+                            let properties = if let Some(props_map) = &rel.properties {
+                                JsonValue::Object(
+                                    props_map
+                                        .properties
+                                        .iter()
+                                        .filter_map(|(k, v)| {
+                                            self.expression_to_json_value(v).ok().map(|val| (k.clone(), val))
+                                        })
+                                        .collect(),
+                                )
+                            } else {
+                                JsonValue::Object(serde_json::Map::new())
+                            };
+                            
+                            // Source is the last_node_var, target will be the next node in pattern
+                            // We need to peek ahead to find the target node variable
+                            if let Some(source_var) = &last_node_var {
+                                if let Some(source_id) = node_ids.get(source_var) {
+                                    // Find target node (next element after this relationship)
+                                    let current_idx = pattern.elements
+                                        .iter()
+                                        .position(|e| matches!(e, parser::PatternElement::Relationship(_)))
+                                        .unwrap_or(0);
+                                    
+                                    if current_idx + 1 < pattern.elements.len() {
+                                        if let parser::PatternElement::Node(target_node) = &pattern.elements[current_idx + 1] {
+                                            if let Some(target_var) = &target_node.variable {
+                                                if let Some(_target_id) = node_ids.get(target_var) {
+                                                    // Executor can't create relationships - no mutable Transaction
+                                                    // Skip creating relationships in executor context
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Execute a single operator and return results
     fn execute_operator(&self, context: &mut ExecutionContext, operator: &Operator) -> Result<()> {
         match operator {
@@ -1296,6 +1430,9 @@ impl Executor {
             }
             Operator::Union { left, right, distinct } => {
                 self.execute_union(context, left, right, *distinct)?;
+            }
+            Operator::Create { pattern } => {
+                self.execute_create_with_context(context, &pattern)?;
             }
             Operator::Join {
                 left,

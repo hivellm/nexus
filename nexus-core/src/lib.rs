@@ -204,6 +204,167 @@ impl Engine {
         Ok(())
     }
 
+    /// Execute MATCH ... CREATE query
+    fn execute_match_create_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
+        // First, execute the MATCH part to get the matching nodes
+        let mut match_query_clauses = Vec::new();
+        let mut create_clause_opt = None;
+        
+        for clause in &ast.clauses {
+            match clause {
+                executor::parser::Clause::Match(_) | executor::parser::Clause::Where(_) => {
+                    match_query_clauses.push(clause.clone());
+                }
+                executor::parser::Clause::Create(create_clause) => {
+                    create_clause_opt = Some(create_clause.clone());
+                    break; // Stop at CREATE
+                }
+                _ => {
+                    match_query_clauses.push(clause.clone());
+                }
+            }
+        }
+        
+        // Execute MATCH to get results
+        let match_query = executor::parser::CypherQuery {
+            clauses: match_query_clauses,
+            params: ast.params.clone(),
+        };
+        
+        let query_obj = executor::Query {
+            cypher: serde_json::to_string(&match_query)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        
+        let match_results = self.executor.execute(&query_obj)?;
+        
+        // For each row in MATCH result, execute the CREATE
+        if let Some(create_clause) = create_clause_opt {
+            for row in &match_results.rows {
+                // Extract node IDs from the row
+                let mut node_vars = std::collections::HashMap::new();
+                
+                for (idx, column) in match_results.columns.iter().enumerate() {
+                    if idx < row.values.len() {
+                        if let serde_json::Value::Object(obj) = &row.values[idx] {
+                            if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
+                                if let Some(node_id) = id.as_u64() {
+                                    node_vars.insert(column.clone(), node_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Create relationships from the pattern
+                self.create_from_pattern_with_context(&create_clause.pattern, &node_vars)?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Create from pattern with existing node context
+    fn create_from_pattern_with_context(
+        &mut self,
+        pattern: &executor::parser::Pattern,
+        node_vars: &std::collections::HashMap<String, u64>,
+    ) -> Result<()> {
+        let mut current_node_id: Option<u64> = None;
+        
+        for element in &pattern.elements {
+            match element {
+                executor::parser::PatternElement::Node(node) => {
+                    if let Some(var) = &node.variable {
+                        // Check if this variable exists in the MATCH context
+                        if let Some(&existing_id) = node_vars.get(var) {
+                            current_node_id = Some(existing_id);
+                        } else {
+                            // Create new node
+                            let properties = if let Some(props_map) = &node.properties {
+                                let mut json_props = serde_json::Map::new();
+                                for (key, value_expr) in &props_map.properties {
+                                    let json_value = self.expression_to_json_value(value_expr)?;
+                                    json_props.insert(key.clone(), json_value);
+                                }
+                                serde_json::Value::Object(json_props)
+                            } else {
+                                serde_json::Value::Null
+                            };
+                            
+                            let node_id = self.create_node(node.labels.clone(), properties)?;
+                            current_node_id = Some(node_id);
+                        }
+                    }
+                }
+                executor::parser::PatternElement::Relationship(rel) => {
+                    // Get source node
+                    let source_id = current_node_id.ok_or_else(|| {
+                        Error::CypherExecution("Relationship must follow a node".to_string())
+                    })?;
+                    
+                    // The target node should be the next element
+                    // For now, we'll find it in the pattern
+                    let current_idx = pattern.elements.iter().position(|e| {
+                        matches!(e, executor::parser::PatternElement::Relationship(_))
+                    }).unwrap_or(0);
+                    
+                    if current_idx + 1 < pattern.elements.len() {
+                        if let executor::parser::PatternElement::Node(target_node) = &pattern.elements[current_idx + 1] {
+                            let target_id = if let Some(var) = &target_node.variable {
+                                // Check if target exists in MATCH context
+                                if let Some(&existing_id) = node_vars.get(var) {
+                                    existing_id
+                                } else {
+                                    // Create target node
+                                    let target_properties = if let Some(props_map) = &target_node.properties {
+                                        let mut json_props = serde_json::Map::new();
+                                        for (key, value_expr) in &props_map.properties {
+                                            let json_value = self.expression_to_json_value(value_expr)?;
+                                            json_props.insert(key.clone(), json_value);
+                                        }
+                                        serde_json::Value::Object(json_props)
+                                    } else {
+                                        serde_json::Value::Null
+                                    };
+                                    
+                                    let tid = self.create_node(target_node.labels.clone(), target_properties)?;
+                                    current_node_id = Some(tid);
+                                    tid
+                                }
+                            } else {
+                                return Err(Error::CypherExecution("Target node must have a variable".to_string()));
+                            };
+                            
+                            // Create relationship
+                            let rel_type = rel.types.first().ok_or_else(|| {
+                                Error::CypherExecution("Relationship must have a type".to_string())
+                            })?;
+                            
+                            let rel_properties = if let Some(props_map) = &rel.properties {
+                                let mut json_props = serde_json::Map::new();
+                                for (key, value_expr) in &props_map.properties {
+                                    let json_value = self.expression_to_json_value(value_expr)?;
+                                    json_props.insert(key.clone(), json_value);
+                                }
+                                serde_json::Value::Object(json_props)
+                            } else {
+                                serde_json::Value::Null
+                            };
+                            
+                            self.create_relationship(source_id, target_id, rel_type.clone(), rel_properties)?;
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
     /// Execute CREATE query via Engine to ensure proper persistence
     fn execute_create_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
         use std::collections::HashMap;
@@ -389,21 +550,20 @@ impl Engine {
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let ast = parser.parse()?;
 
-        // Check if query is a standalone CREATE (no MATCH clause before CREATE)
-        // If there's a MATCH, the executor will handle CREATE in context
-        let is_standalone_create = if let Some(first_clause) = ast.clauses.first() {
-            matches!(
-                first_clause,
-                executor::parser::Clause::Create(_) | executor::parser::Clause::Merge(_)
-            )
-        } else {
-            false
-        };
-
-        if is_standalone_create {
-            // Execute standalone CREATE via Engine to ensure proper persistence
-            self.execute_create_query(&ast)?;
-
+        // Check if query contains CREATE (standalone or with MATCH)
+        let has_create = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Create(_)));
+        let has_match = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Match(_)));
+        
+        // If query has CREATE (with or without MATCH), handle via Engine for persistence
+        if has_create {
+            if has_match {
+                // MATCH ... CREATE: execute MATCH first, then CREATE with results
+                self.execute_match_create_query(&ast)?;
+            } else {
+                // Standalone CREATE
+                self.execute_create_query(&ast)?;
+            }
+            
             // Refresh executor to see the changes
             self.refresh_executor()?;
         }

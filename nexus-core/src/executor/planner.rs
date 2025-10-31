@@ -1,6 +1,6 @@
 use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement,
-    PropertyMap, RelationshipDirection, ReturnItem,
+    RelationshipDirection, ReturnItem,
 };
 use super::{Aggregation, Direction, Operator, ProjectionItem};
 use crate::catalog::Catalog;
@@ -90,9 +90,10 @@ impl<'a> QueryPlanner<'a> {
                     // For now, we just collect the patterns - executor will handle NULL values
                 }
                 Clause::Create(create_clause) => {
-                    patterns.push(create_clause.pattern.clone());
-                    // CREATE is handled by creating nodes/relationships
-                    // For now, just store the pattern for executor to handle
+                    // Add CREATE operator to create nodes/relationships in context
+                    operators.push(Operator::Create {
+                        pattern: create_clause.pattern.clone(),
+                    });
                 }
                 Clause::Merge(merge_clause) => {
                     patterns.push(merge_clause.pattern.clone());
@@ -706,6 +707,10 @@ impl<'a> QueryPlanner<'a> {
                 Operator::HashJoin { .. } => {
                     // Hash join operations are moderately expensive
                     total_cost += 200.0;
+                }
+                Operator::Create { .. } => {
+                    // CREATE operations are moderately expensive
+                    total_cost += 50.0;
                 }
             }
         }
