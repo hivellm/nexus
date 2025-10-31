@@ -2,7 +2,7 @@ use nexus_core::{Engine, Error};
 use tempfile::TempDir;
 
 fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(|e| Error::Io(e.to_string()))?;
+    let temp_dir = tempfile::tempdir().map_err(|e| Error::Io(e))?;
     let engine = Engine::with_data_dir(temp_dir.path())?;
     Ok((engine, temp_dir))
 }
@@ -33,12 +33,12 @@ fn setup_test_data(engine: &mut Engine) -> Result<(), Error> {
 #[test]
 fn test_count_distinct_basic() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher("MATCH (p:Person) RETURN count(DISTINCT p.age) AS unique_ages")?;
     assert_eq!(result.rows.len(), 1);
     
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     assert_eq!(count, 4, "Should have 4 distinct ages: 25, 30, 35, 40");
     
     Ok(())
@@ -47,13 +47,13 @@ fn test_count_distinct_basic() -> Result<(), Error> {
 #[test]
 fn test_count_distinct_vs_regular_count() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let distinct_result = engine.execute_cypher("MATCH (p:Person) RETURN count(DISTINCT p.age) AS count")?;
     let regular_result = engine.execute_cypher("MATCH (p:Person) RETURN count(p.age) AS count")?;
     
-    let distinct_count = distinct_result.rows[0][0].as_i64().unwrap();
-    let regular_count = regular_result.rows[0][0].as_i64().unwrap();
+    let distinct_count = distinct_result.rows[0].values[0].as_i64().unwrap();
+    let regular_count = regular_result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(distinct_count, 4, "Distinct ages");
     assert_eq!(regular_count, 8, "Total people");
@@ -65,10 +65,10 @@ fn test_count_distinct_vs_regular_count() -> Result<(), Error> {
 #[test]
 fn test_count_distinct_city() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher("MATCH (p:Person) RETURN count(DISTINCT p.city) AS unique_cities")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 3, "Should have 3 distinct cities: NYC, LA, SF");
     
@@ -86,7 +86,7 @@ fn test_count_distinct_multiple_labels() -> Result<(), Error> {
     engine.refresh_executor()?;
     
     let result = engine.execute_cypher("MATCH (p:Person:Employee) RETURN count(DISTINCT p.dept) AS unique_depts")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 2, "Should have 2 distinct departments: Engineering, Sales");
     
@@ -96,10 +96,10 @@ fn test_count_distinct_multiple_labels() -> Result<(), Error> {
 #[test]
 fn test_count_distinct_with_where() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher("MATCH (p:Person) WHERE p.age >= 30 RETURN count(DISTINCT p.city) AS cities")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 3, "People age >= 30 are in 3 cities");
     
@@ -109,10 +109,10 @@ fn test_count_distinct_with_where() -> Result<(), Error> {
 #[test]
 fn test_count_distinct_products_price() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher("MATCH (p:Product) RETURN count(DISTINCT p.price) AS unique_prices")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 5, "Should have 5 distinct prices: 25, 75, 150, 300, 1000");
     
@@ -122,10 +122,10 @@ fn test_count_distinct_products_price() -> Result<(), Error> {
 #[test]
 fn test_count_distinct_by_category() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher("MATCH (p:Product) WHERE p.category = 'Electronics' RETURN count(DISTINCT p.price) AS prices")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 4, "Electronics have 4 distinct prices");
     
@@ -135,10 +135,10 @@ fn test_count_distinct_by_category() -> Result<(), Error> {
 #[test]
 fn test_count_distinct_empty_result() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher("MATCH (p:NonExistent) RETURN count(DISTINCT p.name) AS count")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 0, "Non-existent label should return 0");
     
@@ -155,7 +155,7 @@ fn test_count_distinct_all_same_value() -> Result<(), Error> {
     engine.refresh_executor()?;
     
     let result = engine.execute_cypher("MATCH (i:Item) RETURN count(DISTINCT i.type) AS unique_types")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 1, "All same values should return 1");
     
@@ -173,7 +173,7 @@ fn test_count_distinct_with_null_values() -> Result<(), Error> {
     engine.refresh_executor()?;
     
     let result = engine.execute_cypher("MATCH (n:Node) RETURN count(DISTINCT n.value) AS unique_values")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 2, "Should count 2 distinct non-null values: 10, 20");
     
@@ -191,7 +191,7 @@ fn test_count_distinct_numeric_values() -> Result<(), Error> {
     engine.refresh_executor()?;
     
     let result = engine.execute_cypher("MATCH (t:Test) RETURN count(DISTINCT t.age) AS ages")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 3, "Should have 3 distinct ages: 20, 30, 40");
     
@@ -209,7 +209,7 @@ fn test_count_distinct_string_values() -> Result<(), Error> {
     engine.refresh_executor()?;
     
     let result = engine.execute_cypher("MATCH (u:User) RETURN count(DISTINCT u.name) AS unique_names")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 4, "Should have 4 distinct names: Alice, Bob, Charlie, David");
     
@@ -228,7 +228,7 @@ fn test_count_distinct_large_dataset() -> Result<(), Error> {
     engine.refresh_executor()?;
     
     let result = engine.execute_cypher("MATCH (n:BigData) RETURN count(DISTINCT n.value) AS distinct_values")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 10, "Should have 10 distinct values from 0-9");
     
@@ -246,7 +246,7 @@ fn test_count_distinct_case_sensitive() -> Result<(), Error> {
     engine.refresh_executor()?;
     
     let result = engine.execute_cypher("MATCH (t:Text) RETURN count(DISTINCT t.word) AS words")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 3, "Case-sensitive distinct: hello, Hello, HELLO");
     
@@ -256,11 +256,11 @@ fn test_count_distinct_case_sensitive() -> Result<(), Error> {
 #[test]
 fn test_count_distinct_with_limit() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     // LIMIT should not affect COUNT DISTINCT result
     let result = engine.execute_cypher("MATCH (p:Person) RETURN count(DISTINCT p.age) AS ages LIMIT 1")?;
-    let count = result.rows[0][0].as_i64().unwrap();
+    let count = result.rows[0].values[0].as_i64().unwrap();
     
     assert_eq!(count, 4, "LIMIT should not affect aggregation");
     

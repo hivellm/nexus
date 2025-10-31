@@ -5,7 +5,7 @@ use nexus_core::{Engine, Error};
 use tempfile::TempDir;
 
 fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(|e| Error::Io(e.to_string()))?;
+    let temp_dir = tempfile::tempdir().map_err(|e| Error::Io(e))?;
     let engine = Engine::with_data_dir(temp_dir.path())?;
     Ok((engine, temp_dir))
 }

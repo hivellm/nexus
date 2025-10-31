@@ -2,12 +2,12 @@ use nexus_core::{Engine, Error};
 use tempfile::TempDir;
 
 fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(|e| Error::Io(e.to_string()))?;
+    let temp_dir = tempfile::tempdir().map_err(|e| Error::Io(e))?;
     let engine = Engine::with_data_dir(temp_dir.path())?;
     Ok((engine, temp_dir))
 }
 
-fn setup_test_data(engine: &Engine) -> Result<(), Error> {
+fn setup_test_data(engine: &mut Engine) -> Result<(), Error> {
     // People
     engine.execute_cypher("CREATE (p:Person {name: 'Alice', age: 30})")?;
     engine.execute_cypher("CREATE (p:Person {name: 'Bob', age: 25})")?;
@@ -29,7 +29,7 @@ fn setup_test_data(engine: &Engine) -> Result<(), Error> {
 #[test]
 fn test_union_basic() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher(
         "MATCH (p:Person) RETURN p.name AS name UNION MATCH (c:Company) RETURN c.name AS name"
@@ -86,7 +86,7 @@ fn test_union_vs_union_all_duplicates() -> Result<(), Error> {
 #[test]
 fn test_union_empty_left() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher(
         "MATCH (n:NonExistent) RETURN n.name AS name UNION MATCH (p:Person) RETURN p.name AS name"
@@ -100,7 +100,7 @@ fn test_union_empty_left() -> Result<(), Error> {
 #[test]
 fn test_union_empty_right() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher(
         "MATCH (p:Person) RETURN p.name AS name UNION MATCH (n:NonExistent) RETURN n.name AS name"
@@ -114,7 +114,7 @@ fn test_union_empty_right() -> Result<(), Error> {
 #[test]
 fn test_union_both_empty() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher(
         "MATCH (n:NonExistent1) RETURN n.name AS name UNION MATCH (m:NonExistent2) RETURN m.name AS name"
@@ -128,7 +128,7 @@ fn test_union_both_empty() -> Result<(), Error> {
 #[test]
 fn test_union_three_way() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher(
         "MATCH (p:Person) RETURN p.name AS name 
@@ -144,7 +144,7 @@ fn test_union_three_way() -> Result<(), Error> {
 #[test]
 fn test_union_with_where() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher(
         "MATCH (p:Person) WHERE p.age >= 30 RETURN p.name AS name 
@@ -200,7 +200,7 @@ fn test_union_multiple_columns() -> Result<(), Error> {
 #[test]
 fn test_union_identical_queries() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result = engine.execute_cypher(
         "MATCH (p:Person) RETURN p.name AS name UNION MATCH (p:Person) RETURN p.name AS name"
@@ -234,7 +234,7 @@ fn test_union_mixed_types() -> Result<(), Error> {
 #[test]
 fn test_union_order_independence() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
-    setup_test_data(&engine)?;
+    setup_test_data(&mut engine)?;
     
     let result1 = engine.execute_cypher(
         "MATCH (p:Person) RETURN p.name AS name UNION MATCH (c:Company) RETURN c.name AS name"
