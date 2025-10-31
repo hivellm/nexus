@@ -353,7 +353,7 @@ impl Engine {
     /// Refresh the executor to ensure it sees the latest storage state
     /// This is necessary because the executor uses a cloned RecordStore
     /// which has its own PropertyStore instance
-    fn refresh_executor(&mut self) -> Result<()> {
+    pub fn refresh_executor(&mut self) -> Result<()> {
         // Recreate executor with current storage state
         self.executor = executor::Executor::new(
             &self.catalog,

@@ -80,14 +80,21 @@
 ## 7. Comprehensive Testing
 
 - [x] 7.1 Create comprehensive test suite (7 Neo4j compatibility tests)
-- [x] 7.2 Debug and fix test failures (2/7 passing, 5 documented as known issues)
+- [x] 7.2 Debug and fix test failures (3/7 passing, 4 with known architectural limitation)
   - ✅ test_multiple_labels_match - FIXED (label intersection)
   - ✅ test_multiple_labels_filtering - FIXED (label intersection)
-  - ⏸️ test_union_queries - Known issue: UNION not in planner
-  - ⏸️ test_relationship_property_access - Known issue: WHERE r.property
-  - ⏸️ test_relationship_property_return - Known issue: executor enhancement
-  - ⏸️ test_bidirectional_relationship_queries - Known issue: query optimization
-  - ⏸️ test_complex_multiple_labels_query - Known issue: property filter on multi-label
+  - ✅ test_union_queries - FIXED (UNION operator implemented)
+  - ⏸️ test_relationship_property_access - MATCH ... CREATE limitation
+  - ⏸️ test_relationship_property_return - MATCH ... CREATE limitation
+  - ⏸️ test_bidirectional_relationship_queries - MATCH ... CREATE limitation
+  - ⏸️ test_complex_multiple_labels_query - MATCH ... CREATE limitation
+  
+  Known Limitation: MATCH ... CREATE Pattern
+  - Executor uses cloned RecordStore, can't persist during MATCH context
+  - CREATE (standalone) works ✅
+  - MATCH ... CREATE (contextual) needs architectural refactor
+  - Solution: Executor needs reference to Engine to call create_node/create_relationship
+  - All 4 failing tests involve this pattern
 - [x] 7.3 Implement label intersection for MATCH with multiple labels
   - Planner generates NodeByLabel + Filter operators
   - Filter evaluates variable:Label patterns
@@ -142,11 +149,24 @@
   - 2/7 Neo4j compatibility tests now passing
   - All 1053 tests passing
   - Commit: fdd3e76
-- [x] 10.7 Fix UNION operator column handling
-  - UNION was using empty context columns
-  - Now uses left/right context columns
-  - Prevents Null values in results
-  - Commit: (pending)
+- [x] 10.7 Implement UNION operator in planner and executor
+  - Modified Operator::Union to hold Vec<Operator> pipelines
+  - Planner detects UNION clause, splits into left/right sub-queries
+  - Plans both sides recursively
+  - Executor runs both pipelines, combines results
+  - Fixes column handling (was using empty context)
+  - test_union_queries now passing ✅
+  - Commit: a4d399f
+- [x] 10.8 Implement id() function
+  - Returns _nexus_id from nodes/relationships
+  - Used in RETURN id(n) queries
+  - Enables ID-based operations
+  - Commit: a4d399f
+- [x] 10.9 Fix standalone CREATE detection
+  - Only intercept CREATE when it's first clause
+  - MATCH ... CREATE delegates to executor
+  - Prevents premature execution before MATCH
+  - Commit: a4d399f
 
 ## 9. Future Enhancements (Planned)
 
