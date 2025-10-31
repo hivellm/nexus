@@ -111,16 +111,23 @@ pub struct Engine {
     pub indexes: index::IndexManager,
     /// Query executor
     pub executor: executor::Executor,
+    /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
+    _temp_dir: Option<tempfile::TempDir>,
 }
 
 impl Engine {
     /// Create a new engine instance with all components
     /// Uses temporary directory (for backward compatibility)
+    ///
+    /// The temporary directory will be automatically cleaned up when the Engine is dropped.
+    /// For persistent storage, use `Engine::with_data_dir()` instead.
     pub fn new() -> Result<Self> {
         // Create temporary directory for data
         let temp_dir = tempfile::tempdir()?;
-        let data_dir = temp_dir.path();
-        Self::with_data_dir(data_dir)
+        let data_dir = temp_dir.path().to_path_buf();
+        let mut engine = Self::with_data_dir(&data_dir)?;
+        engine._temp_dir = Some(temp_dir);
+        Ok(engine)
     }
 
     /// Create a new engine instance with a specific data directory
@@ -161,6 +168,7 @@ impl Engine {
             transaction_manager,
             indexes,
             executor,
+            _temp_dir: None,
         };
 
         engine.rebuild_indexes_from_storage()?;

@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Filter by relationship properties
   - Return full relationship objects with properties
 
+### Fixed
+- **Engine Test Suite**: Fixed critical bug in `Engine::new()` causing 11 tests to fail
+  - `Engine::new()` now properly keeps temporary directory alive for Engine lifetime
+  - Added `_temp_dir: Option<TempDir>` field to Engine struct to store directory guard
+  - All 11 previously failing tests now pass (test_update_node, test_delete_node, test_clear_all_data, and 8 others)
+  - No impact on production code (production uses `Engine::with_data_dir()` with persistent storage)
+  - Root cause: TempDir guard was dropped immediately after Engine::new() returned, causing "No such file or directory" errors
+
 - **Import Validation Script**: Created PowerShell validation script
   - Validates node type counts and distributions
   - Verifies relationship type counts
