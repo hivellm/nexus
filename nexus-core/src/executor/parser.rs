@@ -1276,65 +1276,187 @@ impl CypherParser {
     /// Parse expression (simplified for MVP)
     pub fn parse_expression(&mut self) -> Result<Expression> {
         self.skip_whitespace();
+        self.parse_or_expression()
+    }
 
-        // Check for unary operators first
-        let unary_op = self.parse_unary_operator();
+    /// Parse OR expressions (lowest precedence)
+    fn parse_or_expression(&mut self) -> Result<Expression> {
+        let mut left = self.parse_and_expression()?;
 
-        // Try to parse a simple expression
-        let mut left = self.parse_simple_expression()?;
-
-        // Apply unary operator if present
-        if let Some(op) = unary_op {
-            left = Expression::UnaryOp {
-                op,
-                operand: Box::new(left),
+        while self.peek_keyword("OR") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            let right = self.parse_and_expression()?;
+            left = Expression::BinaryOp {
+                left: Box::new(left),
+                op: BinaryOperator::Or,
+                right: Box::new(right),
             };
         }
 
-        // Check for binary operators (including AND, OR)
-        loop {
-            // Check for IS NULL / IS NOT NULL before binary operators
+        Ok(left)
+    }
+
+    /// Parse AND expressions
+    fn parse_and_expression(&mut self) -> Result<Expression> {
+        let mut left = self.parse_comparison_expression()?;
+
+        while self.peek_keyword("AND") {
+            self.parse_keyword()?;
             self.skip_whitespace();
-            if self.peek_keyword("IS") {
-                self.parse_keyword()?; // consume "IS"
+            let right = self.parse_comparison_expression()?;
+            left = Expression::BinaryOp {
+                left: Box::new(left),
+                op: BinaryOperator::And,
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse comparison expressions (=, <>, <, <=, >, >=, IS NULL, IS NOT NULL)
+    fn parse_comparison_expression(&mut self) -> Result<Expression> {
+        let left = self.parse_additive_expression()?;
+
+        // Check for IS NULL / IS NOT NULL
+        self.skip_whitespace();
+        if self.peek_keyword("IS") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+
+            let negated = if self.peek_keyword("NOT") {
+                self.parse_keyword()?;
                 self.skip_whitespace();
+                true
+            } else {
+                false
+            };
 
-                let negated = if self.peek_keyword("NOT") {
-                    self.parse_keyword()?; // consume "NOT"
-                    self.skip_whitespace();
-                    true
-                } else {
-                    false
-                };
-
-                if self.peek_keyword("NULL") {
-                    self.parse_keyword()?; // consume "NULL"
-                    left = Expression::IsNull {
-                        expr: Box::new(left),
-                        negated,
-                    };
-                    continue; // Continue checking for more operators
-                } else {
-                    return Err(self.error("Expected NULL after IS [NOT]"));
-                }
+            if self.peek_keyword("NULL") {
+                self.parse_keyword()?;
+                return Ok(Expression::IsNull {
+                    expr: Box::new(left),
+                    negated,
+                });
+            } else {
+                return Err(self.error("Expected NULL after IS [NOT]"));
             }
+        }
 
-            // Try to parse binary operator
-            if let Some(op) = self.parse_binary_operator() {
+        // Check for comparison operators (=, <>, <, <=, >, >=)
+        self.skip_whitespace();
+        if let Some(op) = self.parse_comparison_operator() {
+            self.skip_whitespace();
+            let right = self.parse_additive_expression()?;
+            return Ok(Expression::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            });
+        }
+
+        Ok(left)
+    }
+
+    /// Parse additive expressions (+, -)
+    fn parse_additive_expression(&mut self) -> Result<Expression> {
+        let mut left = self.parse_multiplicative_expression()?;
+
+        loop {
+            self.skip_whitespace();
+            if let Some(op) = self.parse_additive_operator() {
                 self.skip_whitespace();
-                let right = self.parse_simple_expression()?;
+                let right = self.parse_multiplicative_expression()?;
                 left = Expression::BinaryOp {
                     left: Box::new(left),
                     op,
                     right: Box::new(right),
                 };
-                self.skip_whitespace();
             } else {
-                break; // No more operators
+                break;
             }
         }
 
         Ok(left)
+    }
+
+    /// Parse multiplicative expressions (*, /, %)
+    fn parse_multiplicative_expression(&mut self) -> Result<Expression> {
+        let mut left = self.parse_unary_expression()?;
+
+        loop {
+            self.skip_whitespace();
+            if let Some(op) = self.parse_multiplicative_operator() {
+                self.skip_whitespace();
+                let right = self.parse_unary_expression()?;
+                left = Expression::BinaryOp {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                };
+            } else {
+                break;
+            }
+        }
+
+        Ok(left)
+    }
+
+    /// Parse unary expressions
+    fn parse_unary_expression(&mut self) -> Result<Expression> {
+        self.skip_whitespace();
+
+        // Check for unary operators
+        if let Some(op) = self.parse_unary_operator() {
+            self.skip_whitespace();
+            let operand = self.parse_simple_expression()?;
+            return Ok(Expression::UnaryOp {
+                op,
+                operand: Box::new(operand),
+            });
+        }
+
+        self.parse_simple_expression()
+    }
+
+    /// Parse comparison operator only (not AND/OR)
+    fn parse_comparison_operator(&mut self) -> Option<BinaryOperator> {
+        self.skip_whitespace();
+
+        match self.peek_char() {
+            Some('=') => {
+                self.consume_char();
+                Some(BinaryOperator::Equal)
+            }
+            Some('!') if self.peek_char_at(1) == Some('=') => {
+                self.consume_char();
+                self.consume_char();
+                Some(BinaryOperator::NotEqual)
+            }
+            Some('<') => {
+                self.consume_char();
+                if self.peek_char() == Some('=') {
+                    self.consume_char();
+                    Some(BinaryOperator::LessThanOrEqual)
+                } else if self.peek_char() == Some('>') {
+                    self.consume_char();
+                    Some(BinaryOperator::NotEqual)
+                } else {
+                    Some(BinaryOperator::LessThan)
+                }
+            }
+            Some('>') => {
+                self.consume_char();
+                if self.peek_char() == Some('=') {
+                    self.consume_char();
+                    Some(BinaryOperator::GreaterThanOrEqual)
+                } else {
+                    Some(BinaryOperator::GreaterThan)
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Parse simple expression (no binary operators)
@@ -1668,39 +1790,6 @@ impl CypherParser {
     }
 
     /// Parse comparison operator
-    fn parse_comparison_operator(&mut self) -> Option<BinaryOperator> {
-        match self.peek_char() {
-            Some('=') => {
-                self.consume_char();
-                Some(BinaryOperator::Equal)
-            }
-            Some('!') if self.peek_char_at(1) == Some('=') => {
-                self.consume_char();
-                self.consume_char();
-                Some(BinaryOperator::NotEqual)
-            }
-            Some('<') => {
-                self.consume_char();
-                if self.peek_char() == Some('=') {
-                    self.consume_char();
-                    Some(BinaryOperator::LessThanOrEqual)
-                } else {
-                    Some(BinaryOperator::LessThan)
-                }
-            }
-            Some('>') => {
-                self.consume_char();
-                if self.peek_char() == Some('=') {
-                    self.consume_char();
-                    Some(BinaryOperator::GreaterThanOrEqual)
-                } else {
-                    Some(BinaryOperator::GreaterThan)
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// Parse additive operator
     fn parse_additive_operator(&mut self) -> Option<BinaryOperator> {
         match self.peek_char() {
@@ -3504,6 +3593,42 @@ mod tests {
                 assert!(!negated, "Should be IS NULL");
             }
             _ => panic!("Expected IsNull expression, got: {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn test_and_with_comparisons() {
+        let mut parser = CypherParser::new("n.age >= 25 AND n.age <= 35".to_string());
+        let expr = parser.parse_expression().unwrap();
+
+        // Should be: BinaryOp(>=) AND BinaryOp(<=)
+        match expr {
+            Expression::BinaryOp { left, op, right } => {
+                assert!(matches!(op, BinaryOperator::And), "Top level should be AND");
+
+                // Left side: n.age >= 25
+                match &*left {
+                    Expression::BinaryOp { op, .. } => {
+                        assert!(
+                            matches!(op, BinaryOperator::GreaterThanOrEqual),
+                            "Left should be >="
+                        );
+                    }
+                    _ => panic!("Left side should be BinaryOp, got: {:?}", left),
+                }
+
+                // Right side: n.age <= 35
+                match &*right {
+                    Expression::BinaryOp { op, .. } => {
+                        assert!(
+                            matches!(op, BinaryOperator::LessThanOrEqual),
+                            "Right should be <="
+                        );
+                    }
+                    _ => panic!("Right side should be BinaryOp, got: {:?}", right),
+                }
+            }
+            _ => panic!("Expected BinaryOp with AND, got: {:?}", expr),
         }
     }
 }

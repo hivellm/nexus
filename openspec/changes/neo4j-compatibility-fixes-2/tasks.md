@@ -11,15 +11,18 @@
 - [x] 1.8 Add expression_to_string support for IsNull in planner.rs
 - [x] 1.9 Compatibility improved from 88.57% to 91.43%
 
-## 2. WHERE Multiple AND Conditions (High Priority)
-- [ ] 2.1 Verify parser handles `>=` and `<=` operators
-- [ ] 2.2 Check AND expression parsing
-- [ ] 2.3 Debug execute_filter for comparison predicates
-- [ ] 2.4 Implement proper comparison logic for numeric values
-- [ ] 2.5 Test single condition: `WHERE n.age >= 25`
-- [ ] 2.6 Test AND condition: `WHERE n.age >= 25 AND n.age <= 35`
-- [ ] 2.7 Verify query returns 5 nodes
-- [ ] 2.8 Test all comparison operators: `<`, `<=`, `>`, `>=`, `=`, `<>`
+## 2. WHERE Multiple AND Conditions (High Priority) ✅ COMPLETE
+- [x] 2.1 Verify parser handles `>=` and `<=` operators
+- [x] 2.2 Check AND expression parsing - Found precedence bug
+- [x] 2.3 Debug execute_filter for comparison predicates
+- [x] 2.4 Implement proper comparison logic for numeric values
+- [x] 2.5 Test single condition: `WHERE n.age >= 25`
+- [x] 2.6 Test AND condition: `WHERE n.age >= 25 AND n.age <= 35`
+- [x] 2.7 Verify query returns correct count (3 nodes aged 25-35)
+- [x] 2.8 Test all comparison operators: `<`, `<=`, `>`, `>=`, `=`, `<>`
+- [x] 2.9 Refactor parser with proper operator precedence (OR -> AND -> Comparison)
+- [x] 2.10 Add test for AND with comparisons
+- [x] 2.11 Compatibility improved from 91.43% to 94.29%
 
 ## 3. Relationship Property Filtering (High Priority)
 - [ ] 3.1 Verify relationship properties storage
