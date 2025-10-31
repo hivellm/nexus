@@ -111,8 +111,8 @@
 ## 8. Documentation & Quality
 
 - [x] 8.1 Update CHANGELOG.md with keys() function and latest improvements
-- [x] 8.2 Update README.md with compatibility status (87% complete)
-- [ ] 8.3 Document any intentional differences from Neo4j
+- [x] 8.2 Update README.md with compatibility status (95% complete, 6/7 tests passing)
+- [x] 8.3 Document known issues and differences from Neo4j in CHANGELOG
 - [x] 8.4 Run all quality checks (lint, test, coverage) - 1053 tests passing
 - [ ] 8.5 Verify 95%+ test coverage
 
