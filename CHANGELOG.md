@@ -34,6 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enables property mapping validation in import scripts
   - Example: `MATCH (n:Person) RETURN keys(n)` returns `["age", "city", "name"]`
 
+- **CREATE Clause**: Full implementation of CREATE operations in Cypher
+  - CREATE now properly persists nodes and relationships
+  - Supports multiple labels: `CREATE (n:Person:Employee {name: "Alice"})`
+  - Supports properties on nodes and relationships
+  - Intercepts CREATE in Engine.execute_cypher() for proper transaction handling
+  - Automatic executor refresh after CREATE to ensure data visibility
+  - All 736 core tests continue passing
+
+- **Enhanced Import Logging**: Detailed statistics and progress tracking
+  - Timestamp logging for all import operations
+  - Entity creation statistics by type (nodes and relationships)
+  - Progress tracking with percentage complete
+  - JSON log export to import-nexus.log
+  - VERBOSE mode for detailed debugging (set VERBOSE=true)
+  - Throughput and duration metrics
+
 ### Fixed
 - **Engine Test Suite**: Fixed critical bug in `Engine::new()` causing 11 tests to fail
   - `Engine::new()` now properly keeps temporary directory alive for Engine lifetime

@@ -27,15 +27,17 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **MVP: 89.8% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.9.7)**: Multiple labels, UNION queries, bidirectional relationships, keys() function, 87% Neo4j compatible
+**🔥 Latest (v0.9.7)**: Multiple labels, UNION queries, CREATE clause, keys() function, enhanced logging - 92% Neo4j compatible
 
 - ✅ **Multiple Label Support** - `MATCH (n:Person:Employee)` queries work correctly
 - ✅ **UNION Queries** - Full support for UNION and UNION ALL operators
 - ✅ **Bidirectional Relationships** - Undirected relationship patterns `(a)-[r]-(b)`
 - ✅ **Relationship Properties** - Full access to relationship property values
-- ✅ **Import Validation** - PowerShell script to verify data integrity
+- ✅ **CREATE Clause** - Full CREATE implementation with persistence
 - ✅ **keys() Function** - Property introspection for nodes and relationships
-- ✅ **Neo4j Compatibility** - 87% feature coverage (21/24 core features implemented)
+- ✅ **Import Validation** - PowerShell script to verify data integrity
+- ✅ **Enhanced Logging** - Detailed import statistics and progress tracking
+- ✅ **Neo4j Compatibility** - 92% feature coverage (22/24 core features implemented)
 
 - ✅ **Storage Foundation** - Fixed-size records, memmap2, LMDB catalog (100% - ARCHIVED)
 - ✅ **Transactions & Durability** - WAL, MVCC, crash recovery (100% - ARCHIVED)
