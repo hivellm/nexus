@@ -52,11 +52,10 @@ impl<'a> QueryPlanner<'a> {
             let right_operators = self.plan_query(&right_query)?;
 
             // Create UNION operator with complete operator pipelines for each side
-            let mut operators = Vec::new();
-            operators.push(Operator::Union {
+            let operators = vec![Operator::Union {
                 left: left_operators,
                 right: right_operators,
-            });
+            }];
 
             return Ok(operators);
         }

@@ -276,7 +276,7 @@ fn regression_bidirectional_relationships() {
         .unwrap();
 
     // Should find B in both directions
-    assert!(result.rows.len() >= 1);
+    assert!(!result.rows.is_empty());
 }
 
 /// Regression test: Engine::new() temporary directory bug

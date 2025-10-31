@@ -750,17 +750,15 @@ impl Executor {
                     let mut filtered_rows = Vec::new();
 
                     for row in rows {
-                        if let Some(node_value) = row.get(variable) {
-                            if let Value::Object(obj) = node_value {
-                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
-                                    if let Some(node_id) = id.as_u64() {
-                                        // Read node and check if it has the label
-                                        if let Ok(node_record) = self.store.read_node(node_id) {
-                                            let has_label =
-                                                (node_record.label_bits & (1u64 << label_id)) != 0;
-                                            if has_label {
-                                                filtered_rows.push(row);
-                                            }
+                        if let Some(Value::Object(obj)) = row.get(variable) {
+                            if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                if let Some(node_id) = id.as_u64() {
+                                    // Read node and check if it has the label
+                                    if let Ok(node_record) = self.store.read_node(node_id) {
+                                        let has_label =
+                                            (node_record.label_bits & (1u64 << label_id)) != 0;
+                                        if has_label {
+                                            filtered_rows.push(row);
                                         }
                                     }
                                 }
@@ -1263,7 +1261,7 @@ impl Executor {
                 self.execute_aggregate(context, group_by, aggregations)?;
             }
             Operator::Union { left, right } => {
-                self.execute_union(context, &left, &right)?;
+                self.execute_union(context, left, right)?;
             }
             Operator::Join {
                 left,

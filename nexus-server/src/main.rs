@@ -326,6 +326,12 @@ mod tests {
 
     #[test]
     fn test_config_from_env() {
+        // Clear environment first to ensure clean state
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
+
         // Test with environment variables
         unsafe {
             std::env::set_var("NEXUS_ADDR", "192.168.1.100:8080");
@@ -359,21 +365,30 @@ mod tests {
         assert_eq!(config.addr.port(), 15474);
         assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         assert_eq!(config.data_dir, "./data");
+
+        // Ensure cleanup even for defaults test
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
     }
 
     #[test]
     #[should_panic(expected = "Invalid NEXUS_ADDR")]
     fn test_config_from_env_invalid_addr() {
+        // Clear first
+        unsafe {
+            std::env::remove_var("NEXUS_ADDR");
+            std::env::remove_var("NEXUS_DATA_DIR");
+        }
+
         unsafe {
             std::env::set_var("NEXUS_ADDR", "invalid-address");
         }
 
         let _config = Config::from_env();
 
-        // Clean up
-        unsafe {
-            std::env::remove_var("NEXUS_ADDR");
-        }
+        // Note: cleanup won't run due to panic - test framework handles it
     }
 
     #[tokio::test]

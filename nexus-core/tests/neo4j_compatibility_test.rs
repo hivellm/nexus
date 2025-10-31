@@ -822,7 +822,7 @@ fn test_relationship_direction_specificity() {
     )
     .unwrap();
     assert!(
-        both.rows.len() >= 1,
+        !both.rows.is_empty(),
         "Should find relationships in both directions pattern"
     );
 }
@@ -1053,7 +1053,7 @@ fn test_union_with_empty_results() {
     .unwrap();
 
     assert!(
-        result.rows.len() >= 1,
+        !result.rows.is_empty(),
         "Should return results from non-empty side"
     );
 }
@@ -1170,5 +1170,5 @@ fn test_union_with_aggregations() {
     .unwrap();
 
     // Should have counts from both sides
-    assert!(result.rows.len() >= 1, "Should return aggregated results");
+    assert!(!result.rows.is_empty(), "Should return aggregated results");
 }
