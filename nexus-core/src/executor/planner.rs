@@ -159,21 +159,20 @@ impl<'a> QueryPlanner<'a> {
         distinct: bool,
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
-        // Start with the most selective pattern
-        let start_pattern = self.select_start_pattern(patterns)?;
-
-        // Identify which nodes are pure targets of relationships (should not get NodeByLabel)
-        // Pure target = appears after a relationship AND doesn't have a label
-        let mut target_nodes = std::collections::HashSet::new();
-        for (idx, element) in start_pattern.elements.iter().enumerate() {
-            if let PatternElement::Relationship(_) = element {
-                // The node after a relationship is a target
-                if idx + 1 < start_pattern.elements.len() {
-                    if let PatternElement::Node(node) = &start_pattern.elements[idx + 1] {
-                        if let Some(var) = &node.variable {
-                            // Only mark as pure target if it doesn't have a label
-                            if node.labels.is_empty() {
-                                target_nodes.insert(var.clone());
+        // Process ALL patterns, not just the first one
+        // Multiple patterns need Cartesian product (Join)
+        let mut all_target_nodes = std::collections::HashSet::new();
+        
+        // Identify target nodes across all patterns
+        for pattern in patterns {
+            for (idx, element) in pattern.elements.iter().enumerate() {
+                if let PatternElement::Relationship(_) = element {
+                    if idx + 1 < pattern.elements.len() {
+                        if let PatternElement::Node(node) = &pattern.elements[idx + 1] {
+                            if let Some(var) = &node.variable {
+                                if node.labels.is_empty() {
+                                    all_target_nodes.insert(var.clone());
+                                }
                             }
                         }
                     }
@@ -181,12 +180,15 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Add NodeByLabel operators for nodes that are NOT pure relationship targets
+        // Process the first pattern
+        let start_pattern = self.select_start_pattern(patterns)?;
+        
+        // Add NodeByLabel operators for nodes in first pattern
         for element in &start_pattern.elements {
             if let PatternElement::Node(node) = element {
                 if let Some(variable) = &node.variable {
                     // Skip if this node is a pure target without labels (will be populated by Expand)
-                    if target_nodes.contains(variable) {
+                    if all_target_nodes.contains(variable) {
                         continue;
                     }
                     if !node.labels.is_empty() {
@@ -242,8 +244,69 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Add relationship traversal operators
-        self.add_relationship_operators(patterns, operators)?;
+        // Add relationship traversal operators for first pattern
+        self.add_relationship_operators(&[start_pattern.clone()], operators)?;
+
+        // Process additional patterns (for comma-separated MATCH patterns like (p1:...), (p2:...))
+        // Each additional pattern needs its own NodeByLabel + Filter operators
+        for (pattern_idx, pattern) in patterns.iter().enumerate() {
+            if pattern_idx == 0 {
+                continue; // Skip first pattern, already processed
+            }
+            
+            // Add NodeByLabel operators for nodes in this additional pattern
+            for element in &pattern.elements {
+                if let PatternElement::Node(node) = element {
+                    if let Some(variable) = &node.variable {
+                        if all_target_nodes.contains(variable) {
+                            continue;
+                        }
+                        
+                        if !node.labels.is_empty() {
+                            let first_label = &node.labels[0];
+                            let label_id = self.catalog.get_or_create_label(first_label)?;
+                            operators.push(Operator::NodeByLabel {
+                                label_id,
+                                variable: variable.clone(),
+                            });
+                            
+                            // Add filters for additional labels
+                            if node.labels.len() > 1 {
+                                for additional_label in &node.labels[1..] {
+                                    let filter_expr = format!("{}:{}", variable, additional_label);
+                                    operators.push(Operator::Filter {
+                                        predicate: filter_expr,
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Add filters for inline properties
+                        if let Some(property_map) = &node.properties {
+                            for (prop_name, prop_value_expr) in &property_map.properties {
+                                let value_str = match prop_value_expr {
+                                    Expression::Literal(lit) => match lit {
+                                        Literal::String(s) => format!("\"{}\"", s),
+                                        Literal::Integer(i) => i.to_string(),
+                                        Literal::Float(f) => f.to_string(),
+                                        Literal::Boolean(b) => b.to_string(),
+                                        Literal::Null => "null".to_string(),
+                                    },
+                                    _ => self.expression_to_string(prop_value_expr)?,
+                                };
+                                let filter_expr = format!("{}.{} = {}", variable, prop_name, value_str);
+                                operators.push(Operator::Filter {
+                                    predicate: filter_expr,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Add relationship operators for this pattern if any
+            self.add_relationship_operators(&[pattern.clone()], operators)?;
+        }
 
         // Add filter operators for WHERE clauses
         for where_clause in where_clauses {

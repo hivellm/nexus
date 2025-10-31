@@ -765,7 +765,7 @@ impl CypherParser {
         let node = self.parse_node_pattern()?;
         elements.push(PatternElement::Node(node));
 
-        // Parse relationships and nodes
+        // Parse relationships and nodes, or comma-separated nodes
         while self.pos < self.input.len() {
             // Check if there's a relationship pattern by looking ahead
             let saved_pos = self.pos;
@@ -774,6 +774,17 @@ impl CypherParser {
 
             // Skip whitespace
             self.skip_whitespace();
+
+            // Check for comma (multiple independent node patterns)
+            if self.peek_char() == Some(',') {
+                self.consume_char(); // consume ','
+                self.skip_whitespace();
+                
+                // Parse next node pattern as independent node
+                let node = self.parse_node_pattern()?;
+                elements.push(PatternElement::Node(node));
+                continue;
+            }
 
             // Check if we have a relationship pattern
             if self.peek_char() == Some('-')
@@ -788,7 +799,7 @@ impl CypherParser {
                 let node = self.parse_node_pattern()?;
                 elements.push(PatternElement::Node(node));
             } else {
-                // Restore position if no relationship found
+                // Restore position if no relationship or comma found
                 self.pos = saved_pos;
                 self.line = saved_line;
                 self.column = saved_column;

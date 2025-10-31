@@ -231,11 +231,85 @@ impl Engine {
             params: ast.params.clone(),
         };
         
+        // Collect all node variables from MATCH clauses
+        let mut node_variables = Vec::new();
+        for clause in &match_query.clauses {
+            if let executor::parser::Clause::Match(mc) = clause {
+                for element in &mc.pattern.elements {
+                    if let executor::parser::PatternElement::Node(node) = element {
+                        if let Some(var) = &node.variable {
+                            if !node_variables.contains(var) {
+                                node_variables.push(var.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Rebuild MATCH query as string with explicit RETURN of all variables
+        let mut match_query_str = String::new();
+        for clause in &match_query.clauses {
+            match clause {
+                executor::parser::Clause::Match(mc) => {
+                    match_query_str.push_str("MATCH ");
+                    // Reconstruct pattern - simplified for comma-separated nodes
+                    for (idx, element) in mc.pattern.elements.iter().enumerate() {
+                        if let executor::parser::PatternElement::Node(node) = element {
+                            if idx > 0 {
+                                match_query_str.push_str(", ");
+                            }
+                            match_query_str.push('(');
+                            if let Some(var) = &node.variable {
+                                match_query_str.push_str(var);
+                            }
+                            for label in &node.labels {
+                                match_query_str.push_str(&format!(":{}", label));
+                            }
+                            if let Some(props) = &node.properties {
+                                match_query_str.push_str(" {");
+                                let mut first = true;
+                                for (key, val_expr) in &props.properties {
+                                    if !first {
+                                        match_query_str.push_str(", ");
+                                    }
+                                    first = false;
+                                    match_query_str.push_str(key);
+                                    match_query_str.push_str(": ");
+                                    if let executor::parser::Expression::Literal(lit) = val_expr {
+                                        match lit {
+                                            executor::parser::Literal::String(s) => {
+                                                match_query_str.push_str(&format!("\"{}\"", s));
+                                            }
+                                            executor::parser::Literal::Integer(i) => {
+                                                match_query_str.push_str(&i.to_string());
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                match_query_str.push('}');
+                            }
+                            match_query_str.push(')');
+                        }
+                    }
+                    match_query_str.push(' ');
+                }
+                _ => {}
+            }
+        }
+        
+        // Add explicit RETURN for all node variables
+        match_query_str.push_str("RETURN ");
+        for (idx, var) in node_variables.iter().enumerate() {
+            if idx > 0 {
+                match_query_str.push_str(", ");
+            }
+            match_query_str.push_str(var);
+        }
+        
         let query_obj = executor::Query {
-            cypher: serde_json::to_string(&match_query)
-                .unwrap_or_default()
-                .trim_matches('"')
-                .to_string(),
+            cypher: match_query_str,
             params: std::collections::HashMap::new(),
         };
         
