@@ -541,7 +541,10 @@ impl CypherParser {
                 }
             }
 
-            return Ok(Clause::Delete(DeleteClause { items, detach: true }));
+            return Ok(Clause::Delete(DeleteClause {
+                items,
+                detach: true,
+            }));
         }
 
         match keyword.to_uppercase().as_str() {
@@ -802,7 +805,7 @@ impl CypherParser {
             if self.peek_char() == Some(',') {
                 self.consume_char(); // consume ','
                 self.skip_whitespace();
-                
+
                 // Parse next node pattern as independent node
                 let node = self.parse_node_pattern()?;
                 elements.push(PatternElement::Node(node));
@@ -1511,12 +1514,12 @@ impl CypherParser {
                 } else {
                     false
                 };
-                
+
                 // If DISTINCT was found, add it as a marker in args
                 if has_distinct {
                     args.push(Expression::Variable("__DISTINCT__".to_string()));
                 }
-                
+
                 // Parse arguments
                 while self.peek_char() != Some(')') {
                     let arg = self.parse_expression()?;

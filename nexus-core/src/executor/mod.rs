@@ -333,7 +333,11 @@ impl Executor {
                 } => {
                     self.execute_aggregate(&mut context, &group_by, &aggregations)?;
                 }
-                Operator::Union { left, right, distinct } => {
+                Operator::Union {
+                    left,
+                    right,
+                    distinct,
+                } => {
                     self.execute_union(&mut context, &left, &right, distinct)?;
                 }
                 Operator::Create { pattern } => {
@@ -758,7 +762,7 @@ impl Executor {
                     continue;
                 }
             }
-            
+
             match self.read_node_as_value(node_id as u64)? {
                 Value::Null => continue,
                 value => results.push(value),
@@ -975,11 +979,11 @@ impl Executor {
         // DELETE is handled at Engine level (lib.rs) like CREATE
         // This function is called AFTER deletion has already occurred
         // We just need to clear the result set
-        
+
         // Clear the result set since deleted nodes shouldn't be returned
         context.result_set.rows.clear();
         context.variables.clear();
-        
+
         Ok(())
     }
 
@@ -1107,7 +1111,9 @@ impl Executor {
             let mut result_row = group_key;
             for agg in aggregations {
                 let agg_value = match agg {
-                    Aggregation::Count { column, distinct, .. } => {
+                    Aggregation::Count {
+                        column, distinct, ..
+                    } => {
                         if column.is_none() {
                             // COUNT(*) - just count rows
                             Value::Number(serde_json::Number::from(group_rows.len()))
@@ -1284,7 +1290,7 @@ impl Executor {
         if distinct {
             let mut seen = std::collections::HashSet::new();
             let mut deduped_rows = Vec::new();
-            
+
             for row in combined_rows {
                 // Serialize row values to a string for comparison
                 let row_key = serde_json::to_string(&row.values).unwrap_or_default();
@@ -1316,19 +1322,20 @@ impl Executor {
         pattern: &parser::Pattern,
     ) -> Result<()> {
         use serde_json::Value as JsonValue;
-        
+
         // Get current rows from context (from MATCH)
         let current_rows = self.materialize_rows_from_variables(context);
-        
+
         // If no rows from MATCH, nothing to create
         if current_rows.is_empty() {
             return Ok(());
         }
-        
+
         // For each row in the MATCH result, create the pattern
         for row in &current_rows {
-            let mut node_ids: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-            
+            let mut node_ids: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+
             // First, resolve existing node variables from the row
             for (var_name, var_value) in row {
                 if let JsonValue::Object(obj) = var_value {
@@ -1339,10 +1346,10 @@ impl Executor {
                     }
                 }
             }
-            
+
             // Now process the pattern elements to create new nodes and relationships
             let mut last_node_var: Option<String> = None;
-            
+
             for element in &pattern.elements {
                 match element {
                     parser::PatternElement::Node(node) => {
@@ -1355,12 +1362,12 @@ impl Executor {
                                     .filter_map(|l| self.catalog.get_or_create_label(l).ok())
                                     .map(|id| id as u64)
                                     .collect();
-                                
+
                                 let mut _label_bits = 0u64;
                                 for label_id in _labels {
                                     _label_bits |= 1u64 << label_id;
                                 }
-                                
+
                                 // Extract properties
                                 let _properties = if let Some(props_map) = &node.properties {
                                     JsonValue::Object(
@@ -1368,18 +1375,20 @@ impl Executor {
                                             .properties
                                             .iter()
                                             .filter_map(|(k, v)| {
-                                                self.expression_to_json_value(v).ok().map(|val| (k.clone(), val))
+                                                self.expression_to_json_value(v)
+                                                    .ok()
+                                                    .map(|val| (k.clone(), val))
                                             })
                                             .collect(),
                                     )
                                 } else {
                                     JsonValue::Object(serde_json::Map::new())
                                 };
-                                
+
                                 // Executor can't create nodes - no mutable Transaction
                                 // Skip creating new nodes in executor context
                             }
-                            
+
                             // Track this node as the last one for relationship creation
                             last_node_var = Some(var.clone());
                         }
@@ -1388,7 +1397,7 @@ impl Executor {
                         // Create relationship between last_node and next_node
                         if let Some(rel_type) = rel.types.first() {
                             let _type_id = self.catalog.get_or_create_type(rel_type)?;
-                            
+
                             // Extract relationship properties
                             let _properties = if let Some(props_map) = &rel.properties {
                                 JsonValue::Object(
@@ -1396,26 +1405,33 @@ impl Executor {
                                         .properties
                                         .iter()
                                         .filter_map(|(k, v)| {
-                                            self.expression_to_json_value(v).ok().map(|val| (k.clone(), val))
+                                            self.expression_to_json_value(v)
+                                                .ok()
+                                                .map(|val| (k.clone(), val))
                                         })
                                         .collect(),
                                 )
                             } else {
                                 JsonValue::Object(serde_json::Map::new())
                             };
-                            
+
                             // Source is the last_node_var, target will be the next node in pattern
                             // We need to peek ahead to find the target node variable
                             if let Some(source_var) = &last_node_var {
                                 if let Some(_source_id) = node_ids.get(source_var) {
                                     // Find target node (next element after this relationship)
-                                    let current_idx = pattern.elements
+                                    let current_idx = pattern
+                                        .elements
                                         .iter()
-                                        .position(|e| matches!(e, parser::PatternElement::Relationship(_)))
+                                        .position(|e| {
+                                            matches!(e, parser::PatternElement::Relationship(_))
+                                        })
                                         .unwrap_or(0);
-                                    
+
                                     if current_idx + 1 < pattern.elements.len() {
-                                        if let parser::PatternElement::Node(target_node) = &pattern.elements[current_idx + 1] {
+                                        if let parser::PatternElement::Node(target_node) =
+                                            &pattern.elements[current_idx + 1]
+                                        {
                                             if let Some(target_var) = &target_node.variable {
                                                 if let Some(_target_id) = node_ids.get(target_var) {
                                                     // Executor can't create relationships - no mutable Transaction
@@ -1431,7 +1447,7 @@ impl Executor {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -1471,17 +1487,21 @@ impl Executor {
             } => {
                 self.execute_aggregate(context, group_by, aggregations)?;
             }
-            Operator::Union { left, right, distinct } => {
+            Operator::Union {
+                left,
+                right,
+                distinct,
+            } => {
                 self.execute_union(context, left, right, *distinct)?;
             }
             Operator::Create { pattern } => {
-                self.execute_create_with_context(context, &pattern)?;
+                self.execute_create_with_context(context, pattern)?;
             }
             Operator::Delete { variables } => {
-                self.execute_delete(context, &variables, false)?;
+                self.execute_delete(context, variables, false)?;
             }
             Operator::DetachDelete { variables } => {
-                self.execute_delete(context, &variables, true)?;
+                self.execute_delete(context, variables, true)?;
             }
             Operator::Join {
                 left,

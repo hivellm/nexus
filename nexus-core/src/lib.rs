@@ -209,7 +209,7 @@ impl Engine {
         // First, execute the MATCH part to get the matching nodes
         let mut match_query_clauses = Vec::new();
         let mut delete_clause_opt = None;
-        
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::Match(_) | executor::parser::Clause::Where(_) => {
@@ -224,13 +224,13 @@ impl Engine {
                 }
             }
         }
-        
+
         // Execute MATCH to get results
         let match_query = executor::parser::CypherQuery {
             clauses: match_query_clauses,
             params: ast.params.clone(),
         };
-        
+
         // Collect all node variables from MATCH clauses
         let mut node_variables = Vec::new();
         for clause in &match_query.clauses {
@@ -246,59 +246,56 @@ impl Engine {
                 }
             }
         }
-        
+
         // Rebuild MATCH query as string with explicit RETURN of all variables
         let mut match_query_str = String::new();
         for clause in &match_query.clauses {
-            match clause {
-                executor::parser::Clause::Match(mc) => {
-                    match_query_str.push_str("MATCH ");
-                    // Reconstruct pattern
-                    for (idx, element) in mc.pattern.elements.iter().enumerate() {
-                        if let executor::parser::PatternElement::Node(node) = element {
-                            if idx > 0 {
-                                match_query_str.push_str(", ");
-                            }
-                            match_query_str.push('(');
-                            if let Some(var) = &node.variable {
-                                match_query_str.push_str(var);
-                            }
-                            for label in &node.labels {
-                                match_query_str.push_str(&format!(":{}", label));
-                            }
-                            if let Some(props) = &node.properties {
-                                match_query_str.push_str(" {");
-                                let mut first = true;
-                                for (key, val_expr) in &props.properties {
-                                    if !first {
-                                        match_query_str.push_str(", ");
-                                    }
-                                    first = false;
-                                    match_query_str.push_str(key);
-                                    match_query_str.push_str(": ");
-                                    if let executor::parser::Expression::Literal(lit) = val_expr {
-                                        match lit {
-                                            executor::parser::Literal::String(s) => {
-                                                match_query_str.push_str(&format!("\"{}\"", s));
-                                            }
-                                            executor::parser::Literal::Integer(i) => {
-                                                match_query_str.push_str(&i.to_string());
-                                            }
-                                            _ => {}
+            if let executor::parser::Clause::Match(mc) = clause {
+                match_query_str.push_str("MATCH ");
+                // Reconstruct pattern
+                for (idx, element) in mc.pattern.elements.iter().enumerate() {
+                    if let executor::parser::PatternElement::Node(node) = element {
+                        if idx > 0 {
+                            match_query_str.push_str(", ");
+                        }
+                        match_query_str.push('(');
+                        if let Some(var) = &node.variable {
+                            match_query_str.push_str(var);
+                        }
+                        for label in &node.labels {
+                            match_query_str.push_str(&format!(":{}", label));
+                        }
+                        if let Some(props) = &node.properties {
+                            match_query_str.push_str(" {");
+                            let mut first = true;
+                            for (key, val_expr) in &props.properties {
+                                if !first {
+                                    match_query_str.push_str(", ");
+                                }
+                                first = false;
+                                match_query_str.push_str(key);
+                                match_query_str.push_str(": ");
+                                if let executor::parser::Expression::Literal(lit) = val_expr {
+                                    match lit {
+                                        executor::parser::Literal::String(s) => {
+                                            match_query_str.push_str(&format!("\"{}\"", s));
                                         }
+                                        executor::parser::Literal::Integer(i) => {
+                                            match_query_str.push_str(&i.to_string());
+                                        }
+                                        _ => {}
                                     }
                                 }
-                                match_query_str.push('}');
                             }
-                            match_query_str.push(')');
+                            match_query_str.push('}');
                         }
+                        match_query_str.push(')');
                     }
-                    match_query_str.push(' ');
                 }
-                _ => {}
+                match_query_str.push(' ');
             }
         }
-        
+
         // Add explicit RETURN for all node variables
         match_query_str.push_str("RETURN ");
         for (idx, var) in node_variables.iter().enumerate() {
@@ -307,34 +304,32 @@ impl Engine {
             }
             match_query_str.push_str(var);
         }
-        
+
         let query_obj = executor::Query {
             cypher: match_query_str,
             params: std::collections::HashMap::new(),
         };
-        
+
         let match_results = self.executor.execute(&query_obj)?;
-        
+
         // For each row in MATCH result, delete the nodes
         if let Some(delete_clause) = delete_clause_opt {
             let detach = delete_clause.detach;
-            
+
             for row in &match_results.rows {
                 // Extract node IDs from the row
                 for (idx, column) in match_results.columns.iter().enumerate() {
                     // Check if this variable is in the DELETE clause items
-                    if delete_clause.items.contains(column) {
-                        if idx < row.values.len() {
-                            if let serde_json::Value::Object(obj) = &row.values[idx] {
-                                if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
-                                    if let Some(node_id) = id.as_u64() {
-                                        // Delete the node
-                                        if detach {
-                                            // Delete all relationships connected to this node first
-                                            self.delete_node_relationships(node_id)?;
-                                        }
-                                        self.delete_node(node_id)?;
+                    if delete_clause.items.contains(column) && idx < row.values.len() {
+                        if let serde_json::Value::Object(obj) = &row.values[idx] {
+                            if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
+                                if let Some(node_id) = id.as_u64() {
+                                    // Delete the node
+                                    if detach {
+                                        // Delete all relationships connected to this node first
+                                        self.delete_node_relationships(node_id)?;
                                     }
+                                    self.delete_node(node_id)?;
                                 }
                             }
                         }
@@ -342,7 +337,7 @@ impl Engine {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -351,7 +346,7 @@ impl Engine {
         // First, execute the MATCH part to get the matching nodes
         let mut match_query_clauses = Vec::new();
         let mut create_clause_opt = None;
-        
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::Match(_) | executor::parser::Clause::Where(_) => {
@@ -366,13 +361,13 @@ impl Engine {
                 }
             }
         }
-        
+
         // Execute MATCH to get results
         let match_query = executor::parser::CypherQuery {
             clauses: match_query_clauses,
             params: ast.params.clone(),
         };
-        
+
         // Collect all node variables from MATCH clauses
         let mut node_variables = Vec::new();
         for clause in &match_query.clauses {
@@ -388,59 +383,56 @@ impl Engine {
                 }
             }
         }
-        
+
         // Rebuild MATCH query as string with explicit RETURN of all variables
         let mut match_query_str = String::new();
         for clause in &match_query.clauses {
-            match clause {
-                executor::parser::Clause::Match(mc) => {
-                    match_query_str.push_str("MATCH ");
-                    // Reconstruct pattern - simplified for comma-separated nodes
-                    for (idx, element) in mc.pattern.elements.iter().enumerate() {
-                        if let executor::parser::PatternElement::Node(node) = element {
-                            if idx > 0 {
-                                match_query_str.push_str(", ");
-                            }
-                            match_query_str.push('(');
-                            if let Some(var) = &node.variable {
-                                match_query_str.push_str(var);
-                            }
-                            for label in &node.labels {
-                                match_query_str.push_str(&format!(":{}", label));
-                            }
-                            if let Some(props) = &node.properties {
-                                match_query_str.push_str(" {");
-                                let mut first = true;
-                                for (key, val_expr) in &props.properties {
-                                    if !first {
-                                        match_query_str.push_str(", ");
-                                    }
-                                    first = false;
-                                    match_query_str.push_str(key);
-                                    match_query_str.push_str(": ");
-                                    if let executor::parser::Expression::Literal(lit) = val_expr {
-                                        match lit {
-                                            executor::parser::Literal::String(s) => {
-                                                match_query_str.push_str(&format!("\"{}\"", s));
-                                            }
-                                            executor::parser::Literal::Integer(i) => {
-                                                match_query_str.push_str(&i.to_string());
-                                            }
-                                            _ => {}
+            if let executor::parser::Clause::Match(mc) = clause {
+                match_query_str.push_str("MATCH ");
+                // Reconstruct pattern - simplified for comma-separated nodes
+                for (idx, element) in mc.pattern.elements.iter().enumerate() {
+                    if let executor::parser::PatternElement::Node(node) = element {
+                        if idx > 0 {
+                            match_query_str.push_str(", ");
+                        }
+                        match_query_str.push('(');
+                        if let Some(var) = &node.variable {
+                            match_query_str.push_str(var);
+                        }
+                        for label in &node.labels {
+                            match_query_str.push_str(&format!(":{}", label));
+                        }
+                        if let Some(props) = &node.properties {
+                            match_query_str.push_str(" {");
+                            let mut first = true;
+                            for (key, val_expr) in &props.properties {
+                                if !first {
+                                    match_query_str.push_str(", ");
+                                }
+                                first = false;
+                                match_query_str.push_str(key);
+                                match_query_str.push_str(": ");
+                                if let executor::parser::Expression::Literal(lit) = val_expr {
+                                    match lit {
+                                        executor::parser::Literal::String(s) => {
+                                            match_query_str.push_str(&format!("\"{}\"", s));
                                         }
+                                        executor::parser::Literal::Integer(i) => {
+                                            match_query_str.push_str(&i.to_string());
+                                        }
+                                        _ => {}
                                     }
                                 }
-                                match_query_str.push('}');
                             }
-                            match_query_str.push(')');
+                            match_query_str.push('}');
                         }
+                        match_query_str.push(')');
                     }
-                    match_query_str.push(' ');
                 }
-                _ => {}
+                match_query_str.push(' ');
             }
         }
-        
+
         // Add explicit RETURN for all node variables
         match_query_str.push_str("RETURN ");
         for (idx, var) in node_variables.iter().enumerate() {
@@ -449,20 +441,20 @@ impl Engine {
             }
             match_query_str.push_str(var);
         }
-        
+
         let query_obj = executor::Query {
             cypher: match_query_str,
             params: std::collections::HashMap::new(),
         };
-        
+
         let match_results = self.executor.execute(&query_obj)?;
-        
+
         // For each row in MATCH result, execute the CREATE
         if let Some(create_clause) = create_clause_opt {
             for row in &match_results.rows {
                 // Extract node IDs from the row
                 let mut node_vars = std::collections::HashMap::new();
-                
+
                 for (idx, column) in match_results.columns.iter().enumerate() {
                     if idx < row.values.len() {
                         if let serde_json::Value::Object(obj) = &row.values[idx] {
@@ -474,15 +466,15 @@ impl Engine {
                         }
                     }
                 }
-                
+
                 // Create relationships from the pattern
                 self.create_from_pattern_with_context(&create_clause.pattern, &node_vars)?;
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Create from pattern with existing node context
     fn create_from_pattern_with_context(
         &mut self,
@@ -490,7 +482,7 @@ impl Engine {
         node_vars: &std::collections::HashMap<String, u64>,
     ) -> Result<()> {
         let mut current_node_id: Option<u64> = None;
-        
+
         // Use indexed iteration to access next element for relationships
         for (i, element) in pattern.elements.iter().enumerate() {
             match element {
@@ -511,7 +503,7 @@ impl Engine {
                             } else {
                                 serde_json::Value::Null
                             };
-                            
+
                             let node_id = self.create_node(node.labels.clone(), properties)?;
                             current_node_id = Some(node_id);
                         }
@@ -522,10 +514,12 @@ impl Engine {
                     let source_id = current_node_id.ok_or_else(|| {
                         Error::CypherExecution("Relationship must follow a node".to_string())
                     })?;
-                    
+
                     // Get target node (next element after relationship)
                     if i + 1 < pattern.elements.len() {
-                        if let executor::parser::PatternElement::Node(target_node) = &pattern.elements[i + 1] {
+                        if let executor::parser::PatternElement::Node(target_node) =
+                            &pattern.elements[i + 1]
+                        {
                             // Target node MUST have a variable and MUST exist in MATCH context
                             let target_id = if let Some(var) = &target_node.variable {
                                 // Check if target exists in MATCH context
@@ -535,19 +529,22 @@ impl Engine {
                                 } else {
                                     // This shouldn't happen for MATCH ... CREATE
                                     // All nodes should be matched first
-                                    return Err(Error::CypherExecution(
-                                        format!("Node variable '{}' not found in MATCH context", var)
-                                    ));
+                                    return Err(Error::CypherExecution(format!(
+                                        "Node variable '{}' not found in MATCH context",
+                                        var
+                                    )));
                                 }
                             } else {
-                                return Err(Error::CypherExecution("Target node must have a variable".to_string()));
+                                return Err(Error::CypherExecution(
+                                    "Target node must have a variable".to_string(),
+                                ));
                             };
-                            
+
                             // Create relationship
                             let rel_type = rel.types.first().ok_or_else(|| {
                                 Error::CypherExecution("Relationship must have a type".to_string())
                             })?;
-                            
+
                             let rel_properties = if let Some(props_map) = &rel.properties {
                                 let mut json_props = serde_json::Map::new();
                                 for (key, value_expr) in &props_map.properties {
@@ -558,25 +555,30 @@ impl Engine {
                             } else {
                                 serde_json::Value::Null
                             };
-                            
-                            self.create_relationship(source_id, target_id, rel_type.clone(), rel_properties)?;
+
+                            self.create_relationship(
+                                source_id,
+                                target_id,
+                                rel_type.clone(),
+                                rel_properties,
+                            )?;
                         } else {
                             return Err(Error::CypherExecution(
-                                "Relationship must be followed by a node".to_string()
+                                "Relationship must be followed by a node".to_string(),
                             ));
                         }
                     } else {
                         return Err(Error::CypherExecution(
-                            "Pattern must end with a node".to_string()
+                            "Pattern must end with a node".to_string(),
                         ));
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Execute CREATE query via Engine to ensure proper persistence
     fn execute_create_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
         use std::collections::HashMap;
@@ -763,9 +765,18 @@ impl Engine {
         let ast = parser.parse()?;
 
         // Check if query contains CREATE or DELETE
-        let has_create = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Create(_)));
-        let has_delete = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Delete(_)));
-        let has_match = ast.clauses.iter().any(|c| matches!(c, executor::parser::Clause::Match(_)));
+        let has_create = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Create(_)));
+        let has_delete = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Delete(_)));
+        let has_match = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Match(_)));
 
         // Handle DELETE (with or without MATCH)
         if has_delete {
@@ -776,17 +787,19 @@ impl Engine {
                 // Standalone DELETE won't work without MATCH
                 // This would be: DELETE n (without MATCH)
                 // For now, we don't support this syntax
-                return Err(Error::CypherSyntax("DELETE requires MATCH clause".to_string()));
+                return Err(Error::CypherSyntax(
+                    "DELETE requires MATCH clause".to_string(),
+                ));
             }
             self.refresh_executor()?;
-            
+
             // Return empty result for DELETE queries
             return Ok(executor::ResultSet {
                 columns: vec![],
                 rows: vec![],
             });
         }
-        
+
         // If query has CREATE (with or without MATCH), handle via Engine for persistence
         if has_create {
             if has_match {
@@ -796,7 +809,7 @@ impl Engine {
                 // Standalone CREATE
                 self.execute_create_query(&ast)?;
             }
-            
+
             // Refresh executor to see the changes
             self.refresh_executor()?;
         }
@@ -942,7 +955,7 @@ impl Engine {
             // Remove node from label index before marking as deleted
             // This removes the node from all labels it belongs to
             self.indexes.label_index.remove_node(id)?;
-            
+
             // Mark node as deleted
             let mut deleted_record = node_record;
             deleted_record.mark_deleted();
@@ -969,11 +982,11 @@ impl Engine {
     /// Delete all relationships connected to a node (for DETACH DELETE)
     pub fn delete_node_relationships(&mut self, node_id: u64) -> Result<()> {
         let mut tx = self.transaction_manager.begin_write()?;
-        
+
         // Find all relationships connected to this node
         let total_rels = self.storage.relationship_count();
         let mut rels_to_delete = Vec::new();
-        
+
         for rel_id in 0..total_rels {
             if let Ok(rel_record) = self.storage.read_rel(rel_id) {
                 if !rel_record.is_deleted() {
@@ -984,7 +997,7 @@ impl Engine {
                 }
             }
         }
-        
+
         // Mark all connected relationships as deleted
         for rel_id in rels_to_delete {
             if let Ok(rel_record) = self.storage.read_rel(rel_id) {
@@ -993,7 +1006,7 @@ impl Engine {
                 self.storage.write_rel(rel_id, &deleted_record)?;
             }
         }
-        
+
         self.transaction_manager.commit(&mut tx)?;
         Ok(())
     }

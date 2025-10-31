@@ -27,6 +27,13 @@ impl<'a> QueryPlanner<'a> {
 
     /// Plan a Cypher query into optimized operators
     pub fn plan_query(&self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        // Validate that query has at least one clause
+        if query.clauses.is_empty() {
+            return Err(Error::CypherSyntax(
+                "Query must contain at least one clause".to_string(),
+            ));
+        }
+
         // Check if query contains UNION - if so, split and plan separately
         if let Some(union_idx) = query
             .clauses
@@ -39,7 +46,7 @@ impl<'a> QueryPlanner<'a> {
             } else {
                 true // Default to UNION (distinct)
             };
-            
+
             // Split query into left and right parts
             let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
             let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..].to_vec();
@@ -98,7 +105,7 @@ impl<'a> QueryPlanner<'a> {
                 Clause::Delete(delete_clause) => {
                     // Extract variables to delete from the delete clause
                     let variables = delete_clause.items.clone();
-                    
+
                     if delete_clause.detach {
                         operators.push(Operator::DetachDelete { variables });
                     } else {
@@ -146,15 +153,18 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Plan execution strategy
-        self.plan_execution_strategy(
-            &patterns,
-            &where_clauses,
-            &return_items,
-            limit_count,
-            return_distinct,
-            &mut operators,
-        )?;
+        // Plan execution strategy only if we have patterns to match
+        // CREATE-only queries don't need pattern matching
+        if !patterns.is_empty() {
+            self.plan_execution_strategy(
+                &patterns,
+                &where_clauses,
+                &return_items,
+                limit_count,
+                return_distinct,
+                &mut operators,
+            )?;
+        }
 
         Ok(operators)
     }
@@ -172,7 +182,7 @@ impl<'a> QueryPlanner<'a> {
         // Process ALL patterns, not just the first one
         // Multiple patterns need Cartesian product (Join)
         let mut all_target_nodes = std::collections::HashSet::new();
-        
+
         // Identify target nodes across all patterns
         for pattern in patterns {
             for (idx, element) in pattern.elements.iter().enumerate() {
@@ -192,7 +202,7 @@ impl<'a> QueryPlanner<'a> {
 
         // Process the first pattern
         let start_pattern = self.select_start_pattern(patterns)?;
-        
+
         // Add NodeByLabel operators for nodes in first pattern
         for element in &start_pattern.elements {
             if let PatternElement::Node(node) = element {
@@ -229,7 +239,7 @@ impl<'a> QueryPlanner<'a> {
                             variable: variable.clone(),
                         });
                     }
-                    
+
                     // Add filters for inline properties: MATCH (n {property: value})
                     if let Some(property_map) = &node.properties {
                         for (prop_name, prop_value_expr) in &property_map.properties {
@@ -255,7 +265,7 @@ impl<'a> QueryPlanner<'a> {
         }
 
         // Add relationship traversal operators for first pattern
-        self.add_relationship_operators(&[start_pattern.clone()], operators)?;
+        self.add_relationship_operators(std::slice::from_ref(start_pattern), operators)?;
 
         // Process additional patterns (for comma-separated MATCH patterns like (p1:...), (p2:...))
         // Each additional pattern needs its own NodeByLabel + Filter operators
@@ -263,7 +273,7 @@ impl<'a> QueryPlanner<'a> {
             if pattern_idx == 0 {
                 continue; // Skip first pattern, already processed
             }
-            
+
             // Add NodeByLabel operators for nodes in this additional pattern
             for element in &pattern.elements {
                 if let PatternElement::Node(node) = element {
@@ -271,7 +281,7 @@ impl<'a> QueryPlanner<'a> {
                         if all_target_nodes.contains(variable) {
                             continue;
                         }
-                        
+
                         if !node.labels.is_empty() {
                             let first_label = &node.labels[0];
                             let label_id = self.catalog.get_or_create_label(first_label)?;
@@ -279,7 +289,7 @@ impl<'a> QueryPlanner<'a> {
                                 label_id,
                                 variable: variable.clone(),
                             });
-                            
+
                             // Add filters for additional labels
                             if node.labels.len() > 1 {
                                 for additional_label in &node.labels[1..] {
@@ -290,7 +300,7 @@ impl<'a> QueryPlanner<'a> {
                                 }
                             }
                         }
-                        
+
                         // Add filters for inline properties
                         if let Some(property_map) = &node.properties {
                             for (prop_name, prop_value_expr) in &property_map.properties {
@@ -304,7 +314,8 @@ impl<'a> QueryPlanner<'a> {
                                     },
                                     _ => self.expression_to_string(prop_value_expr)?,
                                 };
-                                let filter_expr = format!("{}.{} = {}", variable, prop_name, value_str);
+                                let filter_expr =
+                                    format!("{}.{} = {}", variable, prop_name, value_str);
                                 operators.push(Operator::Filter {
                                     predicate: filter_expr,
                                 });
@@ -313,9 +324,9 @@ impl<'a> QueryPlanner<'a> {
                     }
                 }
             }
-            
+
             // Add relationship operators for this pattern if any
-            self.add_relationship_operators(&[pattern.clone()], operators)?;
+            self.add_relationship_operators(std::slice::from_ref(pattern), operators)?;
         }
 
         // Add filter operators for WHERE clauses
@@ -341,7 +352,7 @@ impl<'a> QueryPlanner<'a> {
                         match func_name.as_str() {
                             "count" => {
                                 has_aggregation = true;
-                                
+
                                 // Check for DISTINCT marker
                                 let mut distinct = false;
                                 let mut real_args = args.clone();
@@ -351,17 +362,21 @@ impl<'a> QueryPlanner<'a> {
                                         real_args = args[1..].to_vec();
                                     }
                                 }
-                                
+
                                 let column = if real_args.is_empty() {
                                     None // COUNT(*) or COUNT(DISTINCT *)
                                 } else if let Some(Expression::Variable(var)) = real_args.first() {
                                     Some(var.clone())
-                                } else if let Some(Expression::PropertyAccess { variable, property }) = real_args.first() {
+                                } else if let Some(Expression::PropertyAccess {
+                                    variable,
+                                    property,
+                                }) = real_args.first()
+                                {
                                     Some(format!("{}.{}", variable, property))
                                 } else {
                                     None
                                 };
-                                
+
                                 aggregations.push(Aggregation::Count {
                                     column,
                                     alias: item
@@ -489,23 +504,25 @@ impl<'a> QueryPlanner<'a> {
                             match func_name.as_str() {
                                 "count" | "sum" | "avg" | "min" | "max" => {
                                     // Skip DISTINCT marker if present
-                                    let real_args = if let Some(Expression::Variable(var)) = args.first() {
-                                        if var == "__DISTINCT__" {
-                                            &args[1..]
+                                    let real_args =
+                                        if let Some(Expression::Variable(var)) = args.first() {
+                                            if var == "__DISTINCT__" {
+                                                &args[1..]
+                                            } else {
+                                                args.as_slice()
+                                            }
                                         } else {
                                             args.as_slice()
-                                        }
-                                    } else {
-                                        args.as_slice()
-                                    };
-                                    
+                                        };
+
                                     if let Some(arg) = real_args.first() {
                                         match arg {
                                             Expression::Variable(var) => {
                                                 required_columns.insert(var.clone());
                                             }
                                             Expression::PropertyAccess { variable, property } => {
-                                                required_columns.insert(format!("{}.{}", variable, property));
+                                                required_columns
+                                                    .insert(format!("{}.{}", variable, property));
                                             }
                                             _ => {}
                                         }
@@ -551,7 +568,7 @@ impl<'a> QueryPlanner<'a> {
                         } else {
                             Expression::Variable(column.clone())
                         };
-                        
+
                         projection_items.push(ProjectionItem {
                             alias: column.clone(),
                             expression,
