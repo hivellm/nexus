@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Filter by relationship properties
   - Return full relationship objects with properties
 
+- **keys() Function**: Implemented property introspection function
+  - Returns sorted array of property names for nodes and relationships
+  - Filters out internal fields (e.g., `_nexus_id`)
+  - Enables property mapping validation in import scripts
+  - Example: `MATCH (n:Person) RETURN keys(n)` returns `["age", "city", "name"]`
+
 ### Fixed
 - **Engine Test Suite**: Fixed critical bug in `Engine::new()` causing 11 tests to fail
   - `Engine::new()` now properly keeps temporary directory alive for Engine lifetime
