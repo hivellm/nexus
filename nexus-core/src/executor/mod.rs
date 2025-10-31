@@ -114,6 +114,8 @@ pub enum Operator {
         left: Vec<Operator>,
         /// Right operator pipeline
         right: Vec<Operator>,
+        /// Distinct flag (true = UNION, false = UNION ALL)
+        distinct: bool,
     },
     /// Join two result sets
     Join {
@@ -176,6 +178,8 @@ pub enum Aggregation {
         column: Option<String>,
         /// Alias for result
         alias: String,
+        /// Distinct flag for COUNT(DISTINCT ...)
+        distinct: bool,
     },
     /// Sum values
     Sum {
@@ -314,8 +318,8 @@ impl Executor {
                 } => {
                     self.execute_aggregate(&mut context, &group_by, &aggregations)?;
                 }
-                Operator::Union { left, right } => {
-                    self.execute_union(&mut context, &left, &right)?;
+                Operator::Union { left, right, distinct } => {
+                    self.execute_union(&mut context, &left, &right, distinct)?;
                 }
                 Operator::Join {
                     left,
@@ -1052,20 +1056,34 @@ impl Executor {
             let mut result_row = group_key;
             for agg in aggregations {
                 let agg_value = match agg {
-                    Aggregation::Count { column, .. } => {
+                    Aggregation::Count { column, distinct, .. } => {
                         if column.is_none() {
+                            // COUNT(*) - just count rows
                             Value::Number(serde_json::Number::from(group_rows.len()))
                         } else {
                             let col_name = column.as_ref().unwrap();
                             let col_idx =
                                 self.get_column_index(col_name, &context.result_set.columns);
                             let count = if let Some(idx) = col_idx {
-                                group_rows
-                                    .iter()
-                                    .filter(|row| {
-                                        idx < row.values.len() && !row.values[idx].is_null()
-                                    })
-                                    .count()
+                                if *distinct {
+                                    // COUNT(DISTINCT col) - collect unique values
+                                    let unique_values: std::collections::HashSet<_> = group_rows
+                                        .iter()
+                                        .filter(|row| {
+                                            idx < row.values.len() && !row.values[idx].is_null()
+                                        })
+                                        .map(|row| row.values[idx].to_string())
+                                        .collect();
+                                    unique_values.len()
+                                } else {
+                                    // COUNT(col) - count non-null values
+                                    group_rows
+                                        .iter()
+                                        .filter(|row| {
+                                            idx < row.values.len() && !row.values[idx].is_null()
+                                        })
+                                        .count()
+                                }
                             } else {
                                 0
                             };
@@ -1192,6 +1210,7 @@ impl Executor {
         context: &mut ExecutionContext,
         left: &[Operator],
         right: &[Operator],
+        distinct: bool,
     ) -> Result<()> {
         // Execute left operator pipeline and collect its results
         let mut left_context = ExecutionContext::new(context.params.clone());
@@ -1209,6 +1228,21 @@ impl Executor {
         let mut combined_rows = Vec::new();
         combined_rows.extend(left_context.result_set.rows);
         combined_rows.extend(right_context.result_set.rows);
+
+        // If UNION (not UNION ALL), deduplicate results
+        if distinct {
+            let mut seen = std::collections::HashSet::new();
+            let mut deduped_rows = Vec::new();
+            
+            for row in combined_rows {
+                // Serialize row values to a string for comparison
+                let row_key = serde_json::to_string(&row.values).unwrap_or_default();
+                if seen.insert(row_key) {
+                    deduped_rows.push(row);
+                }
+            }
+            combined_rows = deduped_rows;
+        }
 
         // Use columns from left context (both sides should have same columns)
         let columns = if !left_context.result_set.columns.is_empty() {
@@ -1260,8 +1294,8 @@ impl Executor {
             } => {
                 self.execute_aggregate(context, group_by, aggregations)?;
             }
-            Operator::Union { left, right } => {
-                self.execute_union(context, left, right)?;
+            Operator::Union { left, right, distinct } => {
+                self.execute_union(context, left, right, *distinct)?;
             }
             Operator::Join {
                 left,

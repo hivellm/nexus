@@ -33,6 +33,13 @@ impl<'a> QueryPlanner<'a> {
             .iter()
             .position(|c| matches!(c, Clause::Union(_)))
         {
+            // Extract the UnionClause to get union_type
+            let distinct = if let Some(Clause::Union(union_clause)) = query.clauses.get(union_idx) {
+                union_clause.union_type == super::parser::UnionType::Distinct
+            } else {
+                true // Default to UNION (distinct)
+            };
+            
             // Split query into left and right parts
             let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
             let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..].to_vec();
@@ -55,6 +62,7 @@ impl<'a> QueryPlanner<'a> {
             let operators = vec![Operator::Union {
                 left: left_operators,
                 right: right_operators,
+                distinct,
             }];
 
             return Ok(operators);
@@ -238,19 +246,34 @@ impl<'a> QueryPlanner<'a> {
                         match func_name.as_str() {
                             "count" => {
                                 has_aggregation = true;
-                                let column = if args.is_empty() {
-                                    None // COUNT(*)
-                                } else if let Some(Expression::Variable(var)) = args.first() {
+                                
+                                // Check for DISTINCT marker
+                                let mut distinct = false;
+                                let mut real_args = args.clone();
+                                if let Some(Expression::Variable(var)) = args.first() {
+                                    if var == "__DISTINCT__" {
+                                        distinct = true;
+                                        real_args = args[1..].to_vec();
+                                    }
+                                }
+                                
+                                let column = if real_args.is_empty() {
+                                    None // COUNT(*) or COUNT(DISTINCT *)
+                                } else if let Some(Expression::Variable(var)) = real_args.first() {
                                     Some(var.clone())
+                                } else if let Some(Expression::PropertyAccess { variable, property }) = real_args.first() {
+                                    Some(format!("{}.{}", variable, property))
                                 } else {
                                     None
                                 };
+                                
                                 aggregations.push(Aggregation::Count {
                                     column,
                                     alias: item
                                         .alias
                                         .clone()
                                         .unwrap_or_else(|| "count".to_string()),
+                                    distinct,
                                 });
                             }
                             "sum" => {
@@ -370,7 +393,18 @@ impl<'a> QueryPlanner<'a> {
                             let func_name = name.to_lowercase();
                             match func_name.as_str() {
                                 "count" | "sum" | "avg" | "min" | "max" => {
-                                    if let Some(arg) = args.first() {
+                                    // Skip DISTINCT marker if present
+                                    let real_args = if let Some(Expression::Variable(var)) = args.first() {
+                                        if var == "__DISTINCT__" {
+                                            &args[1..]
+                                        } else {
+                                            args.as_slice()
+                                        }
+                                    } else {
+                                        args.as_slice()
+                                    };
+                                    
+                                    if let Some(arg) = real_args.first() {
                                         match arg {
                                             Expression::Variable(var) => {
                                                 required_columns.insert(var.clone());
@@ -1088,6 +1122,7 @@ mod tests {
                     label_id: 2,
                     variable: "b".to_string(),
                 }],
+                distinct: true,
             },
             Operator::Join {
                 left: Box::new(Operator::NodeByLabel {

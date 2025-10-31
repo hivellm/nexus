@@ -1469,6 +1469,20 @@ impl CypherParser {
                 self.skip_whitespace();
                 // count(*) has no arguments - empty args list means count all
             } else {
+                // Check for DISTINCT keyword (for COUNT(DISTINCT ...))
+                let has_distinct = if self.peek_keyword("DISTINCT") {
+                    self.expect_keyword("DISTINCT")?;
+                    self.skip_whitespace();
+                    true
+                } else {
+                    false
+                };
+                
+                // If DISTINCT was found, add it as a marker in args
+                if has_distinct {
+                    args.push(Expression::Variable("__DISTINCT__".to_string()));
+                }
+                
                 // Parse arguments
                 while self.peek_char() != Some(')') {
                     let arg = self.parse_expression()?;
