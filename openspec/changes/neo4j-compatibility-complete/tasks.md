@@ -104,9 +104,18 @@
   - Planner generates NodeByLabel + Filter operators
   - Filter evaluates variable:Label patterns
   - Checks label_bits bitmap for label membership
-- [ ] 7.4 Fix edge cases for 100% compatibility
-- [ ] 7.5 Add regression tests
-- [ ] 7.6 Create compatibility report generator
+- [ ] 7.4 Fix edge cases for 100% compatibility (1 known bug remaining)
+- [x] 7.5 Add regression tests (9 regression tests covering all major fixes)
+  - regression_union_null_values - ensures UNION returns actual values
+  - regression_multiple_labels_intersection - ensures label filtering works
+  - regression_id_function_null - ensures id() returns IDs
+  - regression_keys_function_empty - ensures keys() returns property names
+  - regression_relationship_properties - ensures relationship properties accessible
+  - regression_create_persistence - ensures CREATE persists data
+  - regression_create_multiple_labels - ensures multiple labels in CREATE work
+  - regression_bidirectional_relationships - ensures bidirectional queries work
+  - regression_engine_tempdir_lifecycle - ensures Engine::new() temp dir persists
+- [ ] 7.6 Create compatibility report generator (optional)
 
 ## 8. Documentation & Quality
 
