@@ -9,7 +9,7 @@ param(
     [string]$NexusUri = "http://localhost:15474"
 )
 
-Write-Host "🔍 Neo4j vs Nexus Compatibility Test" -ForegroundColor Cyan
+Write-Host "[CHECK] Neo4j vs Nexus Compatibility Test" -ForegroundColor Cyan
 Write-Host "=" * 60
 
 # Test queries to run on both databases
@@ -124,7 +124,7 @@ function Invoke-NexusQuery {
     param([string]$Cypher)
     
     $body = @{
-        cypher = $Cypher
+        query = $Cypher
     } | ConvertTo-Json
     
     try {
@@ -149,16 +149,16 @@ function Compare-Results {
         [object]$NexusResult
     )
     
-    Write-Host "`n📊 Testing: $QueryName" -ForegroundColor Yellow
+    Write-Host "`n[TEST] Testing: $QueryName" -ForegroundColor Yellow
     Write-Host "Query: $($queries | Where-Object { $_.name -eq $QueryName } | Select-Object -ExpandProperty cypher)"
     
     if ($null -eq $Neo4jResult) {
-        Write-Host "⚠️  Neo4j query failed - SKIPPED" -ForegroundColor Yellow
+        Write-Host "[WARN]  Neo4j query failed - SKIPPED" -ForegroundColor Yellow
         return "skipped"
     }
     
     if ($null -eq $NexusResult) {
-        Write-Host "❌ Nexus query failed - FAILED" -ForegroundColor Red
+        Write-Host "[FAIL] Nexus query failed - FAILED" -ForegroundColor Red
         return "failed"
     }
     
@@ -169,7 +169,7 @@ function Compare-Results {
     Write-Host "Neo4j rows: $neo4jRowCount | Nexus rows: $nexusRowCount"
     
     if ($neo4jRowCount -ne $nexusRowCount) {
-        Write-Host "❌ Row count mismatch!" -ForegroundColor Red
+        Write-Host "[FAIL] Row count mismatch!" -ForegroundColor Red
         return "failed"
     }
     
@@ -178,7 +178,7 @@ function Compare-Results {
     $nexusColCount = if ($NexusResult.columns) { $NexusResult.columns.Count } else { 0 }
     
     if ($neo4jColCount -ne $nexusColCount) {
-        Write-Host "⚠️  Column count different: Neo4j=$neo4jColCount, Nexus=$nexusColCount" -ForegroundColor Yellow
+        Write-Host "[WARN]  Column count different: Neo4j=$neo4jColCount, Nexus=$nexusColCount" -ForegroundColor Yellow
     }
     
     # For count queries, compare the actual count value
@@ -189,24 +189,24 @@ function Compare-Results {
         Write-Host "Neo4j count: $neo4jCount | Nexus count: $nexusCount"
         
         if ($neo4jCount -eq $nexusCount) {
-            Write-Host "✅ PASS - Results match!" -ForegroundColor Green
+            Write-Host "[PASS] PASS - Results match!" -ForegroundColor Green
             return "passed"
         }
         else {
-            Write-Host "❌ FAIL - Count mismatch!" -ForegroundColor Red
+            Write-Host "[FAIL] FAIL - Count mismatch!" -ForegroundColor Red
             return "failed"
         }
     }
     
-    Write-Host "✅ PASS - Structure matches!" -ForegroundColor Green
+    Write-Host "[PASS] PASS - Structure matches!" -ForegroundColor Green
     return "passed"
 }
 
 # Setup: Clear both databases first
-Write-Host "`n🔧 Setup: Clearing databases..." -ForegroundColor Cyan
+Write-Host "`n[SETUP] Setup: Clearing databases..." -ForegroundColor Cyan
 
 # Create test data
-Write-Host "`n📝 Creating test data in both databases..." -ForegroundColor Cyan
+Write-Host "`n[DATA] Creating test data in both databases..." -ForegroundColor Cyan
 
 $setupQueries = @(
     "CREATE (p:Person {name: 'Alice', age: 30})",
@@ -227,7 +227,7 @@ foreach ($query in $setupQueries) {
     Invoke-NexusQuery -Cypher $query | Out-Null
 }
 
-Write-Host "`n✅ Test data created" -ForegroundColor Green
+Write-Host "`n[PASS] Test data created" -ForegroundColor Green
 
 # Run compatibility tests
 Write-Host "`n🧪 Running Compatibility Tests..." -ForegroundColor Cyan
@@ -254,19 +254,19 @@ foreach ($query in $queries) {
 
 # Summary
 Write-Host "`n" + ("=" * 60)
-Write-Host "📊 COMPATIBILITY TEST SUMMARY" -ForegroundColor Cyan
+Write-Host "[TEST] COMPATIBILITY TEST SUMMARY" -ForegroundColor Cyan
 Write-Host ("=" * 60)
 Write-Host "Total Tests: $($queries.Count)"
-Write-Host "✅ Passed: $passed" -ForegroundColor Green
-Write-Host "❌ Failed: $failed" -ForegroundColor Red
-Write-Host "⚠️  Skipped: $skipped" -ForegroundColor Yellow
+Write-Host "[PASS] Passed: $passed" -ForegroundColor Green
+Write-Host "[FAIL] Failed: $failed" -ForegroundColor Red
+Write-Host "[WARN]  Skipped: $skipped" -ForegroundColor Yellow
 
 $passRate = if ($queries.Count -gt 0) { 
     [math]::Round(($passed / $queries.Count) * 100, 2) 
 } else { 
     0 
 }
-Write-Host "`n🎯 Pass Rate: $passRate%" -ForegroundColor $(if ($passRate -ge 90) { "Green" } elseif ($passRate -ge 70) { "Yellow" } else { "Red" })
+Write-Host "`n[RESULT] Pass Rate: $passRate%" -ForegroundColor $(if ($passRate -ge 90) { "Green" } elseif ($passRate -ge 70) { "Yellow" } else { "Red" })
 
 # Export results
 $reportPath = "cross-compatibility-report.json"
