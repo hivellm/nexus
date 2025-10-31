@@ -17,7 +17,7 @@
 
 ### Achievements
 - ✅ **95% Neo4j compatibility** (6/7 integration tests passing)
-- ✅ **1066 tests passing** (99.4% pass rate across all suites)
+- ✅ **1088 tests** (29 Neo4j compat, 9 regression, 736 core + others)
 - ✅ **21 commits** implementing features, fixes, and documentation
 - ✅ **9 regression tests** preventing bug reintroduction
 - ✅ **Comprehensive documentation** (CHANGELOG, README, compatibility report)
@@ -32,13 +32,14 @@
 
 ### Test Breakdown
 - Core: 736/736 (100%)
-- Neo4j Compatibility: 6/7 (86%)
+- **Neo4j Compatibility: 29/33 (88%)** ⬆️ UP from 6/7
 - Regression: 9/9 (100%)
 - Integration: 15/15 (100%)
 - Protocol: 21/21 (100%)
 - Server API: 176/176 (100%)
 - Graph Comparison: 36/36 (100%)
 - Other: 67/67 (100%)
+- **TOTAL: 1088 tests** ⬆️ UP from 1066
 
 ### Known Issues
 - ⏸️ 1 edge case: Multi-label + relationship duplication (workaround: use DISTINCT)
@@ -124,8 +125,8 @@
 
 ## 7. Comprehensive Testing
 
-- [x] 7.1 Create comprehensive test suite (7 Neo4j compatibility tests)
-- [x] 7.2 Debug and fix test failures (6/7 passing, 1 with known bug)
+- [x] 7.1 Create comprehensive test suite (33 Neo4j compatibility tests - expanded coverage)
+- [x] 7.2 Debug and fix test failures (29/33 passing - 88% success rate)
   - ✅ test_multiple_labels_match - FIXED (label intersection)
   - ✅ test_multiple_labels_filtering - FIXED (label intersection)
   - ✅ test_union_queries - FIXED (UNION operator implemented)
@@ -155,7 +156,7 @@
   - Workaround available (use DISTINCT clause)
   - Not a blocker for production use
   - Future fix: Investigate planner/executor interaction for this pattern
-- [x] 7.5 Add regression tests (9 regression tests covering all major fixes)
+- [x] 7.5 Add regression tests (9 regression tests) + extended compatibility suite (26 new tests)
   - regression_union_null_values - ensures UNION returns actual values
   - regression_multiple_labels_intersection - ensures label filtering works
   - regression_id_function_null - ensures id() returns IDs
@@ -165,6 +166,34 @@
   - regression_create_multiple_labels - ensures multiple labels in CREATE work
   - regression_bidirectional_relationships - ensures bidirectional queries work
   - regression_engine_tempdir_lifecycle - ensures Engine::new() temp dir persists
+  
+  Extended Compatibility Tests (26 new tests):
+  - test_union_all_preserves_duplicates - UNION ALL behavior
+  - test_labels_function_multiple - labels() with 3+ labels
+  - test_type_function - type() with different rel types
+  - test_keys_function_empty_node - keys() on nodes without properties
+  - test_id_function_consistency - id() consistency
+  - test_multiple_labels_with_count - COUNT aggregation with multi-labels
+  - test_multiple_labels_order_by - ORDER BY with multi-labels
+  - test_union_combines_results - UNION result merging
+  - test_relationship_properties_filtering - WHERE filtering on rel props
+  - test_keys_function_on_relationships - keys() on relationships
+  - test_id_function_on_relationships - id() on relationships
+  - test_match_with_three_labels - 3+ label intersection
+  - test_count_with_multiple_labels - COUNT with label filtering
+  - test_relationship_direction_specificity - directional patterns
+  - test_where_with_property_checks - WHERE with properties
+  - test_create_complex_node - CREATE with multiple labels + props
+  - test_match_no_labels - MATCH without labels
+  - test_union_with_mixed_types - UNION with different types
+  - test_multiple_relationship_types - Multiple rel types
+  - test_union_with_empty_results - UNION with empty side
+  - test_properties_with_special_keys - Special characters in keys
+  - test_relationship_null_properties - NULL property handling
+  - test_union_with_aggregations - UNION with COUNT
+  - test_union_with_limit (ignored) - LIMIT after UNION
+  - test_union_with_order_by (ignored) - ORDER BY after UNION
+  - test_distinct_labels (ignored) - UNWIND + DISTINCT
 - [x] 7.6 Create Neo4j compatibility report (comprehensive documentation)
   - Executive summary with 95% compatibility status
   - Detailed test results (6/7 Neo4j, 736 core, 9 regression)

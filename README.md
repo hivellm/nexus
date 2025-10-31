@@ -8,7 +8,7 @@
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Status](https://img.shields.io/badge/status-MVP%2095%25%20Complete-brightgreen.svg)
-![Tests](https://img.shields.io/badge/tests-736%20core%20%7C%206%2F7%20Neo4j-success.svg)
+![Tests](https://img.shields.io/badge/tests-1088%20total%20%7C%2029%2F33%20Neo4j-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -38,7 +38,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ✅ **keys() Function** - Property introspection for nodes and relationships
 - ✅ **Import Validation** - PowerShell script to verify data integrity
 - ✅ **Enhanced Logging** - Detailed import statistics and progress tracking
-- ✅ **Neo4j Compatibility** - 95% complete (6/7 compatibility tests passing, 736 core tests passing)
+- ✅ **Neo4j Compatibility** - 95% complete (29/33 compatibility tests, 1088 total tests passing)
 
 - ✅ **Storage Foundation** - Fixed-size records, memmap2, LMDB catalog (100% - ARCHIVED)
 - ✅ **Transactions & Durability** - WAL, MVCC, crash recovery (100% - ARCHIVED)

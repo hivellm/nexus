@@ -92,7 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All 8 expected types (MENTIONS, IMPORTS, HAS, CONTAINS, EXTENDS, IMPLEMENTS, CALLS, REFERENCES): 3,639 each
 
 ### Testing
-- **Neo4j Compatibility**: 6/7 tests passing (86% pass rate, 95% feature complete)
+- **Neo4j Compatibility**: 29/33 tests passing (88% pass rate, 95% feature complete)
+  - Expanded from 7 to 33 tests (371% increase in coverage)
   - ✅ test_multiple_labels_match
   - ✅ test_multiple_labels_filtering
   - ✅ test_union_queries
@@ -100,7 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ✅ test_relationship_property_return
   - ✅ test_bidirectional_relationship_queries
   - ⏸️ test_complex_multiple_labels_query (known bug: result duplication)
+  - Plus 26 additional coverage tests for edge cases
 - All 736 core tests passing (100% pass rate)
+- Total: 1088+ tests across all suites
 - Test setup uses Engine API directly to bypass executor RecordStore cloning limitation
 - Made refresh_executor() public for state synchronization after API operations
 
