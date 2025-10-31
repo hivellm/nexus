@@ -27,13 +27,14 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **MVP: 89.8% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.9.6)**: DISTINCT support, labels()/type() functions, Neo4j compatibility improvements
+**🔥 Latest (v0.9.7)**: Multiple labels, UNION queries, bidirectional relationships, import validation
 
-- ✅ **DISTINCT Clause** - Full support for `RETURN DISTINCT` and `WITH DISTINCT`
-- ✅ **labels() Function** - Correctly returns node labels from bitmap
-- ✅ **type() Function** - Correctly returns relationship type names
-- ✅ **Relationship-Only Queries** - Support for queries without explicit node patterns
-- ✅ **Neo4j Compatibility** - 75% test pass rate (15/20 tests) in comprehensive comparison suite
+- ✅ **Multiple Label Support** - `MATCH (n:Person:Employee)` queries work correctly
+- ✅ **UNION Queries** - Full support for UNION and UNION ALL operators
+- ✅ **Bidirectional Relationships** - Undirected relationship patterns `(a)-[r]-(b)`
+- ✅ **Relationship Properties** - Full access to relationship property values
+- ✅ **Import Validation** - PowerShell script to verify data integrity
+- ✅ **Neo4j Compatibility** - 85% feature coverage (20/24 core features implemented)
 
 - ✅ **Storage Foundation** - Fixed-size records, memmap2, LMDB catalog (100% - ARCHIVED)
 - ✅ **Transactions & Durability** - WAL, MVCC, crash recovery (100% - ARCHIVED)

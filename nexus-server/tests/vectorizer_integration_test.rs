@@ -17,10 +17,7 @@ use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 use nexus_core::{
-    catalog::Catalog,
     executor::Executor,
-    index::{KnnIndex, LabelIndex},
-    storage::RecordStore,
     vectorizer_cache::{QueryMetadata, VectorizerCache},
 };
 use nexus_protocol::mcp::McpClient;
@@ -458,53 +455,20 @@ impl McpVectorizerClient {
 async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockVectorizer>) {
     let temp_dir = TempDir::new().unwrap();
 
-    // Initialize core components
-    let catalog = Catalog::new(temp_dir.path().join("catalog")).unwrap();
-    let catalog_arc = Arc::new(RwLock::new(catalog));
+    // Initialize core components using Engine
+    let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
 
-    let store = RecordStore::new(temp_dir.path()).unwrap();
-    let store_arc = Arc::new(RwLock::new(store));
-
-    let label_index = LabelIndex::new();
-    let label_index_arc = Arc::new(RwLock::new(label_index));
-
-    let knn_index = KnnIndex::new(128).unwrap();
-    let knn_index_arc = Arc::new(RwLock::new(knn_index));
-
-    let executor = Executor::new(
-        &*catalog_arc.read().await,
-        &*store_arc.read().await,
-        &*label_index_arc.read().await,
-        &*knn_index_arc.read().await,
-    )
-    .unwrap();
+    let executor = Executor::default();
     let executor_arc = Arc::new(RwLock::new(executor));
 
     // Initialize API modules
-    api::cypher::init_executor().unwrap();
-    api::knn::init_executor(executor_arc.clone()).unwrap();
-    api::ingest::init_executor(executor_arc.clone()).unwrap();
-    api::schema::init_catalog(catalog_arc.clone()).unwrap();
-    api::data::init_catalog(catalog_arc.clone()).unwrap();
-    api::stats::init_instances(
-        catalog_arc.clone(),
-        label_index_arc.clone(),
-        knn_index_arc.clone(),
-    )
-    .unwrap();
+    api::data::init_engine(engine_arc.clone()).unwrap();
+    api::stats::init_engine(engine_arc.clone()).unwrap();
     api::health::init();
 
     // Create server state
-    let engine = Arc::new(RwLock::new(
-        nexus_core::Engine::new().expect("Failed to create engine"),
-    ));
-    let server = Arc::new(NexusServer {
-        executor: executor_arc,
-        catalog: catalog_arc,
-        label_index: label_index_arc,
-        knn_index: knn_index_arc,
-        engine,
-    });
+    let server = Arc::new(NexusServer::new(executor_arc, engine_arc));
 
     // Create mock vectorizer
     let vectorizer = Arc::new(MockVectorizer::new());

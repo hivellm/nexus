@@ -189,9 +189,7 @@ impl Engine {
             }
 
             if !label_ids.is_empty() {
-                self.indexes
-                    .label_index
-                    .add_node(node_id, &label_ids)?;
+                self.indexes.label_index.add_node(node_id, &label_ids)?;
             }
         }
 
@@ -263,7 +261,7 @@ impl Engine {
             .storage
             .create_node_with_label_bits(&mut tx, label_bits, properties)?;
         self.transaction_manager.commit(&mut tx)?;
-        
+
         // CRITICAL FIX: Flush storage to ensure data is persisted to disk
         self.storage.flush()?;
 
@@ -290,7 +288,7 @@ impl Engine {
             .storage
             .create_relationship(&mut tx, from, to, type_id, properties)?;
         self.transaction_manager.commit(&mut tx)?;
- 
+
         // CRITICAL FIX: Flush storage to ensure data is persisted to disk
         self.storage.flush()?;
 
@@ -298,7 +296,7 @@ impl Engine {
 
         // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
         self.refresh_executor()?;
- 
+
         Ok(rel_id)
     }
 

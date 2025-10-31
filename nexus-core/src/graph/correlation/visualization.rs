@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 
+/// Type alias for normalized positions mapping
+type PositionMap = HashMap<String, (f32, f32)>;
+
 /// Trait for graph renderers
 pub trait GraphRenderer {
     /// Render the graph to a string representation
@@ -200,20 +203,32 @@ impl GraphRenderer for SvgRenderer {
         let (_bounds, normalized_nodes) = normalize_positions(graph, config)?;
 
         // Write SVG header
-        write!(svg, r#"<svg width="{}" height="{}" xmlns="http://www.w3.org/2000/svg">"#, config.width, config.height)?;
-        
+        write!(
+            svg,
+            r#"<svg width="{}" height="{}" xmlns="http://www.w3.org/2000/svg">"#,
+            config.width, config.height
+        )?;
+
         // Background
-        write!(svg, r#"<rect width="100%" height="100%" fill="{}"/>"#, config.background_color)?;
+        write!(
+            svg,
+            r#"<rect width="100%" height="100%" fill="{}"/>"#,
+            config.background_color
+        )?;
 
         // Define arrow marker for directed edges
         if config.directed_edges {
-            write!(svg, r#"
+            write!(
+                svg,
+                r#"
             <defs>
                 <marker id="arrowhead" markerWidth="10" markerHeight="10" 
                         refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
                     <polygon points="0 0, 10 3, 0 6" fill="{}"/>
                 </marker>
-            </defs>"#, config.default_edge_color)?;
+            </defs>"#,
+                config.default_edge_color
+            )?;
         }
 
         // Render edges first (so nodes appear on top)
@@ -246,7 +261,7 @@ impl GraphRenderer for SvgRenderer {
 fn normalize_positions(
     graph: &CorrelationGraph,
     config: &VisualizationConfig,
-) -> Result<(Bounds, HashMap<String, (f32, f32)>)> {
+) -> Result<(Bounds, PositionMap)> {
     let mut bounds = Bounds {
         min_x: f32::INFINITY,
         max_x: f32::NEG_INFINITY,
@@ -271,7 +286,7 @@ fn normalize_positions(
         let nodes_per_row = (graph.nodes.len() as f32).sqrt().ceil() as usize;
         let node_spacing = 50.0;
         let mut normalized = HashMap::new();
-        
+
         for (i, node) in graph.nodes.iter().enumerate() {
             let row = i / nodes_per_row;
             let col = i % nodes_per_row;
@@ -279,16 +294,18 @@ fn normalize_positions(
             let y = row as f32 * node_spacing + config.padding;
             normalized.insert(node.id.clone(), (x, y));
         }
-        
+
         return Ok((bounds, normalized));
     }
 
     // Normalize to canvas size
     let width = bounds.max_x - bounds.min_x;
     let height = bounds.max_y - bounds.min_y;
-    
+
     if width == 0.0 || height == 0.0 {
-        return Err(Error::GraphCorrelation("Invalid graph bounds for normalization".to_string()));
+        return Err(Error::GraphCorrelation(
+            "Invalid graph bounds for normalization".to_string(),
+        ));
     }
 
     let scale_x = (config.width - 2.0 * config.padding) / width;
@@ -315,14 +332,14 @@ fn render_edge(
     target_pos: &(f32, f32),
     config: &VisualizationConfig,
 ) -> Result<()> {
-    let style = config.edge_styles
+    let style = config
+        .edge_styles
         .get(&format!("{:?}", edge.edge_type))
         .cloned()
-        .unwrap_or_else(|| {
-            let mut default = EdgeStyle::default();
-            default.color = config.default_edge_color.clone();
-            default.width = config.default_edge_width;
-            default
+        .unwrap_or_else(|| EdgeStyle {
+            color: config.default_edge_color.clone(),
+            width: config.default_edge_width,
+            ..Default::default()
         });
 
     let (x1, y1) = *source_pos;
@@ -354,7 +371,11 @@ fn render_edge(
         style.width,
         style.opacity,
         stroke_dasharray,
-        if config.directed_edges { r#"marker-end="url(#arrowhead)""# } else { "" }
+        if config.directed_edges {
+            r#"marker-end="url(#arrowhead)""#
+        } else {
+            ""
+        }
     )?;
 
     // Render edge label if enabled
@@ -385,16 +406,19 @@ fn render_node(
 ) -> Result<()> {
     // Get node style (type-specific or default)
     let style_key = format!("{:?}", node.node_type);
-    let node_style = config.node_styles
+    let node_style = config
+        .node_styles
         .get(&style_key)
         .cloned()
-        .unwrap_or_else(|| {
-            let mut default = NodeStyle::default();
-            default.size = node.size.unwrap_or(config.default_node_size);
-            default.color = node.color.clone().unwrap_or_else(|| config.default_node_color.clone());
-            default
+        .unwrap_or_else(|| NodeStyle {
+            size: node.size.unwrap_or(config.default_node_size),
+            color: node
+                .color
+                .clone()
+                .unwrap_or_else(|| config.default_node_color.clone()),
+            ..Default::default()
         });
-    
+
     let (x, y) = pos;
     let size = node.size.unwrap_or(node_style.size);
     let color = node.color.as_ref().unwrap_or(&node_style.color);
@@ -405,35 +429,61 @@ fn render_node(
             write!(
                 svg,
                 r#"<circle cx="{}" cy="{}" r="{}" fill="{}" stroke="{}" stroke-width="{}" opacity="{}"/>"#,
-                x, y, size, color, node_style.border_color, node_style.border_width, node_style.opacity
+                x,
+                y,
+                size,
+                color,
+                node_style.border_color,
+                node_style.border_width,
+                node_style.opacity
             )?;
         }
         NodeShape::Rectangle => {
             write!(
                 svg,
                 r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}" stroke="{}" stroke-width="{}" opacity="{}"/>"#,
-                x - size, y - size, size * 2.0, size * 2.0, color, node_style.border_color, node_style.border_width, node_style.opacity
+                x - size,
+                y - size,
+                size * 2.0,
+                size * 2.0,
+                color,
+                node_style.border_color,
+                node_style.border_width,
+                node_style.opacity
             )?;
         }
         NodeShape::Diamond => {
             write!(
                 svg,
                 r#"<polygon points="{},{} {},{} {},{} {},{}" fill="{}" stroke="{}" stroke-width="{}" opacity="{}"/>"#,
-                x, y - size,
-                x + size, y,
-                x, y + size,
-                x - size, y,
-                color, node_style.border_color, node_style.border_width, node_style.opacity
+                x,
+                y - size,
+                x + size,
+                y,
+                x,
+                y + size,
+                x - size,
+                y,
+                color,
+                node_style.border_color,
+                node_style.border_width,
+                node_style.opacity
             )?;
         }
         NodeShape::Triangle => {
             write!(
                 svg,
                 r#"<polygon points="{},{} {},{} {},{}" fill="{}" stroke="{}" stroke-width="{}" opacity="{}"/>"#,
-                x, y - size,
-                x + size, y + size,
-                x - size, y + size,
-                color, node_style.border_color, node_style.border_width, node_style.opacity
+                x,
+                y - size,
+                x + size,
+                y + size,
+                x - size,
+                y + size,
+                color,
+                node_style.border_color,
+                node_style.border_width,
+                node_style.opacity
             )?;
         }
         NodeShape::Hexagon => {
@@ -452,7 +502,11 @@ fn render_node(
             write!(
                 svg,
                 r#"<polygon points="{}" fill="{}" stroke="{}" stroke-width="{}" opacity="{}"/>"#,
-                point_str, color, node_style.border_color, node_style.border_width, node_style.opacity
+                point_str,
+                color,
+                node_style.border_color,
+                node_style.border_width,
+                node_style.opacity
             )?;
         }
     }
@@ -490,7 +544,10 @@ pub fn create_svg_renderer() -> SvgRenderer {
 }
 
 /// Render a graph to SVG string
-pub fn render_graph_to_svg(graph: &CorrelationGraph, config: &VisualizationConfig) -> Result<String> {
+pub fn render_graph_to_svg(
+    graph: &CorrelationGraph,
+    config: &VisualizationConfig,
+) -> Result<String> {
     let renderer = create_svg_renderer();
     renderer.render(graph, config)
 }
@@ -603,21 +660,25 @@ pub fn generate_interaction_data(
 ) -> Result<InteractionData> {
     let (_, normalized_nodes) = normalize_positions(graph, config)?;
 
-    let nodes = graph.nodes
+    let nodes = graph
+        .nodes
         .iter()
         .filter_map(|node| {
-            normalized_nodes.get(&node.id).map(|pos| NodeInteractionData {
-                id: node.id.clone(),
-                label: node.label.clone(),
-                position: *pos,
-                selected: false,
-                visible: true,
-                metadata: node.metadata.clone(),
-            })
+            normalized_nodes
+                .get(&node.id)
+                .map(|pos| NodeInteractionData {
+                    id: node.id.clone(),
+                    label: node.label.clone(),
+                    position: *pos,
+                    selected: false,
+                    visible: true,
+                    metadata: node.metadata.clone(),
+                })
         })
         .collect();
 
-    let edges = graph.edges
+    let edges = graph
+        .edges
         .iter()
         .map(|edge| EdgeInteractionData {
             id: edge.id.clone(),
@@ -675,7 +736,7 @@ impl VisualizationCache {
         }
 
         let key = self.cache_key(graph, config);
-        
+
         if let Some(cached) = self.cache.get(&key) {
             // Check if cache is still valid (not older than 1 hour)
             let age = chrono::Utc::now() - cached.created_at;
@@ -686,11 +747,12 @@ impl VisualizationCache {
 
         // Generate new visualization
         let svg = render_graph_to_svg(graph, config)?;
-        
+
         // Insert into cache
         if self.cache.len() >= self.max_size {
             // Remove oldest entry
-            let oldest_key = self.cache
+            let oldest_key = self
+                .cache
                 .iter()
                 .min_by_key(|(_, v)| v.created_at)
                 .map(|(k, _)| k.clone());
@@ -699,19 +761,22 @@ impl VisualizationCache {
             }
         }
 
-        self.cache.insert(key, CachedVisualization {
-            svg: svg.clone(),
-            created_at: chrono::Utc::now(),
-        });
+        self.cache.insert(
+            key,
+            CachedVisualization {
+                svg: svg.clone(),
+                created_at: chrono::Utc::now(),
+            },
+        );
 
         Ok(svg)
     }
 
     /// Generate cache key from graph and config
     fn cache_key(&self, graph: &CorrelationGraph, config: &VisualizationConfig) -> String {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
-        
+        use std::hash::{Hash, Hasher};
+
         let mut hasher = DefaultHasher::new();
         graph.name.hash(&mut hasher);
         graph.nodes.len().hash(&mut hasher);
@@ -753,11 +818,11 @@ pub struct CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::correlation::{GraphType, EdgeType, NodeType};
+    use crate::graph::correlation::{EdgeType, GraphType, NodeType};
 
     fn create_test_graph() -> CorrelationGraph {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test Graph".to_string());
-        
+
         // Add nodes
         let node1 = GraphNode {
             id: "node1".to_string(),
@@ -777,10 +842,10 @@ mod tests {
             size: Some(10.0),
             color: Some("#e74c3c".to_string()),
         };
-        
+
         graph.add_node(node1).unwrap();
         graph.add_node(node2).unwrap();
-        
+
         // Add edge
         let edge = GraphEdge {
             id: "edge1".to_string(),
@@ -792,7 +857,7 @@ mod tests {
             label: Some("calls".to_string()),
         };
         graph.add_edge(edge).unwrap();
-        
+
         graph
     }
 
@@ -806,10 +871,10 @@ mod tests {
     fn test_render_graph_to_svg() {
         let graph = create_test_graph();
         let config = VisualizationConfig::default();
-        
+
         let result = render_graph_to_svg(&graph, &config);
         assert!(result.is_ok());
-        
+
         let svg = result.unwrap();
         assert!(svg.contains("<svg"));
         assert!(svg.contains("Function 1")); // Check for node labels
@@ -820,7 +885,7 @@ mod tests {
     #[test]
     fn test_apply_grid_layout() {
         let mut graph = CorrelationGraph::new(GraphType::Dependency, "Test".to_string());
-        
+
         // Add nodes without positions
         for i in 0..5 {
             let node = GraphNode {
@@ -834,15 +899,17 @@ mod tests {
             };
             graph.add_node(node).unwrap();
         }
-        
-        let mut config = VisualizationConfig::default();
-        config.layout_algorithm = LayoutAlgorithm::Grid;
-        config.width = 500.0;
-        config.height = 500.0;
-        
+
+        let config = VisualizationConfig {
+            layout_algorithm: LayoutAlgorithm::Grid,
+            width: 500.0,
+            height: 500.0,
+            ..Default::default()
+        };
+
         let result = apply_layout(&mut graph, &config);
         assert!(result.is_ok());
-        
+
         // Verify all nodes have positions
         for node in &graph.nodes {
             assert!(node.position.is_some());
@@ -852,7 +919,7 @@ mod tests {
     #[test]
     fn test_apply_circular_layout() {
         let mut graph = CorrelationGraph::new(GraphType::Call, "Test".to_string());
-        
+
         // Add nodes without positions
         for i in 0..6 {
             let node = GraphNode {
@@ -866,15 +933,17 @@ mod tests {
             };
             graph.add_node(node).unwrap();
         }
-        
-        let mut config = VisualizationConfig::default();
-        config.layout_algorithm = LayoutAlgorithm::Circular;
-        config.width = 500.0;
-        config.height = 500.0;
-        
+
+        let config = VisualizationConfig {
+            layout_algorithm: LayoutAlgorithm::Circular,
+            width: 500.0,
+            height: 500.0,
+            ..Default::default()
+        };
+
         let result = apply_layout(&mut graph, &config);
         assert!(result.is_ok());
-        
+
         // Verify all nodes have positions
         for node in &graph.nodes {
             assert!(node.position.is_some());
@@ -885,10 +954,10 @@ mod tests {
     fn test_generate_interaction_data() {
         let graph = create_test_graph();
         let config = VisualizationConfig::default();
-        
+
         let result = generate_interaction_data(&graph, &config);
         assert!(result.is_ok());
-        
+
         let data = result.unwrap();
         assert_eq!(data.nodes.len(), 2);
         assert_eq!(data.edges.len(), 1);
@@ -899,15 +968,15 @@ mod tests {
         let mut cache = VisualizationCache::new();
         let graph = create_test_graph();
         let config = VisualizationConfig::default();
-        
+
         // First render should generate new SVG
         let svg1 = cache.get_or_render(&graph, &config).unwrap();
         assert!(!svg1.is_empty());
-        
+
         // Second render should use cache
         let svg2 = cache.get_or_render(&graph, &config).unwrap();
         assert_eq!(svg1, svg2);
-        
+
         // Check stats
         let stats = cache.stats();
         assert!(stats.size > 0);
@@ -917,13 +986,15 @@ mod tests {
     fn test_visualization_cache_without_caching() {
         let mut cache = VisualizationCache::new();
         let graph = create_test_graph();
-        let mut config = VisualizationConfig::default();
-        config.enable_caching = false;
-        
+        let config = VisualizationConfig {
+            enable_caching: false,
+            ..Default::default()
+        };
+
         // Should always render fresh
         let svg1 = cache.get_or_render(&graph, &config).unwrap();
         let svg2 = cache.get_or_render(&graph, &config).unwrap();
-        
+
         // Should be equal but not cached
         assert_eq!(svg1, svg2);
     }
@@ -957,12 +1028,11 @@ mod tests {
     fn test_empty_graph_rendering() {
         let graph = CorrelationGraph::new(GraphType::Call, "Empty".to_string());
         let config = VisualizationConfig::default();
-        
+
         let result = render_graph_to_svg(&graph, &config);
         assert!(result.is_ok());
-        
+
         let svg = result.unwrap();
         assert!(svg.contains("<svg"));
     }
 }
-

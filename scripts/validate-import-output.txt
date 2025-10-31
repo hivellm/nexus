@@ -1,0 +1,83 @@
+=== Import Validation Script ===
+Validating imported data structure
+
+1. Checking Nexus server health...
+   [OK] Nexus server is online
+
+2. Getting Nexus database stats...
+   Nodes: 3852
+   Relationships: 3639
+   Labels: 23
+   Relationship Types: 0
+
+3. Checking Neo4j availability for comparison...
+   [INFO] Neo4j comparison disabled (set NEO4J_URL/NEO4J_USER/NEO4J_PASS and ensure Neo4j is running to enable)
+
+4. Verifying node types...
+   [OK] Document : 3852 nodes
+   [OK] Module : 301 nodes
+   [OK] Class : 696 nodes
+   [OK] Function : 1146 nodes
+   [WARN] Interface : 0 nodes
+   [OK] Type : 19 nodes
+   [WARN] Variable : 0 nodes
+   [WARN] Import : 0 nodes
+   [WARN] Entity : 0 nodes
+   Missing node types:
+      - Interface
+      - Variable
+      - Import
+      - Entity
+
+5. Verifying relationship types...
+   [OK] MENTIONS : 3639 relationships
+   [OK] IMPORTS : 3639 relationships
+   [OK] HAS : 3639 relationships
+   [OK] CONTAINS : 3639 relationships
+   [OK] EXTENDS : 3639 relationships
+   [OK] IMPLEMENTS : 3639 relationships
+   [OK] CALLS : 3639 relationships
+   [OK] REFERENCES : 3639 relationships
+
+6. Verifying node property mappings...
+   [WARN] Document : no properties found
+   [WARN] Module : no properties found
+   [WARN] Class : no properties found
+   [WARN] Function : no properties found
+   [WARN] Interface : no properties found
+   [WARN] Type : no properties found
+   [WARN] Variable : no properties found
+   [WARN] Import : no properties found
+   [WARN] Entity : no properties found
+
+7. Verifying relationship property mappings...
+   [INFO] MENTIONS : no properties found
+   [INFO] IMPORTS : no properties found
+   [INFO] HAS : no properties found
+   [INFO] CONTAINS : no properties found
+   [INFO] EXTENDS : no properties found
+   [INFO] IMPLEMENTS : no properties found
+   [INFO] CALLS : no properties found
+   [INFO] REFERENCES : no properties found
+
+=== Validation Summary ===
+â?O Validation failed with errors:
+   - Missing node type: Entity
+   - Missing node type: Import
+   - Missing node type: Interface
+   - Missing node type: Variable
+
+Warnings:
+   - No properties found for label 'Class' in Nexus
+   - No properties found for label 'Document' in Nexus
+   - No properties found for label 'Entity' in Nexus
+   - No properties found for label 'Function' in Nexus
+   - No properties found for label 'Import' in Nexus
+   - No properties found for label 'Interface' in Nexus
+   - No properties found for label 'Module' in Nexus
+   - No properties found for label 'Type' in Nexus
+   - No properties found for label 'Variable' in Nexus
+   - Node type 'Entity' has no nodes
+   - Node type 'Import' has no nodes
+   - Node type 'Interface' has no nodes
+   - Node type 'Variable' has no nodes

@@ -39,9 +39,6 @@ impl NexusServer {
         executor: Arc<RwLock<nexus_core::executor::Executor>>,
         engine: Arc<RwLock<nexus_core::Engine>>,
     ) -> Self {
-        Self {
-            executor,
-            engine,
-        }
+        Self { executor, engine }
     }
 }

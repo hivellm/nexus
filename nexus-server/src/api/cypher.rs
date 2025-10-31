@@ -1,12 +1,12 @@
 //! Cypher query execution endpoint
 
 use axum::extract::Json;
+use nexus_core::executor::parser::PropertyMap;
 use nexus_core::executor::{Executor, Query};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use nexus_core::executor::parser::PropertyMap;
 
 /// Global executor instance
 static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
@@ -73,7 +73,10 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
             nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
             nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
         },
-        nexus_core::executor::parser::Expression::PropertyAccess { variable: _, property: _ } => {
+        nexus_core::executor::parser::Expression::PropertyAccess {
+            variable: _,
+            property: _,
+        } => {
             eprintln!("⚠️  expression_to_json_value: Property expression not supported in CREATE");
             serde_json::Value::Null
         }
@@ -94,7 +97,10 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
             serde_json::Value::Object(result)
         }
         _ => {
-            eprintln!("⚠️  expression_to_json_value: Unsupported expression type: {:?}", expr);
+            eprintln!(
+                "⚠️  expression_to_json_value: Unsupported expression type: {:?}",
+                expr
+            );
             serde_json::Value::Null
         }
     }
@@ -160,11 +166,14 @@ fn create_relationship_from_pattern(
 
     let properties = property_map_to_json(&rel_pattern.properties);
 
-    let mut create_edge = |from: u64, to: u64| {
-        match engine.create_relationship(from, to, rel_type.clone(), properties.clone()) {
-            Ok(_rel_id) => Ok(()),
-            Err(e) => Err(format!("Failed to create relationship: {}", e)),
-        }
+    let mut create_edge = |from: u64, to: u64| match engine.create_relationship(
+        from,
+        to,
+        rel_type.clone(),
+        properties.clone(),
+    ) {
+        Ok(_rel_id) => Ok(()),
+        Err(e) => Err(format!("Failed to create relationship: {}", e)),
     };
 
     match rel_pattern.direction {
@@ -275,7 +284,8 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                 ) {
                                     Ok(nodes) => nodes,
                                     Err(err) => {
-                                        let execution_time = start_time.elapsed().as_millis() as u64;
+                                        let execution_time =
+                                            start_time.elapsed().as_millis() as u64;
                                         tracing::error!("{}", err);
                                         return Json(CypherResponse {
                                             columns: vec![],
@@ -367,13 +377,14 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
                                 }
                             }
                             nexus_core::executor::parser::PatternElement::Relationship(_) => {
-                                tracing::warn!("CREATE clause encountered relationship without leading node; skipping");
+                                tracing::warn!(
+                                    "CREATE clause encountered relationship without leading node; skipping"
+                                );
                                 index += 1;
                             }
                         }
                     }
-                }
-                else if let nexus_core::executor::parser::Clause::Merge(merge_clause) = clause {
+                } else if let nexus_core::executor::parser::Clause::Merge(merge_clause) = clause {
                     // Extract pattern and try to find existing node, or create new one
                     for element in &merge_clause.pattern.elements {
                         if let nexus_core::executor::parser::PatternElement::Node(node_pattern) =
@@ -478,7 +489,11 @@ pub async fn execute_cypher(Json(request): Json<CypherRequest>) -> Json<CypherRe
 
                             // If no matching node found, create new one
                             if !found_node {
-                                eprintln!("🔍 MERGE creating node with {} properties: {:?}", props.len(), props.keys().collect::<Vec<_>>());
+                                eprintln!(
+                                    "🔍 MERGE creating node with {} properties: {:?}",
+                                    props.len(),
+                                    props.keys().collect::<Vec<_>>()
+                                );
                                 match engine
                                     .create_node(labels, serde_json::Value::Object(props.clone()))
                                 {

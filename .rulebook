@@ -1,8 +1,9 @@
 {
-  "version": "0.13.0",
-  "installedAt": "2025-10-25T19:33:10.194Z",
-  "updatedAt": "2025-10-29T23:11:11.682Z",
+  "version": "0.14.0",
+  "installedAt": "2025-10-29T23:11:11.634Z",
+  "updatedAt": "2025-10-31T03:39:18.483Z",
   "projectId": "nexus",
+  "mode": "full",
   "features": {
     "openspec": true,
     "watcher": false,
@@ -11,7 +12,7 @@
     "telemetry": false,
     "notifications": false,
     "dryRun": false,
-    "gitHooks": false,
+    "gitHooks": true,
     "repl": false,
     "templates": true,
     "context": true,

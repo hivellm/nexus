@@ -660,7 +660,7 @@ async fn handle_execute_cypher(
 /// Handle KNN search tool
 async fn handle_knn_search(
     request: CallToolRequestParam,
-    server: Arc<NexusServer>,
+    _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments

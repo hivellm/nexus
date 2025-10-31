@@ -3,10 +3,10 @@ use super::parser::{
     RelationshipDirection, ReturnItem,
 };
 use super::{Aggregation, Direction, Operator, ProjectionItem};
-use std::collections::HashSet;
 use crate::catalog::Catalog;
 use crate::index::{KnnIndex, LabelIndex};
 use crate::{Error, Result};
+use std::collections::HashSet;
 
 /// Query planner for optimizing Cypher execution
 pub struct QueryPlanner<'a> {
@@ -180,9 +180,9 @@ impl<'a> QueryPlanner<'a> {
             let mut aggregations = Vec::new();
             let mut group_by_columns = Vec::new();
 
-        let mut non_aggregate_aliases: Vec<String> = Vec::new();
+            let mut non_aggregate_aliases: Vec<String> = Vec::new();
 
-        for item in return_items {
+            for item in return_items {
                 match &item.expression {
                     Expression::FunctionCall { name, args } => {
                         let func_name = name.to_lowercase();
@@ -198,7 +198,10 @@ impl<'a> QueryPlanner<'a> {
                                 };
                                 aggregations.push(Aggregation::Count {
                                     column,
-                                    alias: item.alias.clone().unwrap_or_else(|| "count".to_string()),
+                                    alias: item
+                                        .alias
+                                        .clone()
+                                        .unwrap_or_else(|| "count".to_string()),
                                 });
                             }
                             "sum" => {
@@ -206,7 +209,10 @@ impl<'a> QueryPlanner<'a> {
                                 if let Some(Expression::Variable(var)) = args.first() {
                                     aggregations.push(Aggregation::Sum {
                                         column: var.clone(),
-                                        alias: item.alias.clone().unwrap_or_else(|| "sum".to_string()),
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "sum".to_string()),
                                     });
                                 }
                             }
@@ -215,7 +221,10 @@ impl<'a> QueryPlanner<'a> {
                                 if let Some(Expression::Variable(var)) = args.first() {
                                     aggregations.push(Aggregation::Avg {
                                         column: var.clone(),
-                                        alias: item.alias.clone().unwrap_or_else(|| "avg".to_string()),
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "avg".to_string()),
                                     });
                                 }
                             }
@@ -224,7 +233,10 @@ impl<'a> QueryPlanner<'a> {
                                 if let Some(Expression::Variable(var)) = args.first() {
                                     aggregations.push(Aggregation::Min {
                                         column: var.clone(),
-                                        alias: item.alias.clone().unwrap_or_else(|| "min".to_string()),
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "min".to_string()),
                                     });
                                 }
                             }
@@ -233,41 +245,44 @@ impl<'a> QueryPlanner<'a> {
                                 if let Some(Expression::Variable(var)) = args.first() {
                                     aggregations.push(Aggregation::Max {
                                         column: var.clone(),
-                                        alias: item.alias.clone().unwrap_or_else(|| "max".to_string()),
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "max".to_string()),
                                     });
                                 }
                             }
                             _ => {
                                 // Not an aggregate function, treat as regular column for GROUP BY
-                            let alias = item.alias.clone().unwrap_or_else(|| {
-                                self.expression_to_string(&item.expression)
-                                    .unwrap_or_default()
-                            });
-                            non_aggregate_aliases.push(alias);
+                                let alias = item.alias.clone().unwrap_or_else(|| {
+                                    self.expression_to_string(&item.expression)
+                                        .unwrap_or_default()
+                                });
+                                non_aggregate_aliases.push(alias);
                             }
                         }
                     }
                     _ => {
                         // Non-aggregate expression, add to GROUP BY if there are aggregations
-                    let alias = item.alias.clone().unwrap_or_else(|| {
-                        self.expression_to_string(&item.expression)
-                            .unwrap_or_default()
-                    });
-                    non_aggregate_aliases.push(alias);
+                        let alias = item.alias.clone().unwrap_or_else(|| {
+                            self.expression_to_string(&item.expression)
+                                .unwrap_or_default()
+                        });
+                        non_aggregate_aliases.push(alias);
                     }
                 }
             }
 
             if has_aggregation {
-            if group_by_columns.is_empty() {
-                group_by_columns = non_aggregate_aliases.clone();
-            } else {
-                for alias in &non_aggregate_aliases {
-                    if !group_by_columns.contains(alias) {
-                        group_by_columns.push(alias.clone());
+                if group_by_columns.is_empty() {
+                    group_by_columns = non_aggregate_aliases.clone();
+                } else {
+                    for alias in &non_aggregate_aliases {
+                        if !group_by_columns.contains(alias) {
+                            group_by_columns.push(alias.clone());
+                        }
                     }
                 }
-            }
 
                 let mut projection_items: Vec<ProjectionItem> = Vec::new();
                 let mut required_columns: HashSet<String> = HashSet::new();
@@ -283,13 +298,10 @@ impl<'a> QueryPlanner<'a> {
                                     }
                                 }
                                 _ => {
-                                    let alias = item
-                                        .alias
-                                        .clone()
-                                        .unwrap_or_else(|| {
-                                            self.expression_to_string(&item.expression)
-                                                .unwrap_or_default()
-                                        });
+                                    let alias = item.alias.clone().unwrap_or_else(|| {
+                                        self.expression_to_string(&item.expression)
+                                            .unwrap_or_default()
+                                    });
                                     projection_items.push(ProjectionItem {
                                         alias,
                                         expression: item.expression.clone(),
@@ -298,13 +310,10 @@ impl<'a> QueryPlanner<'a> {
                             }
                         }
                         _ => {
-                            let alias = item
-                                .alias
-                                .clone()
-                                .unwrap_or_else(|| {
-                                    self.expression_to_string(&item.expression)
-                                        .unwrap_or_default()
-                                });
+                            let alias = item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            });
                             projection_items.push(ProjectionItem {
                                 alias,
                                 expression: item.expression.clone(),
@@ -323,7 +332,9 @@ impl<'a> QueryPlanner<'a> {
                 }
 
                 if !projection_items.is_empty() {
-                    operators.push(Operator::Project { items: projection_items });
+                    operators.push(Operator::Project {
+                        items: projection_items,
+                    });
                 }
 
                 operators.push(Operator::Aggregate {
@@ -335,13 +346,10 @@ impl<'a> QueryPlanner<'a> {
                 let projection_items: Vec<ProjectionItem> = return_items
                     .iter()
                     .map(|item| ProjectionItem {
-                        alias: item
-                            .alias
-                            .clone()
-                            .unwrap_or_else(|| {
-                                self.expression_to_string(&item.expression)
-                                    .unwrap_or_default()
-                            }),
+                        alias: item.alias.clone().unwrap_or_else(|| {
+                            self.expression_to_string(&item.expression)
+                                .unwrap_or_default()
+                        }),
                         expression: item.expression.clone(),
                     })
                     .collect();
@@ -356,11 +364,14 @@ impl<'a> QueryPlanner<'a> {
                         .iter()
                         .map(|item| {
                             item.alias.clone().unwrap_or_else(|| {
-                                self.expression_to_string(&item.expression).unwrap_or_default()
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
                             })
                         })
                         .collect();
-                    operators.push(Operator::Distinct { columns: distinct_columns });
+                    operators.push(Operator::Distinct {
+                        columns: distinct_columns,
+                    });
                 }
             }
         }
@@ -395,7 +406,7 @@ impl<'a> QueryPlanner<'a> {
         for pattern in patterns {
             // Track previous node variable for relationship expansion
             let mut prev_node_var: Option<String> = None;
-            
+
             for (idx, element) in pattern.elements.iter().enumerate() {
                 match element {
                     PatternElement::Node(node_pattern) => {
@@ -412,7 +423,7 @@ impl<'a> QueryPlanner<'a> {
                         };
 
                         // Determine source and target variables
-                        let source_var = prev_node_var.clone().unwrap_or_else(|| "".to_string());
+                        let source_var = prev_node_var.clone().unwrap_or_default();
                         // Target will be the next node in the pattern
                         let target_var = if idx + 1 < pattern.elements.len() {
                             if let PatternElement::Node(next_node) = &pattern.elements[idx + 1] {
@@ -427,10 +438,7 @@ impl<'a> QueryPlanner<'a> {
                         // Get type_id from relationship types
                         let type_id = if let Some(first_type) = rel.types.first() {
                             // Try to get type_id from catalog
-                            match self.catalog.get_type_id(first_type)? {
-                                Some(id) => Some(id),
-                                None => None, // Type doesn't exist yet - will match no relationships
-                            }
+                            self.catalog.get_type_id(first_type)?
                         } else {
                             // No type specified - match all types
                             None
@@ -1076,4 +1084,3 @@ mod tests {
         }
     }
 }
-

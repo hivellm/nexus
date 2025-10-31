@@ -51,10 +51,10 @@ pub use version_constraints::{
     analyze_version_constraints,
 };
 pub use visualization::{
-    CacheStats, EdgeInteractionData, EdgeLineStyle, EdgeStyle, GraphRenderer,
-    InteractionData, LayoutAlgorithm, NodeInteractionData, NodeShape, NodeStyle,
-    SvgRenderer, VisualizationCache, VisualizationConfig, apply_layout,
-    create_svg_renderer, generate_interaction_data, render_graph_to_svg,
+    CacheStats, EdgeInteractionData, EdgeLineStyle, EdgeStyle, GraphRenderer, InteractionData,
+    LayoutAlgorithm, NodeInteractionData, NodeShape, NodeStyle, SvgRenderer, VisualizationCache,
+    VisualizationConfig, apply_layout, create_svg_renderer, generate_interaction_data,
+    render_graph_to_svg,
 };
 
 /// Hierarchical call graph layout algorithms

@@ -442,17 +442,16 @@ impl Executor {
                         .iter()
                         .map(|item| ProjectionItem {
                             expression: item.expression.clone(),
-                            alias: item
-                                .alias
-                                .clone()
-                                .unwrap_or_else(|| {
-                                    self.expression_to_string(&item.expression)
-                                        .unwrap_or_default()
-                                }),
+                            alias: item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            }),
                         })
                         .collect();
 
-                    operators.push(Operator::Project { items: projection_items });
+                    operators.push(Operator::Project {
+                        items: projection_items,
+                    });
                 }
                 parser::Clause::Limit(limit_clause) => {
                     if let parser::Expression::Literal(parser::Literal::Integer(count)) =
@@ -558,7 +557,7 @@ impl Executor {
         } else {
             self.label_index.get_nodes(label_id)?
         };
-        
+
         let mut results = Vec::new();
 
         for node_id in bitmap.iter() {
@@ -633,7 +632,7 @@ impl Executor {
                     };
 
                     let mut new_row = HashMap::new();
-                    
+
                     // Only add target node if target_var is specified
                     if !target_var.is_empty() {
                         let target_node = self.read_node_as_value(rel_record.dst_id)?;
@@ -652,27 +651,22 @@ impl Executor {
             // Normal case: expand from source nodes
             // Only apply target filtering if the target variable is already populated
             // (this happens when we're doing a join-like operation, not a pure expansion)
-            let allowed_target_ids: Option<std::collections::HashSet<u64>> = if target_var.is_empty() {
-                None
-            } else {
-                context
-                    .get_variable(target_var)
-                    .and_then(|value| match value {
-                        Value::Array(values) => {
-                            let ids: std::collections::HashSet<u64> = values
-                                .iter()
-                                .filter_map(|v| Self::extract_entity_id(v))
-                                .collect();
-                            // Only use the set if it's not empty (empty set means "filter everything out")
-                            if ids.is_empty() {
-                                None
-                            } else {
-                                Some(ids)
+            let allowed_target_ids: Option<std::collections::HashSet<u64>> =
+                if target_var.is_empty() {
+                    None
+                } else {
+                    context
+                        .get_variable(target_var)
+                        .and_then(|value| match value {
+                            Value::Array(values) => {
+                                let ids: std::collections::HashSet<u64> =
+                                    values.iter().filter_map(Self::extract_entity_id).collect();
+                                // Only use the set if it's not empty (empty set means "filter everything out")
+                                if ids.is_empty() { None } else { Some(ids) }
                             }
-                        }
-                        _ => None,
-                    })
-            };
+                            _ => None,
+                        })
+                };
 
             for row in rows {
                 let source_value = row
@@ -734,14 +728,19 @@ impl Executor {
     }
 
     /// Execute Project operator
-    fn execute_project(&self, context: &mut ExecutionContext, items: &[ProjectionItem]) -> Result<Vec<Row>> {
+    fn execute_project(
+        &self,
+        context: &mut ExecutionContext,
+        items: &[ProjectionItem],
+    ) -> Result<Vec<Row>> {
         let rows = self.materialize_rows_from_variables(context);
         let mut projected_rows = Vec::new();
 
         for row_map in &rows {
             let mut values = Vec::with_capacity(items.len());
             for item in items {
-                let value = self.evaluate_projection_expression(row_map, context, &item.expression)?;
+                let value =
+                    self.evaluate_projection_expression(row_map, context, &item.expression)?;
                 values.push(value);
             }
             projected_rows.push(Row { values });
@@ -857,12 +856,14 @@ impl Executor {
                             Value::Number(serde_json::Number::from(group_rows.len()))
                         } else {
                             let col_name = column.as_ref().unwrap();
-                            let col_idx = self
-                                .get_column_index(col_name, &context.result_set.columns);
+                            let col_idx =
+                                self.get_column_index(col_name, &context.result_set.columns);
                             let count = if let Some(idx) = col_idx {
                                 group_rows
                                     .iter()
-                                    .filter(|row| idx < row.values.len() && !row.values[idx].is_null())
+                                    .filter(|row| {
+                                        idx < row.values.len() && !row.values[idx].is_null()
+                                    })
                                     .count()
                             } else {
                                 0
@@ -974,7 +975,7 @@ impl Executor {
             context.result_set.rows.push(Row { values: result_row });
         }
 
-        let mut columns = group_by.iter().cloned().collect::<Vec<_>>();
+        let mut columns = group_by.to_vec();
         columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
         context.result_set.columns = columns;
 
@@ -1595,15 +1596,10 @@ impl Executor {
         let label_names = self
             .catalog
             .get_labels_from_bitmap(node_record.label_bits)?;
-        let _labels: Vec<Value> = label_names
-            .into_iter()
-            .map(Value::String)
-            .collect();
+        let _labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
 
-        let properties_value = self
-            .store
-            .load_node_properties(node_id)?;
-        
+        let properties_value = self.store.load_node_properties(node_id)?;
+
         let properties_value = properties_value.unwrap_or_else(|| Value::Object(Map::new()));
 
         let properties_map = match properties_value {
@@ -1619,7 +1615,7 @@ impl Executor {
         // But include _nexus_id for internal ID extraction during relationship traversal
         let mut node = properties_map;
         node.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
-        
+
         Ok(Value::Object(node))
     }
 
@@ -1798,20 +1794,16 @@ impl Executor {
     ) -> Result<Value> {
         match expr {
             parser::Expression::Variable(name) => Ok(row.get(name).cloned().unwrap_or(Value::Null)),
-            parser::Expression::PropertyAccess { variable, property } => {
-                Ok(row
-                    .get(variable)
-                    .map(|entity| Self::extract_property(entity, property))
-                    .unwrap_or(Value::Null))
-            }
+            parser::Expression::PropertyAccess { variable, property } => Ok(row
+                .get(variable)
+                .map(|entity| Self::extract_property(entity, property))
+                .unwrap_or(Value::Null)),
             parser::Expression::Literal(literal) => match literal {
                 parser::Literal::String(s) => Ok(Value::String(s.clone())),
                 parser::Literal::Integer(i) => Ok(Value::Number((*i).into())),
-                parser::Literal::Float(f) => Ok(
-                    serde_json::Number::from_f64(*f)
-                        .map(Value::Number)
-                        .unwrap_or(Value::Null),
-                ),
+                parser::Literal::Float(f) => Ok(serde_json::Number::from_f64(*f)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)),
                 parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
                 parser::Literal::Null => Ok(Value::Null),
             },
@@ -1838,15 +1830,15 @@ impl Executor {
                             } else {
                                 None
                             };
-                            
+
                             if let Some(nid) = node_id {
                                 // Read the node record to get labels
                                 if let Ok(node_record) = self.store.read_node(nid) {
-                                    if let Ok(label_names) = self.catalog.get_labels_from_bitmap(node_record.label_bits) {
-                                        let labels: Vec<Value> = label_names
-                                            .into_iter()
-                                            .map(Value::String)
-                                            .collect();
+                                    if let Ok(label_names) =
+                                        self.catalog.get_labels_from_bitmap(node_record.label_bits)
+                                    {
+                                        let labels: Vec<Value> =
+                                            label_names.into_iter().map(Value::String).collect();
                                         return Ok(Value::Array(labels));
                                     }
                                 }
@@ -1871,11 +1863,13 @@ impl Executor {
                             } else {
                                 None
                             };
-                            
+
                             if let Some(rid) = rel_id {
                                 // Read the relationship record to get type_id
                                 if let Ok(rel_record) = self.store.read_rel(rid) {
-                                    if let Ok(Some(type_name)) = self.catalog.get_type_name(rel_record.type_id) {
+                                    if let Ok(Some(type_name)) =
+                                        self.catalog.get_type_name(rel_record.type_id)
+                                    {
                                         return Ok(Value::String(type_name));
                                     }
                                 }
@@ -1896,32 +1890,30 @@ impl Executor {
                     parser::BinaryOperator::Divide => self.divide_values(&left_val, &right_val),
                     parser::BinaryOperator::Equal => Ok(Value::Bool(left_val == right_val)),
                     parser::BinaryOperator::NotEqual => Ok(Value::Bool(left_val != right_val)),
-                    parser::BinaryOperator::LessThan => {
-                        Ok(Value::Bool(self.compare_values_for_sort(&left_val, &right_val)
-                            == std::cmp::Ordering::Less))
-                    }
-                    parser::BinaryOperator::LessThanOrEqual => Ok(Value::Bool(
-                        matches!(
-                            self.compare_values_for_sort(&left_val, &right_val),
-                            std::cmp::Ordering::Less | std::cmp::Ordering::Equal
-                        ),
+                    parser::BinaryOperator::LessThan => Ok(Value::Bool(
+                        self.compare_values_for_sort(&left_val, &right_val)
+                            == std::cmp::Ordering::Less,
                     )),
+                    parser::BinaryOperator::LessThanOrEqual => Ok(Value::Bool(matches!(
+                        self.compare_values_for_sort(&left_val, &right_val),
+                        std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+                    ))),
                     parser::BinaryOperator::GreaterThan => Ok(Value::Bool(
                         self.compare_values_for_sort(&left_val, &right_val)
                             == std::cmp::Ordering::Greater,
                     )),
-                    parser::BinaryOperator::GreaterThanOrEqual => Ok(Value::Bool(
-                        matches!(
-                            self.compare_values_for_sort(&left_val, &right_val),
-                            std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
-                        ),
-                    )),
+                    parser::BinaryOperator::GreaterThanOrEqual => Ok(Value::Bool(matches!(
+                        self.compare_values_for_sort(&left_val, &right_val),
+                        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+                    ))),
                     parser::BinaryOperator::And => {
-                        let result = self.value_to_bool(&left_val)? && self.value_to_bool(&right_val)?;
+                        let result =
+                            self.value_to_bool(&left_val)? && self.value_to_bool(&right_val)?;
                         Ok(Value::Bool(result))
                     }
                     parser::BinaryOperator::Or => {
-                        let result = self.value_to_bool(&left_val)? || self.value_to_bool(&right_val)?;
+                        let result =
+                            self.value_to_bool(&left_val)? || self.value_to_bool(&right_val)?;
                         Ok(Value::Bool(result))
                     }
                     _ => Ok(Value::Null),
@@ -2020,9 +2012,7 @@ impl Executor {
         }
         context.variables.clear();
         for (var, values) in arrays {
-            context
-                .variables
-                .insert(var, Value::Array(values));
+            context.variables.insert(var, Value::Array(values));
         }
     }
 
@@ -2206,7 +2196,10 @@ mod tests {
 
         let mut node = Map::new();
         node.insert("id".to_string(), Value::Number(id.into()));
-        node.insert("labels".to_string(), Value::Array(vec![Value::String("Person".to_string())]));
+        node.insert(
+            "labels".to_string(),
+            Value::Array(vec![Value::String("Person".to_string())]),
+        );
         node.insert("properties".to_string(), Value::Object(props));
         Value::Object(node)
     }

@@ -1,6 +1,6 @@
 # Implementation Tasks - Neo4j Full Compatibility
 
-**Status**: 🔄 IN PROGRESS (75% Complete)  
+**Status**: 🔄 IN PROGRESS (85% Complete)  
 **Priority**: High  
 **Estimated**: 3-4 weeks  
 **Dependencies**: 
@@ -18,7 +18,7 @@
 - [x] 1.4 Fix PropertyStore persistence and rebuild_index
 - [x] 1.5 Add Engine::refresh_executor() for executor synchronization
 - [x] 1.6 Verify data persists across server restarts
-- [ ] 1.7 Verify all node types created correctly during import
+- [x] 1.7 Verify all node types created correctly during import
 - [ ] 1.8 Validate property mappings match between systems
 
 ## 2. Relationship Creation
@@ -28,8 +28,8 @@
 - [x] 2.3 Verify relationships created during import (3,640 relationships)
 - [x] 2.4 Fix relationship type mapping in planner (use Catalog.get_type_id())
 - [x] 2.5 Fix source_var/target_var tracking in Expand operator
-- [ ] 2.6 Verify bidirectional relationship queries
-- [ ] 2.7 Test relationship property access
+- [x] 2.6 Verify bidirectional relationship queries
+- [x] 2.7 Test relationship property access
 
 ## 3. Query Result Format
 
@@ -51,8 +51,8 @@
 - [x] 4.7 Verify MATCH with labels and WHERE clauses
 - [x] 4.8 Verify RETURN with aliases
 - [x] 4.9 Verify ORDER BY and LIMIT clauses
-- [ ] 4.10 Test MATCH queries with multiple labels
-- [ ] 4.11 Verify UNION queries
+- [x] 4.10 Test MATCH queries with multiple labels
+- [x] 4.11 Verify UNION queries
 
 ## 5. Server Architecture
 
@@ -66,10 +66,10 @@
 - [x] 6.1 Run full import script (213 files, 11,132 nodes, 3,640 relationships)
 - [x] 6.2 Verify data persists after server restart
 - [ ] 6.3 Compare import logs between Nexus and Neo4j
-- [ ] 6.4 Verify all node types created (Document, Module, Class, Function, etc.)
-- [ ] 6.5 Verify all relationship types created (MENTIONS, IMPORTS, etc.)
+- [x] 6.4 Verify all node types created (Document, Module, Class, Function, etc.)
+- [x] 6.5 Verify all relationship types created (MENTIONS, IMPORTS, etc.)
 - [ ] 6.6 Add detailed logging for import process
-- [ ] 6.7 Create import validation script
+- [x] 6.7 Create import validation script
 
 ## 7. Comprehensive Testing
 

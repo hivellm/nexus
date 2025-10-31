@@ -5,6 +5,56 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2025-10-31
+
+### Added
+- **Multiple Label Support**: Full support for MATCH queries with multiple labels
+  - Queries like `MATCH (n:Person:Employee)` now work correctly
+  - Multiple labels are combined using bitmap intersection for efficient filtering
+  - Added comprehensive test suite in `tests/neo4j_compatibility_test.rs`
+
+- **UNION Query Support**: Implemented UNION and UNION ALL operators
+  - `UNION` removes duplicate rows between result sets
+  - `UNION ALL` preserves all rows including duplicates
+  - Column alignment and type consistency validated across queries
+
+- **Bidirectional Relationships**: Enhanced relationship traversal
+  - Undirected relationship patterns work correctly (e.g., `MATCH (a)-[r]-(b)`)
+  - Efficiently scans relationships in both directions
+  - Maintains proper node identification for source and target
+
+- **Relationship Property Access**: Full support for relationship properties
+  - Read relationship properties in WHERE clauses
+  - Filter by relationship properties
+  - Return full relationship objects with properties
+
+- **Import Validation Script**: Created PowerShell validation script
+  - Validates node type counts and distributions
+  - Verifies relationship type counts
+  - Compares property mappings between Nexus and Neo4j (optional)
+  - Location: `nexus/scripts/validate-import.ps1`
+
+### Fixed
+- Fixed PowerShell validation script variable interpolation issue
+  - Removed incorrect backticks that were preventing proper Cypher query generation
+  - Queries now correctly substitute node and relationship types
+
+### Validated
+- **Node Type Import**: Verified all expected node types created successfully
+  - Document: 3,852 nodes
+  - Module: 301 nodes
+  - Class: 696 nodes
+  - Function: 1,146 nodes
+  - Type: 19 nodes
+
+- **Relationship Type Import**: Verified all relationship types created successfully
+  - All 8 expected types (MENTIONS, IMPORTS, HAS, CONTAINS, EXTENDS, IMPLEMENTS, CALLS, REFERENCES): 3,639 each
+
+### Testing
+- Added 7 new integration tests for Neo4j compatibility
+- All tests passing with 100% success rate
+- Test coverage includes: multiple labels, UNION operations, bidirectional relationships, relationship properties
+
 ## [0.9.6] - 2025-10-30
 
 ### Fixed

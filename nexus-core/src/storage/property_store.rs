@@ -370,16 +370,19 @@ impl PropertyStore {
     ///
     /// Forces the memory-mapped property file to sync with disk.
     pub fn flush(&mut self) -> Result<()> {
-        self.mmap.flush().map_err(|e| Error::storage(format!("Failed to flush properties: {}", e)))?;
-        
+        self.mmap
+            .flush()
+            .map_err(|e| Error::storage(format!("Failed to flush properties: {}", e)))?;
+
         // Also sync the underlying file to ensure OS-level persistence
         let property_file = self.path.join("properties.store");
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&property_file)?;
-        file.sync_all().map_err(|e| Error::storage(format!("Failed to sync properties file: {}", e)))?;
-        
+        file.sync_all()
+            .map_err(|e| Error::storage(format!("Failed to sync properties file: {}", e)))?;
+
         Ok(())
     }
 }

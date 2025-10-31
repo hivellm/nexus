@@ -44,8 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize Engine (contains all core components)
     // Use persistent data directory instead of tempdir
-    let data_dir = std::env::var("NEXUS_DATA_DIR")
-        .unwrap_or_else(|_| "./data".to_string());
+    let data_dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     std::fs::create_dir_all(&data_dir)?;
     let engine = nexus_core::Engine::with_data_dir(&data_dir)?;
     info!("Using persistent data directory: {}", data_dir);
@@ -61,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     // The Engine already contains Catalog, LabelIndex, KnnIndex etc.
     // For the new data endpoints, we'll use the Engine's components directly via engine_arc.
     // No need to create separate instances - they should all come from Engine.
-    
+
     // Initialize engine for all API modules that need it
     api::data::init_engine(engine_arc.clone())?;
     api::stats::init_engine(engine_arc.clone())?;
@@ -250,6 +249,7 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use tempfile::TempDir;
 
     #[test]
     fn test_config_default() {
@@ -260,103 +260,50 @@ mod tests {
 
     #[tokio::test]
     async fn test_nexus_server_creation() {
-        let temp_dir = tempdir().unwrap();
-        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
-        let catalog_arc = Arc::new(RwLock::new(catalog));
-
-        let label_index = nexus_core::index::LabelIndex::new();
-        let label_index_arc = Arc::new(RwLock::new(label_index));
-
-        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
-        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        let temp_dir = TempDir::new().unwrap();
+        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(
-            nexus_core::Engine::new().expect("Failed to create engine"),
-        ));
-
-        let server = NexusServer {
-            executor: executor_arc,
-            catalog: catalog_arc,
-            label_index: label_index_arc,
-            knn_index: knn_index_arc,
-            engine,
-        };
+        let server = NexusServer::new(executor_arc.clone(), engine_arc.clone());
 
         // Test that the server can be created
         let server_arc = Arc::new(server);
         let _executor_guard = server_arc.executor.read().await;
-        let _catalog_guard = server_arc.catalog.read().await;
-        let _label_index_guard = server_arc.label_index.read().await;
-        let _knn_index_guard = server_arc.knn_index.read().await;
+        let _engine_guard = server_arc.engine.read().await;
 
         // If we get here, the locks were acquired successfully
     }
 
     #[test]
     fn test_nexus_server_clone() {
-        let temp_dir = tempdir().unwrap();
-        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
-        let catalog_arc = Arc::new(RwLock::new(catalog));
-
-        let label_index = nexus_core::index::LabelIndex::new();
-        let label_index_arc = Arc::new(RwLock::new(label_index));
-
-        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
-        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        let temp_dir = TempDir::new().unwrap();
+        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(
-            nexus_core::Engine::new().expect("Failed to create engine"),
-        ));
-
-        let server = NexusServer {
-            executor: executor_arc,
-            catalog: catalog_arc,
-            label_index: label_index_arc,
-            knn_index: knn_index_arc,
-            engine,
-        };
-
+        let server = NexusServer::new(executor_arc, engine_arc);
         let cloned = server.clone();
 
         // Test that clone works and references the same underlying data
         assert!(Arc::ptr_eq(&server.executor, &cloned.executor));
-        assert!(Arc::ptr_eq(&server.catalog, &cloned.catalog));
-        assert!(Arc::ptr_eq(&server.label_index, &cloned.label_index));
-        assert!(Arc::ptr_eq(&server.knn_index, &cloned.knn_index));
+        assert!(Arc::ptr_eq(&server.engine, &cloned.engine));
     }
 
     #[tokio::test]
     async fn test_create_mcp_router() {
-        let temp_dir = tempdir().unwrap();
-        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
-        let catalog_arc = Arc::new(RwLock::new(catalog));
-
-        let label_index = nexus_core::index::LabelIndex::new();
-        let label_index_arc = Arc::new(RwLock::new(label_index));
-
-        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
-        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        let temp_dir = TempDir::new().unwrap();
+        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(
-            nexus_core::Engine::new().expect("Failed to create engine"),
-        ));
-
-        let server = Arc::new(NexusServer {
-            executor: executor_arc,
-            catalog: catalog_arc,
-            label_index: label_index_arc,
-            knn_index: knn_index_arc,
-            engine,
-        });
+        let server = Arc::new(NexusServer::new(executor_arc, engine_arc));
 
         // Test that MCP router can be created
         let result = create_mcp_router(server).await;
@@ -432,30 +379,14 @@ mod tests {
     #[tokio::test]
     async fn test_router_creation() {
         // This test verifies that the router can be created without panicking
-        let temp_dir = tempdir().unwrap();
-        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
-        let catalog_arc = Arc::new(RwLock::new(catalog));
-
-        let label_index = nexus_core::index::LabelIndex::new();
-        let label_index_arc = Arc::new(RwLock::new(label_index));
-
-        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
-        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        let temp_dir = TempDir::new().unwrap();
+        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(
-            nexus_core::Engine::new().expect("Failed to create engine"),
-        ));
-
-        let server = Arc::new(NexusServer {
-            executor: executor_arc,
-            catalog: catalog_arc,
-            label_index: label_index_arc,
-            knn_index: knn_index_arc,
-            engine,
-        });
+        let server = Arc::new(NexusServer::new(executor_arc, engine_arc));
 
         // Test that we can create the MCP router
         let mcp_router_result = create_mcp_router(server.clone()).await;
@@ -469,35 +400,17 @@ mod tests {
 
     #[test]
     fn test_nexus_server_fields() {
-        let temp_dir = tempdir().unwrap();
-        let catalog = nexus_core::catalog::Catalog::new(temp_dir).unwrap();
-        let catalog_arc = Arc::new(RwLock::new(catalog));
-
-        let label_index = nexus_core::index::LabelIndex::new();
-        let label_index_arc = Arc::new(RwLock::new(label_index));
-
-        let knn_index = nexus_core::index::KnnIndex::new(128).unwrap();
-        let knn_index_arc = Arc::new(RwLock::new(knn_index));
+        let temp_dir = TempDir::new().unwrap();
+        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let engine = Arc::new(RwLock::new(
-            nexus_core::Engine::new().expect("Failed to create engine"),
-        ));
-
-        let server = NexusServer {
-            executor: executor_arc.clone(),
-            catalog: catalog_arc.clone(),
-            label_index: label_index_arc.clone(),
-            knn_index: knn_index_arc.clone(),
-            engine,
-        };
+        let server = NexusServer::new(executor_arc.clone(), engine_arc.clone());
 
         // Test that all fields are accessible
         assert!(Arc::ptr_eq(&server.executor, &executor_arc));
-        assert!(Arc::ptr_eq(&server.catalog, &catalog_arc));
-        assert!(Arc::ptr_eq(&server.label_index, &label_index_arc));
-        assert!(Arc::ptr_eq(&server.knn_index, &knn_index_arc));
+        assert!(Arc::ptr_eq(&server.engine, &engine_arc));
     }
 }

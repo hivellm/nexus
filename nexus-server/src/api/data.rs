@@ -34,11 +34,6 @@ pub fn init_engine(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()
     Ok(())
 }
 
-/// Get the executor instance
-fn get_executor() -> Arc<RwLock<Executor>> {
-    EXECUTOR.get().expect("Executor not initialized").clone()
-}
-
 /// Helper function to log operation details
 fn log_operation(operation: &str, details: &str) {
     tracing::info!("Operation: {} - Details: {}", operation, details);
@@ -504,13 +499,7 @@ pub async fn update_node(Json(request): Json<UpdateNodeRequest>) -> Json<UpdateN
     };
 
     // Convert properties HashMap to serde_json::Value
-    let properties = serde_json::Value::Object(
-        request
-            .properties
-            .into_iter()
-            .map(|(k, v)| (k, v))
-            .collect(),
-    );
+    let properties = serde_json::Value::Object(request.properties.into_iter().collect());
 
     // Update node using Engine (preserve existing labels)
     match engine.update_node(request.node_id, current_labels, properties) {
@@ -920,14 +909,11 @@ mod tests {
 
         // Get the actual engine instance (may be the one we created or already existing)
         let global_engine = ENGINE.get().expect("Engine should be initialized");
-        
+
         // Create nodes - first one will have ID 0, create a dummy to get ID 1
         let mut engine = global_engine.write().await;
         let _dummy_id = engine
-            .create_node(
-                vec!["Dummy".to_string()],
-                serde_json::json!({}),
-            )
+            .create_node(vec!["Dummy".to_string()], serde_json::json!({}))
             .unwrap();
         let node_id = engine
             .create_node(
@@ -943,7 +929,11 @@ mod tests {
 
         let response = get_node_by_id(axum::extract::Query(params)).await;
 
-        assert!(response.error.is_none(), "Expected no error, got: {:?}", response.error);
+        assert!(
+            response.error.is_none(),
+            "Expected no error, got: {:?}",
+            response.error
+        );
         assert!(response.node.is_some());
         let node = response.node.as_ref().unwrap();
         assert_eq!(node.id, node_id);
@@ -990,14 +980,11 @@ mod tests {
 
         // Get the actual engine instance (may be the one we created or already existing)
         let global_engine = ENGINE.get().expect("Engine should be initialized");
-        
+
         // Create nodes - first one will have ID 0, create a dummy to get ID 1
         let mut engine = global_engine.write().await;
         let _dummy_id = engine
-            .create_node(
-                vec!["Dummy".to_string()],
-                serde_json::json!({}),
-            )
+            .create_node(vec!["Dummy".to_string()], serde_json::json!({}))
             .unwrap();
         let node_id = engine
             .create_node(
@@ -1082,10 +1069,7 @@ mod tests {
 
         // Create nodes - first one will have ID 0, create a dummy to get ID 1
         let _dummy_id = engine
-            .create_node(
-                vec!["Dummy".to_string()],
-                serde_json::json!({}),
-            )
+            .create_node(vec!["Dummy".to_string()], serde_json::json!({}))
             .unwrap();
         let node_id = engine
             .create_node(

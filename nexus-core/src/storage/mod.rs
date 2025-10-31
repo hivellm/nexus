@@ -303,12 +303,16 @@ impl RecordStore {
     /// Should be called after writes to guarantee durability.
     pub fn flush(&mut self) -> Result<()> {
         // Flush memory-mapped files to disk
-        self.nodes_mmap.flush().map_err(|e| Error::Storage(format!("Failed to flush nodes: {}", e)))?;
-        self.rels_mmap.flush().map_err(|e| Error::Storage(format!("Failed to flush rels: {}", e)))?;
-        
+        self.nodes_mmap
+            .flush()
+            .map_err(|e| Error::Storage(format!("Failed to flush nodes: {}", e)))?;
+        self.rels_mmap
+            .flush()
+            .map_err(|e| Error::Storage(format!("Failed to flush rels: {}", e)))?;
+
         // Also flush the property store
         self.property_store.flush()?;
-        
+
         Ok(())
     }
 
