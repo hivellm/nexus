@@ -1107,6 +1107,9 @@ impl Executor {
 
         context.result_set.rows.clear();
 
+        // Check if we have an empty result set with aggregations but no GROUP BY
+        let is_empty_aggregation = groups.is_empty() && group_by.is_empty();
+
         for (group_key, group_rows) in groups {
             let mut result_row = group_key;
             for agg in aggregations {
@@ -1197,24 +1200,28 @@ impl Executor {
                     Aggregation::Min { column, .. } => {
                         let col_idx = self.get_column_index(column, &context.result_set.columns);
                         if let Some(idx) = col_idx {
-                            let min_value = group_rows
+                            // Find minimum value while preserving original type
+                            let min_val = group_rows
                                 .iter()
                                 .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
+                                    if idx < row.values.len() && !row.values[idx].is_null() {
+                                        Some(&row.values[idx])
                                     } else {
                                         None
                                     }
                                 })
-                                .fold(f64::INFINITY, |a, b| a.min(b));
-                            if min_value == f64::INFINITY {
-                                Value::Null
-                            } else {
-                                Value::Number(
-                                    serde_json::Number::from_f64(min_value)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
+                                .min_by(|a, b| {
+                                    // Compare as numbers
+                                    let a_num = self.value_to_number(a).ok();
+                                    let b_num = self.value_to_number(b).ok();
+                                    match (a_num, b_num) {
+                                        (Some(an), Some(bn)) => {
+                                            an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
+                                        }
+                                        _ => std::cmp::Ordering::Equal,
+                                    }
+                                });
+                            min_val.cloned().unwrap_or(Value::Null)
                         } else {
                             Value::Null
                         }
@@ -1222,24 +1229,28 @@ impl Executor {
                     Aggregation::Max { column, .. } => {
                         let col_idx = self.get_column_index(column, &context.result_set.columns);
                         if let Some(idx) = col_idx {
-                            let max_value = group_rows
+                            // Find maximum value while preserving original type
+                            let max_val = group_rows
                                 .iter()
                                 .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
+                                    if idx < row.values.len() && !row.values[idx].is_null() {
+                                        Some(&row.values[idx])
                                     } else {
                                         None
                                     }
                                 })
-                                .fold(f64::NEG_INFINITY, |a, b| a.max(b));
-                            if max_value == f64::NEG_INFINITY {
-                                Value::Null
-                            } else {
-                                Value::Number(
-                                    serde_json::Number::from_f64(max_value)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
+                                .max_by(|a, b| {
+                                    // Compare as numbers
+                                    let a_num = self.value_to_number(a).ok();
+                                    let b_num = self.value_to_number(b).ok();
+                                    match (a_num, b_num) {
+                                        (Some(an), Some(bn)) => {
+                                            an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
+                                        }
+                                        _ => std::cmp::Ordering::Equal,
+                                    }
+                                });
+                            max_val.cloned().unwrap_or(Value::Null)
                         } else {
                             Value::Null
                         }
@@ -1248,6 +1259,26 @@ impl Executor {
                 result_row.push(agg_value);
             }
 
+            context.result_set.rows.push(Row { values: result_row });
+        }
+
+        // If no groups and no GROUP BY, still return one row with aggregation values
+        // This handles cases like: MATCH (n:NonExistent) RETURN count(*)
+        if is_empty_aggregation {
+            let mut result_row = Vec::new();
+            for agg in aggregations {
+                let agg_value = match agg {
+                    Aggregation::Count { .. } => {
+                        // COUNT on empty set returns 0
+                        Value::Number(serde_json::Number::from(0))
+                    }
+                    _ => {
+                        // AVG/MIN/MAX/SUM on empty set return NULL
+                        Value::Null
+                    }
+                };
+                result_row.push(agg_value);
+            }
             context.result_set.rows.push(Row { values: result_row });
         }
 
@@ -1959,7 +1990,10 @@ impl Executor {
                 actual: "string".to_string(),
             }),
             Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-            Value::Null => Ok(0.0),
+            Value::Null => Err(Error::TypeMismatch {
+                expected: "number".to_string(),
+                actual: "null".to_string(),
+            }),
             _ => Err(Error::TypeMismatch {
                 expected: "number".to_string(),
                 actual: "unknown type".to_string(),

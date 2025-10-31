@@ -35,7 +35,7 @@
 | Método | Endpoint | Status | Observações |
 |--------|----------|--------|-------------|
 | POST | `/data/nodes` | ✅ PASS | Node criado com sucesso (ID: 2) |
-| GET | `/data/nodes?id=护士` | ⚠️ PASS* | Retorna erro esperado (parser Cypher) |
+| GET | `/data/nodes?id=护士` | ⚠️ PASS* | Retorna error esperado (parser Cypher) |
 | PUT | `/data/nodes` | ✅ PASS | Retorna mensagem: usar Cypher |
 | DELETE | `/data/nodes` | ✅ PASS | Retorna mensagem: usar Cypher |
 
@@ -77,7 +77,7 @@
 
 | Método | Endpoint | Status | Observações |
 |--------|----------|--------|-------------|
-| GET | `/clustering/algorithms` | ✅ PASS | 6 algoritmos retornados (kmeans, hierarchical, etc.) |
+| GET | `/clustering/algorithms` | ✅ PASS | 6 algorithms returned (kmeans, hierarchical, etc.) |
 
 ### ✅ Graph Correlation (2/2)
 
@@ -105,14 +105,14 @@
 1. **Sistema总能 Health Check** - Todas as rotas de status funcionando
 2. **Schema Management** - Criação e listagem de labels/types funcionando
 3. **Cypher Queries** - Execução de queries funcionando perfeitamente
-4. **Statistics** - Estatísticas precisas retornadas
-5. **Graph Comparison** - Serviço de comparação operacional
-6. **Clustering** - API completa com 6 algoritmos disponíveis
-7. **Bulk Ingest** - Operações de ingestão em lote funcionando
+4. **Statistics** - Accurate statistics returned
+5. **Graph Comparison** - Comparison service operational
+6. **Clustering** - Complete API with 6 algorithms available
+7. **Bulk Ingest** - Bulk ingestion operations working
 
-### ⚠️ Comportamento Esperado (Não são bugs)
+### ⚠️ Expected Behavior (Not bugs)
 
-1. **GET /data/nodes?id=X** - Atualmente retorna erro de parser Cypher, mas endpoint responde
+1. **GET /data/nodes?id=X** - Currently returns Cypher parser error, but endpoint responds
    - **Solução**: Melhorar implementação para usar Engine diretamente
    
 2. **PUT/DELETE /data/nodes** - Retorna mensagem para usar Cypher

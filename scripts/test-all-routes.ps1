@@ -51,7 +51,7 @@ function Test-Route {
         $status = "❌ FAIL ($statusCode)"
         
         if ($statusCode -eq 404 -or $statusCode -eq 400 -or $statusCode -eq 422) {
-            # Alguns erros esperados são OK (endpoints que precisam de dados)
+            # Some expected errors are OK (endpoints that require data)
             Write-Host "  Status: $status (Expected for empty/data requirements)" -ForegroundColor Yellow
         } else {
             Write-Host "  Status: $status" -ForegroundColor Red

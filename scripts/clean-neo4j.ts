@@ -64,7 +64,7 @@ async function cleanNeo4j() {
       console.log(`   Relationships: ${relCount}\n`);
     }
   } catch (error) {
-    console.error(`\n❌ Erro ao limpar Neo4j: ${error.message}`);
+    console.error(`\n❌ Error cleaning Neo4j: ${error.message}`);
     throw error;
   }
 }
