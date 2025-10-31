@@ -27,22 +27,10 @@ fn setup_test_data(engine: &mut Engine) -> Result<(), String> {
         engine,
         "CREATE (p1:Person:Employee {name: 'Alice', age: 30})",
     )?;
-    execute_query(
-        engine,
-        "CREATE (p2:Person:Manager {name: 'Bob', age: 40})",
-    )?;
-    execute_query(
-        engine,
-        "CREATE (p3:Person {name: 'Charlie', age: 25})",
-    )?;
-    execute_query(
-        engine,
-        "CREATE (c1:Company {name: 'Acme Corp'})",
-    )?;
-    execute_query(
-        engine,
-        "CREATE (c2:Company {name: 'Tech Inc'})",
-    )?;
+    execute_query(engine, "CREATE (p2:Person:Manager {name: 'Bob', age: 40})")?;
+    execute_query(engine, "CREATE (p3:Person {name: 'Charlie', age: 25})")?;
+    execute_query(engine, "CREATE (c1:Company {name: 'Acme Corp'})")?;
+    execute_query(engine, "CREATE (c2:Company {name: 'Tech Inc'})")?;
 
     // Create relationships with properties
     execute_query(

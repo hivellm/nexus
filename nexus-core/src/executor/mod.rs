@@ -735,7 +735,47 @@ impl Executor {
 
     /// Execute Filter operator
     fn execute_filter(&self, context: &mut ExecutionContext, predicate: &str) -> Result<()> {
-        // Parse the predicate expression
+        // Check for label check pattern: variable:Label
+        if predicate.contains(':') && !predicate.contains("::") {
+            let parts: Vec<&str> = predicate.split(':').collect();
+            if parts.len() == 2 && !parts[0].contains(' ') && !parts[1].contains(' ') {
+                // This is a label check: variable:Label
+                let variable = parts[0].trim();
+                let label_name = parts[1].trim();
+
+                // Get label ID
+                if let Ok(label_id) = self.catalog.get_label_id(label_name) {
+                    // Filter rows where variable has this label
+                    let rows = self.materialize_rows_from_variables(context);
+                    let mut filtered_rows = Vec::new();
+
+                    for row in rows {
+                        if let Some(node_value) = row.get(variable) {
+                            if let Value::Object(obj) = node_value {
+                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                    if let Some(node_id) = id.as_u64() {
+                                        // Read node and check if it has the label
+                                        if let Ok(node_record) = self.store.read_node(node_id) {
+                                            let has_label =
+                                                (node_record.label_bits & (1u64 << label_id)) != 0;
+                                            if has_label {
+                                                filtered_rows.push(row);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    self.update_variables_from_rows(context, &filtered_rows);
+                    self.update_result_set_from_rows(context, &filtered_rows);
+                    return Ok(());
+                }
+            }
+        }
+
+        // Regular predicate expression
         let mut parser = parser::CypherParser::new(predicate.to_string());
         let expr = parser.parse_expression()?;
 

@@ -144,12 +144,25 @@ impl<'a> QueryPlanner<'a> {
                     if target_nodes.contains(variable) {
                         continue;
                     }
-                    if let Some(label) = node.labels.first() {
-                        let label_id = self.catalog.get_or_create_label(label)?;
+                    if !node.labels.is_empty() {
+                        // Use first label for initial scan
+                        let first_label = &node.labels[0];
+                        let label_id = self.catalog.get_or_create_label(first_label)?;
                         operators.push(Operator::NodeByLabel {
                             label_id,
                             variable: variable.clone(),
                         });
+
+                        // Add filters for additional labels (multiple label intersection)
+                        if node.labels.len() > 1 {
+                            for additional_label in &node.labels[1..] {
+                                // Create a filter that checks if node has this label
+                                let filter_expr = format!("{}:{}", variable, additional_label);
+                                operators.push(Operator::Filter {
+                                    predicate: filter_expr,
+                                });
+                            }
+                        }
                     } else {
                         // No label specified - need to scan all nodes
                         // For now, use label_id 0 as a fallback (this might need lower-level storage access)
