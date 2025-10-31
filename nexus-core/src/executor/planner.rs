@@ -27,6 +27,40 @@ impl<'a> QueryPlanner<'a> {
 
     /// Plan a Cypher query into optimized operators
     pub fn plan_query(&self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        // Check if query contains UNION - if so, split and plan separately
+        if let Some(union_idx) = query
+            .clauses
+            .iter()
+            .position(|c| matches!(c, Clause::Union(_)))
+        {
+            // Split query into left and right parts
+            let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
+            let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..].to_vec();
+
+            // Create separate queries for left and right
+            let left_query = CypherQuery {
+                clauses: left_clauses,
+                params: query.params.clone(),
+            };
+            let right_query = CypherQuery {
+                clauses: right_clauses,
+                params: query.params.clone(),
+            };
+
+            // Plan both sides recursively
+            let left_operators = self.plan_query(&left_query)?;
+            let right_operators = self.plan_query(&right_query)?;
+
+            // Create UNION operator with complete operator pipelines for each side
+            let mut operators = Vec::new();
+            operators.push(Operator::Union {
+                left: left_operators,
+                right: right_operators,
+            });
+
+            return Ok(operators);
+        }
+
         let mut operators = Vec::new();
 
         // Extract patterns and constraints
@@ -84,6 +118,9 @@ impl<'a> QueryPlanner<'a> {
                     if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
                         limit_count = Some(*count as usize);
                     }
+                }
+                Clause::Union(_) => {
+                    // Should have been handled above
                 }
                 _ => {
                     // Other clauses not implemented in MVP
@@ -994,14 +1031,14 @@ mod tests {
                 aggregations: vec![],
             },
             Operator::Union {
-                left: Box::new(Operator::NodeByLabel {
+                left: vec![Operator::NodeByLabel {
                     label_id: 1,
                     variable: "a".to_string(),
-                }),
-                right: Box::new(Operator::NodeByLabel {
+                }],
+                right: vec![Operator::NodeByLabel {
                     label_id: 2,
                     variable: "b".to_string(),
-                }),
+                }],
             },
             Operator::Join {
                 left: Box::new(Operator::NodeByLabel {

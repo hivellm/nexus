@@ -389,16 +389,19 @@ impl Engine {
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let ast = parser.parse()?;
 
-        // Check if query contains CREATE or MERGE clauses
-        let has_create = ast.clauses.iter().any(|clause| {
+        // Check if query is a standalone CREATE (no MATCH clause before CREATE)
+        // If there's a MATCH, the executor will handle CREATE in context
+        let is_standalone_create = if let Some(first_clause) = ast.clauses.first() {
             matches!(
-                clause,
+                first_clause,
                 executor::parser::Clause::Create(_) | executor::parser::Clause::Merge(_)
             )
-        });
+        } else {
+            false
+        };
 
-        if has_create {
-            // Execute CREATE via Engine to ensure proper persistence
+        if is_standalone_create {
+            // Execute standalone CREATE via Engine to ensure proper persistence
             self.execute_create_query(&ast)?;
 
             // Refresh executor to see the changes

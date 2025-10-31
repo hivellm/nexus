@@ -110,10 +110,10 @@ pub enum Operator {
     },
     /// Union two result sets
     Union {
-        /// Left operand
-        left: Box<Operator>,
-        /// Right operand
-        right: Box<Operator>,
+        /// Left operator pipeline
+        left: Vec<Operator>,
+        /// Right operator pipeline
+        right: Vec<Operator>,
     },
     /// Join two result sets
     Join {
@@ -1192,24 +1192,35 @@ impl Executor {
     fn execute_union(
         &self,
         context: &mut ExecutionContext,
-        left: &Operator,
-        right: &Operator,
+        left: &[Operator],
+        right: &[Operator],
     ) -> Result<()> {
-        // Execute left operator and collect its results
+        // Execute left operator pipeline and collect its results
         let mut left_context = ExecutionContext::new(context.params.clone());
-        self.execute_operator(&mut left_context, left)?;
+        for operator in left {
+            self.execute_operator(&mut left_context, operator)?;
+        }
 
-        // Execute right operator and collect its results
+        // Execute right operator pipeline and collect its results
         let mut right_context = ExecutionContext::new(context.params.clone());
-        self.execute_operator(&mut right_context, right)?;
+        for operator in right {
+            self.execute_operator(&mut right_context, operator)?;
+        }
 
         // Combine results from both sides
         let mut combined_rows = Vec::new();
         combined_rows.extend(left_context.result_set.rows);
         combined_rows.extend(right_context.result_set.rows);
 
+        // Use columns from left context (both sides should have same columns)
+        let columns = if !left_context.result_set.columns.is_empty() {
+            left_context.result_set.columns.clone()
+        } else {
+            right_context.result_set.columns.clone()
+        };
+
         // Update the main context with combined results
-        context.set_columns_and_rows(context.result_set.columns.clone(), combined_rows);
+        context.set_columns_and_rows(columns, combined_rows);
         let row_maps = self.result_set_as_rows(context);
         self.update_variables_from_rows(context, &row_maps);
         Ok(())
@@ -1252,7 +1263,7 @@ impl Executor {
                 self.execute_aggregate(context, group_by, aggregations)?;
             }
             Operator::Union { left, right } => {
-                self.execute_union(context, left, right)?;
+                self.execute_union(context, &left, &right)?;
             }
             Operator::Join {
                 left,
@@ -2097,6 +2108,18 @@ impl Executor {
                             }
                         }
                         Ok(Value::Array(Vec::new()))
+                    }
+                    "id" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            // Extract node or relationship ID from _nexus_id
+                            if let Value::Object(obj) = &value {
+                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                    return Ok(Value::Number(id.clone()));
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
                     }
                     _ => Ok(Value::Null),
                 }
