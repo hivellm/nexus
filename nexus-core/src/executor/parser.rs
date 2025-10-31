@@ -1774,6 +1774,7 @@ impl CypherParser {
             || self.peek_keyword("MERGE")
             || self.peek_keyword("SET")
             || self.peek_keyword("DELETE")
+            || self.peek_keyword("DETACH")  // For DETACH DELETE
             || self.peek_keyword("REMOVE")
             || self.peek_keyword("WITH")
             || self.peek_keyword("UNWIND")
@@ -1783,7 +1784,6 @@ impl CypherParser {
             || self.peek_keyword("ORDER")
             || self.peek_keyword("LIMIT")
             || self.peek_keyword("SKIP")
-            || (self.peek_keyword("DETACH") && self.peek_keyword_at(1, "DELETE"))  // For DETACH DELETE
     }
 
     /// Check if character is identifier start

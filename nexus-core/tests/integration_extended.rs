@@ -11,7 +11,6 @@ use tempfile::TempDir;
 // ============================================================================
 
 #[test]
-#[ignore]
 fn integration_engine_create_and_query() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -193,7 +192,6 @@ fn integration_engine_20_relationships() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_aggregations() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -212,7 +210,6 @@ fn integration_engine_aggregations() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_min_max() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -236,7 +233,6 @@ fn integration_engine_min_max() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_avg() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -255,7 +251,6 @@ fn integration_engine_avg() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_union() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -277,7 +272,6 @@ fn integration_engine_union() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_union_all() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -566,7 +560,6 @@ fn integration_engine_refresh_multiple() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_sequential_creates() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -582,7 +575,6 @@ fn integration_engine_sequential_creates() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_mixed_api_cypher() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -600,7 +592,6 @@ fn integration_engine_mixed_api_cypher() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_label_filtering() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -627,7 +618,6 @@ fn integration_engine_label_filtering() {
 // Continue adicionando mais 70+ testes...
 
 #[test]
-#[ignore]
 fn integration_create_via_cypher_1() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -635,7 +625,6 @@ fn integration_create_via_cypher_1() {
 }
 
 #[test]
-#[ignore]
 fn integration_create_via_cypher_2() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -643,7 +632,6 @@ fn integration_create_via_cypher_2() {
 }
 
 #[test]
-#[ignore]
 fn integration_create_via_cypher_3() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -767,7 +755,6 @@ fn integration_test_08() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_09() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -775,7 +762,6 @@ fn integration_test_09() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_10() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -909,7 +895,6 @@ fn integration_test_20() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_21() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -925,7 +910,6 @@ fn integration_test_21() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_22() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -941,7 +925,6 @@ fn integration_test_22() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_23() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -957,7 +940,6 @@ fn integration_test_23() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_24() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -973,7 +955,6 @@ fn integration_test_24() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_25() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -1016,7 +997,6 @@ fn integration_test_28() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_29() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -1080,7 +1060,6 @@ fn integration_test_35() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_36() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
