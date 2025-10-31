@@ -255,9 +255,16 @@ impl<'a> QueryPlanner<'a> {
                             }
                             "sum" => {
                                 has_aggregation = true;
-                                if let Some(Expression::Variable(var)) = args.first() {
+                                if let Some(arg) = args.first() {
+                                    let column = match arg {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
                                     aggregations.push(Aggregation::Sum {
-                                        column: var.clone(),
+                                        column,
                                         alias: item
                                             .alias
                                             .clone()
@@ -267,9 +274,16 @@ impl<'a> QueryPlanner<'a> {
                             }
                             "avg" => {
                                 has_aggregation = true;
-                                if let Some(Expression::Variable(var)) = args.first() {
+                                if let Some(arg) = args.first() {
+                                    let column = match arg {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
                                     aggregations.push(Aggregation::Avg {
-                                        column: var.clone(),
+                                        column,
                                         alias: item
                                             .alias
                                             .clone()
@@ -279,9 +293,16 @@ impl<'a> QueryPlanner<'a> {
                             }
                             "min" => {
                                 has_aggregation = true;
-                                if let Some(Expression::Variable(var)) = args.first() {
+                                if let Some(arg) = args.first() {
+                                    let column = match arg {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
                                     aggregations.push(Aggregation::Min {
-                                        column: var.clone(),
+                                        column,
                                         alias: item
                                             .alias
                                             .clone()
@@ -291,9 +312,16 @@ impl<'a> QueryPlanner<'a> {
                             }
                             "max" => {
                                 has_aggregation = true;
-                                if let Some(Expression::Variable(var)) = args.first() {
+                                if let Some(arg) = args.first() {
+                                    let column = match arg {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
                                     aggregations.push(Aggregation::Max {
-                                        column: var.clone(),
+                                        column,
                                         alias: item
                                             .alias
                                             .clone()
@@ -342,8 +370,16 @@ impl<'a> QueryPlanner<'a> {
                             let func_name = name.to_lowercase();
                             match func_name.as_str() {
                                 "count" | "sum" | "avg" | "min" | "max" => {
-                                    if let Some(Expression::Variable(var)) = args.first() {
-                                        required_columns.insert(var.clone());
+                                    if let Some(arg) = args.first() {
+                                        match arg {
+                                            Expression::Variable(var) => {
+                                                required_columns.insert(var.clone());
+                                            }
+                                            Expression::PropertyAccess { variable, property } => {
+                                                required_columns.insert(format!("{}.{}", variable, property));
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                                 _ => {
@@ -373,9 +409,23 @@ impl<'a> QueryPlanner<'a> {
 
                 for column in required_columns {
                     if !projection_items.iter().any(|item| item.alias == column) {
+                        let expression = if column.contains('.') {
+                            let parts: Vec<&str> = column.split('.').collect();
+                            if parts.len() == 2 {
+                                Expression::PropertyAccess {
+                                    variable: parts[0].to_string(),
+                                    property: parts[1].to_string(),
+                                }
+                            } else {
+                                Expression::Variable(column.clone())
+                            }
+                        } else {
+                            Expression::Variable(column.clone())
+                        };
+                        
                         projection_items.push(ProjectionItem {
                             alias: column.clone(),
-                            expression: Expression::Variable(column),
+                            expression,
                         });
                     }
                 }
