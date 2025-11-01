@@ -5,6 +5,49 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2025-11-01
+
+### Added
+- **Built-in Functions**: Implemented 20+ essential Cypher functions for data manipulation
+  - **String Functions** (7):
+    - `toLower()` / `toUpper()`: Case conversion
+    - `substring(string, start, [length])`: Extract substrings
+    - `trim()` / `ltrim()` / `rtrim()`: Whitespace removal
+    - `replace(string, search, replace)`: String replacement
+    - `split(string, delimiter)`: Split string into array
+  - **Math Functions** (6):
+    - `abs()`, `ceil()`, `floor()`, `round()`: Rounding and absolute value
+    - `sqrt()`: Square root
+    - `pow(base, exponent)`: Exponentiation
+  - **Type Conversion** (4):
+    - `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`: Type coercion
+  - **List Functions** (6):
+    - `size()`: Get array/string length
+    - `head()`, `tail()`, `last()`: Array element access
+    - `range(start, end, [step])`: Generate numeric sequences
+    - `reverse()`: Reverse array order
+
+### Improved
+- **Query Support**: RETURN can now evaluate literal expressions without MATCH/UNWIND
+  - `RETURN 1+1 AS result` now works correctly
+  - `RETURN toLower('HELLO') AS lower` evaluates functions in isolation
+  - Fixed planner to handle queries without graph patterns
+- **Executor Enhancements**: Enhanced `execute_project` to handle various query contexts
+  - Detects and handles literal-only queries correctly
+  - Preserves existing behavior for MATCH, UNWIND, and UNION queries
+  - Proper NULL handling in all mathematical functions
+
+### Testing
+- Added comprehensive test suite for built-in functions (28 tests, 100% passing)
+- All existing tests maintained (1200+ tests passing)
+- Verified RETURN literal queries work correctly
+- Validated NULL handling across all functions
+
+### Fixed
+- **RETURN without MATCH**: Fixed literal expression evaluation in standalone RETURN
+- **Range Function**: Fixed step parameter handling for negative steps
+- **NULL Handling**: All math functions now return NULL for NULL inputs
+
 ## [0.9.10] - 2025-10-31
 
 ### Fixed

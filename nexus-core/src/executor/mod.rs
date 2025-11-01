@@ -1032,7 +1032,19 @@ impl Executor {
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect()
         } else {
-            self.materialize_rows_from_variables(context)
+            let materialized = self.materialize_rows_from_variables(context);
+            if materialized.is_empty()
+                && context.variables.is_empty()
+                && context.result_set.columns.is_empty()
+            {
+                // No rows from variables AND no variables AND no previous operations - create single empty row for literal/function evaluation
+                // This handles: RETURN 1+1 AS result, toLower('HELLO') AS lower
+                // But NOT: MATCH (n:NonExistent) RETURN n (which should return 0 rows)
+                // And NOT: UNWIND [] AS x RETURN x (which should return 0 rows)
+                vec![std::collections::HashMap::new()]
+            } else {
+                materialized
+            }
         };
 
         let mut projected_rows = Vec::new();
@@ -2547,6 +2559,429 @@ impl Executor {
                                 if let Some(Value::Number(id)) = obj.get("_nexus_id") {
                                     return Ok(Value::Number(id.clone()));
                                 }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    // String functions
+                    "tolower" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::String(s) = value {
+                                return Ok(Value::String(s.to_lowercase()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "toupper" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::String(s) = value {
+                                return Ok(Value::String(s.to_uppercase()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "substring" => {
+                        // substring(string, start, [length])
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let start_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::Number(start_num)) =
+                                (string_val, start_val)
+                            {
+                                let start = start_num.as_i64().unwrap_or(0).max(0) as usize;
+
+                                if args.len() >= 3 {
+                                    let length_val = self
+                                        .evaluate_projection_expression(row, context, &args[2])?;
+                                    if let Value::Number(len_num) = length_val {
+                                        let length = len_num.as_i64().unwrap_or(0).max(0) as usize;
+                                        let end = (start + length).min(s.len());
+                                        return Ok(Value::String(
+                                            s.chars().skip(start).take(end - start).collect(),
+                                        ));
+                                    }
+                                } else {
+                                    // No length specified - take from start to end
+                                    return Ok(Value::String(s.chars().skip(start).collect()));
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "trim" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::String(s) = value {
+                                return Ok(Value::String(s.trim().to_string()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "ltrim" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::String(s) = value {
+                                return Ok(Value::String(s.trim_start().to_string()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "rtrim" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::String(s) = value {
+                                return Ok(Value::String(s.trim_end().to_string()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "replace" => {
+                        // replace(string, search, replace)
+                        if args.len() >= 3 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let search_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+                            let replace_val =
+                                self.evaluate_projection_expression(row, context, &args[2])?;
+
+                            if let (
+                                Value::String(s),
+                                Value::String(search),
+                                Value::String(replace),
+                            ) = (string_val, search_val, replace_val)
+                            {
+                                return Ok(Value::String(s.replace(&search, &replace)));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "split" => {
+                        // split(string, delimiter)
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let delim_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::String(delim)) =
+                                (string_val, delim_val)
+                            {
+                                let parts: Vec<Value> = s
+                                    .split(&delim)
+                                    .map(|part| Value::String(part.to_string()))
+                                    .collect();
+                                return Ok(Value::Array(parts));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Math functions
+                    "abs" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.abs())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "ceil" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.ceil())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "floor" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.floor())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "round" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.round())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "sqrt" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.sqrt())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "pow" => {
+                        // pow(base, exponent)
+                        if args.len() >= 2 {
+                            let base_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let exp_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+                            if base_val.is_null() || exp_val.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let base = self.value_to_number(&base_val)?;
+                            let exp = self.value_to_number(&exp_val)?;
+                            return serde_json::Number::from_f64(base.powf(exp))
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Type conversion functions
+                    "tointeger" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::Number(n) => {
+                                    if let Some(i) = n.as_i64() {
+                                        return Ok(Value::Number(i.into()));
+                                    }
+                                    if let Some(f) = n.as_f64() {
+                                        return Ok(Value::Number((f as i64).into()));
+                                    }
+                                }
+                                Value::String(s) => {
+                                    if let Ok(i) = s.parse::<i64>() {
+                                        return Ok(Value::Number(i.into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "tofloat" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::Number(n) => {
+                                    if let Some(f) = n.as_f64() {
+                                        return serde_json::Number::from_f64(f)
+                                            .map(Value::Number)
+                                            .ok_or_else(|| Error::TypeMismatch {
+                                                expected: "float".to_string(),
+                                                actual: "non-finite".to_string(),
+                                            });
+                                    }
+                                }
+                                Value::String(s) => {
+                                    if let Ok(f) = s.parse::<f64>() {
+                                        return serde_json::Number::from_f64(f)
+                                            .map(Value::Number)
+                                            .ok_or_else(|| Error::TypeMismatch {
+                                                expected: "float".to_string(),
+                                                actual: "non-finite".to_string(),
+                                            });
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "tostring" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => Ok(Value::String(s)),
+                                Value::Number(n) => Ok(Value::String(n.to_string())),
+                                Value::Bool(b) => Ok(Value::String(b.to_string())),
+                                Value::Null => Ok(Value::Null),
+                                Value::Array(_) | Value::Object(_) => {
+                                    Ok(Value::String(value.to_string()))
+                                }
+                            }
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    "toboolean" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::Bool(b) => Ok(Value::Bool(b)),
+                                Value::String(s) => {
+                                    let lower = s.to_lowercase();
+                                    if lower == "true" {
+                                        Ok(Value::Bool(true))
+                                    } else if lower == "false" {
+                                        Ok(Value::Bool(false))
+                                    } else {
+                                        Ok(Value::Null)
+                                    }
+                                }
+                                Value::Number(n) => {
+                                    // 0 = false, non-zero = true
+                                    Ok(Value::Bool(n.as_f64().unwrap_or(0.0) != 0.0))
+                                }
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    // List functions
+                    "size" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::Array(arr) => Ok(Value::Number((arr.len() as i64).into())),
+                                Value::String(s) => Ok(Value::Number((s.len() as i64).into())),
+                                _ => Ok(Value::Null),
+                            }
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    "head" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Array(arr) = value {
+                                return Ok(arr.first().cloned().unwrap_or(Value::Null));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "tail" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Array(arr) = value {
+                                if arr.len() > 1 {
+                                    return Ok(Value::Array(arr[1..].to_vec()));
+                                }
+                                return Ok(Value::Array(Vec::new()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "last" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Array(arr) = value {
+                                return Ok(arr.last().cloned().unwrap_or(Value::Null));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "range" => {
+                        // range(start, end, [step])
+                        if args.len() >= 2 {
+                            let start_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let end_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::Number(start_num), Value::Number(end_num)) =
+                                (start_val, end_val)
+                            {
+                                // Convert to i64, handling both integer and float cases
+                                let start = start_num
+                                    .as_i64()
+                                    .or_else(|| start_num.as_f64().map(|f| f as i64))
+                                    .unwrap_or(0);
+                                let end = end_num
+                                    .as_i64()
+                                    .or_else(|| end_num.as_f64().map(|f| f as i64))
+                                    .unwrap_or(0);
+                                let step = if args.len() >= 3 {
+                                    let step_val = self
+                                        .evaluate_projection_expression(row, context, &args[2])?;
+                                    if let Value::Number(s) = step_val {
+                                        s.as_i64()
+                                            .or_else(|| s.as_f64().map(|f| f as i64))
+                                            .unwrap_or(1)
+                                    } else {
+                                        1
+                                    }
+                                } else {
+                                    1
+                                };
+
+                                if step == 0 {
+                                    return Ok(Value::Array(Vec::new()));
+                                }
+
+                                let mut result = Vec::new();
+                                if step > 0 {
+                                    let mut i = start;
+                                    while i <= end {
+                                        result.push(Value::Number(i.into()));
+                                        i += step;
+                                    }
+                                } else {
+                                    let mut i = start;
+                                    while i >= end {
+                                        result.push(Value::Number(i.into()));
+                                        i += step;
+                                    }
+                                }
+                                return Ok(Value::Array(result));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "reverse" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Array(mut arr) = value {
+                                arr.reverse();
+                                return Ok(Value::Array(arr));
                             }
                         }
                         Ok(Value::Null)

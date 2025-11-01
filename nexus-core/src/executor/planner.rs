@@ -170,9 +170,27 @@ impl<'a> QueryPlanner<'a> {
                 &unwind_operators,
                 &mut operators,
             )?;
-        } else {
-            // No patterns - just add UNWIND operators before any final projection/return
+        } else if !return_items.is_empty() || !unwind_operators.is_empty() {
+            // No patterns but have RETURN or UNWIND - add projection for literal expressions
+            // This handles cases like: RETURN 1+1 AS result, toLower('HELLO') AS lower
             operators.extend(unwind_operators);
+
+            if !return_items.is_empty() {
+                let projection_items: Vec<ProjectionItem> = return_items
+                    .iter()
+                    .map(|item| ProjectionItem {
+                        alias: item.alias.clone().unwrap_or_else(|| {
+                            self.expression_to_string(&item.expression)
+                                .unwrap_or_default()
+                        }),
+                        expression: item.expression.clone(),
+                    })
+                    .collect();
+
+                operators.push(Operator::Project {
+                    items: projection_items,
+                });
+            }
         }
 
         Ok(operators)

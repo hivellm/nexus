@@ -7,8 +7,8 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Status](https://img.shields.io/badge/status-v0.9.10%20%7C%20100%25%20Neo4j-success.svg)
-![Tests](https://img.shields.io/badge/tests-1279%20total%20%7C%2035%2F35%20Neo4j-success.svg)
+![Status](https://img.shields.io/badge/status-v0.10.0%20%7C%20Built--in%20Functions-success.svg)
+![Tests](https://img.shields.io/badge/tests-1200%2B%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -23,11 +23,19 @@ Nexus is a modern **property graph database** built for **read-heavy workloads**
 
 Think of it as **Neo4j meets Vector Search** - optimized for AI applications that need both structured relationships and s## ✨ **Version 0.6.0 - Core Implementation & Monitoring**
 
-### 🎉 **Current Status (v0.9.10)**
+### 🎉 **Current Status (v0.10.0)**
 
 **MVP: 95% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.9.10)**: **100% Neo4j compatibility achieved (35/35 extended tests)**!
+**🔥 Latest (v0.10.0)**: **20+ Built-in Functions for Data Manipulation**!
+
+- ✅ **String Functions** - `toLower()`, `toUpper()`, `substring()`, `trim()`, `replace()`, `split()`, and more
+- ✅ **Math Functions** - `abs()`, `ceil()`, `floor()`, `round()`, `sqrt()`, `pow()`
+- ✅ **Type Conversion** - `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`
+- ✅ **List Functions** - `size()`, `head()`, `tail()`, `last()`, `range()`, `reverse()`
+- ✅ **Literal RETURN** - Standalone RETURN queries without MATCH: `RETURN 1+1 AS result`
+
+**Previous (v0.9.10)**: **100% Neo4j compatibility achieved (35/35 extended tests)**!
 
 - ✅ **IS NULL / IS NOT NULL** - Full WHERE clause NULL checking support
 - ✅ **WHERE AND/OR Precedence** - Proper boolean operator precedence implementation
@@ -52,11 +60,12 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 🚧 **Authentication** - API keys, RBAC, rate limiting (48.6%)
 
 **Statistics**:
-- 📊 **1279 tests** passing (100% success rate)
+- 📊 **1200+ tests** passing (100% success rate)
 - 🎉 **100% Neo4j compatibility** (35/35 extended validation tests)
-- 📈 **40,758 lines** of Rust code (33K core + 7K server)
-- 🎯 **70.39%** overall coverage (95%+ in core modules)
-- 🏆 **19 modules** across 50 files
+- 🔧 **20+ built-in functions** (string, math, type conversion, list operations)
+- 📈 **41,000+ lines** of Rust code (34K core + 7K server)
+- 🎯 **70%+** overall coverage (95%+ in core modules)
+- 🏆 **19 modules** across 50+ files
 - 💎 **~10,000 lines** of bonus features (clustering, performance, validation, security)
 
 ## 🌟 **Key Features**
