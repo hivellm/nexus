@@ -21,10 +21,10 @@
 - [x] 4.3 Add tests ✅ **DONE**
 
 ## 5. Aggregations
-- [ ] 5.1 COLLECT()
+- [x] 5.1 COLLECT() ✅ **DONE** (with DISTINCT support)
 - [ ] 5.2 percentileDisc, percentileCont
 - [ ] 5.3 stDev, stDevP
-- [ ] 5.4 Add tests
+- [x] 5.4 Add tests (6 comprehensive tests) ✅ **DONE**
 
 ## 6. List Functions
 - [x] 6.1 size, head, tail, last ✅ **DONE**
@@ -37,17 +37,18 @@
 - [ ] 7.3 Add tests
 
 ## 8. Quality
-- [x] 8.1 100% test pass rate (28/28 function tests, 1200+ total) ✅ **DONE**
+- [x] 8.1 100% test pass rate (34/34 function tests, 1200+ total) ✅ **DONE**
 - [x] 8.2 No compiler warnings ✅ **DONE**
 - [x] 8.3 Update documentation (CHANGELOG, README) ✅ **DONE**
 
 ---
 
 ## Summary
-✅ **Phase 1 Complete**: String, Math, Type Conversion, and List functions (20+ total)
+✅ **Phase 1 Complete**: String, Math, Type Conversion, List, and Aggregation functions (24 total)
 - 7 String functions
 - 6 Math functions
 - 4 Type conversion functions
 - 6 List functions
+- 1 Aggregation function (collect with DISTINCT)
 
-📋 **Remaining**: Temporal functions, Advanced aggregations, Path functions, and additional list utilities
+📋 **Remaining**: Temporal functions, Advanced aggregations (percentile, stdev), Path functions, and additional list utilities (reduce, extract)

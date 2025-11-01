@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.0] - 2025-11-01
 
 ### Added
-- **Built-in Functions**: Implemented 20+ essential Cypher functions for data manipulation
+- **Built-in Functions**: Implemented 24 essential Cypher functions for data manipulation
   - **String Functions** (7):
     - `toLower()` / `toUpper()`: Case conversion
     - `substring(string, start, [length])`: Extract substrings
@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `head()`, `tail()`, `last()`: Array element access
     - `range(start, end, [step])`: Generate numeric sequences
     - `reverse()`: Reverse array order
+  - **Aggregation Functions** (1):
+    - `collect()` / `collect(DISTINCT ...)`: Collect values into array with optional deduplication
 
 ### Improved
 - **Query Support**: RETURN can now evaluate literal expressions without MATCH/UNWIND
@@ -38,10 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Proper NULL handling in all mathematical functions
 
 ### Testing
-- Added comprehensive test suite for built-in functions (28 tests, 100% passing)
+- Added comprehensive test suite for built-in functions (34 tests, 100% passing)
 - All existing tests maintained (1200+ tests passing)
 - Verified RETURN literal queries work correctly
 - Validated NULL handling across all functions
+- Tested `collect()` with GROUP BY, DISTINCT, and multiple aggregations
 
 ### Fixed
 - **RETURN without MATCH**: Fixed literal expression evaluation in standalone RETURN

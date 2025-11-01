@@ -231,6 +231,15 @@ pub enum Aggregation {
         /// Alias for result
         alias: String,
     },
+    /// Collect values into array
+    Collect {
+        /// Column to collect
+        column: String,
+        /// Alias for result
+        alias: String,
+        /// Distinct flag for COLLECT(DISTINCT ...)
+        distinct: bool,
+    },
 }
 
 /// Join type
@@ -1308,6 +1317,60 @@ impl Executor {
                             Value::Null
                         }
                     }
+                    Aggregation::Collect {
+                        column, distinct, ..
+                    } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
+                        if let Some(idx) = col_idx {
+                            let values: Vec<Value> = if *distinct {
+                                // COLLECT(DISTINCT col) - collect unique values
+                                let unique_values: std::collections::HashSet<String> = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() && !row.values[idx].is_null() {
+                                            Some(row.values[idx].to_string())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                // Convert back to original values (sorted for determinism)
+                                let mut sorted: Vec<_> = unique_values.into_iter().collect();
+                                sorted.sort();
+                                group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() && !row.values[idx].is_null() {
+                                            let val_str = row.values[idx].to_string();
+                                            if sorted.contains(&val_str) {
+                                                sorted.retain(|s| s != &val_str);
+                                                Some(row.values[idx].clone())
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            } else {
+                                // COLLECT(col) - collect all non-null values
+                                group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() && !row.values[idx].is_null() {
+                                            Some(row.values[idx].clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            };
+                            Value::Array(values)
+                        } else {
+                            Value::Array(Vec::new())
+                        }
+                    }
                 };
                 result_row.push(agg_value);
             }
@@ -1324,6 +1387,10 @@ impl Executor {
                     Aggregation::Count { .. } => {
                         // COUNT on empty set returns 0
                         Value::Number(serde_json::Number::from(0))
+                    }
+                    Aggregation::Collect { .. } => {
+                        // COLLECT on empty set returns empty array
+                        Value::Array(Vec::new())
                     }
                     _ => {
                         // AVG/MIN/MAX/SUM on empty set return NULL
@@ -3237,7 +3304,8 @@ impl Executor {
             | Aggregation::Sum { alias, .. }
             | Aggregation::Avg { alias, .. }
             | Aggregation::Min { alias, .. }
-            | Aggregation::Max { alias, .. } => alias.clone(),
+            | Aggregation::Max { alias, .. }
+            | Aggregation::Collect { alias, .. } => alias.clone(),
         }
     }
 }

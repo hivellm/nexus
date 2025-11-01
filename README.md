@@ -27,12 +27,13 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **MVP: 95% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.10.0)**: **20+ Built-in Functions for Data Manipulation**!
+**🔥 Latest (v0.10.0)**: **24 Built-in Functions for Data Manipulation**!
 
-- ✅ **String Functions** - `toLower()`, `toUpper()`, `substring()`, `trim()`, `replace()`, `split()`, and more
-- ✅ **Math Functions** - `abs()`, `ceil()`, `floor()`, `round()`, `sqrt()`, `pow()`
-- ✅ **Type Conversion** - `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`
-- ✅ **List Functions** - `size()`, `head()`, `tail()`, `last()`, `range()`, `reverse()`
+- ✅ **String Functions (7)** - `toLower()`, `toUpper()`, `substring()`, `trim()`, `ltrim()`, `rtrim()`, `replace()`, `split()`
+- ✅ **Math Functions (6)** - `abs()`, `ceil()`, `floor()`, `round()`, `sqrt()`, `pow()`
+- ✅ **Type Conversion (4)** - `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`
+- ✅ **List Functions (6)** - `size()`, `head()`, `tail()`, `last()`, `range()`, `reverse()`
+- ✅ **Aggregations (1)** - `collect()`, `collect(DISTINCT ...)`
 - ✅ **Literal RETURN** - Standalone RETURN queries without MATCH: `RETURN 1+1 AS result`
 
 **Previous (v0.9.10)**: **100% Neo4j compatibility achieved (35/35 extended tests)**!
@@ -62,8 +63,8 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 **Statistics**:
 - 📊 **1200+ tests** passing (100% success rate)
 - 🎉 **100% Neo4j compatibility** (35/35 extended validation tests)
-- 🔧 **20+ built-in functions** (string, math, type conversion, list operations)
-- 📈 **41,000+ lines** of Rust code (34K core + 7K server)
+- 🔧 **24 built-in functions** (string, math, type conversion, list, aggregation)
+- 📈 **42,000+ lines** of Rust code (35K core + 7K server)
 - 🎯 **70%+** overall coverage (95%+ in core modules)
 - 🏆 **19 modules** across 50+ files
 - 💎 **~10,000 lines** of bonus features (clustering, performance, validation, security)

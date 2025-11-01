@@ -491,6 +491,43 @@ impl<'a> QueryPlanner<'a> {
                                     });
                                 }
                             }
+                            "collect" => {
+                                has_aggregation = true;
+                                let distinct = args.first().is_some_and(|arg| {
+                                    if let Expression::Variable(v) = arg {
+                                        v == "__DISTINCT__"
+                                    } else {
+                                        false
+                                    }
+                                });
+
+                                // Get the actual argument (skip __DISTINCT__ if present)
+                                let actual_arg = if distinct && args.len() > 1 {
+                                    Some(&args[1])
+                                } else if !distinct && !args.is_empty() {
+                                    Some(&args[0])
+                                } else {
+                                    None
+                                };
+
+                                if let Some(arg) = actual_arg {
+                                    let column = match arg {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
+                                    aggregations.push(Aggregation::Collect {
+                                        column,
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "collect".to_string()),
+                                        distinct,
+                                    });
+                                }
+                            }
                             _ => {
                                 // Not an aggregate function, treat as regular column for GROUP BY
                                 let alias = item.alias.clone().unwrap_or_else(|| {
@@ -531,7 +568,7 @@ impl<'a> QueryPlanner<'a> {
                         Expression::FunctionCall { name, args } => {
                             let func_name = name.to_lowercase();
                             match func_name.as_str() {
-                                "count" | "sum" | "avg" | "min" | "max" => {
+                                "count" | "sum" | "avg" | "min" | "max" | "collect" => {
                                     // Skip DISTINCT marker if present
                                     let real_args =
                                         if let Some(Expression::Variable(var)) = args.first() {

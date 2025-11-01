@@ -492,3 +492,172 @@ fn test_null_handling_in_functions() {
     let result = execute_query(&mut engine, "RETURN size(null) AS result");
     assert!(get_single_value(&result).is_null());
 }
+
+// ============================================================================
+// AGGREGATION FUNCTIONS
+// ============================================================================
+
+#[test]
+fn test_collect_basic() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+    // Create test nodes
+    execute_query(&mut engine, "CREATE (p:Person {name: 'Alice', age: 30})");
+    execute_query(&mut engine, "CREATE (p:Person {name: 'Bob', age: 25})");
+    execute_query(&mut engine, "CREATE (p:Person {name: 'Charlie', age: 35})");
+
+    // COLLECT all names
+    let result = execute_query(
+        &mut engine,
+        "MATCH (p:Person) RETURN collect(p.name) AS names",
+    );
+    let arr = get_single_value(&result).as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    assert!(arr.contains(&serde_json::json!("Alice")));
+    assert!(arr.contains(&serde_json::json!("Bob")));
+    assert!(arr.contains(&serde_json::json!("Charlie")));
+}
+
+#[test]
+fn test_collect_with_group_by() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+    execute_query(
+        &mut engine,
+        "CREATE (p:Person {city: 'NYC', name: 'Alice'})",
+    );
+    execute_query(&mut engine, "CREATE (p:Person {city: 'NYC', name: 'Bob'})");
+    execute_query(
+        &mut engine,
+        "CREATE (p:Person {city: 'LA', name: 'Charlie'})",
+    );
+
+    // GROUP BY city and collect names
+    let result = execute_query(
+        &mut engine,
+        "MATCH (p:Person) RETURN p.city AS city, collect(p.name) AS names ORDER BY city",
+    );
+
+    assert_eq!(result.rows.len(), 2);
+
+    // Find LA and NYC rows (order from ORDER BY should be deterministic)
+    let la_row = result
+        .rows
+        .iter()
+        .find(|r| r.values[0] == "LA")
+        .expect("LA row not found");
+    let nyc_row = result
+        .rows
+        .iter()
+        .find(|r| r.values[0] == "NYC")
+        .expect("NYC row not found");
+
+    // LA group should have 1 name
+    let la_names = la_row.values[1].as_array().unwrap();
+    assert_eq!(la_names.len(), 1);
+    assert_eq!(la_names[0], "Charlie");
+
+    // NYC group should have 2 names
+    let nyc_names = nyc_row.values[1].as_array().unwrap();
+    assert_eq!(nyc_names.len(), 2);
+}
+
+#[test]
+fn test_collect_distinct() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+    execute_query(&mut engine, "CREATE (p:Person {skill: 'Rust'})");
+    execute_query(&mut engine, "CREATE (p:Person {skill: 'Python'})");
+    execute_query(&mut engine, "CREATE (p:Person {skill: 'Rust'})");
+    execute_query(&mut engine, "CREATE (p:Person {skill: 'Python'})");
+    execute_query(&mut engine, "CREATE (p:Person {skill: 'Go'})");
+
+    // COLLECT DISTINCT skills
+    let result = execute_query(
+        &mut engine,
+        "MATCH (p:Person) RETURN collect(DISTINCT p.skill) AS skills",
+    );
+    let arr = get_single_value(&result).as_array().unwrap();
+    assert_eq!(arr.len(), 3); // Only unique values
+}
+
+#[test]
+fn test_collect_empty_result() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+    // COLLECT on empty result set
+    let result = execute_query(
+        &mut engine,
+        "MATCH (p:NonExistent) RETURN collect(p.name) AS names",
+    );
+    let arr = get_single_value(&result).as_array().unwrap();
+    assert_eq!(arr.len(), 0);
+}
+
+#[test]
+fn test_collect_with_nulls() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+    execute_query(&mut engine, "CREATE (p:Person {name: 'Alice', age: 30})");
+    execute_query(&mut engine, "CREATE (p:Person {name: 'Bob'})"); // No age
+    execute_query(&mut engine, "CREATE (p:Person {name: 'Charlie', age: 35})");
+
+    // COLLECT should skip NULL values
+    let result = execute_query(
+        &mut engine,
+        "MATCH (p:Person) RETURN collect(p.age) AS ages",
+    );
+    let arr = get_single_value(&result).as_array().unwrap();
+    assert_eq!(arr.len(), 2); // Only non-null ages
+}
+
+#[test]
+fn test_collect_with_count() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+    execute_query(
+        &mut engine,
+        "CREATE (p:Person {city: 'NYC', name: 'Alice'})",
+    );
+    execute_query(&mut engine, "CREATE (p:Person {city: 'NYC', name: 'Bob'})");
+    execute_query(
+        &mut engine,
+        "CREATE (p:Person {city: 'LA', name: 'Charlie'})",
+    );
+
+    // Multiple aggregations
+    let result = execute_query(
+        &mut engine,
+        "MATCH (p:Person) RETURN p.city AS city, collect(p.name) AS names, count(p.name) AS count ORDER BY city",
+    );
+
+    assert_eq!(result.rows.len(), 2);
+
+    // Find LA and NYC rows (order may vary)
+    let la_row = result
+        .rows
+        .iter()
+        .find(|r| r.values[0] == "LA")
+        .expect("LA row not found");
+    let nyc_row = result
+        .rows
+        .iter()
+        .find(|r| r.values[0] == "NYC")
+        .expect("NYC row not found");
+
+    // LA should have 1 person
+    assert_eq!(la_row.values[2], 1);
+    let la_names = la_row.values[1].as_array().unwrap();
+    assert_eq!(la_names.len(), 1);
+
+    // NYC should have 2 people
+    assert_eq!(nyc_row.values[2], 2);
+    let nyc_names = nyc_row.values[1].as_array().unwrap();
+    assert_eq!(nyc_names.len(), 2);
+}
