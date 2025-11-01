@@ -1083,7 +1083,7 @@ fn test_properties_with_special_keys() {
 
 /// Test DISTINCT with labels()
 #[test]
-#[ignore = "UNWIND not implemented yet"]
+#[ignore = "UNWIND with aggregation needs operator reordering"]
 fn test_distinct_labels() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();

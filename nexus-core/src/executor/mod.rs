@@ -162,6 +162,13 @@ pub enum Operator {
         /// Right join key
         right_key: String,
     },
+    /// Unwind a list into rows
+    Unwind {
+        /// Expression that evaluates to a list
+        expression: String,
+        /// Variable name to bind each list item
+        variable: String,
+    },
 }
 
 /// Projection entry describing an expression and its alias
@@ -374,6 +381,12 @@ impl Executor {
                     right_key,
                 } => {
                     self.execute_hash_join(&mut context, &left_key, &right_key)?;
+                }
+                Operator::Unwind {
+                    expression,
+                    variable,
+                } => {
+                    self.execute_unwind(&mut context, &expression, &variable)?;
                 }
             }
         }
@@ -1008,7 +1021,20 @@ impl Executor {
         context: &mut ExecutionContext,
         items: &[ProjectionItem],
     ) -> Result<Vec<Row>> {
-        let rows = self.materialize_rows_from_variables(context);
+        // Use existing result_set.rows if available (from UNWIND, etc), otherwise materialize from variables
+        let rows = if !context.result_set.rows.is_empty() {
+            // Convert existing rows to row maps for projection
+            let existing_columns = context.result_set.columns.clone();
+            context
+                .result_set
+                .rows
+                .iter()
+                .map(|row| self.row_to_map(row, &existing_columns))
+                .collect()
+        } else {
+            self.materialize_rows_from_variables(context)
+        };
+
         let mut projected_rows = Vec::new();
 
         for row_map in &rows {
@@ -1568,6 +1594,12 @@ impl Executor {
                 right_key,
             } => {
                 self.execute_hash_join(context, left_key, right_key)?;
+            }
+            Operator::Unwind {
+                expression,
+                variable,
+            } => {
+                self.execute_unwind(context, expression, variable)?;
             }
         }
         Ok(())
@@ -2209,6 +2241,112 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute UNWIND operator - expands a list into rows
+    fn execute_unwind(
+        &self,
+        context: &mut ExecutionContext,
+        expression: &str,
+        variable: &str,
+    ) -> Result<()> {
+        // Materialize rows from variables if needed (like execute_distinct does)
+        if context.result_set.rows.is_empty() && !context.variables.is_empty() {
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
+        }
+
+        // Parse the expression string
+        let mut parser_instance = parser::CypherParser::new(expression.to_string());
+        let parsed_expr = parser_instance.parse_expression().map_err(|e| {
+            Error::CypherSyntax(format!("Failed to parse UNWIND expression: {}", e))
+        })?;
+
+        // If no existing rows, evaluate expression once and create new rows
+        if context.result_set.rows.is_empty() {
+            // Evaluate expression with empty row context
+            let empty_row = HashMap::new();
+            let list_value =
+                self.evaluate_projection_expression(&empty_row, context, &parsed_expr)?;
+
+            // Convert to array if needed
+            let list_items = match list_value {
+                Value::Array(items) => items,
+                Value::Null => Vec::new(), // NULL list produces no rows
+                other => vec![other],      // Single value wraps into single-item list
+            };
+
+            // Add variable as column
+            context.result_set.columns.push(variable.to_string());
+
+            // Create one row per list item
+            for item in list_items {
+                let row = Row { values: vec![item] };
+                context.result_set.rows.push(row);
+            }
+        } else {
+            // Expand existing rows: for each existing row, evaluate expression and create N new rows
+            let existing_rows = std::mem::take(&mut context.result_set.rows);
+            let existing_columns = context.result_set.columns.clone();
+
+            // Find or add variable column index
+            let var_col_idx = if let Some(idx) = self.get_column_index(variable, &existing_columns)
+            {
+                idx
+            } else {
+                // Add new column
+                context.result_set.columns.push(variable.to_string());
+                existing_columns.len()
+            };
+
+            // For each existing row, evaluate expression and create new rows with each list item
+            for existing_row in existing_rows.iter() {
+                // Convert Row to HashMap for evaluation
+                let row_map = self.row_to_map(existing_row, &existing_columns);
+
+                // Evaluate expression in context of this row
+                let list_value =
+                    self.evaluate_projection_expression(&row_map, context, &parsed_expr)?;
+
+                // Convert to array if needed
+                let list_items = match list_value {
+                    Value::Array(items) => items,
+                    Value::Null => Vec::new(), // NULL list produces no rows
+                    other => vec![other],      // Single value wraps into single-item list
+                };
+
+                if list_items.is_empty() {
+                    // Empty list produces no rows (Cartesian product with empty set)
+                    continue;
+                }
+
+                for item in &list_items {
+                    let mut new_values = existing_row.values.clone();
+
+                    // If var_col_idx equals existing length, append; otherwise replace
+                    if var_col_idx >= new_values.len() {
+                        new_values.resize(var_col_idx + 1, Value::Null);
+                    }
+                    new_values[var_col_idx] = item.clone();
+
+                    let new_row = Row { values: new_values };
+                    context.result_set.rows.push(new_row);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Convert Row to HashMap for expression evaluation
+    fn row_to_map(&self, row: &Row, columns: &[String]) -> HashMap<String, Value> {
+        let mut map = HashMap::new();
+        for (idx, col_name) in columns.iter().enumerate() {
+            if let Some(value) = row.values.get(idx) {
+                map.insert(col_name.clone(), value.clone());
+            }
+        }
+        map
+    }
+
     /// Execute new index scan operation
     fn execute_index_scan_new(
         &self,
@@ -2475,6 +2613,24 @@ impl Executor {
                 let value = self.evaluate_projection_expression(row, context, expr)?;
                 let is_null = value.is_null();
                 Ok(Value::Bool(if *negated { !is_null } else { is_null }))
+            }
+            parser::Expression::List(elements) => {
+                // Evaluate each element and return as JSON array
+                let mut items = Vec::new();
+                for element in elements {
+                    let value = self.evaluate_projection_expression(row, context, element)?;
+                    items.push(value);
+                }
+                Ok(Value::Array(items))
+            }
+            parser::Expression::Map(map) => {
+                // Evaluate each value and return as JSON object
+                let mut obj = serde_json::Map::new();
+                for (key, expr) in map {
+                    let value = self.evaluate_projection_expression(row, context, expr)?;
+                    obj.insert(key.clone(), value);
+                }
+                Ok(Value::Object(obj))
             }
             _ => Ok(Value::Null),
         }

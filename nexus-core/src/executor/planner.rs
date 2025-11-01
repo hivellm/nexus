@@ -1,6 +1,6 @@
 use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement,
-    RelationshipDirection, ReturnItem,
+    RelationshipDirection, ReturnItem, UnaryOperator,
 };
 use super::{Aggregation, Direction, Operator, ProjectionItem};
 use crate::catalog::Catalog;
@@ -83,6 +83,7 @@ impl<'a> QueryPlanner<'a> {
         let mut return_items = Vec::new();
         let mut limit_count = None;
         let mut return_distinct = false;
+        let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
 
         for clause in &query.clauses {
             match clause {
@@ -130,10 +131,14 @@ impl<'a> QueryPlanner<'a> {
                     }
                     return_distinct = with_clause.distinct;
                 }
-                Clause::Unwind(_unwind_clause) => {
+                Clause::Unwind(unwind_clause) => {
                     // UNWIND expands a list into rows
-                    // For now, we'll just track this - executor will handle list expansion
-                    // UNWIND is typically used early in query pipelines
+                    // Collect to insert after MATCH operators
+                    let expression_str = self.expression_to_string(&unwind_clause.expression)?;
+                    unwind_operators.push(Operator::Unwind {
+                        expression: expression_str,
+                        variable: unwind_clause.variable.clone(),
+                    });
                 }
                 Clause::Return(return_clause) => {
                     return_items = return_clause.items.clone();
@@ -162,14 +167,19 @@ impl<'a> QueryPlanner<'a> {
                 &return_items,
                 limit_count,
                 return_distinct,
+                &unwind_operators,
                 &mut operators,
             )?;
+        } else {
+            // No patterns - just add UNWIND operators before any final projection/return
+            operators.extend(unwind_operators);
         }
 
         Ok(operators)
     }
 
     /// Plan execution strategy based on patterns and constraints
+    #[allow(clippy::too_many_arguments)]
     fn plan_execution_strategy(
         &self,
         patterns: &[Pattern],
@@ -177,6 +187,7 @@ impl<'a> QueryPlanner<'a> {
         return_items: &[ReturnItem],
         limit_count: Option<usize>,
         distinct: bool,
+        unwind_operators: &[Operator],
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         // Process ALL patterns, not just the first one
@@ -582,11 +593,21 @@ impl<'a> QueryPlanner<'a> {
                     });
                 }
 
+                // Insert UNWIND operators before aggregation
+                for op in unwind_operators {
+                    operators.push(op.clone());
+                }
+
                 operators.push(Operator::Aggregate {
                     group_by: group_by_columns,
                     aggregations,
                 });
             } else {
+                // Insert UNWIND operators before final projection
+                for op in unwind_operators {
+                    operators.push(op.clone());
+                }
+
                 // Regular projection
                 let projection_items: Vec<ProjectionItem> = return_items
                     .iter()
@@ -763,6 +784,35 @@ impl<'a> QueryPlanner<'a> {
                     Ok(format!("{} IS NULL", expr_str))
                 }
             }
+            Expression::List(elements) => {
+                let elem_strs: Result<Vec<String>> = elements
+                    .iter()
+                    .map(|e| self.expression_to_string(e))
+                    .collect();
+                Ok(format!("[{}]", elem_strs?.join(", ")))
+            }
+            Expression::Map(map) => {
+                let mut pairs = Vec::new();
+                for (key, value) in map {
+                    let value_str = self.expression_to_string(value)?;
+                    pairs.push(format!("{}: {}", key, value_str));
+                }
+                Ok(format!("{{{}}}", pairs.join(", ")))
+            }
+            Expression::FunctionCall { name, args } => {
+                let arg_strs: Result<Vec<String>> =
+                    args.iter().map(|a| self.expression_to_string(a)).collect();
+                Ok(format!("{}({})", name, arg_strs?.join(", ")))
+            }
+            Expression::UnaryOp { op, operand } => {
+                let operand_str = self.expression_to_string(operand)?;
+                let op_str = match op {
+                    UnaryOperator::Not => "NOT",
+                    UnaryOperator::Minus => "-",
+                    UnaryOperator::Plus => "+",
+                };
+                Ok(format!("{} {}", op_str, operand_str))
+            }
             _ => Ok("?".to_string()),
         }
     }
@@ -833,6 +883,10 @@ impl<'a> QueryPlanner<'a> {
                 Operator::DetachDelete { .. } => {
                     // DETACH DELETE is more expensive (deletes relationships first)
                     total_cost += 60.0;
+                }
+                Operator::Unwind { .. } => {
+                    // UNWIND expands list into rows - moderately cheap
+                    total_cost += 15.0;
                 }
             }
         }
