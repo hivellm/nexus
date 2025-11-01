@@ -7,8 +7,8 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Status](https://img.shields.io/badge/status-MVP%2095%25%20Complete-brightgreen.svg)
-![Tests](https://img.shields.io/badge/tests-1279%20total%20%7C%2017%2F17%20Neo4j-success.svg)
+![Status](https://img.shields.io/badge/status-v0.9.10%20%7C%20100%25%20Neo4j-success.svg)
+![Tests](https://img.shields.io/badge/tests-1279%20total%20%7C%2035%2F35%20Neo4j-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -23,23 +23,24 @@ Nexus is a modern **property graph database** built for **read-heavy workloads**
 
 Think of it as **Neo4j meets Vector Search** - optimized for AI applications that need both structured relationships and s## ✨ **Version 0.6.0 - Core Implementation & Monitoring**
 
-### 🎉 **Current Status (v0.9.0)**
+### 🎉 **Current Status (v0.9.10)**
 
-**MVP: 89.8% Complete** - Production Ready! 🚀
+**MVP: 95% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.9.9)**: DELETE parser bug fixed - **100% Neo4j compatibility achieved (17/17 tests)**!
+**🔥 Latest (v0.9.10)**: **100% Neo4j compatibility achieved (35/35 extended tests)**!
 
+- ✅ **IS NULL / IS NOT NULL** - Full WHERE clause NULL checking support
+- ✅ **WHERE AND/OR Precedence** - Proper boolean operator precedence implementation
+- ✅ **Bidirectional Relationships** - Neo4j-compatible bidirectional traversal (emits twice)
+- ✅ **Multi-Hop Patterns** - Fixed intermediate node handling for correct graph traversal
 - ✅ **Label Intersection** - `MATCH (n:Person:Employee)` with proper bitmap filtering
 - ✅ **UNION Operator** - Full planner + executor implementation, pipeline execution
 - ✅ **id() Function** - Neo4j-compatible ID function for nodes and relationships
-- ✅ **Bidirectional Relationships** - Undirected relationship patterns `(a)-[r]-(b)`
 - ✅ **Relationship Properties** - Full access to relationship property values
 - ✅ **CREATE Clause** - Full CREATE implementation with persistence
 - ✅ **keys() Function** - Property introspection for nodes and relationships
-- ✅ **Import Validation** - PowerShell script to verify data integrity
-- ✅ **Enhanced Logging** - Detailed import statistics and progress tracking
-- ✅ **Neo4j Compatibility** - **100% complete (17/17 cross-validation tests, 1279 total tests passing)**
 - ✅ **DELETE Operations** - Full DETACH DELETE support with proper clause parsing
+- ✅ **Neo4j Compatibility** - **100% complete (35/35 extended validation tests, 1279 total tests passing)**
 
 - ✅ **Storage Foundation** - Fixed-size records, memmap2, LMDB catalog (100% - ARCHIVED)
 - ✅ **Transactions & Durability** - WAL, MVCC, crash recovery (100% - ARCHIVED)
@@ -52,7 +53,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **Statistics**:
 - 📊 **1279 tests** passing (100% success rate)
-- 🎉 **100% Neo4j compatibility** (17/17 cross-validation tests)
+- 🎉 **100% Neo4j compatibility** (35/35 extended validation tests)
 - 📈 **40,758 lines** of Rust code (33K core + 7K server)
 - 🎯 **70.39%** overall coverage (95%+ in core modules)
 - 🏆 **19 modules** across 50 files
