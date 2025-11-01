@@ -227,6 +227,10 @@ mod tests {
         manager.create_database("test_db").unwrap();
         assert!(manager.exists("test_db"));
 
+        // On Windows, we need to ensure all locks are released before dropping
+        // Give a small delay for any background operations to complete
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
         manager.drop_database("test_db").unwrap();
         assert!(!manager.exists("test_db"));
     }
