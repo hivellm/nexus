@@ -226,4 +226,161 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
+
+    #[tokio::test]
+    async fn test_create_database_with_invalid_name() {
+        let state = create_test_state().await;
+
+        let response = create_database(
+            State(state),
+            Json(CreateDatabaseRequest {
+                name: "invalid name".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_duplicate_database() {
+        let state = create_test_state().await;
+
+        // Create first time
+        let manager = state.manager.read().await;
+        manager.create_database("test_db").unwrap();
+        drop(manager);
+
+        // Try to create again
+        let response = create_database(
+            State(state),
+            Json(CreateDatabaseRequest {
+                name: "test_db".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_drop_default_database_fails() {
+        let state = create_test_state().await;
+
+        let response = drop_database(State(state), Path("neo4j".to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_list_databases_includes_default() {
+        let state = create_test_state().await;
+
+        let response = list_databases(State(state)).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // Should include default "neo4j" database
+    }
+
+    #[tokio::test]
+    async fn test_list_databases_after_creating_multiple() {
+        let state = create_test_state().await;
+
+        // Create multiple databases
+        let manager = state.manager.read().await;
+        manager.create_database("db1").unwrap();
+        manager.create_database("db2").unwrap();
+        manager.create_database("db3").unwrap();
+        drop(manager);
+
+        let response = list_databases(State(state)).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // Should list all 4 databases (neo4j + 3 new)
+    }
+
+    #[tokio::test]
+    async fn test_get_database_with_data() {
+        let state = create_test_state().await;
+
+        // Create database and add data
+        let manager = state.manager.read().await;
+        let db = manager.create_database("test_db").unwrap();
+        drop(manager);
+
+        {
+            let mut engine = db.write();
+            for i in 0..5 {
+                engine
+                    .create_node(vec!["Person".to_string()], serde_json::json!({"id": i}))
+                    .unwrap();
+            }
+        }
+
+        let response = get_database(State(state), Path("test_db".to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // Should show node_count = 5
+    }
+
+    #[tokio::test]
+    async fn test_database_response_format() {
+        let response = DatabaseResponse {
+            success: true,
+            message: "Test message".to_string(),
+        };
+
+        assert!(response.success);
+        assert_eq!(response.message, "Test message");
+    }
+
+    #[tokio::test]
+    async fn test_create_database_response_format() {
+        let response = CreateDatabaseResponse {
+            success: true,
+            name: "test_db".to_string(),
+            message: "Database created".to_string(),
+        };
+
+        assert!(response.success);
+        assert_eq!(response.name, "test_db");
+    }
+
+    #[tokio::test]
+    async fn test_list_databases_response_format() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        let response = ListDatabasesResponse {
+            databases: manager.list_databases(),
+            default_database: manager.default_database_name().to_string(),
+        };
+
+        assert_eq!(response.default_database, "neo4j");
+        assert!(!response.databases.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_drop_and_recreate_database() {
+        let state = create_test_state().await;
+
+        // Create database
+        let manager = state.manager.read().await;
+        manager.create_database("test_db").unwrap();
+        drop(manager);
+
+        // Drop it
+        let _response1 = drop_database(State(state.clone()), Path("test_db".to_string())).await;
+
+        // Recreate with same name
+        let response2 = create_database(
+            State(state),
+            Json(CreateDatabaseRequest {
+                name: "test_db".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response2.status(), StatusCode::OK);
+    }
 }

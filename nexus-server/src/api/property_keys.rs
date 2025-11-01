@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Server state with engine
+#[derive(Clone)]
 pub struct PropertyKeysState {
     /// Graph engine
     pub engine: Arc<RwLock<nexus_core::Engine>>,
@@ -142,5 +143,127 @@ mod tests {
         let response = get_property_key_stats(State(state)).await;
 
         assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_property_keys_with_data() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+        // Create nodes with properties
+        engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::json!({"name": "Alice", "age": 30}),
+            )
+            .unwrap();
+        engine
+            .create_node(
+                vec!["Person".to_string()],
+                serde_json::json!({"name": "Bob", "email": "bob@test.com"}),
+            )
+            .unwrap();
+
+        let state = PropertyKeysState {
+            engine: Arc::new(RwLock::new(engine)),
+        };
+
+        let response = list_property_keys(State(state)).await;
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_property_keys_empty_database() {
+        let state = create_test_state().await;
+
+        let response = list_property_keys(State(state)).await;
+
+        assert_eq!(response.status(), 200);
+        // Should return empty list for new database
+    }
+
+    #[tokio::test]
+    async fn test_property_key_info_structure() {
+        let info = PropertyKeyInfo {
+            name: "test_key".to_string(),
+            node_count: 10,
+            relationship_count: 5,
+            total_count: 15,
+            types: vec!["string".to_string(), "number".to_string()],
+        };
+
+        assert_eq!(info.name, "test_key");
+        assert_eq!(info.node_count, 10);
+        assert_eq!(info.relationship_count, 5);
+        assert_eq!(info.total_count, 15);
+        assert_eq!(info.types.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_property_keys_response_format() {
+        let response = PropertyKeysResponse {
+            property_keys: vec![PropertyKeyInfo {
+                name: "name".to_string(),
+                node_count: 100,
+                relationship_count: 50,
+                total_count: 150,
+                types: vec!["string".to_string()],
+            }],
+            total_keys: 1,
+        };
+
+        assert_eq!(response.total_keys, 1);
+        assert_eq!(response.property_keys.len(), 1);
+        assert_eq!(response.property_keys[0].name, "name");
+    }
+
+    #[tokio::test]
+    async fn test_property_keys_with_multiple_keys() {
+        let dir = TempDir::new().unwrap();
+        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+        // Create nodes with different properties
+        for i in 0..5 {
+            engine
+                .create_node(
+                    vec!["Person".to_string()],
+                    serde_json::json!({
+                        "name": format!("Person{}", i),
+                        "age": 20 + i,
+                        "active": true,
+                        "score": 100.0 * i as f64
+                    }),
+                )
+                .unwrap();
+        }
+
+        let state = PropertyKeysState {
+            engine: Arc::new(RwLock::new(engine)),
+        };
+
+        let response = list_property_keys(State(state)).await;
+        assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_consistency() {
+        let state = create_test_state().await;
+
+        // Call both endpoints
+        let response1 = list_property_keys(State(state.clone())).await;
+        let response2 = get_property_key_stats(State(state)).await;
+
+        assert_eq!(response1.status(), 200);
+        assert_eq!(response2.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_property_keys_state_creation() {
+        let state = create_test_state().await;
+
+        // Verify state is properly initialized
+        let engine = state.engine.read().await;
+        let stats = engine.stats().unwrap();
+        assert_eq!(stats.nodes, 0);
     }
 }

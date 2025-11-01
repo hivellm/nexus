@@ -333,4 +333,184 @@ mod tests {
         assert!(manager.create_database("test-db").is_ok());
         assert!(manager.create_database("test_db2").is_ok());
     }
+
+    #[test]
+    fn test_get_nonexistent_database() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        let result = manager.get_database("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_default_database() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        let db = manager.get_default_database().unwrap();
+        let engine = db.read();
+        let stats = engine.stats().unwrap();
+        assert_eq!(stats.nodes, 0);
+    }
+
+    #[test]
+    fn test_multiple_databases_isolation() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        // Create multiple databases
+        let db1 = manager.create_database("db1").unwrap();
+        let db2 = manager.create_database("db2").unwrap();
+
+        // Add data to db1
+        {
+            let mut engine1 = db1.write();
+            engine1
+                .create_node(
+                    vec!["Person".to_string()],
+                    serde_json::json!({"name": "Alice"}),
+                )
+                .unwrap();
+        }
+
+        // Verify db2 is empty
+        {
+            let engine2 = db2.read();
+            let stats = engine2.stats().unwrap();
+            assert_eq!(stats.nodes, 0);
+        }
+
+        // Verify db1 has data
+        {
+            let engine1 = db1.read();
+            let stats = engine1.stats().unwrap();
+            assert_eq!(stats.nodes, 1);
+        }
+    }
+
+    #[test]
+    fn test_database_info_metadata() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        manager.create_database("test_db").unwrap();
+
+        let databases = manager.list_databases();
+        let test_db = databases.iter().find(|d| d.name == "test_db").unwrap();
+
+        assert_eq!(test_db.name, "test_db");
+        assert_eq!(test_db.node_count, 0);
+        assert_eq!(test_db.relationship_count, 0);
+        assert!(test_db.path.ends_with("test_db"));
+    }
+
+    #[test]
+    fn test_database_with_data() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        let db = manager.create_database("test_db").unwrap();
+
+        // Add nodes
+        {
+            let mut engine = db.write();
+            for i in 0..10 {
+                engine
+                    .create_node(vec!["Person".to_string()], serde_json::json!({"id": i}))
+                    .unwrap();
+            }
+        }
+
+        // Check stats via list
+        let databases = manager.list_databases();
+        let test_db = databases.iter().find(|d| d.name == "test_db").unwrap();
+        assert_eq!(test_db.node_count, 10);
+    }
+
+    #[test]
+    fn test_drop_nonexistent_database() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        let result = manager.drop_database("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_concurrent_database_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let manager = Arc::new(DatabaseManager::new(dir.path().to_path_buf()).unwrap());
+
+        let db = manager.create_database("test_db").unwrap();
+
+        // Spawn multiple threads accessing same database
+        let mut handles = vec![];
+        for i in 0..5 {
+            let db_clone = db.clone();
+            let handle = thread::spawn(move || {
+                let mut engine = db_clone.write();
+                engine
+                    .create_node(vec!["Person".to_string()], serde_json::json!({"thread": i}))
+                    .unwrap();
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify all nodes created
+        let engine = db.read();
+        let stats = engine.stats().unwrap();
+        assert_eq!(stats.nodes, 5);
+    }
+
+    #[test]
+    fn test_database_list_sorting() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        manager.create_database("zulu").unwrap();
+        manager.create_database("alpha").unwrap();
+        manager.create_database("bravo").unwrap();
+
+        let databases = manager.list_databases();
+        let names: Vec<&str> = databases.iter().map(|d| d.name.as_str()).collect();
+
+        // Should be sorted alphabetically
+        assert_eq!(names, vec!["alpha", "bravo", "neo4j", "zulu"]);
+    }
+
+    #[test]
+    fn test_database_name_edge_cases() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        // Very long name (should work if within limits)
+        let long_name = "a".repeat(50);
+        assert!(manager.create_database(&long_name).is_ok());
+
+        // Single character
+        assert!(manager.create_database("x").is_ok());
+
+        // Numbers only
+        assert!(manager.create_database("123").is_ok());
+
+        // Mixed case
+        assert!(manager.create_database("TestDB").is_ok());
+    }
+
+    #[test]
+    fn test_default_database_name() {
+        let dir = TempDir::new().unwrap();
+        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+
+        assert_eq!(manager.default_database_name(), "neo4j");
+        assert!(manager.exists("neo4j"));
+    }
 }
