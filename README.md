@@ -7,7 +7,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Status](https://img.shields.io/badge/status-v0.10.0%20%7C%20Built--in%20Functions-success.svg)
+![Status](https://img.shields.io/badge/status-v0.10.0%20%7C%2055%20Functions-success.svg)
 ![Tests](https://img.shields.io/badge/tests-1200%2B%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
@@ -27,13 +27,15 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **MVP: 95% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.10.0)**: **24 Built-in Functions for Data Manipulation**!
+**🔥 Latest (v0.10.0)**: **55 Built-in Functions for Data Manipulation**!
 
 - ✅ **String Functions (7)** - `toLower()`, `toUpper()`, `substring()`, `trim()`, `ltrim()`, `rtrim()`, `replace()`, `split()`
 - ✅ **Math Functions (6)** - `abs()`, `ceil()`, `floor()`, `round()`, `sqrt()`, `pow()`
 - ✅ **Type Conversion (4)** - `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`
+- ✅ **Temporal Functions (5)** - `date()`, `datetime()`, `time()`, `timestamp()`, `duration()`
 - ✅ **List Functions (6)** - `size()`, `head()`, `tail()`, `last()`, `range()`, `reverse()`
-- ✅ **Aggregations (1)** - `collect()`, `collect(DISTINCT ...)`
+- ✅ **Aggregations (5)** - `collect()`, `percentileDisc()`, `percentileCont()`, `stDev()`, `stDevP()`
+- ✅ **Path Functions (3)** - `nodes()`, `relationships()`, `length()`
 - ✅ **Literal RETURN** - Standalone RETURN queries without MATCH: `RETURN 1+1 AS result`
 
 **Previous (v0.9.10)**: **100% Neo4j compatibility achieved (35/35 extended tests)**!

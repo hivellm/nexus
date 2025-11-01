@@ -20,6 +20,7 @@ use crate::catalog::Catalog;
 use crate::index::{KnnIndex, LabelIndex};
 use crate::storage::RecordStore;
 use crate::{Error, Result};
+use chrono::{Datelike, TimeZone};
 use planner::QueryPlanner;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -239,6 +240,38 @@ pub enum Aggregation {
         alias: String,
         /// Distinct flag for COLLECT(DISTINCT ...)
         distinct: bool,
+    },
+    /// Discrete percentile (nearest value)
+    PercentileDisc {
+        /// Column to calculate percentile
+        column: String,
+        /// Alias for result
+        alias: String,
+        /// Percentile value (0.0 to 1.0)
+        percentile: f64,
+    },
+    /// Continuous percentile (interpolated)
+    PercentileCont {
+        /// Column to calculate percentile
+        column: String,
+        /// Alias for result
+        alias: String,
+        /// Percentile value (0.0 to 1.0)
+        percentile: f64,
+    },
+    /// Sample standard deviation
+    StDev {
+        /// Column to calculate standard deviation
+        column: String,
+        /// Alias for result
+        alias: String,
+    },
+    /// Population standard deviation
+    StDevP {
+        /// Column to calculate population standard deviation
+        column: String,
+        /// Alias for result
+        alias: String,
     },
 }
 
@@ -1369,6 +1402,160 @@ impl Executor {
                             Value::Array(values)
                         } else {
                             Value::Array(Vec::new())
+                        }
+                    }
+                    Aggregation::PercentileDisc {
+                        column, percentile, ..
+                    } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
+                        if let Some(idx) = col_idx {
+                            let mut values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    if idx < row.values.len() {
+                                        self.value_to_number(&row.values[idx]).ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            if values.is_empty() {
+                                Value::Null
+                            } else {
+                                values.sort_by(|a, b| {
+                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                // Discrete percentile: nearest value
+                                let index = ((*percentile * (values.len() - 1) as f64).round()
+                                    as usize)
+                                    .min(values.len() - 1);
+                                Value::Number(
+                                    serde_json::Number::from_f64(values[index])
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
+                            }
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    Aggregation::PercentileCont {
+                        column, percentile, ..
+                    } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
+                        if let Some(idx) = col_idx {
+                            let mut values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    if idx < row.values.len() {
+                                        self.value_to_number(&row.values[idx]).ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            if values.is_empty() {
+                                Value::Null
+                            } else {
+                                values.sort_by(|a, b| {
+                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                // Continuous percentile: linear interpolation
+                                let position = *percentile * (values.len() - 1) as f64;
+                                let lower_idx = position.floor() as usize;
+                                let upper_idx = position.ceil() as usize;
+
+                                let result = if lower_idx == upper_idx {
+                                    values[lower_idx]
+                                } else {
+                                    let lower = values[lower_idx];
+                                    let upper = values[upper_idx];
+                                    let fraction = position - lower_idx as f64;
+                                    lower + (upper - lower) * fraction
+                                };
+
+                                Value::Number(
+                                    serde_json::Number::from_f64(result)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
+                            }
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    Aggregation::StDev { column, .. } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
+                        if let Some(idx) = col_idx {
+                            let values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    if idx < row.values.len() {
+                                        self.value_to_number(&row.values[idx]).ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            if values.len() < 2 {
+                                Value::Null
+                            } else {
+                                // Sample standard deviation (Bessel's correction: n-1)
+                                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                let variance = values
+                                    .iter()
+                                    .map(|v| {
+                                        let diff = v - mean;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>()
+                                    / (values.len() - 1) as f64;
+                                let std_dev = variance.sqrt();
+                                Value::Number(
+                                    serde_json::Number::from_f64(std_dev)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
+                            }
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    Aggregation::StDevP { column, .. } => {
+                        let col_idx = self.get_column_index(column, &context.result_set.columns);
+                        if let Some(idx) = col_idx {
+                            let values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    if idx < row.values.len() {
+                                        self.value_to_number(&row.values[idx]).ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            if values.is_empty() {
+                                Value::Null
+                            } else {
+                                // Population standard deviation (divide by n)
+                                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                let variance = values
+                                    .iter()
+                                    .map(|v| {
+                                        let diff = v - mean;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>()
+                                    / values.len() as f64;
+                                let std_dev = variance.sqrt();
+                                Value::Number(
+                                    serde_json::Number::from_f64(std_dev)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
+                            }
+                        } else {
+                            Value::Null
                         }
                     }
                 };
@@ -2943,6 +3130,313 @@ impl Executor {
                             Ok(Value::Null)
                         }
                     }
+                    // Temporal functions
+                    "date" => {
+                        if args.is_empty() {
+                            // Return current date in ISO format (YYYY-MM-DD)
+                            let now = chrono::Local::now();
+                            return Ok(Value::String(now.format("%Y-%m-%d").to_string()));
+                        } else if let Some(arg) = args.first() {
+                            // Parse date from string or map
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse ISO date format
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        return Ok(Value::String(
+                                            date.format("%Y-%m-%d").to_string(),
+                                        ));
+                                    }
+                                }
+                                Value::Object(map) => {
+                                    // Support {year, month, day} format
+                                    let year = map
+                                        .get("year")
+                                        .and_then(|v| v.as_i64())
+                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
+                                        as i32;
+                                    let month =
+                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
+                                            as u32;
+                                    let day =
+                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+
+                                    if let Some(date) =
+                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
+                                    {
+                                        return Ok(Value::String(
+                                            date.format("%Y-%m-%d").to_string(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "datetime" => {
+                        if args.is_empty() {
+                            // Return current datetime in ISO format
+                            let now = chrono::Local::now();
+                            return Ok(Value::String(now.to_rfc3339()));
+                        } else if let Some(arg) = args.first() {
+                            // Parse datetime from string or map
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse RFC3339/ISO8601 datetime
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::String(dt.to_rfc3339()));
+                                    }
+                                    // Try to parse without timezone
+                                    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(
+                                        &s,
+                                        "%Y-%m-%dT%H:%M:%S",
+                                    ) {
+                                        let local = chrono::Local::now().timezone();
+                                        let dt_local = local
+                                            .from_local_datetime(&dt)
+                                            .earliest()
+                                            .unwrap_or_else(|| local.from_utc_datetime(&dt));
+                                        return Ok(Value::String(dt_local.to_rfc3339()));
+                                    }
+                                }
+                                Value::Object(map) => {
+                                    // Support {year, month, day, hour, minute, second} format
+                                    let year = map
+                                        .get("year")
+                                        .and_then(|v| v.as_i64())
+                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
+                                        as i32;
+                                    let month =
+                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
+                                            as u32;
+                                    let day =
+                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
+                                        as u32;
+                                    let minute =
+                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+                                    let second =
+                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+
+                                    if let Some(date) =
+                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
+                                    {
+                                        if let Some(time) =
+                                            chrono::NaiveTime::from_hms_opt(hour, minute, second)
+                                        {
+                                            let dt = chrono::NaiveDateTime::new(date, time);
+                                            let local = chrono::Local::now().timezone();
+                                            let dt_local = local
+                                                .from_local_datetime(&dt)
+                                                .earliest()
+                                                .unwrap_or_else(|| local.from_utc_datetime(&dt));
+                                            return Ok(Value::String(dt_local.to_rfc3339()));
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "time" => {
+                        if args.is_empty() {
+                            // Return current time in HH:MM:SS format
+                            let now = chrono::Local::now();
+                            return Ok(Value::String(now.format("%H:%M:%S").to_string()));
+                        } else if let Some(arg) = args.first() {
+                            // Parse time from string or map
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse time format HH:MM:SS
+                                    if let Ok(time) =
+                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+                                    {
+                                        return Ok(Value::String(
+                                            time.format("%H:%M:%S").to_string(),
+                                        ));
+                                    }
+                                    // Try HH:MM format
+                                    if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M")
+                                    {
+                                        return Ok(Value::String(
+                                            time.format("%H:%M:%S").to_string(),
+                                        ));
+                                    }
+                                }
+                                Value::Object(map) => {
+                                    // Support {hour, minute, second} format
+                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
+                                        as u32;
+                                    let minute =
+                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+                                    let second =
+                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+
+                                    if let Some(time) =
+                                        chrono::NaiveTime::from_hms_opt(hour, minute, second)
+                                    {
+                                        return Ok(Value::String(
+                                            time.format("%H:%M:%S").to_string(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "timestamp" => {
+                        if args.is_empty() {
+                            // Return current Unix timestamp in milliseconds
+                            let now = chrono::Local::now();
+                            let millis = now.timestamp_millis();
+                            return Ok(Value::Number(millis.into()));
+                        } else if let Some(arg) = args.first() {
+                            // Parse timestamp from string or return existing number
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::Number(n) => {
+                                    // Return as-is if already a number
+                                    return Ok(Value::Number(n));
+                                }
+                                Value::String(s) => {
+                                    // Try to parse datetime and convert to timestamp
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        let millis = dt.timestamp_millis();
+                                        return Ok(Value::Number(millis.into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "duration" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                // Support duration components: years, months, days, hours, minutes, seconds
+                                let mut duration_map = Map::new();
+
+                                if let Some(years) = map.get("years") {
+                                    duration_map.insert("years".to_string(), years.clone());
+                                }
+                                if let Some(months) = map.get("months") {
+                                    duration_map.insert("months".to_string(), months.clone());
+                                }
+                                if let Some(days) = map.get("days") {
+                                    duration_map.insert("days".to_string(), days.clone());
+                                }
+                                if let Some(hours) = map.get("hours") {
+                                    duration_map.insert("hours".to_string(), hours.clone());
+                                }
+                                if let Some(minutes) = map.get("minutes") {
+                                    duration_map.insert("minutes".to_string(), minutes.clone());
+                                }
+                                if let Some(seconds) = map.get("seconds") {
+                                    duration_map.insert("seconds".to_string(), seconds.clone());
+                                }
+
+                                return Ok(Value::Object(duration_map));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Path functions
+                    "nodes" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            // If value is already an array, treat it as a path of nodes
+                            if let Value::Array(arr) = value {
+                                // Filter only node objects (objects with _nexus_id)
+                                let nodes: Vec<Value> = arr
+                                    .into_iter()
+                                    .filter(|v| {
+                                        if let Value::Object(obj) = v {
+                                            obj.contains_key("_nexus_id")
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .collect();
+                                return Ok(Value::Array(nodes));
+                            }
+                            // If it's a single node, return it as array
+                            if let Value::Object(obj) = &value {
+                                if obj.contains_key("_nexus_id") {
+                                    return Ok(Value::Array(vec![value]));
+                                }
+                            }
+                        }
+                        Ok(Value::Array(Vec::new()))
+                    }
+                    "relationships" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            // If value is already an array, extract relationships
+                            if let Value::Array(arr) = value {
+                                // Filter only relationship objects (objects with _nexus_type and source/target)
+                                let rels: Vec<Value> = arr
+                                    .into_iter()
+                                    .filter(|v| {
+                                        if let Value::Object(obj) = v {
+                                            obj.contains_key("_nexus_type")
+                                                && (obj.contains_key("_source")
+                                                    || obj.contains_key("_target"))
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .collect();
+                                return Ok(Value::Array(rels));
+                            }
+                            // If it's a single relationship, return it as array
+                            if let Value::Object(obj) = &value {
+                                if obj.contains_key("_nexus_type") {
+                                    return Ok(Value::Array(vec![value]));
+                                }
+                            }
+                        }
+                        Ok(Value::Array(Vec::new()))
+                    }
+                    "length" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            // For arrays representing paths, length is the number of relationships
+                            // which is (number of nodes - 1) or number of relationship objects
+                            if let Value::Array(arr) = value {
+                                // Count relationship objects in the path
+                                let rel_count = arr
+                                    .iter()
+                                    .filter(|v| {
+                                        if let Value::Object(obj) = v {
+                                            obj.contains_key("_nexus_type")
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .count();
+                                return Ok(Value::Number((rel_count as i64).into()));
+                            }
+                            // For a single relationship, length is 1
+                            if let Value::Object(obj) = &value {
+                                if obj.contains_key("_nexus_type") {
+                                    return Ok(Value::Number(1.into()));
+                                }
+                            }
+                        }
+                        Ok(Value::Number(0.into()))
+                    }
                     // List functions
                     "size" => {
                         if let Some(arg) = args.first() {
@@ -3305,7 +3799,11 @@ impl Executor {
             | Aggregation::Avg { alias, .. }
             | Aggregation::Min { alias, .. }
             | Aggregation::Max { alias, .. }
-            | Aggregation::Collect { alias, .. } => alias.clone(),
+            | Aggregation::Collect { alias, .. }
+            | Aggregation::PercentileDisc { alias, .. }
+            | Aggregation::PercentileCont { alias, .. }
+            | Aggregation::StDev { alias, .. }
+            | Aggregation::StDevP { alias, .. } => alias.clone(),
         }
     }
 }

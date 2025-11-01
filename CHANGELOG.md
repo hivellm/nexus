@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.0] - 2025-11-01
 
 ### Added
-- **Built-in Functions**: Implemented 24 essential Cypher functions for data manipulation
+- **Built-in Functions**: Implemented 55 essential Cypher functions for data manipulation
   - **String Functions** (7):
     - `toLower()` / `toUpper()`: Case conversion
     - `substring(string, start, [length])`: Extract substrings
@@ -21,13 +21,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `pow(base, exponent)`: Exponentiation
   - **Type Conversion** (4):
     - `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`: Type coercion
+  - **Temporal Functions** (5):
+    - `date()` / `date(string)`: Current or parsed date in ISO format (YYYY-MM-DD)
+    - `datetime()` / `datetime(string)`: Current or parsed datetime in RFC3339 format
+    - `time()` / `time(string)`: Current or parsed time in HH:MM:SS format
+    - `timestamp()` / `timestamp(string)`: Unix timestamp in milliseconds
+    - `duration(map)`: Create duration object from components
   - **List Functions** (6):
     - `size()`: Get array/string length
     - `head()`, `tail()`, `last()`: Array element access
     - `range(start, end, [step])`: Generate numeric sequences
     - `reverse()`: Reverse array order
-  - **Aggregation Functions** (1):
+  - **Aggregation Functions** (5):
     - `collect()` / `collect(DISTINCT ...)`: Collect values into array with optional deduplication
+    - `percentileDisc(column, percentile)`: Discrete percentile (nearest value)
+    - `percentileCont(column, percentile)`: Continuous percentile (linear interpolation)
+    - `stDev(column)`: Sample standard deviation (Bessel's correction)
+    - `stDevP(column)`: Population standard deviation
+  - **Path Functions** (3):
+    - `nodes(path)`: Extract nodes from path or array
+    - `relationships(path)`: Extract relationships from path or array
+    - `length(path)`: Get path length (number of relationships)
 
 ### Improved
 - **Query Support**: RETURN can now evaluate literal expressions without MATCH/UNWIND
@@ -40,11 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Proper NULL handling in all mathematical functions
 
 ### Testing
-- Added comprehensive test suite for built-in functions (34 tests, 100% passing)
+- Added comprehensive test suite for built-in functions (61 tests, 100% passing)
 - All existing tests maintained (1200+ tests passing)
 - Verified RETURN literal queries work correctly
 - Validated NULL handling across all functions
 - Tested `collect()` with GROUP BY, DISTINCT, and multiple aggregations
+- Added temporal function tests (date parsing, current values, format validation)
+- Tested aggregation functions (percentiles, standard deviation)
+- Added path function tests (nodes, relationships, length extraction)
 
 ### Fixed
 - **RETURN without MATCH**: Fixed literal expression evaluation in standalone RETURN
