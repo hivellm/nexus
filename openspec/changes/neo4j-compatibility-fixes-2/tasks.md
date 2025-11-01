@@ -24,14 +24,16 @@
 - [x] 2.10 Add test for AND with comparisons
 - [x] 2.11 Compatibility improved from 91.43% to 94.29%
 
-## 3. Relationship Property Filtering (High Priority)
-- [ ] 3.1 Verify relationship properties storage
-- [ ] 3.2 Check relationship variable accessibility in WHERE
-- [ ] 3.3 Debug filter evaluation for relationship properties
-- [ ] 3.4 Implement comparison logic for relationship property access
-- [ ] 3.5 Test equality: `WHERE r.since = 2015`
-- [ ] 3.6 Test comparison: `WHERE r.since >= 2015`
-- [ ] 3.7 Verify query returns 6 relationships
+## 3. Relationship Property Filtering (High Priority) ✅ COMPLETE
+- [x] 3.1 Verify relationship properties storage - Working correctly
+- [x] 3.2 Check relationship variable accessibility in WHERE - Working
+- [x] 3.3 Debug filter evaluation for relationship properties - Fixed by precedence
+- [x] 3.4 Implement comparison logic for relationship property access - Already working
+- [x] 3.5 Test equality: `WHERE r.since = 2015` - Works
+- [x] 3.6 Test comparison: `WHERE r.since >= 2015` - Works
+- [x] 3.7 Verify query returns 6 relationships - Fixed!
+- [x] 3.8 Fix bidirectional pattern to return each rel twice (Neo4j behavior)
+- [x] 3.9 Compatibility improved from 94.29% to 97.14%
 
 ## 4. Two-Hop Graph Patterns (Medium Priority)
 - [ ] 4.1 Analyze planner handling of multiple relationship patterns

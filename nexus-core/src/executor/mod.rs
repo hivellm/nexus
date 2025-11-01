@@ -871,20 +871,35 @@ impl Executor {
                         type_id: rel_record.type_id,
                     };
 
-                    let mut new_row = HashMap::new();
+                    // For bidirectional patterns, return each relationship twice (once for each direction)
+                    let directions_to_emit = match direction {
+                        Direction::Outgoing | Direction::Incoming => vec![direction],
+                        Direction::Both => vec![Direction::Outgoing, Direction::Incoming],
+                    };
 
-                    // Only add target node if target_var is specified
-                    if !target_var.is_empty() {
-                        let target_node = self.read_node_as_value(rel_record.dst_id)?;
-                        new_row.insert(target_var.to_string(), target_node);
+                    for emit_direction in directions_to_emit {
+                        let mut new_row = HashMap::new();
+
+                        // Determine target based on direction
+                        let target_id = match emit_direction {
+                            Direction::Outgoing => rel_record.dst_id,
+                            Direction::Incoming => rel_record.src_id,
+                            Direction::Both => unreachable!(),
+                        };
+
+                        // Only add target node if target_var is specified
+                        if !target_var.is_empty() {
+                            let target_node = self.read_node_as_value(target_id)?;
+                            new_row.insert(target_var.to_string(), target_node);
+                        }
+
+                        if !rel_var.is_empty() {
+                            let relationship_value = self.read_relationship_as_value(&rel_info)?;
+                            new_row.insert(rel_var.to_string(), relationship_value);
+                        }
+
+                        expanded_rows.push(new_row);
                     }
-
-                    if !rel_var.is_empty() {
-                        let relationship_value = self.read_relationship_as_value(&rel_info)?;
-                        new_row.insert(rel_var.to_string(), relationship_value);
-                    }
-
-                    expanded_rows.push(new_row);
                 }
             }
         } else {
