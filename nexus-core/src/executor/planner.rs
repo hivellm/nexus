@@ -648,6 +648,8 @@ impl<'a> QueryPlanner<'a> {
         patterns: &[Pattern],
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
+        let mut tmp_var_counter = 0;
+
         for pattern in patterns {
             // Track previous node variable for relationship expansion
             let mut prev_node_var: Option<String> = None;
@@ -656,9 +658,12 @@ impl<'a> QueryPlanner<'a> {
                 match element {
                     PatternElement::Node(node_pattern) => {
                         // Update previous node variable
+                        // If node has explicit variable, use it
+                        // Otherwise, keep the previous value (from last Expand's target_var)
                         if let Some(var) = &node_pattern.variable {
                             prev_node_var = Some(var.clone());
                         }
+                        // Don't update prev_node_var if no variable - it should already be set by previous Expand
                     }
                     PatternElement::Relationship(rel) => {
                         let direction = match rel.direction {
@@ -669,16 +674,27 @@ impl<'a> QueryPlanner<'a> {
 
                         // Determine source and target variables
                         let source_var = prev_node_var.clone().unwrap_or_default();
+
                         // Target will be the next node in the pattern
                         let target_var = if idx + 1 < pattern.elements.len() {
                             if let PatternElement::Node(next_node) = &pattern.elements[idx + 1] {
-                                next_node.variable.clone().unwrap_or_else(|| "".to_string())
+                                // If target node has explicit variable, use it
+                                // Otherwise, generate temporary variable for chaining
+                                next_node.variable.clone().unwrap_or_else(|| {
+                                    let tmp_var = format!("__tmp_{}", tmp_var_counter);
+                                    tmp_var_counter += 1;
+                                    tmp_var
+                                })
                             } else {
                                 "".to_string()
                             }
                         } else {
                             "".to_string()
                         };
+
+                        // Update prev_node_var to the target for next relationship
+                        // This ensures multi-hop patterns chain correctly
+                        prev_node_var = Some(target_var.clone());
 
                         // Get type_id from relationship types
                         let type_id = if let Some(first_type) = rel.types.first() {
