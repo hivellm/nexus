@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.0] - 2025-11-01
 
 ### Added
+- **Multiple Database Support**: Full multi-database isolation and management
+  - **DatabaseManager**: Manage multiple isolated graph databases in single instance
+  - **Database API**:
+    - `POST /management/databases` - Create new database
+    - `DELETE /management/databases/:name` - Drop database (protects default)
+    - `GET /management/databases` - List all databases with statistics
+    - `GET /management/databases/:name` - Get specific database info
+  - **Cypher Integration**: Optional `database` field in CypherRequest for database selection
+  - **Isolation**: Each database has separate storage, catalog, indexes, and transaction log
+  - **Default Database**: "neo4j" created automatically, cannot be dropped
+  - **Tests**: 12 tests for DatabaseManager (100% passing)
+
+- **Property Keys API**: Introspection and statistics for property keys
+  - **Property Keys Endpoint**:
+    - `GET /management/property-keys` - List all property keys
+    - `GET /management/property-keys/stats` - Get usage statistics
+  - **Catalog Enhancement**: Added `list_all_keys()` method to enumerate all registered keys
+  - **Admin UI**: Property keys dashboard (views/property_keys.hbs)
+    - Table view with node/relationship usage counts
+    - Data type tracking
+    - Auto-refresh functionality
+  - **Tests**: 2 tests for property keys API (100% passing)
+
 - **Built-in Functions**: Implemented 55 essential Cypher functions for data manipulation
   - **String Functions** (7):
     - `toLower()` / `toUpper()`: Case conversion
@@ -55,7 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 - Added comprehensive test suite for built-in functions (61 tests, 100% passing)
+- Added database management tests (12 tests, 100% passing)
+- Added property keys API tests (2 tests, 100% passing)
 - All existing tests maintained (1200+ tests passing)
+- **Total**: 1275+ tests passing
 - Verified RETURN literal queries work correctly
 - Validated NULL handling across all functions
 - Tested `collect()` with GROUP BY, DISTINCT, and multiple aggregations

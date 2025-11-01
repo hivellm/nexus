@@ -212,6 +212,9 @@ pub struct CypherRequest {
     /// Query parameters
     #[serde(default)]
     pub params: HashMap<String, serde_json::Value>,
+    /// Database name (optional, defaults to "neo4j")
+    #[serde(default)]
+    pub database: Option<String>,
 }
 
 /// Cypher query response
@@ -1032,6 +1035,7 @@ mod tests {
         let request = CypherRequest {
             query: "MATCH (n) RETURN n LIMIT 1".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1046,6 +1050,7 @@ mod tests {
         let request = CypherRequest {
             query: "MATCH (n) RETURN n LIMIT $limit".to_string(),
             params,
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1057,6 +1062,7 @@ mod tests {
         let request = CypherRequest {
             query: "INVALID SYNTAX".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1069,6 +1075,7 @@ mod tests {
         let request = CypherRequest {
             query: "MATCH (n) RETURN n".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let response = execute_cypher(Json(request)).await;
@@ -1081,6 +1088,7 @@ mod tests {
         let request = CypherRequest {
             query: "RETURN 1 as num, 'test' as str".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1092,6 +1100,7 @@ mod tests {
         let request = CypherRequest {
             query: "RETURN 'hello' as greeting".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1108,6 +1117,7 @@ mod tests {
         let request = CypherRequest {
             query: "RETURN $name as name, $age as age, $active as active".to_string(),
             params,
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1119,6 +1129,7 @@ mod tests {
         let request = CypherRequest {
             query: "MATCH (n) WHERE n.nonexistent = 'value' RETURN n".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1130,6 +1141,7 @@ mod tests {
         let request = CypherRequest {
             query: "UNWIND [1, 2, 3] AS num RETURN num".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1145,6 +1157,7 @@ mod tests {
         let request = CypherRequest {
             query: "RETURN $list as numbers, $obj as data".to_string(),
             params,
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1159,6 +1172,7 @@ mod tests {
         let request = CypherRequest {
             query: "RETURN $null_value as null_val".to_string(),
             params,
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1170,6 +1184,7 @@ mod tests {
         let request = CypherRequest {
             query: "".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1182,6 +1197,7 @@ mod tests {
         let request = CypherRequest {
             query: long_query,
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1193,6 +1209,7 @@ mod tests {
         let request = CypherRequest {
             query: "MERGE (n:Person {name: \"Alice\", age: 30})".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1204,6 +1221,7 @@ mod tests {
         let request = CypherRequest {
             query: "MERGE (n:Person)".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1215,6 +1233,7 @@ mod tests {
         let request = CypherRequest {
             query: "CREATE (n:Person {name: \"Alice\"}) SET n.age = 30".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1226,6 +1245,7 @@ mod tests {
         let request = CypherRequest {
             query: "CREATE (n:Person) SET n:Employee".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1237,6 +1257,7 @@ mod tests {
         let request = CypherRequest {
             query: "CREATE (n:Person {name: \"Bob\"}) DELETE n".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1248,6 +1269,7 @@ mod tests {
         let request = CypherRequest {
             query: "CREATE (n:Person {name: \"Charlie\"}) DETACH DELETE n".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1259,6 +1281,7 @@ mod tests {
         let request = CypherRequest {
             query: "CREATE (n:Person {name: \"David\", age: 25}) REMOVE n.age".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;
@@ -1270,6 +1293,7 @@ mod tests {
         let request = CypherRequest {
             query: "CREATE (n:Person:Employee) REMOVE n:Employee".to_string(),
             params: HashMap::new(),
+            database: None,
         };
 
         let _response = execute_cypher(Json(request)).await;

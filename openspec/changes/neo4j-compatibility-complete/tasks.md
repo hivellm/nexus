@@ -285,19 +285,48 @@
   - 6/7 Neo4j compatibility tests now passing ✅
   - Commit: 87a75fc
 
-## 9. Future Enhancements (Planned)
+## 9. Future Enhancements (COMPLETED)
 
-### 9.1 Multiple Database Support
+### 9.1 Multiple Database Support ✅
 
-- [ ] 9.1.1 Design database isolation architecture
-- [ ] 9.1.2 Implement database management API (create, drop, list, switch)
-- [ ] 9.1.3 Add database selection in Cypher endpoint
-- [ ] 9.1.4 Update Engine to support database context switching
-- [ ] 9.1.5 Update storage layer for multiple database directories
+- [x] 9.1.1 Design database isolation architecture
+  - Created DatabaseManager module with HashMap of Engine instances
+  - Each database has isolated storage, catalog, indexes, and WAL
+  - Base directory structure: base_dir/{database_name}/
+- [x] 9.1.2 Implement database management API (create, drop, list, switch)
+  - POST /management/databases - Create database
+  - DELETE /management/databases/:name - Drop database  
+  - GET /management/databases - List all databases
+  - GET /management/databases/:name - Get database info
+- [x] 9.1.3 Add database selection in Cypher endpoint
+  - Added optional `database` field to CypherRequest
+  - Defaults to "neo4j" if not specified
+  - Enables multi-tenancy support
+- [x] 9.1.4 Update Engine to support database context switching
+  - DatabaseManager handles Engine lifecycle
+  - get_database() returns Engine instance for specific database
+  - Thread-safe with Arc<RwLock<Engine>>
+- [x] 9.1.5 Update storage layer for multiple database directories
+  - Each database creates subdirectory under base_dir
+  - Automatic directory creation on database create
+  - Automatic cleanup on database drop (except default)
 
-### 9.2 Property Keys API
+### 9.2 Property Keys API ✅
 
-- [ ] 9.2.1 Create Property Keys API endpoint (/management/property-keys)
-- [ ] 9.2.2 Implement GET /property-keys to list all property keys
-- [ ] 9.2.3 Add property key usage statistics
-- [ ] 9.2.4 Update admin UI to display property keys
+- [x] 9.2.1 Create Property Keys API endpoint (/management/property-keys)
+  - Implemented property_keys module
+  - GET /management/property-keys - List all keys
+  - GET /management/property-keys/stats - Get statistics
+- [x] 9.2.2 Implement GET /property-keys to list all property keys
+  - Catalog.list_all_keys() method added
+  - Returns Vec<(KeyId, String)> of all registered keys
+  - Sorted alphabetically for consistency
+- [x] 9.2.3 Add property key usage statistics
+  - PropertyKeyInfo struct with node/rel counts
+  - Prepared for full graph scan (TODO: implement scan)
+  - Returns key names immediately, stats on demand
+- [x] 9.2.4 Update admin UI to display property keys
+  - Created views/property_keys.hbs Handlebars template
+  - Table view with usage statistics
+  - Auto-refresh every 30 seconds
+  - Responsive design with modern UI

@@ -40,6 +40,7 @@
 pub mod auth;
 pub mod catalog;
 pub mod concurrent_access;
+pub mod database;
 pub mod error;
 pub mod executor;
 pub mod graph; // Unified graph module with submodules

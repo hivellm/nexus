@@ -361,6 +361,21 @@ impl Catalog {
         Ok(self.key_id_to_name.get(&rtxn, &id)?.map(|s| s.to_string()))
     }
 
+    /// List all property keys
+    pub fn list_all_keys(&self) -> Vec<(KeyId, String)> {
+        let Ok(rtxn) = self.env.read_txn() else {
+            return Vec::new();
+        };
+
+        let Ok(iter) = self.key_id_to_name.iter(&rtxn) else {
+            return Vec::new();
+        };
+
+        iter.filter_map(|r| r.ok())
+            .map(|(id, name)| (id, name.to_string()))
+            .collect()
+    }
+
     /// Get current metadata
     pub fn get_metadata(&self) -> Result<CatalogMetadata> {
         let rtxn = self.env.read_txn()?;
