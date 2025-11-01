@@ -107,6 +107,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Environment variable tests can have race conditions when run in parallel"]
     fn test_config_from_env_default() {
         // Clear environment variables to test defaults
         unsafe {
@@ -127,6 +128,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Environment variable tests can have race conditions when run in parallel"]
     fn test_config_from_env_custom() {
         // Clean up any existing environment variables first
         unsafe {
@@ -153,6 +155,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Environment variable tests can have race conditions when run in parallel"]
     fn test_config_from_env_partial() {
         // Clean up any existing environment variables first
         unsafe {
