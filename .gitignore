@@ -48,3 +48,10 @@ coverage/
 *.tmp
 *.bak
 
+
+# Test binaries
+test-*
+*.o
+!test-*.ps1
+!test-*.ts
+!test-*.rs
