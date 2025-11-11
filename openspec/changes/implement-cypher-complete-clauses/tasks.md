@@ -5,76 +5,77 @@
 ## Modular Change Structure
 
 ### ✅ Change Proposals Created:
+*(Status review: 2025-11-11 – no implementation work has started beyond basic parser stubs; all runtime behavior, tests, and documentation remain pending.)*
 
 1. **implement-cypher-write-operations** - Phase 1: MERGE, SET, DELETE, REMOVE
    - Priority: 🔴 CRITICAL
    - Duration: 2-3 weeks
-   - Status: Ready
+   - Status: ⚪ Not started (parser recognizes clauses; executor logic/tests missing)
 
 2. **implement-cypher-query-composition** - Phase 2: WITH, OPTIONAL MATCH, UNWIND, UNION
    - Priority: 🟠 HIGH
    - Duration: 2-3 weeks
-   - Status: Pending Phase 1
+   - Status: ⚪ Not started (parser entries only; no execution or tests)
 
 3. **implement-cypher-advanced-features** - Phase 3: FOREACH, EXISTS, CASE, comprehensions
    - Priority: 🟠 HIGH
    - Duration: 3-4 weeks
-   - Status: Pending Phase 2
+   - Status: ⚪ Not started (only CASE parsing prototype; rest untouched)
 
 4. **implement-cypher-string-ops** - Phase 4: String operators and regex
    - Priority: 🟡 MEDIUM
    - Duration: 1 week
-   - Status: Pending Phase 3
+   - Status: ⚪ Not started
 
 5. **implement-cypher-paths** - Phase 5: Variable-length paths, shortest path
    - Priority: 🟡 MEDIUM
    - Duration: 2 weeks
-   - Status: Pending Phase 4
+  - Status: ⚪ Not started (quantifier parsing exists; traversal/algorithms missing)
 
 6. **implement-cypher-functions** - Phase 6: 50+ built-in functions
    - Priority: 🟡 MEDIUM
    - Duration: 3-4 weeks
-   - Status: Pending Phase 5
+   - Status: ⚪ Not started
 
 7. **implement-cypher-schema-admin** - Phase 7: Indexes, constraints, transactions
    - Priority: 🟠 HIGH
    - Duration: 2-3 weeks
-   - Status: Pending Phase 6
+   - Status: ⚪ Not started
 
 8. **implement-query-analysis** - Phase 8: EXPLAIN, PROFILE, hints
    - Priority: 🟠 HIGH
    - Duration: 1-2 weeks
-   - Status: Pending Phase 7
+   - Status: ⚪ Not started
 
 9. **implement-data-import-export** - Phase 9: LOAD CSV, bulk operations
    - Priority: 🟠 HIGH
    - Duration: 2-3 weeks
-   - Status: Pending Phase 8
+   - Status: ⚪ Not started
 
 10. **implement-advanced-db-features** - Phase 10: USE DATABASE, subqueries
     - Priority: 🟡 MEDIUM
     - Duration: 2 weeks
-    - Status: Pending Phase 9
+    - Status: ⚪ Not started
 
 11. **implement-performance-monitoring** - Phase 11: Statistics, slow query logging
     - Priority: 🟡 MEDIUM
     - Duration: 2-3 weeks
-    - Status: Pending Phase 10
+    - Status: ⚪ Not started
 
 12. **implement-udf-procedures** - Phase 12: UDF framework, plugins
     - Priority: 🟡 MEDIUM
     - Duration: 3-4 weeks
-    - Status: Pending Phase 11
+    - Status: ⚪ Not started
 
 13. **implement-graph-algorithms** - Phase 13: Pathfinding, centrality, communities
     - Priority: 🔵 OPTIONAL
     - Duration: 4-5 weeks
-    - Status: Pending Phase 12
+    - Status: ⚪ Not started
 
 14. **implement-geospatial** - Phase 14: Point type, spatial indexes
     - Priority: 🔵 OPTIONAL
     - Duration: 2-3 weeks
-    - Status: Pending Phase 13
+    - Status: ⚪ Not started
 
 ## Implementation Order
 

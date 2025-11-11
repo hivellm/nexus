@@ -20,7 +20,7 @@ info:
     
     ## Error Handling
     All endpoints return appropriate HTTP status codes and error messages in JSON format.
-  version: 0.4.0
+  version: 0.5.0
   contact:
     name: Nexus Development Team
     url: https://github.com/your-org/nexus
@@ -74,6 +74,8 @@ paths:
         Execute a Cypher query against the graph database.
         
         ## Supported Cypher Features
+        
+        ### Read Operations
         - MATCH patterns with nodes and relationships
         - WHERE clauses with property filtering
         - RETURN clauses with expressions
@@ -81,6 +83,14 @@ paths:
         - Aggregation functions (COUNT, AVG, MAX, MIN, SUM)
         - Variable length paths with `*` syntax
         - Vector similarity search with `<->` operator
+        
+        ### Write Operations
+        - CREATE nodes and relationships
+        - MERGE with ON CREATE and ON MATCH clauses
+        - SET properties and labels
+        - REMOVE properties and labels
+        - DELETE nodes (with relationship validation)
+        - DETACH DELETE nodes (removes relationships automatically)
         
         ## Examples
         ```cypher
@@ -93,6 +103,29 @@ paths:
         // Vector similarity search
         MATCH (n:Person) WHERE n.vector IS NOT NULL 
         RETURN n.name ORDER BY n.vector <-> [0.1, 0.2, 0.3] LIMIT 5
+        
+        // MERGE with ON CREATE
+        MERGE (n:Person {email: 'alice@example.com'}) 
+        ON CREATE SET n.created = true 
+        RETURN n
+        
+        // SET properties and labels
+        MATCH (n:Person {email: 'alice@example.com'}) 
+        SET n.age = 31, n.city = 'NYC', n:Employee 
+        RETURN n
+        
+        // REMOVE properties and labels
+        MATCH (n:Person {email: 'alice@example.com'}) 
+        REMOVE n.age, n:Employee 
+        RETURN n
+        
+        // DELETE node (fails if relationships exist)
+        MATCH (n:Person {email: 'alice@example.com'}) 
+        DELETE n
+        
+        // DETACH DELETE (removes relationships first)
+        MATCH (n:Person) 
+        DETACH DELETE n
         ```
       operationId: executeCypher
       tags:
@@ -121,6 +154,31 @@ paths:
                   query: "MATCH (n:Person) WHERE n.vector IS NOT NULL RETURN n.name ORDER BY n.vector <-> $vector LIMIT 5"
                   params:
                     vector: [0.1, 0.2, 0.3, 0.4]
+              merge_query:
+                summary: MERGE with ON CREATE
+                value:
+                  query: "MERGE (n:Person {email: 'alice@example.com'}) ON CREATE SET n.created = true RETURN n"
+                  params: {}
+              set_query:
+                summary: SET properties and labels
+                value:
+                  query: "MATCH (n:Person {email: 'alice@example.com'}) SET n.age = 31, n.city = 'NYC', n:Employee RETURN n"
+                  params: {}
+              remove_query:
+                summary: REMOVE properties and labels
+                value:
+                  query: "MATCH (n:Person {email: 'alice@example.com'}) REMOVE n.age, n:Employee RETURN n"
+                  params: {}
+              delete_query:
+                summary: DELETE node
+                value:
+                  query: "MATCH (n:Person {email: 'alice@example.com'}) DELETE n"
+                  params: {}
+              detach_delete_query:
+                summary: DETACH DELETE nodes
+                value:
+                  query: "MATCH (n:Person) DETACH DELETE n"
+                  params: {}
       responses:
         '200':
           description: Query executed successfully

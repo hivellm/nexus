@@ -2,202 +2,128 @@
 //!
 //! Tests for MERGE, SET, DELETE, and REMOVE clauses
 
-use nexus_core::catalog::Catalog;
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::{KnnIndex, LabelIndex};
-use nexus_core::storage::RecordStore;
-use std::collections::HashMap;
-use tempfile::TempDir;
+use nexus_core::{Engine, Error};
+use nexus_core::executor::ResultSet;
+use serde_json::Value;
 
-/// Helper to create test executor
-fn create_test_executor() -> (Executor, TempDir) {
-    let temp_dir = TempDir::new().unwrap();
-    let catalog_path = temp_dir.path().join("catalog.db");
-    let nodes_path = temp_dir.path().join("nodes.store");
-    let rels_path = temp_dir.path().join("rels.store");
+fn create_engine() -> Result<Engine, Error> {
+    let mut engine = Engine::new()?;
+    // Ensure clean database for each test
+    let _ = engine.execute_cypher("MATCH (n) DETACH DELETE n");
+    Ok(engine)
+}
 
-    let catalog = Catalog::open(catalog_path).unwrap();
-    let record_store = RecordStore::new(nodes_path, rels_path).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new();
-
-    let executor = Executor::new(catalog, record_store, label_index, knn_index);
-
-    (executor, temp_dir)
+fn extract_first_row_value(result: &ResultSet, column_idx: usize) -> Option<&Value> {
+    result.rows.get(0).and_then(|row| row.values.get(column_idx))
 }
 
 #[test]
-fn test_parse_merge_query() {
-    let (mut executor, _temp) = create_test_executor();
+fn merge_creates_node_when_missing_and_reuses_existing() -> Result<(), Error> {
+    let mut engine = create_engine()?;
 
-    // Test MERGE parsing
-    let query = Query {
-        cypher: "MERGE (n:Person {name: 'Alice'})".to_string(),
-        params: HashMap::new(),
-    };
+    // First MERGE should create the node
+    let result = engine.execute_cypher(
+        "MERGE (n:Person {email: 'alice@example.com'})\n         ON CREATE SET n.created = true\n         RETURN n",
+    )?;
+    assert_eq!(result.rows.len(), 1, "MERGE should return one row on creation");
+    let node = extract_first_row_value(&result, 0)
+        .and_then(Value::as_object)
+        .expect("MERGE should return node object");
+    assert_eq!(node.get("email"), Some(&Value::String("alice@example.com".into())));
+    assert_eq!(node.get("created"), Some(&Value::Bool(true)));
 
-    // For now, just test that parsing doesn't panic
-    // Execution will be implemented in the next phase
-    let result = executor.execute(&query);
-    
-    // Should fail with "not implemented" for now
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("not implemented") || err.to_string().contains("Unsupported"));
+    // Second MERGE should match existing node without creating a duplicate
+    let result = engine.execute_cypher(
+        "MERGE (n:Person {email: 'alice@example.com'})\n         ON MATCH SET n.last_seen = '2025-11-11'\n         RETURN n",
+    )?;
+    assert_eq!(result.rows.len(), 1, "MERGE should still return one row when matching");
+    let node = extract_first_row_value(&result, 0)
+        .and_then(Value::as_object)
+        .expect("MERGE match should return node");
+    assert_eq!(node.get("email"), Some(&Value::String("alice@example.com".into())));
+    assert_eq!(node.get("last_seen"), Some(&Value::String("2025-11-11".into())));
+    assert_eq!(node.get("created"), Some(&Value::Bool(true)), "created flag should be preserved");
+
+    // Verify no duplicate nodes exist
+    let result = engine.execute_cypher("MATCH (n:Person) RETURN count(n) AS total")?;
+    let total = extract_first_row_value(&result, 0)
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert_eq!(total, 1, "MERGE should keep data idempotent");
+
+    Ok(())
 }
 
 #[test]
-fn test_parse_merge_with_on_create() {
-    let (mut executor, _temp) = create_test_executor();
+fn set_updates_properties_and_labels() -> Result<(), Error> {
+    let mut engine = create_engine()?;
+    engine.execute_cypher("CREATE (n:Person {name: 'Alice', age: 30})")?;
 
-    let query = Query {
-        cypher: "MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.created = true".to_string(),
-        params: HashMap::new(),
-    };
+    let result = engine.execute_cypher(
+        "MATCH (n:Person {name: 'Alice'})\n         SET n.age = 31, n.city = 'NYC', n:Employee\n         RETURN n",
+    )?;
 
-    let result = executor.execute(&query);
-    assert!(result.is_err());
+    let node = extract_first_row_value(&result, 0)
+        .and_then(Value::as_object)
+        .expect("SET should return the updated node");
+    assert_eq!(node.get("age"), Some(&Value::Number(31.into())));
+    assert_eq!(node.get("city"), Some(&Value::String("NYC".into())));
+    let labels = node
+        .get("_nexus_labels")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(labels.iter().any(|label| label == "Employee"), "Employee label should be attached");
+
+    Ok(())
 }
 
 #[test]
-fn test_parse_merge_with_on_match() {
-    let (mut executor, _temp) = create_test_executor();
+fn delete_and_detach_delete_remove_nodes() -> Result<(), Error> {
+    let mut engine = create_engine()?;
+    engine.execute_cypher(
+        "CREATE (a:Person {name: 'A'})-[:KNOWS]->(b:Person {name: 'B'})",
+    )?;
 
-    let query = Query {
-        cypher: "MERGE (n:Person {name: 'Alice'}) ON MATCH SET n.updated = true".to_string(),
-        params: HashMap::new(),
-    };
+    // Regular DELETE should fail on node with relationship but work on isolated node
+    let delete_result = engine.execute_cypher("MATCH (n:Person {name: 'B'}) DELETE n");
+    assert!(delete_result.is_err(), "DELETE should fail when relationships exist");
 
-    let result = executor.execute(&query);
-    assert!(result.is_err());
+    // DETACH DELETE should remove both nodes
+    engine.execute_cypher("MATCH (n:Person) DETACH DELETE n")?;
+    let result = engine.execute_cypher("MATCH (n) RETURN count(n) AS total")?;
+    let total = extract_first_row_value(&result, 0)
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    assert_eq!(total, 0, "DETACH DELETE should clear all nodes");
+
+    Ok(())
 }
 
 #[test]
-fn test_parse_set_property() {
-    let (mut executor, _temp) = create_test_executor();
+fn remove_properties_and_labels() -> Result<(), Error> {
+    let mut engine = create_engine()?;
+    engine.execute_cypher("CREATE (n:Person:Employee {name: 'Carol', age: 40})")?;
 
-    let query = Query {
-        cypher: "MATCH (n:Person) SET n.age = 30".to_string(),
-        params: HashMap::new(),
-    };
+    let result = engine.execute_cypher(
+        "MATCH (n:Person {name: 'Carol'})\n         REMOVE n.age, n:Employee\n         RETURN n",
+    )?;
 
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
+    let node = extract_first_row_value(&result, 0)
+        .and_then(Value::as_object)
+        .expect("REMOVE should return the altered node");
+    assert!(node.get("age").is_none(), "age property should be removed");
 
-#[test]
-fn test_parse_set_label() {
-    let (mut executor, _temp) = create_test_executor();
+    let labels = node
+        .get("_nexus_labels")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(labels.iter().all(|label| label != "Employee"), "Employee label should be removed");
 
-    let query = Query {
-        cypher: "MATCH (n:Person) SET n:VIP".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_set_multiple() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (n:Person) SET n.age = 30, n.name = 'Bob', n:VIP".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_delete() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (n:Person) DELETE n".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_detach_delete() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (n:Person) DETACH DELETE n".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_remove_property() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (n:Person) REMOVE n.age".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_remove_label() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (n:Person) REMOVE n:VIP".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_complex_write_query() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (n:Person {name: 'Alice'}) SET n.age = 30, n:VIP RETURN n".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_merge_relationship() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (a:Person), (b:Person) MERGE (a)-[r:KNOWS]->(b)".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_parse_set_with_expression() {
-    let (mut executor, _temp) = create_test_executor();
-
-    let query = Query {
-        cypher: "MATCH (n:Person) SET n.age = n.age + 1".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    assert!(result.is_err());
+    Ok(())
 }

@@ -10,7 +10,7 @@ use crate::{Error, Result};
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
 use roaring::RoaringBitmap;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 pub mod btree;
@@ -97,6 +97,35 @@ pub struct LabelIndexStats {
 }
 
 impl LabelIndex {
+    fn recompute_stats(bitmaps: &HashMap<u32, RoaringBitmap>) -> LabelIndexStats {
+        let mut unique_nodes: HashSet<u32> = HashSet::new();
+        let mut total_entries: u64 = 0;
+
+        for bitmap in bitmaps.values() {
+            total_entries += bitmap.len();
+            unique_nodes.extend(bitmap.iter());
+        }
+
+        let label_count = bitmaps.len() as u32;
+        let avg_nodes_per_label = if label_count > 0 {
+            total_entries as f64 / label_count as f64
+        } else {
+            0.0
+        };
+
+        LabelIndexStats {
+            total_nodes: unique_nodes.len() as u64,
+            label_count,
+            avg_nodes_per_label,
+        }
+    }
+
+    fn update_stats(&self, bitmaps: &HashMap<u32, RoaringBitmap>) {
+        let stats_snapshot = Self::recompute_stats(bitmaps);
+        let mut stats = self.stats.write();
+        *stats = stats_snapshot;
+    }
+
     /// Create a new label index
     pub fn new() -> Self {
         Self {
@@ -108,40 +137,42 @@ impl LabelIndex {
     /// Add a node with given labels
     pub fn add_node(&self, node_id: u64, label_ids: &[u32]) -> Result<()> {
         let mut bitmaps = self.label_bitmaps.write();
-        let mut stats = self.stats.write();
 
         for &label_id in label_ids {
             bitmaps.entry(label_id).or_default().insert(node_id as u32);
         }
 
-        stats.total_nodes += 1;
-        stats.label_count = bitmaps.len() as u32;
-        stats.avg_nodes_per_label = if stats.label_count > 0 {
-            stats.total_nodes as f64 / stats.label_count as f64
-        } else {
-            0.0
-        };
-
+        self.update_stats(&bitmaps);
         Ok(())
     }
 
     /// Remove a node from all labels
     pub fn remove_node(&self, node_id: u64) -> Result<()> {
         let mut bitmaps = self.label_bitmaps.write();
-        let mut stats = self.stats.write();
 
         for bitmap in bitmaps.values_mut() {
             bitmap.remove(node_id as u32);
         }
 
-        stats.total_nodes = stats.total_nodes.saturating_sub(1);
-        stats.label_count = bitmaps.len() as u32;
-        stats.avg_nodes_per_label = if stats.label_count > 0 {
-            stats.total_nodes as f64 / stats.label_count as f64
-        } else {
-            0.0
-        };
+        bitmaps.retain(|_, bitmap| !bitmap.is_empty());
+        self.update_stats(&bitmaps);
+        Ok(())
+    }
 
+    /// Replace the labels associated with a node
+    pub fn set_node_labels(&self, node_id: u64, label_ids: &[u32]) -> Result<()> {
+        let mut bitmaps = self.label_bitmaps.write();
+
+        for bitmap in bitmaps.values_mut() {
+            bitmap.remove(node_id as u32);
+        }
+
+        for &label_id in label_ids {
+            bitmaps.entry(label_id).or_default().insert(node_id as u32);
+        }
+
+        bitmaps.retain(|_, bitmap| !bitmap.is_empty());
+        self.update_stats(&bitmaps);
         Ok(())
     }
 
@@ -213,9 +244,7 @@ impl LabelIndex {
         let mut bitmaps = self.label_bitmaps.write();
         bitmaps.clear();
 
-        let mut stats = self.stats.write();
-        *stats = LabelIndexStats::default();
-
+        self.update_stats(&bitmaps);
         Ok(())
     }
 

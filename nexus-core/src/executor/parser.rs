@@ -648,7 +648,13 @@ impl CypherParser {
             self.skip_whitespace();
             self.parse_keyword()?; // "CREATE"
             self.skip_whitespace();
-            Some(self.parse_set_clause()?)
+            // Parse SET keyword before parsing SET clause
+            if self.peek_keyword("SET") {
+                self.parse_keyword()?; // "SET"
+                Some(self.parse_set_clause()?)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -660,7 +666,13 @@ impl CypherParser {
             self.skip_whitespace();
             self.parse_keyword()?; // "MATCH"
             self.skip_whitespace();
-            Some(self.parse_set_clause()?)
+            // Parse SET keyword before parsing SET clause
+            if self.peek_keyword("SET") {
+                self.parse_keyword()?; // "SET"
+                Some(self.parse_set_clause()?)
+            } else {
+                None
+            }
         } else {
             None
         };

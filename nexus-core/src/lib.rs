@@ -37,6 +37,9 @@
 #![warn(clippy::all)]
 #![allow(dead_code)] // Allow during initial scaffolding
 
+use serde_json::{Map, Value};
+use std::collections::{HashMap, HashSet};
+
 pub mod auth;
 pub mod catalog;
 pub mod concurrent_access;
@@ -325,12 +328,20 @@ impl Engine {
                         if let serde_json::Value::Object(obj) = &row.values[idx] {
                             if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
                                 if let Some(node_id) = id.as_u64() {
-                                    // Delete the node
                                     if detach {
                                         // Delete all relationships connected to this node first
                                         self.delete_node_relationships(node_id)?;
+                                        self.delete_node(node_id)?;
+                                    } else {
+                                        let node_record = self.storage.read_node(node_id)?;
+                                        if node_record.first_rel_ptr != u64::MAX {
+                                            return Err(Error::CypherExecution(
+                                                "Cannot DELETE node with existing relationships; use DETACH DELETE"
+                                                    .to_string(),
+                                            ));
+                                        }
+                                        self.delete_node(node_id)?;
                                     }
-                                    self.delete_node(node_id)?;
                                 }
                             }
                         }
@@ -774,6 +785,18 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::Delete(_)));
+        let has_merge = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Merge(_)));
+        let has_set_clause = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Set(_)));
+        let has_remove_clause = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Remove(_)));
         let has_match = ast
             .clauses
             .iter()
@@ -801,6 +824,12 @@ impl Engine {
             });
         }
 
+        // Handle MERGE / SET / REMOVE write queries before falling back to read executor
+        if has_merge || has_set_clause || has_remove_clause {
+            let result = self.execute_write_query(&ast)?;
+            return Ok(result);
+        }
+
         // If query has CREATE (with or without MATCH), handle via Engine for persistence
         if has_create {
             if has_match {
@@ -821,6 +850,458 @@ impl Engine {
             params: std::collections::HashMap::new(),
         };
         self.executor.execute(&query_obj)
+    }
+
+    fn execute_write_query(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        let mut context: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut result: Option<executor::ResultSet> = None;
+
+        for clause in &ast.clauses {
+            match clause {
+                executor::parser::Clause::Match(match_clause) => {
+                    let (variable, node_ids) = self.process_match_clause(match_clause)?;
+                    context.insert(variable, node_ids);
+                }
+                executor::parser::Clause::Merge(merge_clause) => {
+                    let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
+                    context.insert(variable, node_ids);
+                }
+                executor::parser::Clause::Set(set_clause) => {
+                    self.apply_set_clause(&context, set_clause)?;
+                }
+                executor::parser::Clause::Remove(remove_clause) => {
+                    self.apply_remove_clause(&context, remove_clause)?;
+                }
+                executor::parser::Clause::Return(return_clause) => {
+                    result = Some(self.build_return_result(&context, return_clause)?);
+                }
+                executor::parser::Clause::Where(_)
+                | executor::parser::Clause::With(_)
+                | executor::parser::Clause::Unwind(_)
+                | executor::parser::Clause::Union(_)
+                | executor::parser::Clause::OrderBy(_)
+                | executor::parser::Clause::Limit(_)
+                | executor::parser::Clause::Skip(_) => {
+                    return Err(Error::CypherExecution(
+                        "Unsupported clause in write query".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        self.storage.flush()?;
+        self.refresh_executor()?;
+
+        Ok(result.unwrap_or_else(|| executor::ResultSet {
+            columns: vec![],
+            rows: vec![],
+        }))
+    }
+
+    fn process_merge_clause(
+        &mut self,
+        merge_clause: &executor::parser::MergeClause,
+    ) -> Result<(String, Vec<u64>)> {
+        let node_pattern = merge_clause
+            .pattern
+            .elements
+            .iter()
+            .find_map(|element| {
+                if let executor::parser::PatternElement::Node(node) = element {
+                    Some(node.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::CypherExecution("MERGE requires a node pattern".to_string()))?;
+
+        let variable = node_pattern
+            .variable
+            .clone()
+            .ok_or_else(|| Error::CypherExecution("MERGE requires a variable alias".to_string()))?;
+
+        let mut node_ids = self.find_nodes_by_node_pattern(&node_pattern)?;
+        node_ids.sort_unstable();
+        node_ids.dedup();
+
+        if node_ids.is_empty() {
+            let labels = node_pattern.labels.clone();
+            let mut props = Map::new();
+            if let Some(prop_map) = &node_pattern.properties {
+                for (key, expr) in &prop_map.properties {
+                    let value = self.expression_to_json_value(expr)?;
+                    props.insert(key.clone(), value);
+                }
+            }
+            let node_id = self.create_node(labels, Value::Object(props))?;
+            node_ids.push(node_id);
+
+            if let Some(on_create) = &merge_clause.on_create {
+                let mut ctx = HashMap::new();
+                ctx.insert(variable.clone(), vec![node_id]);
+                self.apply_set_clause(&ctx, on_create)?;
+            }
+        } else if let Some(on_match) = &merge_clause.on_match {
+            let mut ctx = HashMap::new();
+            ctx.insert(variable.clone(), node_ids.clone());
+            self.apply_set_clause(&ctx, on_match)?;
+        }
+
+        Ok((variable, node_ids))
+    }
+
+    fn process_match_clause(
+        &mut self,
+        match_clause: &executor::parser::MatchClause,
+    ) -> Result<(String, Vec<u64>)> {
+        if match_clause.optional {
+            return Err(Error::CypherExecution(
+                "OPTIONAL MATCH not supported in write queries".to_string(),
+            ));
+        }
+
+        if match_clause.where_clause.is_some() {
+            return Err(Error::CypherExecution(
+                "MATCH with WHERE is not supported in write queries".to_string(),
+            ));
+        }
+
+        let node_pattern = match_clause
+            .pattern
+            .elements
+            .iter()
+            .find_map(|element| {
+                if let executor::parser::PatternElement::Node(node) = element {
+                    Some(node.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::CypherExecution("MATCH requires a node pattern".to_string()))?;
+
+        let variable = node_pattern
+            .variable
+            .clone()
+            .ok_or_else(|| Error::CypherExecution("MATCH requires a variable alias".to_string()))?;
+
+        let mut node_ids = self.find_nodes_by_node_pattern(&node_pattern)?;
+        node_ids.sort_unstable();
+        node_ids.dedup();
+
+        Ok((variable, node_ids))
+    }
+
+    fn apply_set_clause(
+        &mut self,
+        context: &HashMap<String, Vec<u64>>,
+        set_clause: &executor::parser::SetClause,
+    ) -> Result<()> {
+        if set_clause.items.is_empty() {
+            return Ok(());
+        }
+
+        let mut state_map: HashMap<u64, NodeWriteState> = HashMap::new();
+
+        for item in &set_clause.items {
+            match item {
+                executor::parser::SetItem::Property {
+                    target,
+                    property,
+                    value,
+                } => {
+                    let node_ids = context.get(target).ok_or_else(|| {
+                        Error::CypherExecution(format!(
+                            "Unknown variable '{}' in SET clause",
+                            target
+                        ))
+                    })?;
+
+                    let json_value = self.expression_to_json_value(value)?;
+                    for node_id in node_ids {
+                        let state = self.ensure_node_state(*node_id, &mut state_map)?;
+                        state
+                            .properties
+                            .insert(property.clone(), json_value.clone());
+                    }
+                }
+                executor::parser::SetItem::Label { target, label } => {
+                    let node_ids = context.get(target).ok_or_else(|| {
+                        Error::CypherExecution(format!(
+                            "Unknown variable '{}' in SET clause",
+                            target
+                        ))
+                    })?;
+
+                    for node_id in node_ids {
+                        let state = self.ensure_node_state(*node_id, &mut state_map)?;
+                        state.labels.insert(label.clone());
+                    }
+                }
+            }
+        }
+
+        for (node_id, state) in state_map.into_iter() {
+            self.persist_node_state(node_id, state)?;
+        }
+
+        Ok(())
+    }
+
+    fn apply_remove_clause(
+        &mut self,
+        context: &HashMap<String, Vec<u64>>,
+        remove_clause: &executor::parser::RemoveClause,
+    ) -> Result<()> {
+        if remove_clause.items.is_empty() {
+            return Ok(());
+        }
+
+        let mut state_map: HashMap<u64, NodeWriteState> = HashMap::new();
+
+        for item in &remove_clause.items {
+            match item {
+                executor::parser::RemoveItem::Property { target, property } => {
+                    let node_ids = context.get(target).ok_or_else(|| {
+                        Error::CypherExecution(format!(
+                            "Unknown variable '{}' in REMOVE clause",
+                            target
+                        ))
+                    })?;
+
+                    for node_id in node_ids {
+                        let state = self.ensure_node_state(*node_id, &mut state_map)?;
+                        state.properties.remove(property);
+                    }
+                }
+                executor::parser::RemoveItem::Label { target, label } => {
+                    let node_ids = context.get(target).ok_or_else(|| {
+                        Error::CypherExecution(format!(
+                            "Unknown variable '{}' in REMOVE clause",
+                            target
+                        ))
+                    })?;
+
+                    for node_id in node_ids {
+                        let state = self.ensure_node_state(*node_id, &mut state_map)?;
+                        state.labels.remove(label);
+                    }
+                }
+            }
+        }
+
+        for (node_id, state) in state_map.into_iter() {
+            self.persist_node_state(node_id, state)?;
+        }
+
+        Ok(())
+    }
+
+    fn build_return_result(
+        &mut self,
+        context: &HashMap<String, Vec<u64>>,
+        return_clause: &executor::parser::ReturnClause,
+    ) -> Result<executor::ResultSet> {
+        if return_clause.items.len() != 1 {
+            return Err(Error::CypherExecution(
+                "Only single RETURN items are supported in write queries".to_string(),
+            ));
+        }
+
+        let item = &return_clause.items[0];
+        let variable = match &item.expression {
+            executor::parser::Expression::Variable(var) => var.clone(),
+            _ => {
+                return Err(Error::CypherExecution(
+                    "Only variable projections are supported in RETURN for write queries"
+                        .to_string(),
+                ));
+            }
+        };
+
+        let node_ids = context.get(&variable).cloned().unwrap_or_default();
+        let mut seen = HashSet::new();
+        let mut rows = Vec::new();
+
+        for node_id in node_ids {
+            if seen.insert(node_id) {
+                let value = self.node_to_result_value(node_id)?;
+                rows.push(executor::Row {
+                    values: vec![value],
+                });
+            }
+        }
+
+        let column = item.alias.clone().unwrap_or(variable);
+        Ok(executor::ResultSet {
+            columns: vec![column],
+            rows,
+        })
+    }
+
+    fn ensure_node_state<'a>(
+        &mut self,
+        node_id: u64,
+        cache: &'a mut HashMap<u64, NodeWriteState>,
+    ) -> Result<&'a mut NodeWriteState> {
+        use std::collections::hash_map::Entry;
+        match cache.entry(node_id) {
+            Entry::Vacant(e) => {
+                let properties = self.load_node_properties_map(node_id)?;
+                let record = self.storage.read_node(node_id)?;
+                if record.is_deleted() {
+                    return Err(Error::CypherExecution(format!(
+                        "Node {} is deleted",
+                        node_id
+                    )));
+                }
+                let labels = self.catalog.get_labels_from_bitmap(record.label_bits)?;
+                Ok(e.insert(NodeWriteState {
+                    properties,
+                    labels: labels.into_iter().collect(),
+                }))
+            }
+            Entry::Occupied(e) => Ok(e.into_mut()),
+        }
+    }
+
+    fn persist_node_state(&mut self, node_id: u64, state: NodeWriteState) -> Result<()> {
+        let NodeWriteState { properties, labels } = state;
+        self.storage
+            .update_node_properties(node_id, Value::Object(properties))?;
+
+        let mut label_ids = Vec::new();
+        for label in labels {
+            let label_id = self.catalog.get_or_create_label(&label)?;
+            label_ids.push(label_id);
+        }
+        self.update_node_labels_with_ids(node_id, label_ids)?;
+        Ok(())
+    }
+
+    fn load_node_properties_map(&self, node_id: u64) -> Result<Map<String, Value>> {
+        if let Some(Value::Object(map)) = self.storage.load_node_properties(node_id)? {
+            return Ok(map);
+        }
+        Ok(Map::new())
+    }
+
+    fn node_to_result_value(&mut self, node_id: u64) -> Result<Value> {
+        let record = self.storage.read_node(node_id)?;
+        if record.is_deleted() {
+            return Ok(Value::Null);
+        }
+
+        let mut properties = self.load_node_properties_map(node_id)?;
+        properties.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
+        let label_names = self.catalog.get_labels_from_bitmap(record.label_bits)?;
+        let label_values = label_names.into_iter().map(Value::String).collect();
+        properties.insert("_nexus_labels".to_string(), Value::Array(label_values));
+
+        Ok(Value::Object(properties))
+    }
+
+    fn find_nodes_by_node_pattern(
+        &mut self,
+        node_pattern: &executor::parser::NodePattern,
+    ) -> Result<Vec<u64>> {
+        let mut label_ids = Vec::new();
+        for label in &node_pattern.labels {
+            match self.catalog.get_label_id(label) {
+                Ok(id) => label_ids.push(id),
+                Err(_) => return Ok(Vec::new()),
+            }
+        }
+
+        let mut candidates = Vec::new();
+        if label_ids.is_empty() {
+            let total_nodes = self.storage.node_count();
+            for node_id in 0..total_nodes {
+                candidates.push(node_id);
+            }
+        } else {
+            let bitmap = self.indexes.label_index.get_nodes_with_labels(&label_ids)?;
+            for node_id in bitmap.iter() {
+                candidates.push(node_id as u64);
+            }
+        }
+
+        let mut matches = Vec::new();
+        for node_id in candidates {
+            let record = self.storage.read_node(node_id)?;
+            if record.is_deleted() {
+                continue;
+            }
+            if let Some(prop_map) = &node_pattern.properties {
+                if !self.node_matches_properties(node_id, prop_map)? {
+                    continue;
+                }
+            }
+            matches.push(node_id);
+        }
+
+        Ok(matches)
+    }
+
+    fn node_matches_properties(
+        &mut self,
+        node_id: u64,
+        prop_map: &executor::parser::PropertyMap,
+    ) -> Result<bool> {
+        let properties = self.load_node_properties_map(node_id)?;
+        for (key, expr) in &prop_map.properties {
+            let expected = self.expression_to_json_value(expr)?;
+            match properties.get(key) {
+                Some(existing) if existing == &expected => {}
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    fn update_node_labels_with_ids(&mut self, node_id: u64, new_label_ids: Vec<u32>) -> Result<()> {
+        let mut record = self.storage.read_node(node_id)?;
+        if record.is_deleted() {
+            return Err(Error::CypherExecution(format!(
+                "Node {} is deleted",
+                node_id
+            )));
+        }
+
+        let current_ids = record.get_labels();
+        let current_set: HashSet<u32> = current_ids.iter().copied().collect();
+        let new_set: HashSet<u32> = new_label_ids.iter().copied().collect();
+
+        let added: Vec<u32> = new_set.difference(&current_set).copied().collect();
+        let removed: Vec<u32> = current_set.difference(&new_set).copied().collect();
+
+        let mut new_bits = 0u64;
+        for label_id in &new_label_ids {
+            if *label_id < 64 {
+                new_bits |= 1u64 << label_id;
+            }
+        }
+        record.label_bits = new_bits;
+
+        let mut tx = self.transaction_manager.begin_write()?;
+        self.storage.write_node(node_id, &record)?;
+        self.transaction_manager.commit(&mut tx)?;
+
+        self.indexes
+            .label_index
+            .set_node_labels(node_id, &new_label_ids)?;
+
+        for id in added {
+            self.catalog.increment_node_count(id)?;
+        }
+        for id in removed {
+            self.catalog.decrement_node_count(id)?;
+        }
+
+        Ok(())
     }
 
     /// Create a new node
@@ -1376,6 +1857,11 @@ impl Default for Engine {
     fn default() -> Self {
         Self::new().expect("Failed to create default engine")
     }
+}
+
+struct NodeWriteState {
+    properties: Map<String, Value>,
+    labels: HashSet<String>,
 }
 
 #[cfg(test)]
