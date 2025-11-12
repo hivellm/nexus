@@ -1515,6 +1515,42 @@ impl Engine {
         })
     }
 
+    /// Execute CALL subquery commands
+    fn execute_call_subquery_commands(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        // For now, execute each CALL subquery sequentially
+        // Future: Support IN TRANSACTIONS and correlated subqueries
+        let mut all_results = Vec::new();
+        let mut columns = Vec::new();
+
+        for clause in &ast.clauses {
+            if let executor::parser::Clause::CallSubquery(call_subquery) = clause {
+                // Execute the subquery recursively
+                let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
+                
+                // For IN TRANSACTIONS, we would batch the execution
+                // For now, just execute normally
+                if call_subquery.in_transactions {
+                    // TODO: Implement batch execution with transactions
+                    // For now, execute normally
+                }
+
+                // Merge results (for now, just take the first subquery's results)
+                if columns.is_empty() {
+                    columns = subquery_result.columns.clone();
+                }
+                all_results.extend(subquery_result.rows);
+            }
+        }
+
+        Ok(executor::ResultSet {
+            columns,
+            rows: all_results,
+        })
+    }
+
     /// Check constraints before creating or updating a node
     fn check_constraints(
         &self,
@@ -1778,6 +1814,15 @@ impl Engine {
 
         if has_create_constraint || has_drop_constraint {
             return self.execute_constraint_commands(ast);
+        }
+
+        // Check for CALL subquery commands
+        let has_call_subquery = ast.clauses.iter().any(|c| {
+            matches!(c, executor::parser::Clause::CallSubquery(_))
+        });
+
+        if has_call_subquery {
+            return self.execute_call_subquery_commands(ast);
         }
 
         // Check for user management commands (should be handled at server level)

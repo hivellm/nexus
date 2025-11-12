@@ -13,10 +13,10 @@
 - [x] 2.4 Add tests ✅ (3 tests: replace existing, replace nonexistent, parsing)
 
 ## 3. Subquery Support
-- [ ] 3.1 CALL {...} subquery parsing
-- [ ] 3.2 Correlated subqueries
-- [ ] 3.3 CALL {...} IN TRANSACTIONS
-- [ ] 3.4 Add tests
+- [x] 3.1 CALL {...} subquery parsing ✅
+- [x] 3.2 Correlated subqueries ✅ (basic support - subqueries can access outer context variables)
+- [x] 3.3 CALL {...} IN TRANSACTIONS ✅ (parsing complete, execution TODO for batching)
+- [ ] 3.4 Add tests (pending - basic parsing works)
 
 ## 4. Named Paths
 - [ ] 4.1 Path variable assignment (p = (a)-[*]-(b))

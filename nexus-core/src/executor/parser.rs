@@ -96,6 +96,8 @@ pub enum Clause {
     Explain(ExplainClause),
     /// PROFILE command for query execution profiling
     Profile(ProfileClause),
+    /// CALL subquery clause
+    CallSubquery(CallSubqueryClause),
 }
 
 /// MATCH clause with pattern matching
@@ -573,6 +575,17 @@ pub struct ProfileClause {
     pub query_string: Option<String>,
 }
 
+/// CALL subquery clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallSubqueryClause {
+    /// The subquery to execute
+    pub query: CypherQuery,
+    /// Whether to execute in transactions (CALL ... IN TRANSACTIONS)
+    pub in_transactions: bool,
+    /// Batch size for IN TRANSACTIONS (optional)
+    pub batch_size: Option<usize>,
+}
+
 /// Expression types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Expression {
@@ -990,6 +1003,18 @@ impl CypherParser {
                     Ok(Clause::UseDatabase(use_db_clause))
                 } else {
                     Err(self.error("USE must be followed by DATABASE"))
+                }
+            }
+            "CALL" => {
+                self.skip_whitespace();
+                // Check if this is CALL { subquery } or CALL procedure()
+                if self.peek_char() == Some('{') {
+                    let call_subquery_clause = self.parse_call_subquery_clause()?;
+                    Ok(Clause::CallSubquery(call_subquery_clause))
+                } else {
+                    // This is a procedure call, not a subquery
+                    // For now, we'll return an error as procedure calls are not fully implemented
+                    Err(self.error("CALL procedures are not yet supported. Use CALL { subquery } for subqueries."))
                 }
             }
             "BEGIN" => {
@@ -1896,6 +1921,80 @@ impl CypherParser {
         self.skip_whitespace();
         let name = self.parse_identifier()?;
         Ok(UseDatabaseClause { name })
+    }
+
+    /// Parse CALL subquery clause
+    /// Syntax: CALL { subquery } [IN TRANSACTIONS [OF n ROWS]]
+    fn parse_call_subquery_clause(&mut self) -> Result<CallSubqueryClause> {
+        // Expect opening brace
+        self.expect_char('{')?;
+        self.skip_whitespace();
+
+        // Parse the subquery (nested CypherQuery)
+        let mut clauses = Vec::new();
+
+        // Parse clauses until we find the closing brace
+        while self.pos < self.input.len() {
+            self.skip_whitespace();
+            
+            // Check for closing brace
+            if self.peek_char() == Some('}') {
+                self.consume_char();
+                break;
+            }
+
+            // Check if this is a clause boundary
+            if self.is_clause_boundary() {
+                let clause = self.parse_clause()?;
+                clauses.push(clause);
+            } else {
+                // No more clauses
+                break;
+            }
+        }
+
+        if clauses.is_empty() {
+            return Err(self.error("CALL subquery must contain at least one clause"));
+        }
+
+        let query = CypherQuery {
+            clauses,
+            params: std::collections::HashMap::new(),
+        };
+
+        // Check for IN TRANSACTIONS
+        self.skip_whitespace();
+        let (in_transactions, batch_size) = if self.peek_keyword("IN") {
+            self.parse_keyword()?; // consume "IN"
+            self.expect_keyword("TRANSACTIONS")?;
+            self.skip_whitespace();
+
+            // Check for batch size: OF n ROWS
+            let batch = if self.peek_keyword("OF") {
+                self.parse_keyword()?; // consume "OF"
+                self.skip_whitespace();
+                let size = self.parse_number()?;
+                self.skip_whitespace();
+                if self.peek_keyword("ROWS") {
+                    self.parse_keyword()?; // consume "ROWS"
+                } else if self.peek_keyword("ROW") {
+                    self.parse_keyword()?; // consume "ROW"
+                }
+                Some(size as usize)
+            } else {
+                None
+            };
+
+            (true, batch)
+        } else {
+            (false, None)
+        };
+
+        Ok(CallSubqueryClause {
+            query,
+            in_transactions,
+            batch_size,
+        })
     }
 
     /// Parse CREATE INDEX clause
