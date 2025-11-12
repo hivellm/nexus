@@ -25,7 +25,7 @@
 4. **implement-cypher-string-ops** - Phase 4: String operators and regex
    - Priority: 🟡 MEDIUM
    - Duration: 1 week
-   - Status: ⚪ Not started
+   - Status: ✅ COMPLETED (2025-11-11) - Parsing and evaluation implemented for STARTS WITH, ENDS WITH, CONTAINS, and regex (=~)
 
 5. **implement-cypher-paths** - Phase 5: Variable-length paths, shortest path
    - Priority: 🟡 MEDIUM
