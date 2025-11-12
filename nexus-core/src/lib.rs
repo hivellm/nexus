@@ -2341,7 +2341,7 @@ impl Engine {
         }
         record.label_bits = new_bits;
 
-        let mut tx = self.transaction_manager.begin_write()?;
+        let mut tx = self.transaction_manager.write().begin_write()?;
         self.storage.write_node(node_id, &record)?;
         self.transaction_manager.write().commit(&mut tx)?;
 
@@ -2365,7 +2365,7 @@ impl Engine {
         labels: Vec<String>,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let mut tx = self.transaction_manager.begin_write()?;
+        let mut tx = self.transaction_manager.write().begin_write()?;
 
         // Create labels in catalog and get their IDs
         let mut label_bits = 0u64;
@@ -2406,7 +2406,7 @@ impl Engine {
         rel_type: String,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let mut tx = self.transaction_manager.begin_write()?;
+        let mut tx = self.transaction_manager.write().begin_write()?;
         let type_id = self.catalog.get_or_create_type(&rel_type)?;
         let rel_id = self
             .storage
@@ -2479,7 +2479,7 @@ impl Engine {
             };
 
         // Write updated record
-        let mut tx = self.transaction_manager.begin_write()?;
+        let mut tx = self.transaction_manager.write().begin_write()?;
         self.storage.write_node(id, &node_record)?;
         self.transaction_manager.write().commit(&mut tx)?;
 
@@ -2505,7 +2505,7 @@ impl Engine {
             let mut deleted_record = node_record;
             deleted_record.mark_deleted();
 
-            let mut tx = self.transaction_manager.begin_write()?;
+            let mut tx = self.transaction_manager.write().begin_write()?;
             self.storage.write_node(id, &deleted_record)?;
             self.transaction_manager.write().commit(&mut tx)?;
 
@@ -2526,7 +2526,7 @@ impl Engine {
 
     /// Delete all relationships connected to a node (for DETACH DELETE)
     pub fn delete_node_relationships(&mut self, node_id: u64) -> Result<()> {
-        let mut tx = self.transaction_manager.begin_write()?;
+        let mut tx = self.transaction_manager.write().begin_write()?;
 
         // Find all relationships connected to this node
         let total_rels = self.storage.relationship_count();
