@@ -190,12 +190,21 @@ mod tests {
             "hashed_key".to_string(),
         );
 
-        // Set created_at to 10 days ago
-        api_key.created_at = Utc::now() - chrono::Duration::days(10);
+        // Test with expires_at
+        api_key.expires_at = Some(Utc::now() - chrono::Duration::days(1));
+        assert!(api_key.is_expired());
 
-        assert!(api_key.is_expired(Some(7))); // Expired after 7 days
-        assert!(!api_key.is_expired(Some(15))); // Not expired after 15 days
-        assert!(!api_key.is_expired(None)); // No expiration
+        api_key.expires_at = Some(Utc::now() + chrono::Duration::days(1));
+        assert!(!api_key.is_expired());
+
+        api_key.expires_at = None;
+        assert!(!api_key.is_expired());
+
+        // Test legacy method
+        api_key.created_at = Utc::now() - chrono::Duration::days(10);
+        assert!(api_key.is_expired_legacy(Some(7))); // Expired after 7 days
+        assert!(!api_key.is_expired_legacy(Some(15))); // Not expired after 15 days
+        assert!(!api_key.is_expired_legacy(None)); // No expiration
     }
 
     #[test]
