@@ -16,14 +16,14 @@
 - [x] 3.1 CALL {...} subquery parsing ✅
 - [x] 3.2 Correlated subqueries ✅ (basic support - subqueries can access outer context variables)
 - [x] 3.3 CALL {...} IN TRANSACTIONS ✅ (parsing and execution with batching implemented)
-- [ ] 3.4 Add tests (pending - basic parsing and execution works)
+- [x] 3.4 Add tests ✅ (7 tests: parsing, IN TRANSACTIONS parsing, batch size parsing, execution)
 
 ## 4. Named Paths
 - [x] 4.1 Path variable assignment (p = (a)-[*]-(b)) ✅
 - [x] 4.2 Path operations on named paths ✅ (path variable stored and accessible in RETURN)
-- [ ] 4.3 Add tests (pending - parsing and execution works)
+- [x] 4.3 Add tests ✅ (3 tests: parsing, variable-length parsing, execution)
 
 ## 5. Quality
-- [ ] 5.1 95%+ coverage
-- [ ] 5.2 No clippy warnings
-- [ ] 5.3 Update documentation
+- [ ] 5.1 95%+ coverage (pending - need to run coverage check)
+- [x] 5.2 No clippy warnings ✅
+- [ ] 5.3 Update documentation (pending)

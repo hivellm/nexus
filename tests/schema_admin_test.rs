@@ -6,6 +6,8 @@
 //! - Transaction Commands (BEGIN, COMMIT, ROLLBACK)
 //! - Database Management (CREATE/DROP/SHOW DATABASE) - parsing only
 //! - User Management (SHOW/CREATE USER, GRANT/REVOKE) - parsing only
+//! - CALL Subquery Support (CALL {...}, CALL {...} IN TRANSACTIONS)
+//! - Named Paths (p = (pattern))
 //!
 //! Note: Tests that require server execution are marked with #[cfg(feature = "server-tests")]
 //! and should only be run when the server is available.

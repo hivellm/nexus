@@ -1008,6 +1008,7 @@ mod tests {
             clauses: vec![
                 Clause::Match(MatchClause {
                     pattern: Pattern {
+                        path_variable: None,
                         elements: vec![PatternElement::Node(NodePattern {
                             variable: Some("n".to_string()),
                             labels: vec!["Person".to_string()],
@@ -1085,6 +1086,7 @@ mod tests {
             clauses: vec![
                 Clause::Match(MatchClause {
                     pattern: Pattern {
+                        path_variable: None,
                         elements: vec![PatternElement::Node(NodePattern {
                             variable: Some("n".to_string()),
                             labels: vec!["Person".to_string()],
@@ -1153,6 +1155,7 @@ mod tests {
             clauses: vec![
                 Clause::Match(MatchClause {
                     pattern: Pattern {
+                        path_variable: None,
                         elements: vec![PatternElement::Node(NodePattern {
                             variable: Some("n".to_string()),
                             labels: vec!["Person".to_string()],
@@ -1198,6 +1201,7 @@ mod tests {
             clauses: vec![
                 Clause::Match(MatchClause {
                     pattern: Pattern {
+                        path_variable: None,
                         elements: vec![
                             PatternElement::Node(NodePattern {
                                 variable: Some("a".to_string()),
@@ -1253,6 +1257,7 @@ mod tests {
             clauses: vec![
                 Clause::Match(MatchClause {
                     pattern: Pattern {
+                        path_variable: None,
                         elements: vec![
                             PatternElement::Node(NodePattern {
                                 variable: Some("a".to_string()),
@@ -1319,6 +1324,7 @@ mod tests {
             clauses: vec![
                 Clause::Match(MatchClause {
                     pattern: Pattern {
+                        path_variable: None,
                         elements: vec![
                             PatternElement::Node(NodePattern {
                                 variable: Some("a".to_string()),
@@ -1591,6 +1597,7 @@ mod tests {
             clauses: vec![
                 Clause::Match(MatchClause {
                     pattern: Pattern {
+                        path_variable: None,
                         elements: vec![PatternElement::Node(NodePattern {
                             variable: Some("n".to_string()),
                             labels: vec!["Person".to_string()],
