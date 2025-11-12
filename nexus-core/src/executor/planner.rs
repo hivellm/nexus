@@ -247,7 +247,7 @@ impl<'a> QueryPlanner<'a> {
                     // Check for hints for this variable
                     let use_index_hint = hints.iter().find(|h| {
                         if let QueryHint::UsingIndex { variable: hint_var, .. } = h {
-                            hint_var == &variable
+                            hint_var == variable
                         } else {
                             false
                         }
@@ -255,7 +255,7 @@ impl<'a> QueryPlanner<'a> {
                     
                     let use_scan_hint = hints.iter().find(|h| {
                         if let QueryHint::UsingScan { variable: hint_var, .. } = h {
-                            hint_var == &variable
+                            hint_var == variable
                         } else {
                             false
                         }
