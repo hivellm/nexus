@@ -160,6 +160,58 @@ async fn main() -> anyhow::Result<()> {
                 move |request| api::cypher::execute_cypher(axum::extract::State(server), request)
             }),
         )
+        // Authentication endpoints
+        .route(
+            "/auth/users",
+            post({
+                let server = nexus_server.clone();
+                move |request| api::auth::create_user(axum::extract::State(server), request)
+            }),
+        )
+        .route(
+            "/auth/users",
+            get({
+                let server = nexus_server.clone();
+                move || api::auth::list_users(axum::extract::State(server))
+            }),
+        )
+        .route(
+            "/auth/users/:username",
+            get({
+                let server = nexus_server.clone();
+                move |path| api::auth::get_user(axum::extract::State(server), path)
+            }),
+        )
+        .route(
+            "/auth/users/:username",
+            delete({
+                let server = nexus_server.clone();
+                move |path| api::auth::delete_user(axum::extract::State(server), path)
+            }),
+        )
+        .route(
+            "/auth/users/:username/permissions",
+            post({
+                let server = nexus_server.clone();
+                move |path, request| {
+                    api::auth::grant_permissions(axum::extract::State(server), path, request)
+                }
+            }),
+        )
+        .route(
+            "/auth/users/:username/permissions",
+            get({
+                let server = nexus_server.clone();
+                move |path| api::auth::get_user_permissions(axum::extract::State(server), path)
+            }),
+        )
+        .route(
+            "/auth/users/:username/permissions/:permission",
+            delete({
+                let server = nexus_server.clone();
+                move |path| api::auth::revoke_permission(axum::extract::State(server), path)
+            }),
+        )
         .route("/knn_traverse", post(api::knn::knn_traverse))
         .route("/ingest", post(api::ingest::ingest_data))
         // Schema management endpoints

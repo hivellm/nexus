@@ -1,5 +1,6 @@
 //! API handlers
 
+pub mod auth;
 pub mod auto_generate;
 pub mod clustering;
 pub mod comparison;
