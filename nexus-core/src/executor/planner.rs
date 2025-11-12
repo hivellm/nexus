@@ -169,6 +169,7 @@ impl<'a> QueryPlanner<'a> {
                 limit_count,
                 return_distinct,
                 &unwind_operators,
+                &match_hints,
                 &mut operators,
             )?;
         } else if !return_items.is_empty() || !unwind_operators.is_empty() {
@@ -207,6 +208,7 @@ impl<'a> QueryPlanner<'a> {
         limit_count: Option<usize>,
         distinct: bool,
         unwind_operators: &[Operator],
+        hints: &[QueryHint],
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         // Process ALL patterns, not just the first one
@@ -232,13 +234,6 @@ impl<'a> QueryPlanner<'a> {
 
         // Process the first pattern
         let start_pattern = self.select_start_pattern(patterns)?;
-
-        // Get hints from the first MATCH clause (if any)
-        let hints = if let Some(Clause::Match(match_clause)) = query.clauses.iter().find(|c| matches!(c, Clause::Match(_))) {
-            &match_clause.hints
-        } else {
-            &[]
-        };
 
         // Add NodeByLabel operators for nodes in first pattern
         for element in &start_pattern.elements {
