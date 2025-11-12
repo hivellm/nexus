@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexus-graph-db
+    ports:
+      - "15474:15474"
+    volumes:
+      - nexus-data:/app/data
+      - ./config:/app/config:ro
+    environment:
+      # Root user configuration
+      - NEXUS_ROOT_USERNAME=${NEXUS_ROOT_USERNAME:-admin}
+      - NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
+      - NEXUS_ROOT_ENABLED=${NEXUS_ROOT_ENABLED:-true}
+      - NEXUS_DISABLE_ROOT_AFTER_SETUP=${NEXUS_DISABLE_ROOT_AFTER_SETUP:-true}
+      
+      # Authentication configuration
+      - NEXUS_AUTH_ENABLED=${NEXUS_AUTH_ENABLED:-true}
+      - NEXUS_AUTH_REQUIRED_FOR_PUBLIC=${NEXUS_AUTH_REQUIRED_FOR_PUBLIC:-true}
+      
+      # Server configuration
+      - NEXUS_ADDR=0.0.0.0:15474
+      - NEXUS_DATA_DIR=/app/data
+      - RUST_LOG=${RUST_LOG:-info}
+    secrets:
+      - nexus_root_password
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:15474/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  nexus-data:
+    driver: local
+
+secrets:
+  nexus_root_password:
+    file: ./secrets/root_password.txt
+

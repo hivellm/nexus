@@ -1,811 +1,517 @@
-# Nexus Graph Database - Deployment Guide
+# Docker Deployment Guide
+
+This guide covers deploying Nexus Graph Database using Docker, including authentication setup, Docker secrets, environment variables, and production security recommendations.
 
 ## Table of Contents
 
-1. [System Requirements](#system-requirements)
-2. [Installation](#installation)
-3. [Configuration](#configuration)
-4. [Production Deployment](#production-deployment)
-5. [Docker Deployment](#docker-deployment)
-6. [Kubernetes Deployment](#kubernetes-deployment)
-7. [Monitoring](#monitoring)
-8. [Backup and Recovery](#backup-and-recovery)
-9. [Security](#security)
-10. [Troubleshooting](#troubleshooting)
-
-## System Requirements
-
-### Minimum Requirements
-
-- **CPU**: 2 cores, 2.0 GHz
-- **RAM**: 4 GB
-- **Storage**: 10 GB SSD
-- **OS**: Linux (Ubuntu 20.04+), macOS (10.15+), Windows 10+
-- **Network**: 100 Mbps
-
-### Recommended Requirements
-
-- **CPU**: 8+ cores, 3.0+ GHz
-- **RAM**: 16+ GB
-- **Storage**: 100+ GB NVMe SSD
-- **OS**: Linux (Ubuntu 22.04 LTS)
-- **Network**: 1 Gbps
-
-### Software Dependencies
-
-- Rust 1.70+ (for building from source)
-- Docker (for containerized deployment)
-- Kubernetes (for orchestrated deployment)
-
-## Installation
-
-### Option 1: Pre-built Binaries
-
-```bash
-# Download latest release
-wget https://github.com/your-org/nexus/releases/latest/download/nexus-server-linux-x86_64.tar.gz
-
-# Extract and install
-tar -xzf nexus-server-linux-x86_64.tar.gz
-sudo mv nexus-server /usr/local/bin/
-sudo chmod +x /usr/local/bin/nexus-server
-
-# Verify installation
-nexus-server --version
-```
-
-### Option 2: Build from Source
-
-```bash
-# Clone repository
-git clone https://github.com/your-org/nexus.git
-cd nexus
-
-# Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Build release version
-cargo build --release
-
-# Install
-sudo cp target/release/nexus-server /usr/local/bin/
-sudo chmod +x /usr/local/bin/nexus-server
-```
-
-### Option 3: Package Managers
-
-#### Ubuntu/Debian
-
-```bash
-# Add repository (when available)
-curl -fsSL https://packages.nexus-db.com/debian/nexus-keyring.gpg | sudo gpg --dearmor -o /usr/share/keyrings/nexus-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/nexus-archive-keyring.gpg] https://packages.nexus-db.com/debian stable main" | sudo tee /etc/apt/sources.list.d/nexus.list
-
-# Install
-sudo apt update
-sudo apt install nexus-server
-```
-
-#### macOS (Homebrew)
-
-```bash
-# Add tap (when available)
-brew tap nexus-db/nexus
-
-# Install
-brew install nexus-server
-```
-
-## Configuration
-
-### Configuration File
-
-Create a configuration file at `/etc/nexus/config.yml`:
-
-```yaml
-# Server configuration
-server:
-  host: "0.0.0.0"
-  port: 3000
-  workers: 8
-  
-# Database configuration
-database:
-  data_dir: "/var/lib/nexus/data"
-  catalog_dir: "/var/lib/nexus/catalog"
-  wal_dir: "/var/lib/nexus/wal"
-  
-# Index configuration
-indexes:
-  label_index:
-    enabled: true
-    cache_size_mb: 256
-    
-  knn_index:
-    enabled: true
-    dimension: 128
-    cache_size_mb: 512
-    
-# Logging configuration
-logging:
-  level: "info"
-  file: "/var/log/nexus/nexus.log"
-  max_size_mb: 100
-  max_files: 5
-  
-# Performance tuning
-performance:
-  max_memory_mb: 8192
-  query_timeout_ms: 30000
-  batch_size: 1000
-  
-# Security (for future implementation)
-security:
-  enabled: false
-  jwt_secret: ""
-  cors_origins: []
-```
-
-### Environment Variables
-
-You can also configure Nexus using environment variables:
-
-```bash
-export NEXUS_HOST=0.0.0.0
-export NEXUS_PORT=3000
-export NEXUS_DATA_DIR=/var/lib/nexus/data
-export NEXUS_LOG_LEVEL=info
-export NEXUS_MAX_MEMORY_MB=8192
-```
-
-### System Service
-
-Create a systemd service file at `/etc/systemd/system/nexus.service`:
-
-```ini
-[Unit]
-Description=Nexus Graph Database Server
-After=network.target
-
-[Service]
-Type=simple
-User=nexus
-Group=nexus
-ExecStart=/usr/local/bin/nexus-server --config /etc/nexus/config.yml
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=nexus
-
-# Security settings
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/nexus /var/log/nexus
-
-# Resource limits
-LimitNOFILE=65536
-LimitNPROC=32768
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start the service:
-
-```bash
-# Create nexus user
-sudo useradd -r -s /bin/false -d /var/lib/nexus nexus
-
-# Create directories
-sudo mkdir -p /var/lib/nexus/{data,catalog,wal}
-sudo mkdir -p /var/log/nexus
-sudo mkdir -p /etc/nexus
-
-# Set permissions
-sudo chown -R nexus:nexus /var/lib/nexus /var/log/nexus
-sudo chmod 755 /var/lib/nexus /var/log/nexus
-
-# Enable and start service
-sudo systemctl daemon-reload
-sudo systemctl enable nexus
-sudo systemctl start nexus
-
-# Check status
-sudo systemctl status nexus
-```
-
-## Production Deployment
-
-### High Availability Setup
-
-For production deployments, consider the following architecture:
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Load Balancer │    │   Load Balancer │    │   Load Balancer │
-│     (HAProxy)   │    │     (HAProxy)   │    │     (HAProxy)   │
-└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
-          │                      │                      │
-          ▼                      ▼                      ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Nexus Node 1  │    │   Nexus Node 2  │    │   Nexus Node 3  │
-│   (Primary)     │    │   (Secondary)   │    │   (Secondary)   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-          │                      │                      │
-          └──────────────────────┼──────────────────────┘
-                                 ▼
-                    ┌─────────────────────────┐
-                    │    Shared Storage       │
-                    │    (NFS/Ceph)          │
-                    └─────────────────────────┘
-```
-
-### Load Balancer Configuration (HAProxy)
-
-```haproxy
-global
-    daemon
-    maxconn 4096
-
-defaults
-    mode http
-    timeout connect 5000ms
-    timeout client 50000ms
-    timeout server 50000ms
-
-frontend nexus_frontend
-    bind *:80
-    bind *:443 ssl crt /etc/ssl/certs/nexus.pem
-    redirect scheme https if !{ ssl_fc }
-    
-    default_backend nexus_backend
-
-backend nexus_backend
-    balance roundrobin
-    option httpchk GET /health
-    
-    server nexus1 10.0.1.10:3000 check
-    server nexus2 10.0.1.11:3000 check
-    server nexus3 10.0.1.12:3000 check
-```
-
-### Database Replication
-
-For data replication between nodes, implement a custom replication strategy:
-
-```bash
-# On primary node
-nexus-server --role primary --replication-port 3001
-
-# On secondary nodes
-nexus-server --role secondary --primary-host 10.0.1.10 --primary-port 3001
-```
-
-## Docker Deployment
-
-### Dockerfile
-
-```dockerfile
-FROM rust:1.70-slim as builder
-
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bullseye-slim
-
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /app/target/release/nexus-server /usr/local/bin/nexus-server
-
-RUN useradd -r -s /bin/false nexus
-USER nexus
-
-EXPOSE 3000
-
-VOLUME ["/var/lib/nexus"]
-
-CMD ["nexus-server", "--config", "/etc/nexus/config.yml"]
-```
-
-### Docker Compose
-
-```yaml
-version: '3.8'
-
-services:
-  nexus:
-    build: .
-    ports:
-      - "3000:3000"
-    volumes:
-      - nexus_data:/var/lib/nexus
-      - ./config.yml:/etc/nexus/config.yml:ro
-    environment:
-      - NEXUS_LOG_LEVEL=info
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  nexus-replica:
-    build: .
-    ports:
-      - "3001:3000"
-    volumes:
-      - nexus_replica_data:/var/lib/nexus
-      - ./config-replica.yml:/etc/nexus/config.yml:ro
-    environment:
-      - NEXUS_LOG_LEVEL=info
-    restart: unless-stopped
-    depends_on:
-      - nexus
-
-volumes:
-  nexus_data:
-  nexus_replica_data:
-```
-
-### Docker Run
+1. [Quick Start](#quick-start)
+2. [Dockerfile Overview](#dockerfile-overview)
+3. [Docker Compose](#docker-compose)
+4. [Root User Configuration](#root-user-configuration)
+5. [Docker Secrets](#docker-secrets)
+6. [Environment Variables](#environment-variables)
+7. [Production Deployment](#production-deployment)
+8. [Security Recommendations](#security-recommendations)
+9. [Troubleshooting](#troubleshooting)
+
+## Quick Start
+
+### Using Docker Compose (Recommended)
+
+1. **Create secrets directory:**
+   ```bash
+   mkdir -p secrets
+   echo "your_secure_password_here" > secrets/root_password.txt
+   chmod 600 secrets/root_password.txt
+   ```
+
+2. **Start Nexus:**
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **Check logs:**
+   ```bash
+   docker-compose logs -f nexus
+   ```
+
+4. **Verify health:**
+   ```bash
+   curl http://localhost:15474/health
+   ```
+
+### Using Docker Run
 
 ```bash
 # Build image
-docker build -t nexus-server .
+docker build -t nexus-graph-db:latest .
 
 # Run container
 docker run -d \
   --name nexus \
-  -p 3000:3000 \
-  -v nexus_data:/var/lib/nexus \
-  -v ./config.yml:/etc/nexus/config.yml:ro \
-  nexus-server
+  -p 15474:15474 \
+  -v nexus-data:/app/data \
+  -e NEXUS_ROOT_USERNAME=admin \
+  -e NEXUS_ROOT_PASSWORD=secure_password_here \
+  -e NEXUS_AUTH_ENABLED=true \
+  -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
+  nexus-graph-db:latest
 ```
 
-## Kubernetes Deployment
+## Dockerfile Overview
 
-### Namespace
+The Dockerfile uses a multi-stage build for optimal image size:
 
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: nexus
-```
+### Build Stage
+- Uses `rustlang/rust:nightly` base image
+- Installs build dependencies (pkg-config, libssl-dev)
+- Builds the project in release mode
+- Produces optimized binary
 
-### ConfigMap
+### Runtime Stage
+- Uses `debian:bookworm-slim` for minimal size
+- Installs only runtime dependencies (ca-certificates, libssl3)
+- Creates non-root user (`nexus`) for security
+- Sets up data and config directories
+- Includes health check
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nexus-config
-  namespace: nexus
-data:
-  config.yml: |
-    server:
-      host: "0.0.0.0"
-      port: 3000
-      workers: 4
-    database:
-      data_dir: "/var/lib/nexus/data"
-    logging:
-      level: "info"
-```
+### Image Size
+- Build stage: ~2GB (temporary)
+- Runtime stage: ~150MB (final image)
 
-### PersistentVolumeClaim
+## Docker Compose
 
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: nexus-data
-  namespace: nexus
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 100Gi
-  storageClassName: fast-ssd
-```
+The `docker-compose.yml` file provides a complete setup with:
 
-### Deployment
+- **Volume persistence**: Data stored in `nexus-data` volume
+- **Secrets management**: Root password from Docker secrets
+- **Health checks**: Automatic health monitoring
+- **Restart policy**: Automatic restart on failure
+- **Environment variables**: Configurable via `.env` file
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nexus
-  namespace: nexus
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: nexus
-  template:
-    metadata:
-      labels:
-        app: nexus
-    spec:
-      containers:
-      - name: nexus
-        image: nexus-server:latest
-        ports:
-        - containerPort: 3000
-        volumeMounts:
-        - name: config
-          mountPath: /etc/nexus
-        - name: data
-          mountPath: /var/lib/nexus
-        env:
-        - name: NEXUS_LOG_LEVEL
-          value: "info"
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "500m"
-          limits:
-            memory: "8Gi"
-            cpu: "2"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 3000
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 3000
-          initialDelaySeconds: 5
-          periodSeconds: 5
-      volumes:
-      - name: config
-        configMap:
-          name: nexus-config
-      - name: data
-        persistentVolumeClaim:
-          claimName: nexus-data
-```
+### Customizing Docker Compose
 
-### Service
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: nexus-service
-  namespace: nexus
-spec:
-  selector:
-    app: nexus
-  ports:
-  - port: 3000
-    targetPort: 3000
-  type: ClusterIP
-```
-
-### Ingress
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: nexus-ingress
-  namespace: nexus
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-spec:
-  tls:
-  - hosts:
-    - nexus.example.com
-    secretName: nexus-tls
-  rules:
-  - host: nexus.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: nexus-service
-            port:
-              number: 3000
-```
-
-## Monitoring
-
-### Prometheus Metrics
-
-Nexus exposes Prometheus-compatible metrics at `/metrics`:
-
-```yaml
-# Add to prometheus.yml
-scrape_configs:
-  - job_name: 'nexus'
-    static_configs:
-      - targets: ['nexus.example.com:3000']
-    metrics_path: '/metrics'
-    scrape_interval: 15s
-```
-
-### Grafana Dashboard
-
-Key metrics to monitor:
-
-- **Query Performance**: Query execution time, QPS
-- **Memory Usage**: Heap usage, cache hit rates
-- **Storage**: Disk usage, WAL size
-- **Network**: Request rate, error rate
-- **Indexes**: Index size, search performance
-
-### Log Aggregation
-
-Configure centralized logging with ELK stack or similar:
-
-```yaml
-# Logstash configuration
-input {
-  beats {
-    port => 5044
-  }
-}
-
-filter {
-  if [fields][service] == "nexus" {
-    grok {
-      match => { "message" => "%{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:level} %{GREEDYDATA:message}" }
-    }
-  }
-}
-
-output {
-  elasticsearch {
-    hosts => ["elasticsearch:9200"]
-    index => "nexus-%{+YYYY.MM.dd}"
-  }
-}
-```
-
-## Backup and Recovery
-
-### Backup Strategy
+Create a `.env` file:
 
 ```bash
-#!/bin/bash
-# backup-nexus.sh
-
-BACKUP_DIR="/backup/nexus"
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="nexus_backup_${DATE}.tar.gz"
-
-# Create backup directory
-mkdir -p $BACKUP_DIR
-
-# Stop Nexus service
-systemctl stop nexus
-
-# Create backup
-tar -czf "${BACKUP_DIR}/${BACKUP_FILE}" \
-  /var/lib/nexus/data \
-  /var/lib/nexus/catalog \
-  /var/lib/nexus/wal
-
-# Start Nexus service
-systemctl start nexus
-
-# Upload to cloud storage (optional)
-aws s3 cp "${BACKUP_DIR}/${BACKUP_FILE}" s3://nexus-backups/
-
-# Cleanup old backups (keep last 7 days)
-find $BACKUP_DIR -name "nexus_backup_*.tar.gz" -mtime +7 -delete
-
-echo "Backup completed: ${BACKUP_FILE}"
+# .env
+NEXUS_ROOT_USERNAME=admin
+NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
+NEXUS_ROOT_ENABLED=true
+NEXUS_DISABLE_ROOT_AFTER_SETUP=true
+NEXUS_AUTH_ENABLED=true
+NEXUS_AUTH_REQUIRED_FOR_PUBLIC=true
+RUST_LOG=info
 ```
 
-### Recovery Process
+## Root User Configuration
+
+### Method 1: Environment Variables (Development)
 
 ```bash
-#!/bin/bash
-# restore-nexus.sh
-
-BACKUP_FILE=$1
-RESTORE_DIR="/var/lib/nexus"
-
-if [ -z "$BACKUP_FILE" ]; then
-    echo "Usage: $0 <backup_file>"
-    exit 1
-fi
-
-# Stop Nexus service
-systemctl stop nexus
-
-# Restore from backup
-tar -xzf "$BACKUP_FILE" -C /
-
-# Start Nexus service
-systemctl start nexus
-
-echo "Recovery completed from: $BACKUP_FILE"
+docker run -d \
+  -e NEXUS_ROOT_USERNAME=admin \
+  -e NEXUS_ROOT_PASSWORD=secure_password \
+  -e NEXUS_ROOT_ENABLED=true \
+  -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
+  nexus-graph-db:latest
 ```
 
-### Automated Backups
-
-Set up automated backups with cron:
+### Method 2: Docker Secrets (Production - Recommended)
 
 ```bash
-# Add to crontab
-0 2 * * * /opt/nexus/scripts/backup-nexus.sh
+# Create secret file
+echo "secure_password_here" > secrets/root_password.txt
+chmod 600 secrets/root_password.txt
+
+# Use in docker-compose.yml
+secrets:
+  - nexus_root_password
+
+environment:
+  - NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
 ```
 
-## Security
+### Method 3: Config File
 
-### Network Security
+Mount `config/auth.toml`:
 
-1. **Firewall Configuration**:
 ```bash
-# Allow only necessary ports
-ufw allow 3000/tcp
-ufw deny 3001/tcp  # Replication port (internal only)
+docker run -d \
+  -v $(pwd)/config:/app/config:ro \
+  nexus-graph-db:latest
 ```
 
-2. **SSL/TLS Configuration**:
+**Priority Order:**
+1. Environment variables (highest priority)
+2. Docker secrets file (`NEXUS_ROOT_PASSWORD_FILE`)
+3. Config file (`config/auth.toml`)
+4. Default values (lowest priority)
+
+## Docker Secrets
+
+Docker secrets provide secure credential management:
+
+### Creating Secrets
+
+**Using Docker Swarm:**
+```bash
+echo "secure_password" | docker secret create nexus_root_password -
+```
+
+**Using Docker Compose:**
 ```yaml
-# In config.yml
-server:
-  tls:
-    enabled: true
-    cert_file: "/etc/ssl/certs/nexus.crt"
-    key_file: "/etc/ssl/private/nexus.key"
+secrets:
+  nexus_root_password:
+    file: ./secrets/root_password.txt
 ```
 
-### Authentication (Future Implementation)
+### Using Secrets
 
+**In docker-compose.yml:**
 ```yaml
-# Planned security configuration
-security:
-  enabled: true
-  jwt_secret: "your-secret-key"
-  cors_origins:
-    - "https://app.example.com"
-  rate_limiting:
-    enabled: true
-    requests_per_minute: 1000
+services:
+  nexus:
+    secrets:
+      - nexus_root_password
+    environment:
+      - NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
 ```
 
-### Data Encryption
+**In Dockerfile:**
+```dockerfile
+# Secrets are automatically mounted at /run/secrets/
+ENV NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
+```
+
+### Security Best Practices
+
+1. **Never commit secrets to git:**
+   ```bash
+   echo "secrets/" >> .gitignore
+   echo "*.txt" >> .gitignore  # if storing in files
+   ```
+
+2. **Use proper file permissions:**
+   ```bash
+   chmod 600 secrets/root_password.txt
+   ```
+
+3. **Rotate secrets regularly:**
+   ```bash
+   # Update secret file
+   echo "new_password" > secrets/root_password.txt
+   # Restart container
+   docker-compose restart nexus
+   ```
+
+## Environment Variables
+
+### Root User Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXUS_ROOT_USERNAME` | `root` | Root user username |
+| `NEXUS_ROOT_PASSWORD` | `root` | Root user password (plaintext) |
+| `NEXUS_ROOT_PASSWORD_FILE` | - | Path to password file (Docker secrets) |
+| `NEXUS_ROOT_ENABLED` | `true` | Enable root user |
+| `NEXUS_DISABLE_ROOT_AFTER_SETUP` | `false` | Auto-disable root after first admin |
+
+### Authentication Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXUS_AUTH_ENABLED` | `false` | Enable authentication |
+| `NEXUS_AUTH_REQUIRED_FOR_PUBLIC` | `true` | Require auth for 0.0.0.0 binding |
+| `NEXUS_AUTH_REQUIRE_HEALTH_AUTH` | `false` | Require auth for /health endpoint |
+
+### Server Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXUS_ADDR` | `127.0.0.1:15474` | Server bind address |
+| `NEXUS_DATA_DIR` | `./data` | Data directory path |
+| `RUST_LOG` | `info` | Logging level (trace, debug, info, warn, error) |
+
+### Example Configuration
 
 ```bash
-# Encrypt data directory
-sudo cryptsetup luksFormat /dev/sdb
-sudo cryptsetup luksOpen /dev/sdb nexus_data
-sudo mkfs.ext4 /dev/mapper/nexus_data
-sudo mount /dev/mapper/nexus_data /var/lib/nexus
+# Production configuration
+export NEXUS_ROOT_USERNAME=admin
+export NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
+export NEXUS_ROOT_ENABLED=true
+export NEXUS_DISABLE_ROOT_AFTER_SETUP=true
+export NEXUS_AUTH_ENABLED=true
+export NEXUS_AUTH_REQUIRED_FOR_PUBLIC=true
+export NEXUS_ADDR=0.0.0.0:15474
+export NEXUS_DATA_DIR=/app/data
+export RUST_LOG=warn
+```
+
+## Production Deployment
+
+### Step 1: Build Production Image
+
+```bash
+# Build optimized image
+docker build -t nexus-graph-db:v0.11.0 .
+
+# Tag as latest
+docker tag nexus-graph-db:v0.11.0 nexus-graph-db:latest
+```
+
+### Step 2: Create Secrets
+
+```bash
+# Create secrets directory
+mkdir -p secrets
+
+# Generate secure password
+openssl rand -base64 32 > secrets/root_password.txt
+chmod 600 secrets/root_password.txt
+```
+
+### Step 3: Configure Environment
+
+Create `.env` file:
+
+```bash
+NEXUS_ROOT_USERNAME=admin
+NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
+NEXUS_ROOT_ENABLED=true
+NEXUS_DISABLE_ROOT_AFTER_SETUP=true
+NEXUS_AUTH_ENABLED=true
+NEXUS_AUTH_REQUIRED_FOR_PUBLIC=true
+NEXUS_ADDR=0.0.0.0:15474
+RUST_LOG=warn
+```
+
+### Step 4: Deploy
+
+```bash
+# Start services
+docker-compose up -d
+
+# Verify deployment
+docker-compose ps
+docker-compose logs nexus
+
+# Check health
+curl http://localhost:15474/health
+```
+
+### Step 5: Initial Setup
+
+1. **Login as root:**
+   ```bash
+   curl -X POST http://localhost:15474/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "your_password"}'
+   ```
+
+2. **Create admin user:**
+   ```bash
+   curl -X POST http://localhost:15474/auth/users \
+     -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "username": "admin_user",
+       "password": "secure_password",
+       "permissions": ["READ", "WRITE", "ADMIN"]
+     }'
+   ```
+
+3. **Root user will auto-disable** (if `NEXUS_DISABLE_ROOT_AFTER_SETUP=true`)
+
+4. **Create API key:**
+   ```bash
+   curl -X POST http://localhost:15474/auth/api-keys \
+     -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "production-api-key",
+       "permissions": ["READ", "WRITE"]
+     }'
+   ```
+
+## Security Recommendations
+
+### 1. Use Docker Secrets
+
+**✅ Recommended:**
+```yaml
+secrets:
+  - nexus_root_password
+environment:
+  - NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
+```
+
+**❌ Avoid:**
+```yaml
+environment:
+  - NEXUS_ROOT_PASSWORD=plaintext_password  # Visible in docker inspect
+```
+
+### 2. Enable Authentication for Public Binding
+
+**✅ Required for production:**
+```bash
+NEXUS_AUTH_ENABLED=true
+NEXUS_AUTH_REQUIRED_FOR_PUBLIC=true
+```
+
+### 3. Auto-Disable Root User
+
+**✅ Recommended:**
+```bash
+NEXUS_DISABLE_ROOT_AFTER_SETUP=true
+```
+
+This automatically disables the root user after the first admin user is created.
+
+### 4. Use Non-Default Ports
+
+**✅ Recommended:**
+```bash
+# Map to non-standard port
+ports:
+  - "127.0.0.1:15474:15474"  # Only accessible from localhost
+```
+
+### 5. Limit Container Resources
+
+```yaml
+services:
+  nexus:
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+```
+
+### 6. Use Read-Only Root Filesystem
+
+```yaml
+services:
+  nexus:
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/data
+```
+
+### 7. Network Isolation
+
+```yaml
+services:
+  nexus:
+    networks:
+      - internal
+    # Don't expose ports publicly
+
+networks:
+  internal:
+    driver: bridge
+```
+
+### 8. Regular Updates
+
+```bash
+# Pull latest image
+docker pull nexus-graph-db:latest
+
+# Update container
+docker-compose pull
+docker-compose up -d
 ```
 
 ## Troubleshooting
 
-### Common Issues
+### Container Won't Start
 
-#### High Memory Usage
-
+**Check logs:**
 ```bash
-# Check memory usage
-free -h
-ps aux --sort=-%mem | head
-
-# Adjust memory limits in config.yml
-performance:
-  max_memory_mb: 4096  # Reduce if needed
+docker-compose logs nexus
+docker logs nexus
 ```
 
-#### Slow Queries
+**Common issues:**
+- Port already in use: Change `NEXUS_ADDR` or port mapping
+- Permission denied: Check volume permissions
+- Missing secrets: Verify secret file exists and is readable
 
+### Authentication Not Working
+
+**Verify configuration:**
 ```bash
-# Enable query logging
-logging:
-  level: "debug"
-  query_logging: true
+# Check environment variables
+docker exec nexus env | grep NEXUS
 
-# Check slow queries in logs
-tail -f /var/log/nexus/nexus.log | grep "slow query"
+# Check secret file
+docker exec nexus cat /run/secrets/nexus_root_password
+
+# Test login
+curl -X POST http://localhost:15474/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "your_password"}'
 ```
 
-#### Disk Space Issues
+### Data Persistence Issues
 
+**Check volume:**
 ```bash
-# Check disk usage
-df -h
-du -sh /var/lib/nexus/*
+# List volumes
+docker volume ls
 
-# Clean up old WAL files
-find /var/lib/nexus/wal -name "*.wal" -mtime +7 -delete
+# Inspect volume
+docker volume inspect nexus-data
+
+# Check data directory
+docker exec nexus ls -la /app/data
 ```
 
-#### Connection Issues
+### Health Check Failing
 
+**Manual health check:**
 ```bash
-# Check if service is running
-systemctl status nexus
-
-# Check port binding
-netstat -tlnp | grep 3000
-
-# Test connectivity
-curl -f http://localhost:3000/health
+docker exec nexus curl -f http://localhost:15474/health
 ```
 
-### Performance Tuning
-
-#### System-level Optimizations
-
+**Check server logs:**
 ```bash
-# Increase file descriptor limits
-echo "nexus soft nofile 65536" >> /etc/security/limits.conf
-echo "nexus hard nofile 65536" >> /etc/security/limits.conf
-
-# Optimize kernel parameters
-echo "vm.swappiness=10" >> /etc/sysctl.conf
-echo "vm.dirty_ratio=15" >> /etc/sysctl.conf
-sysctl -p
+docker-compose logs -f nexus
 ```
 
-#### Application-level Optimizations
+### Performance Issues
 
+**Monitor resources:**
+```bash
+docker stats nexus
+```
+
+**Adjust resources:**
 ```yaml
-# In config.yml
-performance:
-  max_memory_mb: 8192
-  query_timeout_ms: 30000
-  batch_size: 1000
-  cache_size_mb: 1024
-
-indexes:
-  label_index:
-    cache_size_mb: 512
-  knn_index:
-    cache_size_mb: 1024
+services:
+  nexus:
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
 ```
 
-### Support and Maintenance
+## Additional Resources
 
-#### Log Analysis
+- [Authentication Guide](AUTHENTICATION.md) - Complete authentication documentation
+- [Security Audit](SECURITY_AUDIT.md) - Security best practices and audit report
+- [API Documentation](api/openapi.yml) - Complete API reference
 
-```bash
-# Monitor error logs
-tail -f /var/log/nexus/nexus.log | grep ERROR
+## Support
 
-# Analyze query performance
-grep "execution_time" /var/log/nexus/nexus.log | sort -k3 -n
-```
-
-#### Health Checks
-
-```bash
-# Create health check script
-#!/bin/bash
-response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health)
-if [ $response -eq 200 ]; then
-    echo "Nexus is healthy"
-    exit 0
-else
-    echo "Nexus is unhealthy (HTTP $response)"
-    exit 1
-fi
-```
-
-This deployment guide provides comprehensive instructions for deploying Nexus in various environments. For additional support, refer to the troubleshooting section or contact the development team.
-
-
-
-
-
+For issues and questions:
+- GitHub Issues: https://github.com/hivellm/nexus/issues
+- Documentation: https://github.com/hivellm/nexus/docs
