@@ -1331,6 +1331,9 @@ pub(crate) async fn execute_user_commands(
                         "WRITE" => Ok(Permission::Write),
                         "ADMIN" => Ok(Permission::Admin),
                         "SUPER" => Ok(Permission::Super),
+                        "QUEUE" => Ok(Permission::Queue),
+                        "CHATROOM" => Ok(Permission::Chatroom),
+                        "REST" => Ok(Permission::Rest),
                         _ => Err(format!("Unknown permission: {}", p)),
                     })
                     .collect();
@@ -1403,6 +1406,9 @@ pub(crate) async fn execute_user_commands(
                         "WRITE" => Ok(Permission::Write),
                         "ADMIN" => Ok(Permission::Admin),
                         "SUPER" => Ok(Permission::Super),
+                        "QUEUE" => Ok(Permission::Queue),
+                        "CHATROOM" => Ok(Permission::Chatroom),
+                        "REST" => Ok(Permission::Rest),
                         _ => Err(format!("Unknown permission: {}", p)),
                     })
                     .collect();

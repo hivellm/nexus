@@ -15,6 +15,12 @@ pub enum Permission {
     Admin,
     /// Super user access (replication, cluster management)
     Super,
+    /// Queue operations (publish, consume)
+    Queue,
+    /// Chatroom operations
+    Chatroom,
+    /// REST API access
+    Rest,
 }
 
 impl fmt::Display for Permission {
@@ -24,6 +30,9 @@ impl fmt::Display for Permission {
             Permission::Write => write!(f, "write"),
             Permission::Admin => write!(f, "admin"),
             Permission::Super => write!(f, "super"),
+            Permission::Queue => write!(f, "queue"),
+            Permission::Chatroom => write!(f, "chatroom"),
+            Permission::Rest => write!(f, "rest"),
         }
     }
 }
@@ -36,6 +45,9 @@ impl Permission {
             Permission::Write,
             Permission::Admin,
             Permission::Super,
+            Permission::Queue,
+            Permission::Chatroom,
+            Permission::Rest,
         ]
     }
 
@@ -57,6 +69,9 @@ impl Permission {
             Permission::Write => 2,
             Permission::Admin => 3,
             Permission::Super => 4,
+            Permission::Queue => 2,
+            Permission::Chatroom => 2,
+            Permission::Rest => 1,
         }
     }
 }
@@ -70,6 +85,9 @@ impl FromStr for Permission {
             "write" => Ok(Permission::Write),
             "admin" => Ok(Permission::Admin),
             "super" => Ok(Permission::Super),
+            "queue" => Ok(Permission::Queue),
+            "chatroom" => Ok(Permission::Chatroom),
+            "rest" => Ok(Permission::Rest),
             _ => Err(format!("Invalid permission: {}", s)),
         }
     }
@@ -183,6 +201,9 @@ mod tests {
         assert_eq!("Write".parse::<Permission>(), Ok(Permission::Write));
         assert_eq!("admin".parse::<Permission>(), Ok(Permission::Admin));
         assert_eq!("super".parse::<Permission>(), Ok(Permission::Super));
+        assert_eq!("queue".parse::<Permission>(), Ok(Permission::Queue));
+        assert_eq!("chatroom".parse::<Permission>(), Ok(Permission::Chatroom));
+        assert_eq!("rest".parse::<Permission>(), Ok(Permission::Rest));
         assert!("invalid".parse::<Permission>().is_err());
     }
 
@@ -211,6 +232,9 @@ mod tests {
         assert_eq!(Permission::Write.level(), 2);
         assert_eq!(Permission::Admin.level(), 3);
         assert_eq!(Permission::Super.level(), 4);
+        assert_eq!(Permission::Queue.level(), 2);
+        assert_eq!(Permission::Chatroom.level(), 2);
+        assert_eq!(Permission::Rest.level(), 1);
     }
 
     #[test]
