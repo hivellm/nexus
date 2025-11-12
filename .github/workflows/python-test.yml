@@ -1,0 +1,59 @@
+name: Python Tests
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        python-version: [ '3.11', '3.12' ]
+
+    steps:
+    - uses: actions/checkout@v5
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        # MONOREPO: Uncomment and adjust path if in monorepo subdirectory
+        # cache: 'pip'
+        # cache-dependency-path: 'subdirectory/requirements.txt'
+        # Note: Cache may fail in monorepo - disable if you get path resolution errors
+    
+    - name: Install dependencies
+      # MONOREPO: Add working-directory if in subdirectory
+      # working-directory: ./subdirectory
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        if [ -f pyproject.toml ]; then pip install .; fi
+      shell: bash
+    
+    - name: Run tests
+      # MONOREPO: Add working-directory and adjust --cov path if in subdirectory
+      # working-directory: ./subdirectory
+      run: pytest --cov=. --cov-report=xml --cov-report=term
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+      with:
+        files: ./coverage.xml
+        flags: unittests
+        fail_ci_if_error: false
+    
+    - name: Security audit
+      run: |
+        echo "Running security audit..."
+        python -m pip install pip-audit
+        pip-audit || true
+        echo "Checking for outdated packages..."
+        pip list --outdated || true
+

@@ -1494,7 +1494,7 @@ impl CypherParser {
         Ok(left)
     }
 
-    /// Parse comparison expressions (=, <>, <, <=, >, >=, IS NULL, IS NOT NULL)
+    /// Parse comparison expressions (=, <>, <, <=, >, >=, IS NULL, IS NOT NULL, STARTS WITH, ENDS WITH, CONTAINS, =~)
     fn parse_comparison_expression(&mut self) -> Result<Expression> {
         let left = self.parse_additive_expression()?;
 
@@ -1521,6 +1521,67 @@ impl CypherParser {
             } else {
                 return Err(self.error("Expected NULL after IS [NOT]"));
             }
+        }
+
+        // Check for string operators (STARTS WITH, ENDS WITH, CONTAINS)
+        self.skip_whitespace();
+        if self.peek_keyword("STARTS") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            if self.peek_keyword("WITH") {
+                self.parse_keyword()?;
+                self.skip_whitespace();
+                let right = self.parse_additive_expression()?;
+                return Ok(Expression::BinaryOp {
+                    left: Box::new(left),
+                    op: BinaryOperator::StartsWith,
+                    right: Box::new(right),
+                });
+            } else {
+                return Err(self.error("Expected WITH after STARTS"));
+            }
+        }
+
+        if self.peek_keyword("ENDS") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            if self.peek_keyword("WITH") {
+                self.parse_keyword()?;
+                self.skip_whitespace();
+                let right = self.parse_additive_expression()?;
+                return Ok(Expression::BinaryOp {
+                    left: Box::new(left),
+                    op: BinaryOperator::EndsWith,
+                    right: Box::new(right),
+                });
+            } else {
+                return Err(self.error("Expected WITH after ENDS"));
+            }
+        }
+
+        if self.peek_keyword("CONTAINS") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            let right = self.parse_additive_expression()?;
+            return Ok(Expression::BinaryOp {
+                left: Box::new(left),
+                op: BinaryOperator::Contains,
+                right: Box::new(right),
+            });
+        }
+
+        // Check for regex operator (=~)
+        self.skip_whitespace();
+        if self.peek_char() == Some('=') && self.peek_char_at(1) == Some('~') {
+            self.consume_char(); // consume '='
+            self.consume_char(); // consume '~'
+            self.skip_whitespace();
+            let right = self.parse_additive_expression()?;
+            return Ok(Expression::BinaryOp {
+                left: Box::new(left),
+                op: BinaryOperator::RegexMatch,
+                right: Box::new(right),
+            });
         }
 
         // Check for comparison operators (=, <>, <, <=, >, >=)

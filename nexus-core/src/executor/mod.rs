@@ -2209,7 +2209,31 @@ impl Executor {
                         let right_bool = self.value_to_bool(&right_val)?;
                         Ok(left_bool || right_bool)
                     }
-                    _ => Ok(false), // Other operators not implemented in MVP
+                    parser::BinaryOperator::StartsWith => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        Ok(left_str.starts_with(&right_str))
+                    }
+                    parser::BinaryOperator::EndsWith => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        Ok(left_str.ends_with(&right_str))
+                    }
+                    parser::BinaryOperator::Contains => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        Ok(left_str.contains(&right_str))
+                    }
+                    parser::BinaryOperator::RegexMatch => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        // Use regex crate for pattern matching
+                        match regex::Regex::new(&right_str) {
+                            Ok(re) => Ok(re.is_match(&left_str)),
+                            Err(_) => Ok(false), // Invalid regex pattern returns false
+                        }
+                    }
+                    _ => Ok(false), // Other operators not implemented
                 }
             }
             parser::Expression::UnaryOp { op, operand } => {
@@ -3624,6 +3648,30 @@ impl Executor {
                         let result =
                             self.value_to_bool(&left_val)? || self.value_to_bool(&right_val)?;
                         Ok(Value::Bool(result))
+                    }
+                    parser::BinaryOperator::StartsWith => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        Ok(Value::Bool(left_str.starts_with(&right_str)))
+                    }
+                    parser::BinaryOperator::EndsWith => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        Ok(Value::Bool(left_str.ends_with(&right_str)))
+                    }
+                    parser::BinaryOperator::Contains => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        Ok(Value::Bool(left_str.contains(&right_str)))
+                    }
+                    parser::BinaryOperator::RegexMatch => {
+                        let left_str = self.value_to_string(&left_val);
+                        let right_str = self.value_to_string(&right_val);
+                        // Use regex crate for pattern matching
+                        match regex::Regex::new(&right_str) {
+                            Ok(re) => Ok(Value::Bool(re.is_match(&left_str))),
+                            Err(_) => Ok(Value::Bool(false)), // Invalid regex pattern returns false
+                        }
                     }
                     _ => Ok(Value::Null),
                 }

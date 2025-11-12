@@ -1,0 +1,47 @@
+name: Python Lint
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        # MONOREPO: Uncomment and adjust path if in monorepo subdirectory
+        # cache: 'pip'
+        # cache-dependency-path: 'subdirectory/requirements.txt'
+        # Note: Cache may fail in monorepo - disable if you get path resolution errors
+    
+    - name: Install dependencies
+      # MONOREPO: Add working-directory if in subdirectory
+      # working-directory: ./subdirectory
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff mypy black
+    
+    - name: Check code formatting with black
+      # MONOREPO: Add working-directory if in subdirectory
+      # working-directory: ./subdirectory
+      run: black --check .
+    
+    - name: Run ruff linter
+      # MONOREPO: Add working-directory if in subdirectory
+      # working-directory: ./subdirectory
+      run: ruff check .
+    
+    - name: Run mypy type checker
+      # MONOREPO: Add working-directory if in subdirectory
+      # working-directory: ./subdirectory
+      run: mypy . || echo "Type checking optional"
+      continue-on-error: true
+

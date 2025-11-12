@@ -5,6 +5,74 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2025-11-11
+
+### Added
+- **Advanced Cypher Features**: Complete implementation of advanced Cypher query language features
+  - **CASE Expressions**: Conditional logic in queries
+    - Simple CASE: `CASE WHEN condition THEN result ELSE default END`
+    - Generic CASE: `CASE input WHEN value THEN result ELSE default END`
+    - Nested CASE expressions supported
+    - Works in WHERE, ORDER BY, and RETURN clauses
+    - Full type support (strings, numbers, booleans, NULL)
+  - **FOREACH Clause**: Iterative operations on lists
+    - `FOREACH (item IN list | SET n.property = item)`
+    - Supports SET operations within iteration
+    - Supports DELETE and DETACH DELETE within iteration
+    - Works with variable lists and literal lists
+  - **EXISTS Subqueries**: Pattern existence checking
+    - `EXISTS { (n)-[:REL]->(m) }` - Checks if pattern exists
+    - `EXISTS { (n)-[:REL]->(m) WHERE n.age > 30 }` - Pattern with WHERE clause
+    - Works in WHERE clauses for filtering
+    - Supports multi-hop patterns and relationship filtering
+  - **Map Projections**: Dynamic map construction
+    - `n {.name, .age}` - Property selection
+    - `n {.name AS fullName, computed: n.age * 2}` - Virtual keys and aliases
+    - Nested map projections supported
+    - Computed properties with expressions
+  - **List Comprehensions**: Functional list transformations
+    - `[x IN list WHERE x > 10 | x * 2]` - Filter and transform
+    - `[x IN list | x.property]` - Simple transformation
+    - `[x IN list WHERE condition]` - Filter only
+    - Nested comprehensions supported
+  - **Pattern Comprehensions**: Pattern-based collection
+    - `[(n)-[:REL]->(m) WHERE n.age > 30 | m.name]` - Collect with filtering
+    - `[(n)-[:REL]->(m) | m {.name, .age}]` - Map projection transformation
+    - Multi-hop patterns supported
+    - Relationship property filtering
+
+### Fixed
+- **EXISTS WHERE Clause Parsing**: Fixed parsing of EXISTS patterns with WHERE clauses
+  - Parser now correctly delimits pattern boundaries
+  - Added `parse_pattern_until_where_or_brace()` helper function
+  - Resolved syntax errors in complex EXISTS queries
+- **Pattern Comprehension Transformations**: Fixed evaluation of complex transformations
+  - Map projections now work correctly in transform expressions
+  - Fixed context handling for pattern variables
+  - Improved evaluation of nested expressions
+
+### Improved
+- **Parser Architecture**: Enhanced pattern parsing for advanced features
+  - Better boundary detection for EXISTS and Pattern Comprehensions
+  - Improved WHERE clause integration in pattern expressions
+  - More robust error messages for parsing failures
+- **Expression Evaluation**: Enhanced executor for advanced expressions
+  - Better context management for comprehensions
+  - Improved variable scoping in FOREACH iterations
+  - Enhanced pattern matching in EXISTS subqueries
+
+### Testing
+- **Comprehensive Test Suite**: 75 integration tests for advanced features
+  - 28 complex scenario tests covering edge cases
+  - 36 extended tests with real-world patterns
+  - 11 business scenario tests
+  - 100% test pass rate
+  - All features validated end-to-end via HTTP API
+- **Test Coverage**: Maintained 95%+ coverage requirement
+  - All advanced feature code paths covered
+  - Edge cases validated (NULL values, empty lists, nested expressions)
+  - Real-world business scenarios tested
+
 ## [0.10.1] - 2025-11-11
 
 ### Added
