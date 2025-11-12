@@ -2015,7 +2015,7 @@ impl Engine {
             .any(|c| matches!(c, executor::parser::Clause::RollbackTransaction));
 
         if has_begin || has_commit || has_rollback {
-            return self.execute_transaction_commands(ast);
+            return self.execute_transaction_commands(ast, None);
         }
 
         // Check for index management commands
