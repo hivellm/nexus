@@ -16,21 +16,21 @@
 ## Phase 1: Root User & Configuration (Week 1)
 
 ### 1.1 Root User Configuration
-- [ ] 1.1.1 Add root user configuration to `nexus-server/src/config.rs`
-- [ ] 1.1.2 Support environment variables: `NEXUS_ROOT_USERNAME`, `NEXUS_ROOT_PASSWORD`, `NEXUS_ROOT_ENABLED`
+- [x] 1.1.1 Add root user configuration to `nexus-server/src/config.rs` ✅
+- [x] 1.1.2 Support environment variables: `NEXUS_ROOT_USERNAME`, `NEXUS_ROOT_PASSWORD`, `NEXUS_ROOT_ENABLED` ✅
 - [ ] 1.1.3 Support config file: `config/auth.toml`
-- [ ] 1.1.4 Default root credentials: `root/root` (configurable)
-- [ ] 1.1.5 Add `NEXUS_DISABLE_ROOT_AFTER_SETUP` flag
+- [x] 1.1.4 Default root credentials: `root/root` (configurable) ✅
+- [x] 1.1.5 Add `NEXUS_DISABLE_ROOT_AFTER_SETUP` flag ✅
 - [ ] 1.1.6 Implement root user auto-disable after first admin user creation
-- [ ] 1.1.7 Add Docker secrets support
-- [ ] 1.1.8 Add unit tests for root user configuration
+- [x] 1.1.7 Add Docker secrets support (`NEXUS_ROOT_PASSWORD_FILE`) ✅
+- [x] 1.1.8 Add unit tests for root user configuration ✅
 
 ### 1.2 Root User Management
-- [ ] 1.2.1 Implement root user creation on startup
-- [ ] 1.2.2 Implement root user disable functionality
-- [ ] 1.2.3 Prevent root user deletion (only disable)
+- [x] 1.2.1 Implement root user creation on startup ✅
+- [x] 1.2.2 Implement root user disable functionality ✅
+- [x] 1.2.3 Prevent root user deletion (only disable) ✅
 - [ ] 1.2.4 Add root user validation (cannot be modified by non-root)
-- [ ] 1.2.5 Add unit tests for root user management
+- [x] 1.2.5 Add unit tests for root user management ✅
 
 ### 1.3 User CRUD Operations
 - [ ] 1.3.1 Implement `CREATE USER username [WITH PASSWORD 'password']` Cypher command

@@ -10,6 +10,32 @@ pub struct Config {
     pub addr: SocketAddr,
     /// Data directory
     pub data_dir: String,
+    /// Root user configuration
+    pub root_user: RootUserConfig,
+}
+
+/// Root user configuration
+#[derive(Debug, Clone)]
+pub struct RootUserConfig {
+    /// Root username
+    pub username: String,
+    /// Root password (plaintext, will be hashed)
+    pub password: String,
+    /// Whether root user is enabled
+    pub enabled: bool,
+    /// Whether to disable root after first admin user is created
+    pub disable_after_setup: bool,
+}
+
+impl Default for RootUserConfig {
+    fn default() -> Self {
+        Self {
+            username: "root".to_string(),
+            password: "root".to_string(),
+            enabled: true,
+            disable_after_setup: false,
+        }
+    }
 }
 
 impl Default for Config {
@@ -17,6 +43,7 @@ impl Default for Config {
         Self {
             addr: "127.0.0.1:15474".parse().unwrap(),
             data_dir: "./data".to_string(),
+            root_user: RootUserConfig::default(),
         }
     }
 }
@@ -32,7 +59,42 @@ impl Config {
 
         let data_dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
 
-        Self { addr, data_dir }
+        // Load root user configuration from environment
+        let root_username =
+            std::env::var("NEXUS_ROOT_USERNAME").unwrap_or_else(|_| "root".to_string());
+
+        // Support Docker secrets: try NEXUS_ROOT_PASSWORD_FILE first, then NEXUS_ROOT_PASSWORD
+        let root_password = if let Ok(password_file) = std::env::var("NEXUS_ROOT_PASSWORD_FILE") {
+            std::fs::read_to_string(&password_file)
+                .unwrap_or_else(|_| "root".to_string())
+                .trim()
+                .to_string()
+        } else {
+            std::env::var("NEXUS_ROOT_PASSWORD").unwrap_or_else(|_| "root".to_string())
+        };
+
+        let root_enabled = std::env::var("NEXUS_ROOT_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .unwrap_or(true);
+
+        let disable_after_setup = std::env::var("NEXUS_DISABLE_ROOT_AFTER_SETUP")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse::<bool>()
+            .unwrap_or(false);
+
+        let root_user = RootUserConfig {
+            username: root_username,
+            password: root_password,
+            enabled: root_enabled,
+            disable_after_setup,
+        };
+
+        Self {
+            addr,
+            data_dir,
+            root_user,
+        }
     }
 
     /// Get the bind address
@@ -211,5 +273,22 @@ mod tests {
 
         assert!(debug_str.contains("127.0.0.1:15474"));
         assert!(debug_str.contains("./data"));
+    }
+
+    #[test]
+    fn test_root_user_config_default() {
+        let root_config = RootUserConfig::default();
+        assert_eq!(root_config.username, "root");
+        assert_eq!(root_config.password, "root");
+        assert!(root_config.enabled);
+        assert!(!root_config.disable_after_setup);
+    }
+
+    #[test]
+    fn test_config_with_root_user() {
+        let config = Config::default();
+        assert_eq!(config.root_user.username, "root");
+        assert_eq!(config.root_user.password, "root");
+        assert!(config.root_user.enabled);
     }
 }

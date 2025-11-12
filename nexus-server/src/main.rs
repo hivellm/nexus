@@ -23,7 +23,7 @@ use axum::{
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use nexus_server::{NexusServer, api, config::Config, middleware::RateLimiter};
@@ -72,7 +72,31 @@ async fn main() -> anyhow::Result<()> {
     let database_manager_arc = Arc::new(RwLock::new(database_manager));
 
     // Initialize RBAC for user management
-    let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+    let mut rbac = nexus_core::auth::RoleBasedAccessControl::new();
+
+    // Create root user if enabled in config
+    if config.root_user.enabled {
+        use argon2::password_hash::{SaltString, rand_core::OsRng};
+        use argon2::{Argon2, PasswordHasher};
+
+        let argon2 = Argon2::default();
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = argon2
+            .hash_password(config.root_user.password.as_bytes(), &salt)
+            .map_err(|e| anyhow::anyhow!("Failed to hash root password: {}", e))?;
+
+        if let Err(e) =
+            rbac.create_root_user(config.root_user.username.clone(), password_hash.to_string())
+        {
+            warn!("Failed to create root user: {}", e);
+        } else {
+            info!(
+                "Root user '{}' created successfully",
+                config.root_user.username
+            );
+        }
+    }
+
     let rbac_arc = Arc::new(RwLock::new(rbac));
 
     // Create Nexus server state

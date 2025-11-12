@@ -1,6 +1,7 @@
 //! Role-Based Access Control (RBAC) for Nexus
 
 use super::permissions::{Permission, PermissionSet};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -68,12 +69,16 @@ pub struct User {
     pub username: String,
     /// Email address
     pub email: Option<String>,
+    /// Password hash (Argon2)
+    pub password_hash: Option<String>,
     /// Roles assigned to this user
     pub roles: Vec<String>,
     /// Additional permissions (beyond roles)
     pub additional_permissions: PermissionSet,
     /// Whether the user is active
     pub is_active: bool,
+    /// Whether this is the root user (cannot be deleted, only disabled)
+    pub is_root: bool,
 }
 
 impl User {
@@ -83,9 +88,11 @@ impl User {
             id,
             username,
             email: None,
+            password_hash: None,
             roles: Vec::new(),
             additional_permissions: PermissionSet::new(),
             is_active: true,
+            is_root: false,
         }
     }
 
@@ -95,10 +102,35 @@ impl User {
             id,
             username,
             email: Some(email),
+            password_hash: None,
             roles: Vec::new(),
             additional_permissions: PermissionSet::new(),
             is_active: true,
+            is_root: false,
         }
+    }
+
+    /// Create a new user with password hash
+    pub fn with_password_hash(id: String, username: String, password_hash: String) -> Self {
+        Self {
+            id,
+            username,
+            email: None,
+            password_hash: Some(password_hash),
+            roles: Vec::new(),
+            additional_permissions: PermissionSet::new(),
+            is_active: true,
+            is_root: false,
+        }
+    }
+
+    /// Create a root user with password hash
+    pub fn root_user(id: String, username: String, password_hash: String) -> Self {
+        let mut user = Self::with_password_hash(id, username, password_hash);
+        user.is_root = true;
+        // Root user gets Super permission
+        user.additional_permissions.add(Permission::Super);
+        user
     }
 
     /// Add a role to the user
@@ -214,7 +246,54 @@ impl RoleBasedAccessControl {
 
     /// Remove a user from the system
     pub fn remove_user(&mut self, user_id: &str) -> Option<User> {
+        // Prevent deletion of root user
+        if let Some(user) = self.users.get(user_id) {
+            if user.is_root {
+                return None;
+            }
+        }
         self.users.remove(user_id)
+    }
+
+    /// Create root user with password hash
+    pub fn create_root_user(
+        &mut self,
+        username: String,
+        password_hash: String,
+    ) -> Result<(), String> {
+        let root_id = "root".to_string();
+
+        // Check if root user already exists
+        if self.users.contains_key(&root_id) {
+            return Err("Root user already exists".to_string());
+        }
+
+        let root_user = User::root_user(root_id.clone(), username, password_hash);
+        self.users.insert(root_id, root_user);
+        Ok(())
+    }
+
+    /// Disable root user
+    pub fn disable_root_user(&mut self) -> Result<(), String> {
+        if let Some(user) = self.users.get_mut("root") {
+            if user.is_root {
+                user.is_active = false;
+                Ok(())
+            } else {
+                Err("User is not root".to_string())
+            }
+        } else {
+            Err("Root user not found".to_string())
+        }
+    }
+
+    /// Check if root user exists and is enabled
+    pub fn is_root_enabled(&self) -> bool {
+        if let Some(user) = self.users.get("root") {
+            user.is_root && user.is_active
+        } else {
+            false
+        }
     }
 
     /// List all users
@@ -415,6 +494,60 @@ mod tests {
         assert!(rbac.user_has_permission("user1", &Permission::Write));
         assert!(rbac.user_has_permission("user1", &Permission::Admin));
         assert!(!rbac.user_has_permission("user1", &Permission::Super));
+    }
+
+    #[test]
+    fn test_root_user_creation() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let result = rbac.create_root_user("root".to_string(), "hashed_password".to_string());
+        assert!(result.is_ok());
+
+        let root_user = rbac.get_user("root");
+        assert!(root_user.is_some());
+        let root_user = root_user.unwrap();
+        assert!(root_user.is_root);
+        assert!(
+            root_user
+                .additional_permissions
+                .has_permission(&Permission::Super)
+        );
+    }
+
+    #[test]
+    fn test_root_user_cannot_be_deleted() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        rbac.create_root_user("root".to_string(), "hashed_password".to_string())
+            .unwrap();
+
+        let result = rbac.remove_user("root");
+        assert!(result.is_none()); // Root user cannot be deleted
+        assert!(rbac.get_user("root").is_some()); // Still exists
+    }
+
+    #[test]
+    fn test_root_user_disable() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        rbac.create_root_user("root".to_string(), "hashed_password".to_string())
+            .unwrap();
+        assert!(rbac.is_root_enabled());
+
+        rbac.disable_root_user().unwrap();
+        assert!(!rbac.is_root_enabled());
+    }
+
+    #[test]
+    fn test_user_with_password_hash() {
+        let user = User::with_password_hash(
+            "user1".to_string(),
+            "testuser".to_string(),
+            "hashed_password".to_string(),
+        );
+
+        assert_eq!(user.password_hash, Some("hashed_password".to_string()));
+        assert!(!user.is_root);
     }
 
     #[test]
