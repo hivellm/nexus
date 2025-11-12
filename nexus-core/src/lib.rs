@@ -797,6 +797,10 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::Remove(_)));
+        let has_foreach = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Foreach(_)));
         let has_match = ast
             .clauses
             .iter()
@@ -824,8 +828,8 @@ impl Engine {
             });
         }
 
-        // Handle MERGE / SET / REMOVE write queries before falling back to read executor
-        if has_merge || has_set_clause || has_remove_clause {
+        // Handle MERGE / SET / REMOVE / FOREACH write queries before falling back to read executor
+        if has_merge || has_set_clause || has_remove_clause || has_foreach {
             let result = self.execute_write_query(&ast)?;
             return Ok(result);
         }
@@ -874,6 +878,9 @@ impl Engine {
                 }
                 executor::parser::Clause::Remove(remove_clause) => {
                     self.apply_remove_clause(&context, remove_clause)?;
+                }
+                executor::parser::Clause::Foreach(foreach_clause) => {
+                    self.execute_foreach_clause(&context, foreach_clause)?;
                 }
                 executor::parser::Clause::Return(return_clause) => {
                     result = Some(self.build_return_result(&context, return_clause)?);
@@ -1095,6 +1102,92 @@ impl Engine {
 
         for (node_id, state) in state_map.into_iter() {
             self.persist_node_state(node_id, state)?;
+        }
+
+        Ok(())
+    }
+
+    fn execute_foreach_clause(
+        &mut self,
+        context: &HashMap<String, Vec<u64>>,
+        foreach_clause: &executor::parser::ForeachClause,
+    ) -> Result<()> {
+        // Evaluate the list expression
+        let list_value = match &foreach_clause.list_expression {
+            executor::parser::Expression::Variable(var_name) => {
+                // Variable from context - assume it's a list of node IDs
+                // Convert node IDs to a list of values (we'll use node IDs as the iteration items)
+                // For FOREACH, we typically iterate over node IDs, not values
+                context.get(var_name).cloned().unwrap_or_default()
+            }
+            executor::parser::Expression::Literal(executor::parser::Literal::Null) => {
+                // NULL list - no iteration
+                return Ok(());
+            }
+            executor::parser::Expression::List(items) => {
+                // Literal list - evaluate each item
+                // For now, we'll treat list items as node IDs if they're integers
+                // This is a simplified implementation
+                let mut node_ids = Vec::new();
+                for item in items {
+                    if let executor::parser::Expression::Literal(
+                        executor::parser::Literal::Integer(id),
+                    ) = item
+                    {
+                        node_ids.push(*id as u64);
+                    }
+                }
+                node_ids
+            }
+            _ => {
+                return Err(Error::CypherExecution(format!(
+                    "FOREACH list expression must be a variable or literal list, got: {:?}",
+                    foreach_clause.list_expression
+                )));
+            }
+        };
+
+        // Iterate over each item in the list
+        for item_value in list_value {
+            // Create a new context for this iteration with the FOREACH variable
+            // The variable contains a single node ID for this iteration
+            let mut iteration_context = context.clone();
+            iteration_context.insert(foreach_clause.variable.clone(), vec![item_value]);
+
+            // Execute each update clause for this iteration
+            for update_clause in &foreach_clause.update_clauses {
+                match update_clause {
+                    executor::parser::ForeachUpdateClause::Set(set_clause) => {
+                        self.apply_set_clause(&iteration_context, set_clause)?;
+                    }
+                    executor::parser::ForeachUpdateClause::Delete(delete_clause) => {
+                        // Apply DELETE for this iteration
+                        // DELETE in FOREACH context means delete the node referenced by the variable
+                        let node_ids = iteration_context
+                            .get(&foreach_clause.variable)
+                            .cloned()
+                            .unwrap_or_default();
+
+                        for node_id in node_ids {
+                            if delete_clause.detach {
+                                // DETACH DELETE: remove all relationships first
+                                self.delete_node_relationships(node_id)?;
+                                self.delete_node(node_id)?;
+                            } else {
+                                // Regular DELETE: check for relationships
+                                let node_record = self.storage.read_node(node_id)?;
+                                if node_record.first_rel_ptr != u64::MAX {
+                                    return Err(Error::CypherExecution(format!(
+                                        "Cannot DELETE node {} with existing relationships; use DETACH DELETE",
+                                        node_id
+                                    )));
+                                }
+                                self.delete_node(node_id)?;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())

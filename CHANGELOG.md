@@ -5,6 +5,77 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2025-11-11
+
+### Added
+- **Cypher Write Operations**: Complete implementation of write operations for data modification
+  - **MERGE Clause**: Full match-or-create semantics with property matching
+    - `MERGE (n:Person {email: 'alice@example.com'})` - Creates node if not exists, matches if exists
+    - `ON CREATE SET` - Sets properties/labels only when creating new node
+    - `ON MATCH SET` - Sets properties/labels only when matching existing node
+    - Variable context tracking for created/matched nodes
+  - **SET Clause**: Update node properties and labels
+    - `SET n.age = 31, n.city = 'NYC'` - Updates multiple properties
+    - `SET n:Employee` - Adds labels to nodes
+    - Supports property assignment and label addition in single clause
+  - **REMOVE Clause**: Remove properties and labels from nodes
+    - `REMOVE n.age` - Removes specific property
+    - `REMOVE n:Employee` - Removes specific label
+    - Supports multiple removals in single clause
+  - **DELETE Clause**: Delete nodes with relationship validation
+    - `DELETE n` - Deletes node (fails if relationships exist)
+    - `DETACH DELETE n` - Deletes node and all its relationships automatically
+    - Prevents orphaned relationships by validating before deletion
+  - **NodeWriteState**: Internal state management for atomic node updates
+    - Tracks properties and labels during write operations
+    - Ensures consistent updates across multiple clauses
+  - **LabelIndex Enhancement**: Added `set_node_labels()` method
+    - Efficiently updates all labels for a node
+    - Removes node from old labels and adds to new labels atomically
+    - Maintains index consistency during label changes
+
+### Fixed
+- **MERGE Parser Bug**: Fixed parsing of `ON CREATE SET` and `ON MATCH SET` clauses
+  - Parser now correctly consumes `SET` keyword before parsing set operations
+  - Resolved "expected property assignment or label" error in MERGE queries
+- **Clippy Warnings**: Fixed all code quality warnings
+  - Removed unnecessary casts (`u64` to `u64`)
+  - Simplified collapsible match expressions
+  - Replaced `contains_key` + `insert` with `Entry` API for better performance
+  - Moved `NodeWriteState` struct before test module to fix items-after-test-module warning
+
+### Improved
+- **OpenAPI Documentation**: Updated API specification with write operations
+  - Added comprehensive examples for MERGE, SET, REMOVE, DELETE operations
+  - Documented all supported write operation patterns
+  - Updated version to 0.5.0 to reflect new capabilities
+  - Generated `openapi.json` from updated YAML specification
+- **Error Handling**: Enhanced error messages for write operations
+  - Clear error when attempting DELETE on node with relationships
+  - Suggests using DETACH DELETE when appropriate
+  - Better validation of node state during updates
+
+### Testing
+- **Integration Tests**: Comprehensive test suite for write operations
+  - 390 tests passing (100% pass rate)
+  - Tests cover MERGE create/match scenarios
+  - Tests validate SET property and label updates
+  - Tests verify REMOVE property and label removal
+  - Tests ensure DELETE validation and DETACH DELETE behavior
+  - All tests executed via HTTP API for end-to-end validation
+- **Test Coverage**: Maintained 95%+ coverage requirement
+  - All write operation code paths covered
+  - Edge cases validated (empty properties, multiple labels, etc.)
+
+### Changed
+- **Parser Structure**: Enhanced parser to handle complex MERGE clauses
+  - Explicit SET keyword parsing in ON CREATE/ON MATCH blocks
+  - Better clause boundary detection for write operations
+- **Engine Architecture**: Added `execute_write_query()` helper method
+  - Centralized handling of write operation clauses
+  - Improved variable context management across clauses
+  - Better separation of read and write query execution paths
+
 ## [0.10.0] - 2025-11-01
 
 ### Added

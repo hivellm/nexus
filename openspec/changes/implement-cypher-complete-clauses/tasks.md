@@ -10,12 +10,12 @@
 1. **implement-cypher-write-operations** - Phase 1: MERGE, SET, DELETE, REMOVE
    - Priority: 🔴 CRITICAL
    - Duration: 2-3 weeks
-   - Status: ⚪ Not started (parser recognizes clauses; executor logic/tests missing)
+   - Status: ✅ COMPLETED (2025-11-11) - Full implementation with tests, all 390 tests passing
 
 2. **implement-cypher-query-composition** - Phase 2: WITH, OPTIONAL MATCH, UNWIND, UNION
    - Priority: 🟠 HIGH
    - Duration: 2-3 weeks
-   - Status: ⚪ Not started (parser entries only; no execution or tests)
+   - Status: ✅ COMPLETED (2025-11-01) - MVP features complete, archived
 
 3. **implement-cypher-advanced-features** - Phase 3: FOREACH, EXISTS, CASE, comprehensions
    - Priority: 🟠 HIGH

@@ -2282,6 +2282,45 @@ impl Executor {
                     Ok(Value::Null)
                 }
             }
+            parser::Expression::Case {
+                input,
+                when_clauses,
+                else_clause,
+            } => {
+                // Evaluate input expression if present (generic CASE)
+                let input_value = if let Some(input_expr) = input {
+                    Some(self.evaluate_expression(node, input_expr, context)?)
+                } else {
+                    None
+                };
+
+                // Evaluate WHEN clauses
+                for when_clause in when_clauses {
+                    let condition_value =
+                        self.evaluate_expression(node, &when_clause.condition, context)?;
+
+                    // For generic CASE: compare input with condition
+                    // For simple CASE: evaluate condition as boolean
+                    let matches = if let Some(ref input_val) = input_value {
+                        // Generic CASE: input == condition
+                        input_val == &condition_value
+                    } else {
+                        // Simple CASE: condition is boolean expression
+                        self.value_to_bool(&condition_value)?
+                    };
+
+                    if matches {
+                        return self.evaluate_expression(node, &when_clause.result, context);
+                    }
+                }
+
+                // No WHEN clause matched, return ELSE or NULL
+                if let Some(else_expr) = else_clause {
+                    self.evaluate_expression(node, else_expr, context)
+                } else {
+                    Ok(Value::Null)
+                }
+            }
             _ => Ok(Value::Null), // Other expressions not implemented in MVP
         }
     }
@@ -3610,6 +3649,236 @@ impl Executor {
                 let is_null = value.is_null();
                 Ok(Value::Bool(if *negated { !is_null } else { is_null }))
             }
+            parser::Expression::Exists {
+                pattern,
+                where_clause,
+            } => {
+                // Check if the pattern exists in the current context
+                let pattern_exists = self.check_pattern_exists(row, context, pattern)?;
+
+                // If pattern doesn't exist, return false
+                if !pattern_exists {
+                    return Ok(Value::Bool(false));
+                }
+
+                // If WHERE clause is present, evaluate it
+                if let Some(where_expr) = where_clause {
+                    // Create a context with pattern variables for WHERE evaluation
+                    let mut exists_row = row.clone();
+
+                    // Extract variables from pattern and add to row context
+                    for element in &pattern.elements {
+                        match element {
+                            parser::PatternElement::Node(node) => {
+                                if let Some(var) = &node.variable {
+                                    // Try to get variable from current row or context
+                                    if let Some(value) = row.get(var) {
+                                        exists_row.insert(var.clone(), value.clone());
+                                    } else if let Some(value) = context.get_variable(var) {
+                                        exists_row.insert(var.clone(), value.clone());
+                                    }
+                                }
+                            }
+                            parser::PatternElement::Relationship(rel) => {
+                                if let Some(var) = &rel.variable {
+                                    if let Some(value) = row.get(var) {
+                                        exists_row.insert(var.clone(), value.clone());
+                                    } else if let Some(value) = context.get_variable(var) {
+                                        exists_row.insert(var.clone(), value.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Evaluate WHERE condition
+                    let condition_value =
+                        self.evaluate_projection_expression(&exists_row, context, where_expr)?;
+                    let condition_true = self.value_to_bool(&condition_value)?;
+
+                    Ok(Value::Bool(condition_true))
+                } else {
+                    Ok(Value::Bool(pattern_exists))
+                }
+            }
+            parser::Expression::MapProjection { source, items } => {
+                // Evaluate the source expression (should be a node/map)
+                let source_value = self.evaluate_projection_expression(row, context, source)?;
+
+                // Build the projected map
+                let mut projected_map = serde_json::Map::new();
+
+                for item in items {
+                    match item {
+                        parser::MapProjectionItem::Property { property, alias } => {
+                            // Extract property from source
+                            let prop_value = if let Value::Object(obj) = &source_value {
+                                // If source is a node object, get property from properties
+                                if let Some(Value::Object(props)) = obj.get("properties") {
+                                    props.get(property.as_str()).cloned().unwrap_or(Value::Null)
+                                } else {
+                                    obj.get(property.as_str()).cloned().unwrap_or(Value::Null)
+                                }
+                            } else {
+                                Value::Null
+                            };
+
+                            // Use alias if provided, otherwise use property name
+                            let key = alias
+                                .as_ref()
+                                .map(|s| s.as_str())
+                                .unwrap_or(property.as_str())
+                                .to_string();
+                            projected_map.insert(key, prop_value);
+                        }
+                        parser::MapProjectionItem::VirtualKey { key, expression } => {
+                            // Evaluate the expression and use as value
+                            let expr_value =
+                                self.evaluate_projection_expression(row, context, expression)?;
+                            projected_map.insert(key.clone(), expr_value);
+                        }
+                    }
+                }
+
+                Ok(Value::Object(projected_map))
+            }
+            parser::Expression::ListComprehension {
+                variable,
+                list_expression,
+                where_clause,
+                transform_expression,
+            } => {
+                // Evaluate the list expression
+                let list_value =
+                    self.evaluate_projection_expression(row, context, list_expression)?;
+
+                // Convert to array if needed
+                let list_items = match list_value {
+                    Value::Array(items) => items,
+                    Value::Null => Vec::new(),
+                    other => vec![other],
+                };
+
+                // Filter and transform items
+                let mut result_items = Vec::new();
+
+                for item in list_items {
+                    // Create a new row context with the variable bound to this item
+                    let mut comprehension_row = row.clone();
+                    let item_clone = item.clone();
+                    comprehension_row.insert(variable.clone(), item_clone);
+
+                    // Apply WHERE clause if present
+                    if let Some(where_expr) = where_clause {
+                        let condition_value = self.evaluate_projection_expression(
+                            &comprehension_row,
+                            context,
+                            where_expr,
+                        )?;
+
+                        // Only include item if condition is true
+                        if !self.value_to_bool(&condition_value)? {
+                            continue;
+                        }
+                    }
+
+                    // Apply transformation if present, otherwise use item as-is
+                    if let Some(transform_expr) = transform_expression {
+                        let transformed_value = self.evaluate_projection_expression(
+                            &comprehension_row,
+                            context,
+                            transform_expr,
+                        )?;
+                        result_items.push(transformed_value);
+                    } else {
+                        result_items.push(item);
+                    }
+                }
+
+                Ok(Value::Array(result_items))
+            }
+            parser::Expression::PatternComprehension {
+                pattern,
+                where_clause,
+                transform_expression,
+            } => {
+                // Pattern comprehensions collect matching patterns and transform them
+                // This is a simplified implementation that works within the current context
+
+                // For a full implementation, we would need to:
+                // 1. Execute the pattern as a subquery within the current context
+                // 2. Collect all matching results
+                // 3. Apply WHERE clause filtering
+                // 4. Apply transformation expression
+                // 5. Return as array
+
+                // For now, we'll implement a basic version that:
+                // - Extracts variables from the pattern
+                // - Checks if they exist in the current row context
+                // - Applies WHERE and transform if present
+
+                // Extract variables from pattern
+                let mut pattern_vars = Vec::new();
+                for element in &pattern.elements {
+                    match element {
+                        parser::PatternElement::Node(node) => {
+                            if let Some(var) = &node.variable {
+                                pattern_vars.push(var.clone());
+                            }
+                        }
+                        parser::PatternElement::Relationship(rel) => {
+                            if let Some(var) = &rel.variable {
+                                pattern_vars.push(var.clone());
+                            }
+                        }
+                    }
+                }
+
+                // Check if all pattern variables exist in current row
+                let mut all_vars_exist = true;
+                let mut pattern_row = HashMap::new();
+                for var in &pattern_vars {
+                    if let Some(value) = row.get(var) {
+                        pattern_row.insert(var.clone(), value.clone());
+                    } else {
+                        all_vars_exist = false;
+                        break;
+                    }
+                }
+
+                // If pattern variables don't exist in current row, return empty array
+                if !all_vars_exist || pattern_row.is_empty() {
+                    return Ok(Value::Array(Vec::new()));
+                }
+
+                // Apply WHERE clause if present
+                if let Some(where_expr) = where_clause {
+                    let condition_value =
+                        self.evaluate_projection_expression(&pattern_row, context, where_expr)?;
+
+                    // If WHERE condition is false, return empty array
+                    if !self.value_to_bool(&condition_value)? {
+                        return Ok(Value::Array(Vec::new()));
+                    }
+                }
+
+                // Apply transformation if present, otherwise return the pattern variables
+                if let Some(transform_expr) = transform_expression {
+                    // Evaluate transformation expression (can be MapProjection, property access, etc.)
+                    let transformed_value =
+                        self.evaluate_projection_expression(&pattern_row, context, transform_expr)?;
+
+                    // Always return as array (even if single value)
+                    Ok(Value::Array(vec![transformed_value]))
+                } else {
+                    // No transformation - return array of pattern variable values
+                    let values: Vec<Value> = pattern_vars
+                        .iter()
+                        .filter_map(|var| pattern_row.get(var).cloned())
+                        .collect();
+                    Ok(Value::Array(values))
+                }
+            }
             parser::Expression::List(elements) => {
                 // Evaluate each element and return as JSON array
                 let mut items = Vec::new();
@@ -3628,8 +3897,105 @@ impl Executor {
                 }
                 Ok(Value::Object(obj))
             }
-            _ => Ok(Value::Null),
+            parser::Expression::Case {
+                input,
+                when_clauses,
+                else_clause,
+            } => {
+                // Evaluate input expression if present (generic CASE)
+                let input_value = if let Some(input_expr) = input {
+                    Some(self.evaluate_projection_expression(row, context, input_expr)?)
+                } else {
+                    None
+                };
+
+                // Evaluate WHEN clauses
+                for when_clause in when_clauses {
+                    let condition_value =
+                        self.evaluate_projection_expression(row, context, &when_clause.condition)?;
+
+                    // For generic CASE: compare input with condition
+                    // For simple CASE: evaluate condition as boolean
+                    let matches = if let Some(ref input_val) = input_value {
+                        // Generic CASE: input == condition
+                        input_val == &condition_value
+                    } else {
+                        // Simple CASE: condition is boolean expression
+                        self.value_to_bool(&condition_value)?
+                    };
+
+                    if matches {
+                        return self.evaluate_projection_expression(
+                            row,
+                            context,
+                            &when_clause.result,
+                        );
+                    }
+                }
+
+                // No WHEN clause matched, return ELSE or NULL
+                if let Some(else_expr) = else_clause {
+                    self.evaluate_projection_expression(row, context, else_expr)
+                } else {
+                    Ok(Value::Null)
+                }
+            }
         }
+    }
+
+    /// Check if a pattern exists in the current context
+    fn check_pattern_exists(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        pattern: &parser::Pattern,
+    ) -> Result<bool> {
+        // For EXISTS, we need to check if the pattern matches in the current context
+        // This is a simplified implementation that checks if nodes and relationships exist
+
+        // If pattern is empty, return false
+        if pattern.elements.is_empty() {
+            return Ok(false);
+        }
+
+        // For now, implement a basic check:
+        // - If pattern has a single node, check if it exists in context
+        // - If pattern has relationships, check if they exist
+
+        // Get the first node from the pattern
+        if let Some(parser::PatternElement::Node(first_node)) = pattern.elements.first() {
+            // If the node has a variable, check if it exists in the current row/context
+            if let Some(var_name) = &first_node.variable {
+                // Check if variable exists in current row
+                if let Some(Value::Object(obj)) = row.get(var_name) {
+                    // If it's a valid node object, the pattern exists
+                    if obj.contains_key("_nexus_id") {
+                        // Node exists, check relationships if any
+                        if pattern.elements.len() > 1 {
+                            // Pattern has relationships - for now, return true if node exists
+                            // Full relationship checking would require more complex logic
+                            return Ok(true);
+                        }
+                        return Ok(true);
+                    }
+                }
+
+                // Check if variable exists in context variables
+                if let Some(Value::Array(nodes)) = context.variables.get(var_name) {
+                    if !nodes.is_empty() {
+                        return Ok(true);
+                    }
+                }
+            } else {
+                // No variable - pattern exists if we can find matching nodes
+                // For simplicity, if no variable is specified, assume pattern might exist
+                // This is a basic implementation
+                return Ok(true);
+            }
+        }
+
+        // Pattern doesn't match
+        Ok(false)
     }
 
     fn extract_property(entity: &Value, property: &str) -> Value {

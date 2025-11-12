@@ -48,6 +48,8 @@ pub enum Clause {
     Limit(LimitClause),
     /// SKIP clause for result offset
     Skip(SkipClause),
+    /// FOREACH clause for iterating over lists
+    Foreach(ForeachClause),
 }
 
 /// MATCH clause with pattern matching
@@ -320,6 +322,26 @@ pub struct SkipClause {
     pub count: Expression,
 }
 
+/// FOREACH clause for iterating over lists
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForeachClause {
+    /// Variable to bind each list item to
+    pub variable: String,
+    /// Expression that evaluates to a list
+    pub list_expression: Expression,
+    /// Update clauses to execute for each item (SET or DELETE)
+    pub update_clauses: Vec<ForeachUpdateClause>,
+}
+
+/// Update clause types allowed in FOREACH
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ForeachUpdateClause {
+    /// SET clause
+    Set(SetClause),
+    /// DELETE clause
+    Delete(DeleteClause),
+}
+
 /// Expression types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Expression {
@@ -379,6 +401,40 @@ pub enum Expression {
         /// Whether this is IS NOT NULL (true) or IS NULL (false)
         negated: bool,
     },
+    /// EXISTS subquery - checks if a pattern exists
+    Exists {
+        /// Pattern to check for existence
+        pattern: Pattern,
+        /// Optional WHERE clause for filtering
+        where_clause: Option<Box<Expression>>,
+    },
+    /// Map projection - projects properties from a node/map
+    MapProjection {
+        /// Source expression (variable or expression)
+        source: Box<Expression>,
+        /// Projection items (properties to include)
+        items: Vec<MapProjectionItem>,
+    },
+    /// List comprehension - filters and transforms lists
+    ListComprehension {
+        /// Variable to bind each list item to
+        variable: String,
+        /// Expression that evaluates to a list
+        list_expression: Box<Expression>,
+        /// Optional WHERE clause for filtering
+        where_clause: Option<Box<Expression>>,
+        /// Optional transformation expression (after |)
+        transform_expression: Option<Box<Expression>>,
+    },
+    /// Pattern comprehension - collects patterns and transforms results
+    PatternComprehension {
+        /// Pattern to match
+        pattern: Pattern,
+        /// Optional WHERE clause for filtering
+        where_clause: Option<Box<Expression>>,
+        /// Optional transformation expression (after |)
+        transform_expression: Option<Box<Expression>>,
+    },
 }
 
 /// When clause for CASE expressions
@@ -388,6 +444,25 @@ pub struct WhenClause {
     pub condition: Expression,
     /// Result expression
     pub result: Expression,
+}
+
+/// Map projection item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MapProjectionItem {
+    /// Property projection: .name or .name AS alias
+    Property {
+        /// Property name (without the dot)
+        property: String,
+        /// Optional alias
+        alias: Option<String>,
+    },
+    /// Virtual key: name: expression
+    VirtualKey {
+        /// Key name
+        key: String,
+        /// Expression to evaluate
+        expression: Expression,
+    },
 }
 
 /// Literal values
@@ -611,6 +686,10 @@ impl CypherParser {
             "SKIP" => {
                 let skip_clause = self.parse_skip_clause()?;
                 Ok(Clause::Skip(skip_clause))
+            }
+            "FOREACH" => {
+                let foreach_clause = self.parse_foreach_clause()?;
+                Ok(Clause::Foreach(foreach_clause))
             }
             _ => Err(self.error(&format!("Unexpected keyword: {}", keyword))),
         }
@@ -1269,6 +1348,94 @@ impl CypherParser {
         })
     }
 
+    /// Parse FOREACH clause
+    fn parse_foreach_clause(&mut self) -> Result<ForeachClause> {
+        self.skip_whitespace();
+
+        // Expect opening parenthesis
+        self.expect_char('(')?;
+        self.skip_whitespace();
+
+        // Parse variable name
+        let variable = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // Expect IN keyword
+        self.expect_keyword("IN")?;
+        self.skip_whitespace();
+
+        // Parse list expression
+        let list_expression = self.parse_expression()?;
+        self.skip_whitespace();
+
+        // Expect pipe separator |
+        self.expect_char('|')?;
+        self.skip_whitespace();
+
+        // Parse update clauses (SET or DELETE) until closing parenthesis
+        let mut update_clauses = Vec::new();
+        loop {
+            self.skip_whitespace();
+
+            // Check for closing parenthesis
+            if self.peek_char() == Some(')') {
+                self.consume_char();
+                break;
+            }
+
+            // Parse SET or DELETE clause
+            let keyword = self.parse_keyword()?;
+            match keyword.to_uppercase().as_str() {
+                "SET" => {
+                    let set_clause = self.parse_set_clause()?;
+                    update_clauses.push(ForeachUpdateClause::Set(set_clause));
+                }
+                "DELETE" => {
+                    // Check for DETACH DELETE
+                    let detach = if self.peek_keyword("DETACH") {
+                        self.parse_keyword()?;
+                        self.skip_whitespace();
+                        true
+                    } else {
+                        false
+                    };
+
+                    self.skip_whitespace();
+                    let mut items = Vec::new();
+                    loop {
+                        let variable = self.parse_identifier()?;
+                        items.push(variable);
+
+                        self.skip_whitespace();
+                        if self.peek_char() == Some(',') {
+                            self.consume_char();
+                            self.skip_whitespace();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let delete_clause = DeleteClause { items, detach };
+                    update_clauses.push(ForeachUpdateClause::Delete(delete_clause));
+                }
+                _ => {
+                    return Err(self.error(&format!(
+                        "Expected SET or DELETE in FOREACH, found: {}",
+                        keyword
+                    )));
+                }
+            }
+
+            self.skip_whitespace();
+        }
+
+        Ok(ForeachClause {
+            variable,
+            list_expression,
+            update_clauses,
+        })
+    }
+
     /// Parse UNION clause
     fn parse_union_clause(&mut self) -> Result<UnionClause> {
         self.skip_whitespace();
@@ -1484,6 +1651,8 @@ impl CypherParser {
                 // Check if it's a keyword first
                 if self.peek_keyword("CASE") {
                     self.parse_case_expression()
+                } else if self.peek_keyword("EXISTS") {
+                    self.parse_exists_expression()
                 } else if self.peek_keyword("true") {
                     self.parse_boolean_literal(true)
                 } else if self.peek_keyword("false") {
@@ -1710,6 +1879,12 @@ impl CypherParser {
                 args,
             })
         }
+        // Check for map projection: n {.name, .age}
+        else if self.peek_char() == Some('{') {
+            let source = Box::new(Expression::Variable(identifier));
+            let items = self.parse_map_projection_items()?;
+            Ok(Expression::MapProjection { source, items })
+        }
         // Check for property access
         else if self.peek_char() == Some('.') {
             self.consume_char();
@@ -1742,7 +1917,112 @@ impl CypherParser {
     /// Parse list expression
     fn parse_list_expression(&mut self) -> Result<Expression> {
         self.expect_char('[')?;
+        self.skip_whitespace();
 
+        // Check if this is a pattern comprehension: [(pattern) WHERE ... | ...]
+        // Pattern comprehensions start with '(' or an identifier followed by ':' or '-'
+        let saved_pos = self.pos;
+        let is_pattern_comprehension = if self.peek_char() == Some('(') {
+            // Starts with '(', likely a pattern
+            true
+        } else if self.is_identifier_start() {
+            // Check if identifier is followed by ':' (label) or '-' (relationship)
+            let _identifier = self.parse_identifier()?;
+            self.skip_whitespace();
+            let next_char = self.peek_char();
+            let is_pattern = next_char == Some(':') || next_char == Some('-');
+            // Reset position
+            self.pos = saved_pos;
+            is_pattern
+        } else {
+            false
+        };
+
+        if is_pattern_comprehension {
+            // Parse pattern comprehension: [(pattern) WHERE ... | ...]
+            let pattern = self.parse_pattern_until_where_or_brace()?;
+            self.skip_whitespace();
+
+            // Parse optional WHERE clause
+            let where_clause = if self.peek_keyword("WHERE") {
+                self.expect_keyword("WHERE")?;
+                self.skip_whitespace();
+                Some(Box::new(self.parse_expression()?))
+            } else {
+                None
+            };
+            self.skip_whitespace();
+
+            // Parse optional transformation expression (after |)
+            let transform_expression = if self.peek_char() == Some('|') {
+                self.consume_char();
+                self.skip_whitespace();
+                Some(Box::new(self.parse_expression()?))
+            } else {
+                None
+            };
+            self.skip_whitespace();
+
+            self.expect_char(']')?;
+
+            return Ok(Expression::PatternComprehension {
+                pattern,
+                where_clause,
+                transform_expression,
+            });
+        }
+
+        // Check if this is a list comprehension: [x IN list WHERE ... | ...]
+        if self.is_identifier_start() {
+            let saved_pos = self.pos;
+            let variable = self.parse_identifier()?;
+            self.skip_whitespace();
+
+            // Check if next token is IN (indicating list comprehension)
+            if self.peek_keyword("IN") {
+                // This is a list comprehension
+                self.expect_keyword("IN")?;
+                self.skip_whitespace();
+
+                // Parse list expression
+                let list_expression = Box::new(self.parse_expression()?);
+                self.skip_whitespace();
+
+                // Parse optional WHERE clause
+                let where_clause = if self.peek_keyword("WHERE") {
+                    self.expect_keyword("WHERE")?;
+                    self.skip_whitespace();
+                    Some(Box::new(self.parse_expression()?))
+                } else {
+                    None
+                };
+                self.skip_whitespace();
+
+                // Parse optional transformation expression (after |)
+                let transform_expression = if self.peek_char() == Some('|') {
+                    self.consume_char();
+                    self.skip_whitespace();
+                    Some(Box::new(self.parse_expression()?))
+                } else {
+                    None
+                };
+                self.skip_whitespace();
+
+                self.expect_char(']')?;
+
+                return Ok(Expression::ListComprehension {
+                    variable,
+                    list_expression,
+                    where_clause,
+                    transform_expression,
+                });
+            } else {
+                // Not a list comprehension, reset position and parse as regular list
+                self.pos = saved_pos;
+            }
+        }
+
+        // Regular list expression
         let mut elements = Vec::new();
 
         while self.peek_char() != Some(']') {
@@ -1763,6 +2043,64 @@ impl CypherParser {
     fn parse_map_expression(&mut self) -> Result<Expression> {
         let property_map = self.parse_property_map()?;
         Ok(Expression::Map(property_map.properties))
+    }
+
+    /// Parse map projection items: {.name, .age AS age_alias, fullName: n.name}
+    fn parse_map_projection_items(&mut self) -> Result<Vec<MapProjectionItem>> {
+        self.expect_char('{')?;
+        self.skip_whitespace();
+
+        let mut items = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            // Check for closing brace
+            if self.peek_char() == Some('}') {
+                self.consume_char();
+                break;
+            }
+
+            // Check if it's a property projection (.name) or virtual key (name: expr)
+            if self.peek_char() == Some('.') {
+                // Property projection: .name or .name AS alias
+                self.consume_char(); // consume '.'
+                let property = self.parse_identifier()?;
+                self.skip_whitespace();
+
+                // Check for AS alias
+                let alias = if self.peek_keyword("AS") {
+                    self.expect_keyword("AS")?;
+                    self.skip_whitespace();
+                    Some(self.parse_identifier()?)
+                } else {
+                    None
+                };
+
+                items.push(MapProjectionItem::Property { property, alias });
+            } else {
+                // Virtual key: name: expression
+                let key = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_char(':')?;
+                self.skip_whitespace();
+                let expression = self.parse_expression()?;
+
+                items.push(MapProjectionItem::VirtualKey { key, expression });
+            }
+
+            self.skip_whitespace();
+
+            // Check for comma separator
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            } else if self.peek_char() != Some('}') {
+                return Err(self.error("Expected ',' or '}' in map projection"));
+            }
+        }
+
+        Ok(items)
     }
 
     /// Parse case expression
@@ -1799,6 +2137,117 @@ impl CypherParser {
             when_clauses,
             else_clause,
         })
+    }
+
+    /// Parse EXISTS expression
+    fn parse_exists_expression(&mut self) -> Result<Expression> {
+        self.expect_keyword("EXISTS")?; // consume EXISTS
+        self.skip_whitespace();
+
+        // Expect opening brace {
+        self.expect_char('{')?;
+        self.skip_whitespace();
+
+        // Parse the pattern inside the braces
+        // We need to stop before WHERE or closing brace
+        let pattern = self.parse_pattern_until_where_or_brace()?;
+        self.skip_whitespace();
+
+        // Parse optional WHERE clause
+        let where_clause = if self.peek_keyword("WHERE") {
+            self.expect_keyword("WHERE")?;
+            self.skip_whitespace();
+            Some(Box::new(self.parse_expression()?))
+        } else {
+            None
+        };
+        self.skip_whitespace();
+
+        // Expect closing brace }
+        self.expect_char('}')?;
+
+        Ok(Expression::Exists {
+            pattern,
+            where_clause,
+        })
+    }
+
+    /// Parse pattern until WHERE keyword or closing brace
+    /// This is used for EXISTS and Pattern Comprehensions
+    fn parse_pattern_until_where_or_brace(&mut self) -> Result<Pattern> {
+        let mut elements = Vec::new();
+
+        // Parse first node
+        let node = self.parse_node_pattern()?;
+        elements.push(PatternElement::Node(node));
+
+        // Parse relationships and nodes, or comma-separated nodes
+        while self.pos < self.input.len() {
+            // Check if there's a relationship pattern by looking ahead
+            let saved_pos = self.pos;
+            let saved_line = self.line;
+            let saved_column = self.column;
+
+            // Skip whitespace
+            self.skip_whitespace();
+
+            // Check for WHERE keyword (stop parsing pattern)
+            if self.peek_keyword("WHERE") {
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+                break;
+            }
+
+            // Check for closing brace (stop parsing pattern)
+            if self.peek_char() == Some('}') {
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+                break;
+            }
+
+            // Check for pipe (|) - used in comprehensions
+            if self.peek_char() == Some('|') {
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+                break;
+            }
+
+            // Check for comma (multiple independent node patterns)
+            if self.peek_char() == Some(',') {
+                self.consume_char(); // consume ','
+                self.skip_whitespace();
+
+                // Parse next node pattern as independent node
+                let node = self.parse_node_pattern()?;
+                elements.push(PatternElement::Node(node));
+                continue;
+            }
+
+            // Check if we have a relationship pattern
+            if self.peek_char() == Some('-')
+                || self.peek_char() == Some('<')
+                || self.peek_char() == Some('>')
+            {
+                // Parse relationship
+                let rel = self.parse_relationship_pattern()?;
+                elements.push(PatternElement::Relationship(rel));
+
+                // Parse next node
+                let node = self.parse_node_pattern()?;
+                elements.push(PatternElement::Node(node));
+            } else {
+                // Restore position if no relationship or comma found
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+                break;
+            }
+        }
+
+        Ok(Pattern { elements })
     }
 
     /// Parse comparison operator
