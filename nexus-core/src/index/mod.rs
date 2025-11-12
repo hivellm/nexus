@@ -799,7 +799,7 @@ impl PropertyIndex {
             // Update stats: subtract entries from this index
             let mut removed_entries = 0u64;
             for bitmap in tree.values() {
-                removed_entries += bitmap.len() as u64;
+                removed_entries += bitmap.len();
             }
             stats.total_entries = stats.total_entries.saturating_sub(removed_entries);
             stats.indexed_properties = trees.len() as u32;

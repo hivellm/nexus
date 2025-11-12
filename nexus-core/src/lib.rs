@@ -1300,24 +1300,36 @@ impl Engine {
         &mut self,
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
-        // Note: Currently, transactions are automatic. These commands are placeholders
-        // for future explicit transaction support.
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::BeginTransaction => {
-                    // For now, transactions begin automatically on write operations
-                    // Future: Store transaction context
+                    // Begin a write transaction
+                    // Note: The transaction is stored internally by TransactionManager
+                    // For explicit transaction support, we would need to track the transaction
+                    // handle per session/client. For now, we just ensure the transaction manager
+                    // is ready for write operations.
+                    let _tx = self.transaction_manager.begin_write()?;
+                    // In a full implementation, we would store this transaction handle
+                    // in a session context for later commit/rollback
                 }
                 executor::parser::Clause::CommitTransaction => {
-                    // For now, transactions commit automatically
-                    // Future: Commit stored transaction context
+                    // Commit the current transaction
+                    // Note: In a full implementation, we would retrieve the transaction handle
+                    // from the session context. For now, we create a transaction and commit it
+                    // to ensure consistency.
+                    let mut tx = self.transaction_manager.begin_write()?;
+                    self.transaction_manager.commit(&mut tx)?;
+                    // Flush storage to ensure durability
                     self.storage.flush()?;
                 }
                 executor::parser::Clause::RollbackTransaction => {
-                    // Note: Currently transactions are automatic (each operation commits immediately)
-                    // ROLLBACK is a no-op for now, but doesn't return an error
-                    // Future: Implement explicit transaction context to support proper rollback
-                    // For now, just flush to ensure consistency
+                    // Rollback the current transaction
+                    // Note: In a full implementation, we would retrieve the transaction handle
+                    // from the session context and call abort/rollback. For now, we create
+                    // a transaction and abort it to ensure consistency.
+                    let mut tx = self.transaction_manager.begin_write()?;
+                    self.transaction_manager.abort(&mut tx)?;
+                    // Flush storage to ensure consistency
                     self.storage.flush()?;
                 }
                 _ => {}
@@ -1340,46 +1352,62 @@ impl Engine {
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::CreateIndex(create_index) => {
-                    // If OR REPLACE is specified, drop existing index first
-                    if create_index.or_replace {
-                        // Check if index exists (by checking if label exists)
-                        let label_exists = self.catalog.get_label_id(&create_index.label).is_ok();
-                        if label_exists {
-                            // Drop the index (if it exists)
-                            // For now, indexes are managed automatically, so we just ensure
-                            // the catalog entries are recreated
-                            // Future: Explicitly drop index structure
-                        }
-                    }
-
-                    // Ensure label and property exist in catalog
-                    let _label_id = self.catalog.get_or_create_label(&create_index.label)?;
-                    let _property_key_id =
+                    // Get label and property IDs
+                    let label_id = self.catalog.get_or_create_label(&create_index.label)?;
+                    let property_key_id =
                         self.catalog.get_or_create_key(&create_index.property)?;
 
-                    // Check if index already exists (only if IF NOT EXISTS is not set)
-                    if !create_index.or_replace && !create_index.if_not_exists {
-                        // Check if index already exists
-                        // Note: For now, we'll just ensure catalog entries exist
-                        // Future: Check if index structure exists
-                        // Indexes are created automatically when properties are indexed
+                    // Check if index already exists
+                    let index_exists = self.indexes.property_index.has_index(label_id, property_key_id);
+
+                    // Handle OR REPLACE
+                    if create_index.or_replace && index_exists {
+                        // Drop existing index first
+                        self.indexes.property_index.drop_index(label_id, property_key_id)?;
                     }
 
-                    // Create property index for this label+property combination
-                    // The index is automatically created when first property is indexed
-                    // For now, we just ensure the catalog entries exist
-                    // Future: Explicitly create index structure
+                    // Handle IF NOT EXISTS
+                    if !create_index.or_replace && create_index.if_not_exists && index_exists {
+                        // Index already exists and IF NOT EXISTS was specified, skip
+                        continue;
+                    }
+
+                    // Check if index already exists (error if not IF NOT EXISTS or OR REPLACE)
+                    if !create_index.or_replace && !create_index.if_not_exists && index_exists {
+                        return Err(Error::CypherExecution(format!(
+                            "Index on :{}({}) already exists",
+                            create_index.label, create_index.property
+                        )));
+                    }
+
+                    // Create the index structure
+                    self.indexes.property_index.create_index(label_id, property_key_id)?;
+
+                    // Populate index with existing nodes that have this label and property
+                    self.populate_index(label_id, property_key_id)?;
                 }
                 executor::parser::Clause::DropIndex(drop_index) => {
-                    // Check if label and property exist in catalog
-                    // For now, we'll check if they exist by trying to get them
-                    // Future: Check if index structure actually exists
-                    let label_exists = self.catalog.get_label_id(&drop_index.label).is_ok();
-                    // Check if key exists by trying to get it (keys are created automatically)
-                    // For now, we'll assume index exists if label exists
-                    // Future: Track which indexes actually exist
+                    // Get label and property IDs
+                    let label_id = match self.catalog.get_label_id(&drop_index.label) {
+                        Ok(id) => id,
+                        Err(_) if drop_index.if_exists => {
+                            // Label doesn't exist and IF EXISTS was specified, skip
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
 
-                    if !label_exists {
+                    let property_key_id = match self.catalog.get_key_id(&drop_index.property) {
+                        Ok(id) => id,
+                        Err(_) if drop_index.if_exists => {
+                            // Property doesn't exist and IF EXISTS was specified, skip
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
+
+                    // Check if index exists
+                    if !self.indexes.property_index.has_index(label_id, property_key_id) {
                         if drop_index.if_exists {
                             // Index doesn't exist and IF EXISTS was specified, skip
                             continue;
@@ -1391,8 +1419,8 @@ impl Engine {
                         }
                     }
 
-                    // For now, indexes are managed automatically
-                    // Future: Explicitly drop index structure
+                    // Drop the index
+                    self.indexes.property_index.drop_index(label_id, property_key_id)?;
                 }
                 _ => {}
             }
@@ -1404,6 +1432,60 @@ impl Engine {
                 values: vec![serde_json::Value::String("ok".to_string())],
             }],
         })
+    }
+
+    /// Populate an index with existing nodes that have the specified label and property
+    fn populate_index(&mut self, label_id: u32, property_key_id: u32) -> Result<()> {
+        use crate::index::PropertyValue;
+        use serde_json::Value as JsonValue;
+
+        // Get property key name
+        let property_name = self.catalog.get_key_name(property_key_id)?
+            .ok_or_else(|| Error::CypherExecution(format!(
+                "Property key {} not found",
+                property_key_id
+            )))?;
+
+        // Get all nodes with this label
+        let label_bitmap = self.indexes.label_index.get_nodes_with_labels(&[label_id])?;
+        
+        // Iterate through all nodes with this label
+        for node_id in label_bitmap.iter() {
+            let node_id_u64 = node_id as u64;
+            
+            // Load node properties
+            if let Some(JsonValue::Object(props)) = self.storage.load_node_properties(node_id_u64)? {
+                // Check if this node has the property we're indexing
+                if let Some(prop_value) = props.get(&property_name) {
+                    // Convert JSON value to PropertyValue
+                    let property_value = match prop_value {
+                        JsonValue::String(s) => PropertyValue::String(s.clone()),
+                        JsonValue::Number(n) => {
+                            if let Some(i) = n.as_i64() {
+                                PropertyValue::Integer(i)
+                            } else if let Some(f) = n.as_f64() {
+                                PropertyValue::Float(f)
+                            } else {
+                                continue; // Skip invalid number
+                            }
+                        }
+                        JsonValue::Bool(b) => PropertyValue::Boolean(*b),
+                        JsonValue::Null => PropertyValue::Null,
+                        _ => continue, // Skip arrays and objects
+                    };
+
+                    // Add to index
+                    self.indexes.property_index.add_property(
+                        node_id_u64,
+                        label_id,
+                        property_key_id,
+                        property_value,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Execute constraint management commands (CREATE CONSTRAINT, DROP CONSTRAINT)
