@@ -16,7 +16,7 @@ pub use rbac::{Role, RoleBasedAccessControl, User};
 use anyhow::Result;
 use argon2::password_hash::{SaltString, rand_core::OsRng};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -77,10 +77,14 @@ impl AuthManager {
     }
 
     /// Generate a new API key
-    pub fn generate_api_key(&self, name: String, permissions: Vec<Permission>) -> Result<ApiKey> {
+    pub fn generate_api_key(
+        &self,
+        name: String,
+        permissions: Vec<Permission>,
+    ) -> Result<(ApiKey, String)> {
         let key_id = uuid::Uuid::new_v4().to_string();
         let key_secret = self.generate_secret();
-        let full_key = format!("nexus_sk_{}_{}", key_id, key_secret);
+        let full_key = format!("nx_{}", key_secret);
 
         // Hash the full key for storage
         let salt = SaltString::generate(&mut OsRng);
@@ -92,11 +96,15 @@ impl AuthManager {
         let api_key = ApiKey {
             id: key_id,
             name,
+            user_id: None,
             permissions,
             hashed_key: password_hash.to_string(),
             created_at: Utc::now(),
+            expires_at: None,
             last_used: None,
             is_active: true,
+            is_revoked: false,
+            revocation_reason: None,
         };
 
         // Store the API key
@@ -105,7 +113,89 @@ impl AuthManager {
             keys.insert(api_key.id.clone(), api_key.clone());
         }
 
-        Ok(api_key)
+        Ok((api_key, full_key))
+    }
+
+    /// Generate a new API key for a user
+    pub fn generate_api_key_for_user(
+        &self,
+        name: String,
+        user_id: String,
+        permissions: Vec<Permission>,
+    ) -> Result<(ApiKey, String)> {
+        let key_id = uuid::Uuid::new_v4().to_string();
+        let key_secret = self.generate_secret();
+        let full_key = format!("nx_{}", key_secret);
+
+        // Hash the full key for storage
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = self
+            .argon2
+            .hash_password(full_key.as_bytes(), &salt)
+            .map_err(|e| anyhow::anyhow!("Failed to hash API key: {}", e))?;
+
+        let api_key = ApiKey {
+            id: key_id,
+            name,
+            user_id: Some(user_id),
+            permissions,
+            hashed_key: password_hash.to_string(),
+            created_at: Utc::now(),
+            expires_at: None,
+            last_used: None,
+            is_active: true,
+            is_revoked: false,
+            revocation_reason: None,
+        };
+
+        // Store the API key
+        {
+            let mut keys = self.api_keys.write();
+            keys.insert(api_key.id.clone(), api_key.clone());
+        }
+
+        Ok((api_key, full_key))
+    }
+
+    /// Generate a new temporary API key with expiration
+    pub fn generate_temporary_api_key(
+        &self,
+        name: String,
+        permissions: Vec<Permission>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(ApiKey, String)> {
+        let key_id = uuid::Uuid::new_v4().to_string();
+        let key_secret = self.generate_secret();
+        let full_key = format!("nx_{}", key_secret);
+
+        // Hash the full key for storage
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = self
+            .argon2
+            .hash_password(full_key.as_bytes(), &salt)
+            .map_err(|e| anyhow::anyhow!("Failed to hash API key: {}", e))?;
+
+        let api_key = ApiKey {
+            id: key_id,
+            name,
+            user_id: None,
+            permissions,
+            hashed_key: password_hash.to_string(),
+            created_at: Utc::now(),
+            expires_at: Some(expires_at),
+            last_used: None,
+            is_active: true,
+            is_revoked: false,
+            revocation_reason: None,
+        };
+
+        // Store the API key
+        {
+            let mut keys = self.api_keys.write();
+            keys.insert(api_key.id.clone(), api_key.clone());
+        }
+
+        Ok((api_key, full_key))
     }
 
     /// Verify an API key
@@ -114,26 +204,22 @@ impl AuthManager {
             return Ok(None);
         }
 
-        // Extract key ID from the full key
-        let key_id = if let Some(stripped) = key.strip_prefix("nexus_sk_") {
-            if let Some(underscore_pos) = stripped.find('_') {
-                &stripped[..underscore_pos]
-            } else {
-                return Ok(None);
-            }
-        } else {
+        // Check if key starts with nx_
+        if !key.starts_with("nx_") {
             return Ok(None);
+        }
+
+        // Try to find the key by verifying against all stored keys
+        // This is less efficient but necessary since we hash the full key
+        let keys = {
+            let keys_guard = self.api_keys.read();
+            keys_guard.values().cloned().collect::<Vec<_>>()
         };
 
-        // Look up the API key
-        let api_key = {
-            let keys = self.api_keys.read();
-            keys.get(key_id).cloned()
-        };
-
-        if let Some(api_key) = api_key {
-            if !api_key.is_active {
-                return Ok(None);
+        for mut api_key in keys {
+            // Check if key is valid (active, not revoked, not expired)
+            if !api_key.is_valid() {
+                continue;
             }
 
             // Verify the key
@@ -148,17 +234,16 @@ impl AuthManager {
                 // Update last used timestamp
                 {
                     let mut keys = self.api_keys.write();
-                    if let Some(key) = keys.get_mut(key_id) {
+                    if let Some(key) = keys.get_mut(&api_key.id) {
                         key.last_used = Some(Utc::now());
                     }
                 }
-                Ok(Some(api_key))
-            } else {
-                Ok(None)
+                api_key.last_used = Some(Utc::now());
+                return Ok(Some(api_key));
             }
-        } else {
-            Ok(None)
         }
+
+        Ok(None)
     }
 
     /// Check if a user has a specific permission
@@ -176,6 +261,37 @@ impl AuthManager {
     pub fn delete_api_key(&self, key_id: &str) -> bool {
         let mut keys = self.api_keys.write();
         keys.remove(key_id).is_some()
+    }
+
+    /// Revoke an API key
+    pub fn revoke_api_key(&self, key_id: &str, reason: Option<String>) -> Result<()> {
+        let mut keys = self.api_keys.write();
+        if let Some(api_key) = keys.get_mut(key_id) {
+            api_key.revoke(reason);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("API key not found"))
+        }
+    }
+
+    /// Get API keys for a specific user
+    pub fn get_api_keys_for_user(&self, user_id: &str) -> Vec<ApiKey> {
+        let keys = self.api_keys.read();
+        keys.values()
+            .filter(|key| {
+                key.user_id
+                    .as_ref()
+                    .map(|id| id == user_id)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Get a specific API key by ID
+    pub fn get_api_key(&self, key_id: &str) -> Option<ApiKey> {
+        let keys = self.api_keys.read();
+        keys.get(key_id).cloned()
     }
 
     /// Update API key permissions
