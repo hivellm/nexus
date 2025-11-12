@@ -159,6 +159,10 @@ impl Engine {
 
         // Initialize transaction manager
         let transaction_manager = transaction::TransactionManager::new()?;
+        let transaction_manager_arc = Arc::new(RwLock::new(transaction_manager));
+
+        // Initialize session manager
+        let session_manager = session::SessionManager::new(transaction_manager_arc.clone());
 
         // Initialize index manager
         let indexes = index::IndexManager::new(data_dir.join("indexes"))?;
@@ -167,12 +171,18 @@ impl Engine {
         let executor =
             executor::Executor::new(&catalog, &storage, &indexes.label_index, &indexes.knn_index)?;
 
+        // Extract TransactionManager from Arc for Engine
+        let transaction_manager = Arc::try_unwrap(transaction_manager_arc)
+            .map_err(|_| Error::internal("Failed to unwrap TransactionManager"))?
+            .into_inner();
+
         let mut engine = Engine {
             catalog,
             storage,
             page_cache,
             wal,
             transaction_manager,
+            session_manager,
             indexes,
             executor,
             _temp_dir: None,
@@ -832,7 +842,7 @@ impl Engine {
             .any(|c| matches!(c, executor::parser::Clause::RollbackTransaction));
 
         if has_begin || has_commit || has_rollback {
-            return self.execute_transaction_commands(&ast);
+            return self.execute_transaction_commands(&ast, None);
         }
 
         // Check for index management commands
