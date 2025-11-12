@@ -37,20 +37,20 @@
 - [x] 1.3.2 Implement `DROP USER username` Cypher command ✅
 - [x] 1.3.3 Implement `SHOW USERS` Cypher command ✅ (already existed)
 - [x] 1.3.4 Implement `SHOW USER username` Cypher command ✅
-- [ ] 1.3.5 Add REST endpoint: `POST /auth/users`
-- [ ] 1.3.6 Add REST endpoint: `DELETE /auth/users/{username}`
-- [ ] 1.3.7 Add REST endpoint: `GET /auth/users`
-- [ ] 1.3.8 Add REST endpoint: `GET /auth/users/{username}`
+- [x] 1.3.5 Add REST endpoint: `POST /auth/users` ✅
+- [x] 1.3.6 Add REST endpoint: `DELETE /auth/users/{username}` ✅
+- [x] 1.3.7 Add REST endpoint: `GET /auth/users` ✅
+- [x] 1.3.8 Add REST endpoint: `GET /auth/users/{username}` ✅
 - [ ] 1.3.9 Add unit tests for user CRUD operations
 - [ ] 1.3.10 Add integration tests (S2S)
 
 ### 1.4 Permission Management
-- [ ] 1.4.1 Implement `GRANT permission TO username` Cypher command
-- [ ] 1.4.2 Implement `REVOKE permission FROM username` Cypher command
+- [x] 1.4.1 Implement `GRANT permission TO username` Cypher command ✅ (already existed)
+- [x] 1.4.2 Implement `REVOKE permission FROM username` Cypher command ✅ (already existed)
 - [ ] 1.4.3 Add fine-grained permissions: QUEUE, CHATROOM, REST
-- [ ] 1.4.4 Add REST endpoint: `POST /auth/users/{username}/permissions`
-- [ ] 1.4.5 Add REST endpoint: `DELETE /auth/users/{username}/permissions/{permission}`
-- [ ] 1.4.6 Add REST endpoint: `GET /auth/users/{username}/permissions`
+- [x] 1.4.4 Add REST endpoint: `POST /auth/users/{username}/permissions` ✅
+- [x] 1.4.5 Add REST endpoint: `DELETE /auth/users/{username}/permissions/{permission}` ✅
+- [x] 1.4.6 Add REST endpoint: `GET /auth/users/{username}/permissions` ✅
 - [ ] 1.4.7 Add unit tests for permission management
 - [ ] 1.4.8 Add integration tests (S2S)
 
