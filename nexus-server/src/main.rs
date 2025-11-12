@@ -67,11 +67,21 @@ async fn main() -> anyhow::Result<()> {
     // Initialize cypher engine
     api::cypher::init_engine(engine_arc.clone())?;
 
-    // Create Nexus server state (simplified - only engine and executor needed)
-    let nexus_server = Arc::new(NexusServer {
-        executor: api::cypher::get_executor(),
-        engine: engine_arc,
-    });
+    // Initialize DatabaseManager for multi-database support
+    let database_manager = nexus_core::database::DatabaseManager::new(data_dir.clone().into())?;
+    let database_manager_arc = Arc::new(RwLock::new(database_manager));
+
+    // Initialize RBAC for user management
+    let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+
+    // Create Nexus server state
+    let nexus_server = Arc::new(NexusServer::new(
+        api::cypher::get_executor(),
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+    ));
 
     info!("Starting Nexus Server on {}", config.addr);
 
@@ -119,7 +129,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(api::health::health_check))
         .route("/health", get(api::health::health_check))
         .route("/metrics", get(api::health::metrics))
-        .route("/cypher", post(api::cypher::execute_cypher))
+        .route(
+            "/cypher",
+            post({
+                let server = nexus_server.clone();
+                move |request| api::cypher::execute_cypher(axum::extract::State(server), request)
+            }),
+        )
         .route("/knn_traverse", post(api::knn::knn_traverse))
         .route("/ingest", post(api::ingest::ingest_data))
         // Schema management endpoints
@@ -267,7 +283,18 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let server = NexusServer::new(executor_arc.clone(), engine_arc.clone());
+        let database_manager =
+            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+        let rbac_arc = Arc::new(RwLock::new(rbac));
+
+        let server = NexusServer::new(
+            executor_arc.clone(),
+            engine_arc.clone(),
+            database_manager_arc,
+            rbac_arc,
+        );
 
         // Test that the server can be created
         let server_arc = Arc::new(server);
@@ -286,12 +313,23 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let server = NexusServer::new(executor_arc, engine_arc);
+        let database_manager =
+            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+        let rbac_arc = Arc::new(RwLock::new(rbac));
+
+        let server = NexusServer::new(executor_arc, engine_arc, database_manager_arc, rbac_arc);
         let cloned = server.clone();
 
         // Test that clone works and references the same underlying data
         assert!(Arc::ptr_eq(&server.executor, &cloned.executor));
         assert!(Arc::ptr_eq(&server.engine, &cloned.engine));
+        assert!(Arc::ptr_eq(
+            &server.database_manager,
+            &cloned.database_manager
+        ));
+        assert!(Arc::ptr_eq(&server.rbac, &cloned.rbac));
     }
 
     #[tokio::test]
@@ -303,7 +341,18 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let server = Arc::new(NexusServer::new(executor_arc, engine_arc));
+        let database_manager =
+            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+        let rbac_arc = Arc::new(RwLock::new(rbac));
+
+        let server = Arc::new(NexusServer::new(
+            executor_arc,
+            engine_arc,
+            database_manager_arc,
+            rbac_arc,
+        ));
 
         // Test that MCP router can be created
         let result = create_mcp_router(server).await;
@@ -403,7 +452,18 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let server = Arc::new(NexusServer::new(executor_arc, engine_arc));
+        let database_manager =
+            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+        let rbac_arc = Arc::new(RwLock::new(rbac));
+
+        let server = Arc::new(NexusServer::new(
+            executor_arc,
+            engine_arc,
+            database_manager_arc,
+            rbac_arc,
+        ));
 
         // Test that we can create the MCP router
         let mcp_router_result = create_mcp_router(server.clone()).await;
@@ -424,10 +484,23 @@ mod tests {
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(RwLock::new(executor));
 
-        let server = NexusServer::new(executor_arc.clone(), engine_arc.clone());
+        let database_manager =
+            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+        let rbac_arc = Arc::new(RwLock::new(rbac));
+
+        let server = NexusServer::new(
+            executor_arc.clone(),
+            engine_arc.clone(),
+            database_manager_arc.clone(),
+            rbac_arc.clone(),
+        );
 
         // Test that all fields are accessible
         assert!(Arc::ptr_eq(&server.executor, &executor_arc));
         assert!(Arc::ptr_eq(&server.engine, &engine_arc));
+        assert!(Arc::ptr_eq(&server.database_manager, &database_manager_arc));
+        assert!(Arc::ptr_eq(&server.rbac, &rbac_arc));
     }
 }

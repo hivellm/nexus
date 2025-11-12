@@ -78,6 +78,10 @@ pub enum Clause {
     Grant(GrantClause),
     /// REVOKE command
     Revoke(RevokeClause),
+    /// EXPLAIN command for query plan analysis
+    Explain(ExplainClause),
+    /// PROFILE command for query execution profiling
+    Profile(ProfileClause),
 }
 
 /// MATCH clause with pattern matching
@@ -474,6 +478,26 @@ pub struct RevokeClause {
     pub target: String,
 }
 
+/// EXPLAIN clause for query plan analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExplainClause {
+    /// The query to explain
+    pub query: CypherQuery,
+    /// Original query string (for execution)
+    #[serde(skip)]
+    pub query_string: Option<String>,
+}
+
+/// PROFILE clause for query execution profiling
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileClause {
+    /// The query to profile
+    pub query: CypherQuery,
+    /// Original query string (for execution)
+    #[serde(skip)]
+    pub query_string: Option<String>,
+}
+
 /// Expression types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Expression {
@@ -719,11 +743,21 @@ impl CypherParser {
             }
         }
 
+        // Allow empty queries (for EXPLAIN/PROFILE nested queries)
+        // The planner will validate if needed
         Ok(CypherQuery { clauses, params })
     }
 
     /// Parse a single clause
     fn parse_clause(&mut self) -> Result<Clause> {
+        // Check for EXPLAIN or PROFILE first (must be at the beginning)
+        if self.peek_keyword("EXPLAIN") {
+            return self.parse_explain_clause();
+        }
+        if self.peek_keyword("PROFILE") {
+            return self.parse_profile_clause();
+        }
+
         // Check for OPTIONAL MATCH first
         if self.peek_keyword("OPTIONAL") {
             self.parse_keyword()?; // consume "OPTIONAL"
@@ -767,8 +801,25 @@ impl CypherParser {
                 Ok(Clause::Match(match_clause))
             }
             "CREATE" => {
-                let create_clause = self.parse_create_clause()?;
-                Ok(Clause::Create(create_clause))
+                self.skip_whitespace();
+                // Check for CREATE DATABASE/INDEX/CONSTRAINT/USER before regular CREATE
+                if self.peek_keyword("DATABASE") {
+                    let create_db_clause = self.parse_create_database_clause()?;
+                    Ok(Clause::CreateDatabase(create_db_clause))
+                } else if self.peek_keyword("INDEX") {
+                    let create_index_clause = self.parse_create_index_clause()?;
+                    Ok(Clause::CreateIndex(create_index_clause))
+                } else if self.peek_keyword("CONSTRAINT") {
+                    let create_constraint_clause = self.parse_create_constraint_clause()?;
+                    Ok(Clause::CreateConstraint(create_constraint_clause))
+                } else if self.peek_keyword("USER") {
+                    let create_user_clause = self.parse_create_user_clause()?;
+                    Ok(Clause::CreateUser(create_user_clause))
+                } else {
+                    // Regular CREATE clause
+                    let create_clause = self.parse_create_clause()?;
+                    Ok(Clause::Create(create_clause))
+                }
             }
             "MERGE" => {
                 let merge_clause = self.parse_merge_clause()?;
@@ -856,50 +907,30 @@ impl CypherParser {
                 }
                 Ok(Clause::RollbackTransaction)
             }
-            _ => {
-                // Check for CREATE/DROP with administrative keywords
-                if keyword.to_uppercase() == "CREATE" {
-                    self.skip_whitespace();
-                    if self.peek_keyword("DATABASE") {
-                        let create_db_clause = self.parse_create_database_clause()?;
-                        return Ok(Clause::CreateDatabase(create_db_clause));
-                    } else if self.peek_keyword("INDEX") {
-                        let create_index_clause = self.parse_create_index_clause()?;
-                        return Ok(Clause::CreateIndex(create_index_clause));
-                    } else if self.peek_keyword("CONSTRAINT") {
-                        let create_constraint_clause = self.parse_create_constraint_clause()?;
-                        return Ok(Clause::CreateConstraint(create_constraint_clause));
-                    } else if self.peek_keyword("USER") {
-                        let create_user_clause = self.parse_create_user_clause()?;
-                        return Ok(Clause::CreateUser(create_user_clause));
-                    }
-                    // Fall back to regular CREATE clause
-                    let create_clause = self.parse_create_clause()?;
-                    Ok(Clause::Create(create_clause))
-                } else if keyword.to_uppercase() == "DROP" {
-                    self.skip_whitespace();
-                    if self.peek_keyword("DATABASE") {
-                        let drop_db_clause = self.parse_drop_database_clause()?;
-                        return Ok(Clause::DropDatabase(drop_db_clause));
-                    } else if self.peek_keyword("INDEX") {
-                        let drop_index_clause = self.parse_drop_index_clause()?;
-                        return Ok(Clause::DropIndex(drop_index_clause));
-                    } else if self.peek_keyword("CONSTRAINT") {
-                        let drop_constraint_clause = self.parse_drop_constraint_clause()?;
-                        return Ok(Clause::DropConstraint(drop_constraint_clause));
-                    }
-                    // DROP without keyword is not valid
-                    Err(self.error("DROP must be followed by DATABASE, INDEX, or CONSTRAINT"))
-                } else if keyword.to_uppercase() == "GRANT" {
-                    let grant_clause = self.parse_grant_clause()?;
-                    Ok(Clause::Grant(grant_clause))
-                } else if keyword.to_uppercase() == "REVOKE" {
-                    let revoke_clause = self.parse_revoke_clause()?;
-                    Ok(Clause::Revoke(revoke_clause))
+            "DROP" => {
+                self.skip_whitespace();
+                if self.peek_keyword("DATABASE") {
+                    let drop_db_clause = self.parse_drop_database_clause()?;
+                    Ok(Clause::DropDatabase(drop_db_clause))
+                } else if self.peek_keyword("INDEX") {
+                    let drop_index_clause = self.parse_drop_index_clause()?;
+                    Ok(Clause::DropIndex(drop_index_clause))
+                } else if self.peek_keyword("CONSTRAINT") {
+                    let drop_constraint_clause = self.parse_drop_constraint_clause()?;
+                    Ok(Clause::DropConstraint(drop_constraint_clause))
                 } else {
-                    Err(self.error(&format!("Unexpected keyword: {}", keyword)))
+                    Err(self.error("DROP must be followed by DATABASE, INDEX, or CONSTRAINT"))
                 }
             }
+            "GRANT" => {
+                let grant_clause = self.parse_grant_clause()?;
+                Ok(Clause::Grant(grant_clause))
+            }
+            "REVOKE" => {
+                let revoke_clause = self.parse_revoke_clause()?;
+                Ok(Clause::Revoke(revoke_clause))
+            }
+            _ => Err(self.error(&format!("Unexpected keyword: {}", keyword))),
         }
     }
 
@@ -1211,14 +1242,42 @@ impl CypherParser {
         };
 
         self.skip_whitespace();
-        let properties = if self.peek_char() == Some('{') {
-            Some(self.parse_property_map()?)
-        } else {
-            None
-        };
 
-        self.skip_whitespace();
-        let quantifier = self.parse_relationship_quantifier()?;
+        // Check if next token is a quantifier (starts with *, +, ?, or { followed by digit/comma/})
+        // or a property map (starts with { followed by identifier)
+        let (properties, quantifier) = if self.peek_char() == Some('{') {
+            // Peek ahead to see if it's a quantifier or property map
+            // Check character after '{' (skip whitespace)
+            let mut peek_offset = 1;
+            let mut is_quantifier = false;
+            while peek_offset < self.input.len() - self.pos {
+                if let Some(c) = self.peek_char_at(peek_offset) {
+                    if c.is_whitespace() {
+                        peek_offset += 1;
+                        continue;
+                    }
+                    // If next char is digit, comma, or '}', it's a quantifier
+                    is_quantifier = c.is_ascii_digit() || c == ',' || c == '}';
+                    break;
+                } else {
+                    break;
+                }
+            }
+
+            if is_quantifier {
+                // It's a quantifier, not properties
+                (None, self.parse_relationship_quantifier()?)
+            } else {
+                // It's a property map
+                (
+                    Some(self.parse_property_map()?),
+                    self.parse_relationship_quantifier()?,
+                )
+            }
+        } else {
+            // No properties, check for quantifier
+            (None, self.parse_relationship_quantifier()?)
+        };
 
         self.skip_whitespace();
         self.expect_char(']')?;
@@ -1362,8 +1421,17 @@ impl CypherParser {
             None
         };
 
-        if self.peek_char() == Some(',') {
-            self.consume_char();
+        // Check for range separator: ',' or '..'
+        if self.peek_char() == Some(',')
+            || (self.peek_char() == Some('.') && self.peek_char_at(1) == Some('.'))
+        {
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+            } else {
+                // Consume '..'
+                self.consume_char();
+                self.consume_char();
+            }
             let end = if self.is_digit() {
                 Some(self.parse_number()?)
             } else {
@@ -1958,6 +2026,222 @@ impl CypherParser {
             permissions,
             target,
         })
+    }
+
+    /// Parse EXPLAIN clause
+    /// Syntax: EXPLAIN [query]
+    fn parse_explain_clause(&mut self) -> Result<Clause> {
+        self.parse_keyword()?; // consume "EXPLAIN"
+        self.skip_whitespace();
+
+        // Save current position to extract query string
+        let start_pos = self.pos;
+
+        // Parse the remaining query directly using the current parser state
+        // This is more reliable than creating a temporary parser
+        let mut clauses = Vec::new();
+
+        // Parse clauses until end of input
+        // We need to parse clauses without checking for EXPLAIN/PROFILE again
+        // since we're already inside an EXPLAIN clause
+        while self.pos < self.input.len() {
+            if self.is_clause_boundary() {
+                // Parse clause but skip EXPLAIN/PROFILE detection
+                // We'll manually check for the clause type
+                let keyword = self.parse_keyword()?;
+                let clause = match keyword.to_uppercase().as_str() {
+                    "MATCH" => {
+                        let match_clause = self.parse_match_clause()?;
+                        Clause::Match(match_clause)
+                    }
+                    "CREATE" => {
+                        self.skip_whitespace();
+                        // Check for CREATE DATABASE/INDEX/CONSTRAINT/USER
+                        if self.peek_keyword("DATABASE") {
+                            Clause::CreateDatabase(self.parse_create_database_clause()?)
+                        } else if self.peek_keyword("INDEX") {
+                            Clause::CreateIndex(self.parse_create_index_clause()?)
+                        } else if self.peek_keyword("CONSTRAINT") {
+                            Clause::CreateConstraint(self.parse_create_constraint_clause()?)
+                        } else if self.peek_keyword("USER") {
+                            Clause::CreateUser(self.parse_create_user_clause()?)
+                        } else {
+                            Clause::Create(self.parse_create_clause()?)
+                        }
+                    }
+                    "MERGE" => Clause::Merge(self.parse_merge_clause()?),
+                    "SET" => Clause::Set(self.parse_set_clause()?),
+                    "DELETE" => Clause::Delete(self.parse_delete_clause()?),
+                    "DETACH" => {
+                        self.expect_keyword("DELETE")?;
+                        let mut delete_clause = self.parse_delete_clause()?;
+                        delete_clause.detach = true;
+                        Clause::Delete(delete_clause)
+                    }
+                    "REMOVE" => Clause::Remove(self.parse_remove_clause()?),
+                    "WITH" => Clause::With(self.parse_with_clause()?),
+                    "UNWIND" => Clause::Unwind(self.parse_unwind_clause()?),
+                    "UNION" => {
+                        self.skip_whitespace();
+                        let union_type = if self.peek_keyword("ALL") {
+                            self.parse_keyword()?;
+                            UnionType::All
+                        } else {
+                            UnionType::Distinct
+                        };
+                        Clause::Union(UnionClause { union_type })
+                    }
+                    "WHERE" => Clause::Where(self.parse_where_clause()?),
+                    "RETURN" => Clause::Return(self.parse_return_clause()?),
+                    "ORDER" => {
+                        self.expect_keyword("BY")?;
+                        Clause::OrderBy(self.parse_order_by_clause()?)
+                    }
+                    "LIMIT" => Clause::Limit(self.parse_limit_clause()?),
+                    "SKIP" => Clause::Skip(self.parse_skip_clause()?),
+                    "FOREACH" => Clause::Foreach(self.parse_foreach_clause()?),
+                    "OPTIONAL" => {
+                        self.expect_keyword("MATCH")?;
+                        let mut match_clause = self.parse_match_clause()?;
+                        match_clause.optional = true;
+                        Clause::Match(match_clause)
+                    }
+                    _ => return Err(self.error(&format!("Unexpected clause: {}", keyword))),
+                };
+                clauses.push(clause);
+                self.skip_whitespace();
+                if self.pos >= self.input.len() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Extract the query string that was parsed
+        let query_str = self.input[start_pos..self.pos].trim().to_string();
+
+        if clauses.is_empty() {
+            return Err(self.error("EXPLAIN requires a query with at least one clause"));
+        }
+
+        let query = CypherQuery {
+            clauses,
+            params: std::collections::HashMap::new(),
+        };
+
+        Ok(Clause::Explain(ExplainClause {
+            query,
+            query_string: Some(query_str),
+        }))
+    }
+
+    /// Parse PROFILE clause
+    /// Syntax: PROFILE [query]
+    fn parse_profile_clause(&mut self) -> Result<Clause> {
+        self.parse_keyword()?; // consume "PROFILE"
+        self.skip_whitespace();
+
+        // Save current position to extract query string
+        let start_pos = self.pos;
+
+        // Parse the remaining query directly using the current parser state
+        // This is more reliable than creating a temporary parser
+        let mut clauses = Vec::new();
+
+        // Parse clauses until end of input
+        // We need to parse clauses without checking for EXPLAIN/PROFILE again
+        // since we're already inside a PROFILE clause
+        while self.pos < self.input.len() {
+            if self.is_clause_boundary() {
+                // Parse clause but skip EXPLAIN/PROFILE detection
+                // We'll manually check for the clause type
+                let keyword = self.parse_keyword()?;
+                let clause = match keyword.to_uppercase().as_str() {
+                    "MATCH" => {
+                        let match_clause = self.parse_match_clause()?;
+                        Clause::Match(match_clause)
+                    }
+                    "CREATE" => {
+                        self.skip_whitespace();
+                        // Check for CREATE DATABASE/INDEX/CONSTRAINT/USER
+                        if self.peek_keyword("DATABASE") {
+                            Clause::CreateDatabase(self.parse_create_database_clause()?)
+                        } else if self.peek_keyword("INDEX") {
+                            Clause::CreateIndex(self.parse_create_index_clause()?)
+                        } else if self.peek_keyword("CONSTRAINT") {
+                            Clause::CreateConstraint(self.parse_create_constraint_clause()?)
+                        } else if self.peek_keyword("USER") {
+                            Clause::CreateUser(self.parse_create_user_clause()?)
+                        } else {
+                            Clause::Create(self.parse_create_clause()?)
+                        }
+                    }
+                    "MERGE" => Clause::Merge(self.parse_merge_clause()?),
+                    "SET" => Clause::Set(self.parse_set_clause()?),
+                    "DELETE" => Clause::Delete(self.parse_delete_clause()?),
+                    "DETACH" => {
+                        self.expect_keyword("DELETE")?;
+                        let mut delete_clause = self.parse_delete_clause()?;
+                        delete_clause.detach = true;
+                        Clause::Delete(delete_clause)
+                    }
+                    "REMOVE" => Clause::Remove(self.parse_remove_clause()?),
+                    "WITH" => Clause::With(self.parse_with_clause()?),
+                    "UNWIND" => Clause::Unwind(self.parse_unwind_clause()?),
+                    "UNION" => {
+                        self.skip_whitespace();
+                        let union_type = if self.peek_keyword("ALL") {
+                            self.parse_keyword()?;
+                            UnionType::All
+                        } else {
+                            UnionType::Distinct
+                        };
+                        Clause::Union(UnionClause { union_type })
+                    }
+                    "WHERE" => Clause::Where(self.parse_where_clause()?),
+                    "RETURN" => Clause::Return(self.parse_return_clause()?),
+                    "ORDER" => {
+                        self.expect_keyword("BY")?;
+                        Clause::OrderBy(self.parse_order_by_clause()?)
+                    }
+                    "LIMIT" => Clause::Limit(self.parse_limit_clause()?),
+                    "SKIP" => Clause::Skip(self.parse_skip_clause()?),
+                    "FOREACH" => Clause::Foreach(self.parse_foreach_clause()?),
+                    "OPTIONAL" => {
+                        self.expect_keyword("MATCH")?;
+                        let mut match_clause = self.parse_match_clause()?;
+                        match_clause.optional = true;
+                        Clause::Match(match_clause)
+                    }
+                    _ => return Err(self.error(&format!("Unexpected clause: {}", keyword))),
+                };
+                clauses.push(clause);
+                self.skip_whitespace();
+                if self.pos >= self.input.len() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Extract the query string that was parsed
+        let query_str = self.input[start_pos..self.pos].trim().to_string();
+
+        if clauses.is_empty() {
+            return Err(self.error("PROFILE requires a query with at least one clause"));
+        }
+
+        let query = CypherQuery {
+            clauses,
+            params: std::collections::HashMap::new(),
+        };
+
+        Ok(Clause::Profile(ProfileClause {
+            query,
+            query_string: Some(query_str),
+        }))
     }
 
     /// Parse REVOKE clause
@@ -2974,6 +3258,13 @@ impl CypherParser {
             || self.peek_keyword("ORDER")
             || self.peek_keyword("LIMIT")
             || self.peek_keyword("SKIP")
+            || self.peek_keyword("SHOW")  // For SHOW DATABASES/USERS
+            || self.peek_keyword("DROP")  // For DROP DATABASE/INDEX/CONSTRAINT
+            || self.peek_keyword("BEGIN")  // For BEGIN TRANSACTION
+            || self.peek_keyword("COMMIT")  // For COMMIT TRANSACTION
+            || self.peek_keyword("ROLLBACK")  // For ROLLBACK TRANSACTION
+            || self.peek_keyword("GRANT")  // For GRANT permissions
+            || self.peek_keyword("REVOKE") // For REVOKE permissions
     }
 
     /// Check if character is identifier start
@@ -3548,6 +3839,76 @@ mod tests {
             Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
                 PatternElement::Relationship(rel) => {
                     assert_eq!(rel.quantifier, None);
+                }
+                _ => panic!("Expected relationship"),
+            },
+            _ => panic!("Expected match clause"),
+        }
+
+        // Test zero or more quantifier (*)
+        let mut parser = CypherParser::new("MATCH (a)-[r*]->(b) RETURN a".to_string());
+        let query = parser.parse().unwrap();
+        match &query.clauses[0] {
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.quantifier, Some(RelationshipQuantifier::ZeroOrMore));
+                }
+                _ => panic!("Expected relationship"),
+            },
+            _ => panic!("Expected match clause"),
+        }
+
+        // Test one or more quantifier (+)
+        let mut parser = CypherParser::new("MATCH (a)-[r+]->(b) RETURN a".to_string());
+        let query = parser.parse().unwrap();
+        match &query.clauses[0] {
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.quantifier, Some(RelationshipQuantifier::OneOrMore));
+                }
+                _ => panic!("Expected relationship"),
+            },
+            _ => panic!("Expected match clause"),
+        }
+
+        // Test zero or one quantifier (?)
+        let mut parser = CypherParser::new("MATCH (a)-[r?]->(b) RETURN a".to_string());
+        let query = parser.parse().unwrap();
+        match &query.clauses[0] {
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.quantifier, Some(RelationshipQuantifier::ZeroOrOne));
+                }
+                _ => panic!("Expected relationship"),
+            },
+            _ => panic!("Expected match clause"),
+        }
+
+        // Test exact quantifier {2}
+        let mut parser = CypherParser::new("MATCH (a)-[r{2}]->(b) RETURN a".to_string());
+        let query = parser.parse().unwrap();
+        match &query.clauses[0] {
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    assert_eq!(rel.quantifier, Some(RelationshipQuantifier::Exact(2)));
+                }
+                _ => panic!("Expected relationship"),
+            },
+            _ => panic!("Expected match clause"),
+        }
+
+        // Test range quantifier {1..3}
+        let mut parser = CypherParser::new("MATCH (a)-[r{1..3}]->(b) RETURN a".to_string());
+        let query = parser.parse().unwrap();
+        match &query.clauses[0] {
+            Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => {
+                    if let Some(RelationshipQuantifier::Range(min, max)) = &rel.quantifier {
+                        assert_eq!(*min, 1);
+                        assert_eq!(*max, 3);
+                    } else {
+                        panic!("Expected Range quantifier, got {:?}", rel.quantifier);
+                    }
                 }
                 _ => panic!("Expected relationship"),
             },

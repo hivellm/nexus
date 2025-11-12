@@ -172,30 +172,30 @@ fn test_drop_index_nonexistent() {
 fn test_create_constraint_unique() {
     let mut engine = create_engine();
 
-    // Create constraint - should return error as constraint system not implemented
+    // Create constraint - should succeed now
     let query = "CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE";
     let result = engine.execute_cypher(query);
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Constraint system not yet implemented"));
+    assert!(result.is_ok());
+    assert_eq!(
+        extract_first_row_value(result.unwrap()),
+        Some(Value::String("ok".to_string()))
+    );
 }
 
 #[test]
 fn test_create_constraint_exists() {
     let mut engine = create_engine();
 
-    // Create EXISTS constraint - should return error
+    // Create EXISTS constraint - should succeed now
     let query = "CREATE CONSTRAINT ON (n:Person) ASSERT EXISTS(n.email)";
     let result = engine.execute_cypher(query);
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Constraint system not yet implemented"));
+    assert!(result.is_ok());
+    assert_eq!(
+        extract_first_row_value(result.unwrap()),
+        Some(Value::String("ok".to_string()))
+    );
 }
 
 #[test]
@@ -217,15 +217,18 @@ fn test_create_constraint_if_not_exists() {
 fn test_drop_constraint_unique() {
     let mut engine = create_engine();
 
-    // Drop constraint - should return error as constraint system not implemented
+    // First create the constraint
+    engine.execute_cypher("CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE").unwrap();
+
+    // Drop constraint - should succeed now
     let query = "DROP CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE";
     let result = engine.execute_cypher(query);
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Constraint system not yet implemented"));
+    assert!(result.is_ok());
+    assert_eq!(
+        extract_first_row_value(result.unwrap()),
+        Some(Value::String("ok".to_string()))
+    );
 }
 
 #[test]
@@ -241,6 +244,56 @@ fn test_drop_constraint_if_exists() {
         extract_first_row_value(result),
         Some(Value::String("ok".to_string()))
     );
+}
+
+#[test]
+fn test_constraint_enforcement_unique() {
+    let mut engine = create_engine();
+
+    // Create UNIQUE constraint
+    engine.execute_cypher("CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE").unwrap();
+
+    // Create first node with email - should succeed
+    engine.execute_cypher("CREATE (n:Person {email: 'alice@example.com'})").unwrap();
+
+    // Try to create second node with same email - should fail
+    let result = engine.execute_cypher("CREATE (n:Person {email: 'alice@example.com'})");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("UNIQUE constraint violated"));
+}
+
+#[test]
+fn test_constraint_enforcement_exists() {
+    let mut engine = create_engine();
+
+    // Create EXISTS constraint
+    engine.execute_cypher("CREATE CONSTRAINT ON (n:Person) ASSERT EXISTS(n.email)").unwrap();
+
+    // Create node without email - should fail
+    let result = engine.execute_cypher("CREATE (n:Person {name: 'Alice'})");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("EXISTS constraint violated"));
+
+    // Create node with email - should succeed
+    let result = engine.execute_cypher("CREATE (n:Person {email: 'alice@example.com'})");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_constraint_enforcement_update() {
+    let mut engine = create_engine();
+
+    // Create UNIQUE constraint
+    engine.execute_cypher("CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE").unwrap();
+
+    // Create two nodes with different emails
+    engine.execute_cypher("CREATE (n1:Person {email: 'alice@example.com'})").unwrap();
+    engine.execute_cypher("CREATE (n2:Person {email: 'bob@example.com'})").unwrap();
+
+    // Try to update second node to have same email as first - should fail
+    let result = engine.execute_cypher("MATCH (n:Person {email: 'bob@example.com'}) SET n.email = 'alice@example.com'");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("UNIQUE constraint violated"));
 }
 
 #[test]
@@ -307,30 +360,30 @@ fn test_commit_transaction_explicit() {
 fn test_rollback_transaction() {
     let mut engine = create_engine();
 
-    // ROLLBACK transaction - should return error (not yet supported)
+    // ROLLBACK transaction - should succeed (no-op for now, transactions are automatic)
     let query = "ROLLBACK";
     let result = engine.execute_cypher(query);
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("ROLLBACK not yet supported"));
+    assert!(result.is_ok());
+    assert_eq!(
+        extract_first_row_value(result.unwrap()),
+        Some(Value::String("ok".to_string()))
+    );
 }
 
 #[test]
 fn test_rollback_transaction_explicit() {
     let mut engine = create_engine();
 
-    // ROLLBACK TRANSACTION - should return error
+    // ROLLBACK TRANSACTION - should succeed (no-op for now, transactions are automatic)
     let query = "ROLLBACK TRANSACTION";
     let result = engine.execute_cypher(query);
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("ROLLBACK not yet supported"));
+    assert!(result.is_ok());
+    assert_eq!(
+        extract_first_row_value(result.unwrap()),
+        Some(Value::String("ok".to_string()))
+    );
 }
 
 #[test]

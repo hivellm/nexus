@@ -462,13 +462,24 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
     let executor = Executor::default();
     let executor_arc = Arc::new(RwLock::new(executor));
 
+    let database_manager =
+        nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+    let database_manager_arc = Arc::new(RwLock::new(database_manager));
+    let rbac = nexus_core::auth::RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+
     // Initialize API modules
     api::data::init_engine(engine_arc.clone()).unwrap();
     api::stats::init_engine(engine_arc.clone()).unwrap();
     api::health::init();
 
     // Create server state
-    let server = Arc::new(NexusServer::new(executor_arc, engine_arc));
+    let server = Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+    ));
 
     // Create mock vectorizer
     let vectorizer = Arc::new(MockVectorizer::new());
@@ -533,7 +544,8 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
                     api::clustering::group_by_property(axum::extract::State(server), request)
                 }
             }),
-        );
+        )
+        .with_state(server.clone());
 
     (app, server, vectorizer)
 }

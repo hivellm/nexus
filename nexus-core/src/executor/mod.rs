@@ -170,6 +170,23 @@ pub enum Operator {
         /// Variable name to bind each list item
         variable: String,
     },
+    /// Variable-length path expansion
+    VariableLengthPath {
+        /// Type ID (None = all types)
+        type_id: Option<u32>,
+        /// Direction (Outgoing, Incoming, Both)
+        direction: Direction,
+        /// Source variable
+        source_var: String,
+        /// Target variable
+        target_var: String,
+        /// Relationship variable (optional, for collecting path relationships)
+        rel_var: String,
+        /// Path variable (optional, for collecting the full path)
+        path_var: String,
+        /// Quantifier specifying path length constraints
+        quantifier: parser::RelationshipQuantifier,
+    },
 }
 
 /// Projection entry describing an expression and its alias
@@ -301,6 +318,12 @@ pub enum IndexType {
     FullText,
 }
 
+/// Path structure for shortest path functions
+struct Path {
+    nodes: Vec<u64>,
+    relationships: Vec<u64>,
+}
+
 /// Query executor
 pub struct Executor {
     /// Catalog for label/type lookups
@@ -429,6 +452,26 @@ impl Executor {
                     variable,
                 } => {
                     self.execute_unwind(&mut context, &expression, &variable)?;
+                }
+                Operator::VariableLengthPath {
+                    type_id,
+                    direction,
+                    source_var,
+                    target_var,
+                    rel_var,
+                    path_var,
+                    quantifier,
+                } => {
+                    self.execute_variable_length_path(
+                        &mut context,
+                        type_id,
+                        direction,
+                        &source_var,
+                        &target_var,
+                        &rel_var,
+                        &path_var,
+                        &quantifier,
+                    )?;
                 }
             }
         }
@@ -604,7 +647,7 @@ impl Executor {
 
                     // Store node ID if variable exists
                     if let Some(var) = &node.variable {
-                        created_nodes.insert(var.clone(), node_id);
+                        created_nodes.entry(var.clone()).or_insert(node_id);
                     }
 
                     // Track last node for relationship creation
@@ -657,7 +700,7 @@ impl Executor {
 
                             // Store target node ID if variable exists
                             if let Some(var) = &target_node.variable {
-                                created_nodes.insert(var.clone(), tid);
+                                created_nodes.entry(var.clone()).or_insert(tid);
                             }
 
                             last_node_id = Some(tid);
@@ -1867,6 +1910,20 @@ impl Executor {
             } => {
                 self.execute_unwind(context, expression, variable)?;
             }
+            Operator::VariableLengthPath {
+                type_id,
+                direction,
+                source_var,
+                target_var,
+                rel_var,
+                path_var,
+                quantifier,
+            } => {
+                self.execute_variable_length_path(
+                    context, *type_id, *direction, source_var, target_var, rel_var, path_var,
+                    quantifier,
+                )?;
+            }
         }
         Ok(())
     }
@@ -2452,6 +2509,432 @@ impl Executor {
         Ok(relationships)
     }
 
+    /// Execute variable-length path expansion using BFS
+    #[allow(clippy::too_many_arguments)]
+    fn execute_variable_length_path(
+        &self,
+        context: &mut ExecutionContext,
+        type_id: Option<u32>,
+        direction: Direction,
+        source_var: &str,
+        target_var: &str,
+        rel_var: &str,
+        path_var: &str,
+        quantifier: &parser::RelationshipQuantifier,
+    ) -> Result<()> {
+        use std::collections::{HashSet, VecDeque};
+
+        // Get source nodes from context
+        let rows = if !context.result_set.rows.is_empty() {
+            self.result_set_as_rows(context)
+        } else {
+            self.materialize_rows_from_variables(context)
+        };
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        // Determine min and max path lengths from quantifier
+        let (min_length, max_length) = match quantifier {
+            parser::RelationshipQuantifier::ZeroOrMore => (0, usize::MAX),
+            parser::RelationshipQuantifier::OneOrMore => (1, usize::MAX),
+            parser::RelationshipQuantifier::ZeroOrOne => (0, 1),
+            parser::RelationshipQuantifier::Exact(n) => (*n, *n),
+            parser::RelationshipQuantifier::Range(min, max) => (*min, *max),
+        };
+
+        let mut expanded_rows = Vec::new();
+
+        // Process each source row
+        for row in rows {
+            let source_value = row
+                .get(source_var)
+                .cloned()
+                .or_else(|| context.get_variable(source_var).cloned())
+                .unwrap_or(Value::Null);
+
+            let source_id = match Self::extract_entity_id(&source_value) {
+                Some(id) => id,
+                None => continue,
+            };
+
+            // BFS to find all paths matching the quantifier
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+
+            // Entry: (node_id, path_length, path_relationships, path_nodes)
+            queue.push_back((source_id, 0, Vec::<u64>::new(), vec![source_id]));
+            visited.insert((source_id, 0));
+
+            while let Some((current_node, path_length, path_rels, path_nodes)) = queue.pop_front() {
+                // Check if we've reached a valid path length
+                if path_length >= min_length && path_length <= max_length {
+                    // Create a result row for this path
+                    let target_node = self.read_node_as_value(current_node)?;
+                    let mut new_row = row.clone();
+                    new_row.insert(source_var.to_string(), source_value.clone());
+                    new_row.insert(target_var.to_string(), target_node);
+
+                    // Add relationship variable if specified
+                    if !rel_var.is_empty() && !path_rels.is_empty() {
+                        let rel_values: Vec<Value> = path_rels
+                            .iter()
+                            .filter_map(|rel_id| {
+                                if let Ok(rel_record) = self.store.read_rel(*rel_id) {
+                                    Some(RelationshipInfo {
+                                        id: *rel_id,
+                                        source_id: rel_record.src_id,
+                                        target_id: rel_record.dst_id,
+                                        type_id: rel_record.type_id,
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .filter_map(|rel_info| self.read_relationship_as_value(&rel_info).ok())
+                            .collect();
+
+                        if path_rels.len() == 1 {
+                            // Single relationship - return as object, not array
+                            if let Some(first) = rel_values.first() {
+                                new_row
+                                    .entry(rel_var.to_string())
+                                    .or_insert_with(|| first.clone());
+                            }
+                        } else {
+                            // Multiple relationships - return as array
+                            new_row.insert(rel_var.to_string(), Value::Array(rel_values));
+                        }
+                    }
+
+                    // Add path variable if specified
+                    if !path_var.is_empty() {
+                        let path_nodes_values: Vec<Value> = path_nodes
+                            .iter()
+                            .filter_map(|node_id| self.read_node_as_value(*node_id).ok())
+                            .collect();
+                        new_row.insert(path_var.to_string(), Value::Array(path_nodes_values));
+                    }
+
+                    expanded_rows.push(new_row);
+                }
+
+                // Continue expanding if we haven't reached max length
+                if path_length < max_length {
+                    // Find neighbors
+                    let neighbors = self.find_relationships(current_node, type_id, direction)?;
+
+                    for rel_info in neighbors {
+                        let next_node = match direction {
+                            Direction::Outgoing => rel_info.target_id,
+                            Direction::Incoming => rel_info.source_id,
+                            Direction::Both => {
+                                if rel_info.source_id == current_node {
+                                    rel_info.target_id
+                                } else {
+                                    rel_info.source_id
+                                }
+                            }
+                        };
+
+                        // Avoid cycles: don't revisit nodes in the current path
+                        if path_nodes.contains(&next_node) {
+                            continue;
+                        }
+
+                        let new_path_length = path_length + 1;
+                        let mut new_path_rels = path_rels.clone();
+                        new_path_rels.push(rel_info.id);
+                        let mut new_path_nodes = path_nodes.clone();
+                        new_path_nodes.push(next_node);
+
+                        // Add to queue if not already visited at this length
+                        let visit_key = (next_node, new_path_length);
+                        if !visited.contains(&visit_key) {
+                            visited.insert(visit_key);
+                            queue.push_back((
+                                next_node,
+                                new_path_length,
+                                new_path_rels,
+                                new_path_nodes,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        self.update_variables_from_rows(context, &expanded_rows);
+        self.update_result_set_from_rows(context, &expanded_rows);
+
+        Ok(())
+    }
+
+    /// Find shortest path between two nodes using BFS
+    fn find_shortest_path(
+        &self,
+        start_id: u64,
+        end_id: u64,
+        type_id: Option<u32>,
+        direction: Direction,
+    ) -> Result<Option<Path>> {
+        use std::collections::{HashMap, VecDeque};
+
+        if start_id == end_id {
+            // Path to self is empty
+            return Ok(Some(Path {
+                nodes: vec![start_id],
+                relationships: Vec::new(),
+            }));
+        }
+
+        let mut queue = VecDeque::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut parent: HashMap<u64, (u64, u64)> = HashMap::new(); // node -> (parent_node, relationship_id)
+
+        queue.push_back(start_id);
+        visited.insert(start_id);
+
+        while let Some(current) = queue.pop_front() {
+            if current == end_id {
+                // Reconstruct path
+                let mut path_nodes = Vec::new();
+                let mut path_rels = Vec::new();
+                let mut node = end_id;
+
+                while node != start_id {
+                    path_nodes.push(node);
+                    if let Some((parent_node, rel_id)) = parent.get(&node) {
+                        path_rels.push(*rel_id);
+                        node = *parent_node;
+                    } else {
+                        break;
+                    }
+                }
+                path_nodes.push(start_id);
+                path_nodes.reverse();
+                path_rels.reverse();
+
+                return Ok(Some(Path {
+                    nodes: path_nodes,
+                    relationships: path_rels,
+                }));
+            }
+
+            // Find neighbors
+            let neighbors = self.find_relationships(current, type_id, direction)?;
+            for rel_info in neighbors {
+                let next_node = match direction {
+                    Direction::Outgoing => rel_info.target_id,
+                    Direction::Incoming => rel_info.source_id,
+                    Direction::Both => {
+                        if rel_info.source_id == current {
+                            rel_info.target_id
+                        } else {
+                            rel_info.source_id
+                        }
+                    }
+                };
+
+                if !visited.contains(&next_node) {
+                    visited.insert(next_node);
+                    parent.insert(next_node, (current, rel_info.id));
+                    queue.push_back(next_node);
+                }
+            }
+        }
+
+        Ok(None) // No path found
+    }
+
+    /// Find all shortest paths between two nodes using BFS
+    fn find_all_shortest_paths(
+        &self,
+        start_id: u64,
+        end_id: u64,
+        type_id: Option<u32>,
+        direction: Direction,
+    ) -> Result<Vec<Path>> {
+        use std::collections::{HashMap, VecDeque};
+
+        if start_id == end_id {
+            return Ok(vec![Path {
+                nodes: vec![start_id],
+                relationships: Vec::new(),
+            }]);
+        }
+
+        // First BFS to find shortest distance
+        let mut queue = VecDeque::new();
+        let mut distances: HashMap<u64, usize> = HashMap::new();
+        queue.push_back((start_id, 0));
+        distances.insert(start_id, 0);
+
+        while let Some((current, dist)) = queue.pop_front() {
+            if current == end_id {
+                break; // Found target
+            }
+
+            let neighbors = self.find_relationships(current, type_id, direction)?;
+            for rel_info in neighbors {
+                let next_node = match direction {
+                    Direction::Outgoing => rel_info.target_id,
+                    Direction::Incoming => rel_info.source_id,
+                    Direction::Both => {
+                        if rel_info.source_id == current {
+                            rel_info.target_id
+                        } else {
+                            rel_info.source_id
+                        }
+                    }
+                };
+
+                distances.entry(next_node).or_insert_with(|| {
+                    queue.push_back((next_node, dist + 1));
+                    dist + 1
+                });
+            }
+        }
+
+        // Get shortest distance
+        let shortest_dist = if let Some(&dist) = distances.get(&end_id) {
+            dist
+        } else {
+            return Ok(Vec::new()); // No path found
+        };
+
+        // Now find all paths of shortest length using DFS
+        let mut paths = Vec::new();
+        let mut current_path = vec![start_id];
+        self.find_paths_dfs(
+            start_id,
+            end_id,
+            type_id,
+            direction,
+            shortest_dist,
+            &mut current_path,
+            &mut paths,
+            &distances,
+        )?;
+
+        Ok(paths)
+    }
+
+    /// DFS helper to find all paths of a specific length
+    #[allow(clippy::too_many_arguments)]
+    fn find_paths_dfs(
+        &self,
+        current: u64,
+        target: u64,
+        type_id: Option<u32>,
+        direction: Direction,
+        remaining_steps: usize,
+        current_path: &mut Vec<u64>,
+        paths: &mut Vec<Path>,
+        distances: &std::collections::HashMap<u64, usize>,
+    ) -> Result<()> {
+        if current == target && remaining_steps == 0 {
+            // Found a path of correct length
+            let mut path_rels = Vec::new();
+            for i in 0..current_path.len() - 1 {
+                let from = current_path[i];
+                let to = current_path[i + 1];
+                let neighbors = self.find_relationships(from, type_id, direction)?;
+                if let Some(rel_info) = neighbors.iter().find(|r| match direction {
+                    Direction::Outgoing => r.target_id == to,
+                    Direction::Incoming => r.source_id == to,
+                    Direction::Both => r.source_id == to || r.target_id == to,
+                }) {
+                    path_rels.push(rel_info.id);
+                }
+            }
+            paths.push(Path {
+                nodes: current_path.clone(),
+                relationships: path_rels,
+            });
+            return Ok(());
+        }
+
+        if remaining_steps == 0 {
+            return Ok(());
+        }
+
+        // Check if we can still reach target
+        if let Some(&dist_to_target) = distances.get(&current) {
+            if dist_to_target > remaining_steps {
+                return Ok(());
+            }
+        }
+
+        let neighbors = self.find_relationships(current, type_id, direction)?;
+        for rel_info in neighbors {
+            let next_node = match direction {
+                Direction::Outgoing => rel_info.target_id,
+                Direction::Incoming => rel_info.source_id,
+                Direction::Both => {
+                    if rel_info.source_id == current {
+                        rel_info.target_id
+                    } else {
+                        rel_info.source_id
+                    }
+                }
+            };
+
+            if !current_path.contains(&next_node) {
+                current_path.push(next_node);
+                self.find_paths_dfs(
+                    next_node,
+                    target,
+                    type_id,
+                    direction,
+                    remaining_steps - 1,
+                    current_path,
+                    paths,
+                    distances,
+                )?;
+                current_path.pop();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Convert Path to JSON Value
+    fn path_to_value(&self, path: &Path) -> Value {
+        let mut path_obj = serde_json::Map::new();
+
+        // Add nodes array
+        let nodes: Vec<Value> = path
+            .nodes
+            .iter()
+            .filter_map(|node_id| self.read_node_as_value(*node_id).ok())
+            .collect();
+        path_obj.insert("nodes".to_string(), Value::Array(nodes));
+
+        // Add relationships array
+        let rels: Vec<Value> = path
+            .relationships
+            .iter()
+            .filter_map(|rel_id| {
+                if let Ok(rel_record) = self.store.read_rel(*rel_id) {
+                    let rel_info = RelationshipInfo {
+                        id: *rel_id,
+                        source_id: rel_record.src_id,
+                        target_id: rel_record.dst_id,
+                        type_id: rel_record.type_id,
+                    };
+                    self.read_relationship_as_value(&rel_info).ok()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        path_obj.insert("relationships".to_string(), Value::Array(rels));
+
+        Value::Object(path_obj)
+    }
+
     /// Read a node as a JSON value
     fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
         let node_record = self.store.read_node(node_id)?;
@@ -2727,7 +3210,7 @@ impl Executor {
                 let value = if values.len() == max_len {
                     values.get(idx).cloned().unwrap_or(Value::Null)
                 } else if values.len() == 1 {
-                    values[0].clone()
+                    values.first().cloned().unwrap_or(Value::Null)
                 } else {
                     values.get(idx).cloned().unwrap_or(Value::Null)
                 };
@@ -3100,6 +3583,57 @@ impl Executor {
                         }
                         Ok(Value::Null)
                     }
+                    "sin" => {
+                        // sin(angle) - sine function (angle in radians)
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.sin())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "cos" => {
+                        // cos(angle) - cosine function (angle in radians)
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.cos())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "tan" => {
+                        // tan(angle) - tangent function (angle in radians)
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.tan())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
                     // Type conversion functions
                     "tointeger" => {
                         if let Some(arg) = args.first() {
@@ -3192,6 +3726,53 @@ impl Executor {
                         } else {
                             Ok(Value::Null)
                         }
+                    }
+                    "todate" => {
+                        // toDate(value) - Convert to date string (YYYY-MM-DD)
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date string
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        return Ok(Value::String(
+                                            date.format("%Y-%m-%d").to_string(),
+                                        ));
+                                    }
+                                    // Try datetime format
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::String(
+                                            dt.date_naive().format("%Y-%m-%d").to_string(),
+                                        ));
+                                    }
+                                }
+                                Value::Object(map) => {
+                                    // Support {year, month, day} format
+                                    let year = map
+                                        .get("year")
+                                        .and_then(|v| v.as_i64())
+                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
+                                        as i32;
+                                    let month =
+                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
+                                            as u32;
+                                    let day =
+                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+
+                                    if let Some(date) =
+                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
+                                    {
+                                        return Ok(Value::String(
+                                            date.format("%Y-%m-%d").to_string(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
                     }
                     // Temporal functions
                     "date" => {
@@ -3500,6 +4081,188 @@ impl Executor {
                         }
                         Ok(Value::Number(0.into()))
                     }
+                    "shortestpath" => {
+                        // shortestPath((start)-[*]->(end))
+                        // Returns the shortest path between two nodes
+                        // For now, we support: shortestPath((a)-[*]->(b)) where a and b are variables
+                        if !args.is_empty() {
+                            // Try to extract pattern from first argument
+                            // Pattern should be a PatternComprehension or we need to extract nodes from context
+                            if let parser::Expression::PatternComprehension { pattern, .. } =
+                                &args[0]
+                            {
+                                // Extract start and end nodes from pattern
+                                if let (Some(start_node), Some(end_node)) =
+                                    (pattern.elements.first(), pattern.elements.last())
+                                {
+                                    if let (
+                                        parser::PatternElement::Node(start),
+                                        parser::PatternElement::Node(end),
+                                    ) = (start_node, end_node)
+                                    {
+                                        // Get node IDs from row context
+                                        let start_id = if let Some(var) = &start.variable {
+                                            if let Some(Value::Object(obj)) = row.get(var) {
+                                                if let Some(Value::Number(id)) =
+                                                    obj.get("_nexus_id")
+                                                {
+                                                    id.as_u64()
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        };
+
+                                        let end_id = if let Some(var) = &end.variable {
+                                            if let Some(Value::Object(obj)) = row.get(var) {
+                                                if let Some(Value::Number(id)) =
+                                                    obj.get("_nexus_id")
+                                                {
+                                                    id.as_u64()
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        };
+
+                                        if let (Some(start_id), Some(end_id)) = (start_id, end_id) {
+                                            // Extract relationship type and direction from pattern
+                                            let rel_type = pattern.elements.iter().find_map(|e| {
+                                                if let parser::PatternElement::Relationship(rel) = e
+                                                {
+                                                    rel.types.first().cloned()
+                                                } else {
+                                                    None
+                                                }
+                                            });
+                                            let type_id = rel_type.and_then(|t| {
+                                                self.catalog.get_type_id(&t).ok().flatten()
+                                            });
+                                            let direction = pattern.elements.iter()
+                                                .find_map(|e| {
+                                                    if let parser::PatternElement::Relationship(rel) = e {
+                                                        Some(match rel.direction {
+                                                            parser::RelationshipDirection::Outgoing => Direction::Outgoing,
+                                                            parser::RelationshipDirection::Incoming => Direction::Incoming,
+                                                            parser::RelationshipDirection::Both => Direction::Both,
+                                                        })
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .unwrap_or(Direction::Both);
+
+                                            // Find shortest path using BFS
+                                            if let Ok(Some(path)) = self.find_shortest_path(
+                                                start_id, end_id, type_id, direction,
+                                            ) {
+                                                return Ok(self.path_to_value(&path));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "allshortestpaths" => {
+                        // allShortestPaths((start)-[*]->(end))
+                        // Returns all shortest paths between two nodes
+                        if !args.is_empty() {
+                            if let parser::Expression::PatternComprehension { pattern, .. } =
+                                &args[0]
+                            {
+                                if let (Some(start_node), Some(end_node)) =
+                                    (pattern.elements.first(), pattern.elements.last())
+                                {
+                                    if let (
+                                        parser::PatternElement::Node(start),
+                                        parser::PatternElement::Node(end),
+                                    ) = (start_node, end_node)
+                                    {
+                                        let start_id = if let Some(var) = &start.variable {
+                                            if let Some(Value::Object(obj)) = row.get(var) {
+                                                if let Some(Value::Number(id)) =
+                                                    obj.get("_nexus_id")
+                                                {
+                                                    id.as_u64()
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        };
+
+                                        let end_id = if let Some(var) = &end.variable {
+                                            if let Some(Value::Object(obj)) = row.get(var) {
+                                                if let Some(Value::Number(id)) =
+                                                    obj.get("_nexus_id")
+                                                {
+                                                    id.as_u64()
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        };
+
+                                        if let (Some(start_id), Some(end_id)) = (start_id, end_id) {
+                                            let rel_type = pattern.elements.iter().find_map(|e| {
+                                                if let parser::PatternElement::Relationship(rel) = e
+                                                {
+                                                    rel.types.first().cloned()
+                                                } else {
+                                                    None
+                                                }
+                                            });
+                                            let type_id = rel_type.and_then(|t| {
+                                                self.catalog.get_type_id(&t).ok().flatten()
+                                            });
+                                            let direction = pattern.elements.iter()
+                                                .find_map(|e| {
+                                                    if let parser::PatternElement::Relationship(rel) = e {
+                                                        Some(match rel.direction {
+                                                            parser::RelationshipDirection::Outgoing => Direction::Outgoing,
+                                                            parser::RelationshipDirection::Incoming => Direction::Incoming,
+                                                            parser::RelationshipDirection::Both => Direction::Both,
+                                                        })
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .unwrap_or(Direction::Both);
+
+                                            // Find all shortest paths
+                                            if let Ok(paths) = self.find_all_shortest_paths(
+                                                start_id, end_id, type_id, direction,
+                                            ) {
+                                                let path_values: Vec<Value> = paths
+                                                    .iter()
+                                                    .map(|p| self.path_to_value(p))
+                                                    .collect();
+                                                return Ok(Value::Array(path_values));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
                     // List functions
                     "size" => {
                         if let Some(arg) = args.first() {
@@ -3609,6 +4372,251 @@ impl Executor {
                             }
                         }
                         Ok(Value::Null)
+                    }
+                    "reduce" => {
+                        // reduce(accumulator, variable IN list | expression)
+                        // Example: reduce(total = 0, n IN [1,2,3] | total + n)
+                        if args.len() >= 3 {
+                            // First arg: accumulator initial value
+                            let acc_init =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            // Second arg: variable name (string)
+                            let var_name = if let Value::String(s) =
+                                self.evaluate_projection_expression(row, context, &args[1])?
+                            {
+                                s
+                            } else {
+                                return Ok(Value::Null);
+                            };
+                            // Third arg: list
+                            let list_val =
+                                self.evaluate_projection_expression(row, context, &args[2])?;
+                            if let Value::Array(list) = list_val {
+                                // Fourth arg: expression (optional, if not provided use variable itself)
+                                let expr = args.get(3).cloned();
+
+                                let mut accumulator = acc_init;
+                                for item in list {
+                                    // Set variable in context
+                                    let mut new_row = row.clone();
+                                    new_row.insert(var_name.clone(), item);
+
+                                    // Evaluate expression with new context
+                                    if let Some(ref expr) = expr {
+                                        let result = self.evaluate_projection_expression(
+                                            &new_row, context, expr,
+                                        )?;
+                                        accumulator = result;
+                                    } else {
+                                        accumulator =
+                                            new_row.get(&var_name).cloned().unwrap_or(Value::Null);
+                                    }
+                                }
+                                return Ok(accumulator);
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "extract" => {
+                        // extract(variable IN list | expression)
+                        // Example: extract(n IN [1,2,3] | n * 2)
+                        if args.len() >= 2 {
+                            // First arg: variable name (string)
+                            let var_name = if let Value::String(s) =
+                                self.evaluate_projection_expression(row, context, &args[0])?
+                            {
+                                s
+                            } else {
+                                return Ok(Value::Null);
+                            };
+                            // Second arg: list
+                            let list_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+                            if let Value::Array(list) = list_val {
+                                // Third arg: expression (optional, if not provided use variable itself)
+                                let expr = args.get(2).cloned();
+
+                                let mut results = Vec::new();
+                                for item in list {
+                                    // Set variable in context
+                                    let mut new_row = row.clone();
+                                    new_row.insert(var_name.clone(), item);
+
+                                    // Evaluate expression with new context
+                                    if let Some(ref expr) = expr {
+                                        if let Ok(result) = self
+                                            .evaluate_projection_expression(&new_row, context, expr)
+                                        {
+                                            results.push(result);
+                                        }
+                                    } else {
+                                        results.push(
+                                            new_row.get(&var_name).cloned().unwrap_or(Value::Null),
+                                        );
+                                    }
+                                }
+                                return Ok(Value::Array(results));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "all" => {
+                        // all(variable IN list WHERE predicate)
+                        // Returns true if all elements in list satisfy predicate
+                        if args.len() >= 2 {
+                            let list_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let Value::Array(list) = list_val {
+                                if list.is_empty() {
+                                    return Ok(Value::Bool(true)); // All elements of empty list satisfy predicate
+                                }
+
+                                // If third arg exists, it's the predicate expression
+                                if let Some(predicate) = args.get(2) {
+                                    // Extract variable name from first arg if it's a string
+                                    let var_name = if let Ok(Value::String(s)) =
+                                        self.evaluate_projection_expression(row, context, &args[0])
+                                    {
+                                        s
+                                    } else {
+                                        return Ok(Value::Bool(false));
+                                    };
+
+                                    for item in list {
+                                        let mut new_row = row.clone();
+                                        new_row.insert(var_name.clone(), item);
+
+                                        let result = self.evaluate_projection_expression(
+                                            &new_row, context, predicate,
+                                        )?;
+                                        if !result.as_bool().unwrap_or(false) {
+                                            return Ok(Value::Bool(false));
+                                        }
+                                    }
+                                    return Ok(Value::Bool(true));
+                                }
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    "any" => {
+                        // any(variable IN list WHERE predicate)
+                        // Returns true if any element in list satisfies predicate
+                        if args.len() >= 2 {
+                            let list_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let Value::Array(list) = list_val {
+                                if list.is_empty() {
+                                    return Ok(Value::Bool(false)); // No elements satisfy predicate
+                                }
+
+                                if let Some(predicate) = args.get(2) {
+                                    let var_name = if let Ok(Value::String(s)) =
+                                        self.evaluate_projection_expression(row, context, &args[0])
+                                    {
+                                        s
+                                    } else {
+                                        return Ok(Value::Bool(false));
+                                    };
+
+                                    for item in list {
+                                        let mut new_row = row.clone();
+                                        new_row.insert(var_name.clone(), item);
+
+                                        let result = self.evaluate_projection_expression(
+                                            &new_row, context, predicate,
+                                        )?;
+                                        if result.as_bool().unwrap_or(false) {
+                                            return Ok(Value::Bool(true));
+                                        }
+                                    }
+                                    return Ok(Value::Bool(false));
+                                }
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    "none" => {
+                        // none(variable IN list WHERE predicate)
+                        // Returns true if no elements in list satisfy predicate
+                        if args.len() >= 2 {
+                            let list_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let Value::Array(list) = list_val {
+                                if list.is_empty() {
+                                    return Ok(Value::Bool(true)); // No elements satisfy predicate
+                                }
+
+                                if let Some(predicate) = args.get(2) {
+                                    let var_name = if let Ok(Value::String(s)) =
+                                        self.evaluate_projection_expression(row, context, &args[0])
+                                    {
+                                        s
+                                    } else {
+                                        return Ok(Value::Bool(false));
+                                    };
+
+                                    for item in list {
+                                        let mut new_row = row.clone();
+                                        new_row.insert(var_name.clone(), item);
+
+                                        let result = self.evaluate_projection_expression(
+                                            &new_row, context, predicate,
+                                        )?;
+                                        if result.as_bool().unwrap_or(false) {
+                                            return Ok(Value::Bool(false));
+                                        }
+                                    }
+                                    return Ok(Value::Bool(true));
+                                }
+                            }
+                        }
+                        Ok(Value::Bool(true))
+                    }
+                    "single" => {
+                        // single(variable IN list WHERE predicate)
+                        // Returns true if exactly one element in list satisfies predicate
+                        if args.len() >= 2 {
+                            let list_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let Value::Array(list) = list_val {
+                                if list.is_empty() {
+                                    return Ok(Value::Bool(false)); // No elements satisfy
+                                }
+
+                                if let Some(predicate) = args.get(2) {
+                                    let var_name = if let Ok(Value::String(s)) =
+                                        self.evaluate_projection_expression(row, context, &args[0])
+                                    {
+                                        s
+                                    } else {
+                                        return Ok(Value::Bool(false));
+                                    };
+
+                                    let mut count = 0;
+                                    for item in list {
+                                        let mut new_row = row.clone();
+                                        new_row.insert(var_name.clone(), item);
+
+                                        let result = self.evaluate_projection_expression(
+                                            &new_row, context, predicate,
+                                        )?;
+                                        if result.as_bool().unwrap_or(false) {
+                                            count += 1;
+                                            if count > 1 {
+                                                return Ok(Value::Bool(false));
+                                            }
+                                        }
+                                    }
+                                    return Ok(Value::Bool(count == 1));
+                                }
+                            }
+                        }
+                        Ok(Value::Bool(false))
                     }
                     _ => Ok(Value::Null),
                 }

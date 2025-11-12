@@ -31,6 +31,10 @@ pub struct NexusServer {
     pub executor: Arc<RwLock<nexus_core::executor::Executor>>,
     /// Engine for all operations (contains Catalog, LabelIndex, KnnIndex, etc.)
     pub engine: Arc<RwLock<nexus_core::Engine>>,
+    /// Database manager for multi-database support
+    pub database_manager: Arc<RwLock<nexus_core::database::DatabaseManager>>,
+    /// RBAC system for user management
+    pub rbac: Arc<RwLock<nexus_core::auth::RoleBasedAccessControl>>,
 }
 
 impl NexusServer {
@@ -38,7 +42,14 @@ impl NexusServer {
     pub fn new(
         executor: Arc<RwLock<nexus_core::executor::Executor>>,
         engine: Arc<RwLock<nexus_core::Engine>>,
+        database_manager: Arc<RwLock<nexus_core::database::DatabaseManager>>,
+        rbac: Arc<RwLock<nexus_core::auth::RoleBasedAccessControl>>,
     ) -> Self {
-        Self { executor, engine }
+        Self {
+            executor,
+            engine,
+            database_manager,
+            rbac,
+        }
     }
 }

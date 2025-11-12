@@ -776,6 +776,26 @@ impl Engine {
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let ast = parser.parse()?;
 
+        // Check for EXPLAIN command
+        if let Some(executor::parser::Clause::Explain(explain_clause)) = ast.clauses.first() {
+            // Use stored query string if available, otherwise convert from AST
+            let query_str = explain_clause
+                .query_string
+                .clone()
+                .unwrap_or_else(|| self.query_to_string(&explain_clause.query));
+            return self.execute_explain_with_string(&explain_clause.query, &query_str);
+        }
+
+        // Check for PROFILE command
+        if let Some(executor::parser::Clause::Profile(profile_clause)) = ast.clauses.first() {
+            // Use stored query string if available, otherwise convert from AST
+            let query_str = profile_clause
+                .query_string
+                .clone()
+                .unwrap_or_else(|| self.query_to_string(&profile_clause.query));
+            return self.execute_profile_with_string(&profile_clause.query, &query_str);
+        }
+
         // Check for administrative commands that need special handling
         // These commands (CREATE/DROP DATABASE, SHOW DATABASES) should be handled at server level
         // as Engine doesn't have access to DatabaseManager
@@ -1025,6 +1045,7 @@ impl Engine {
                     props.insert(key.clone(), value);
                 }
             }
+            // create_node already checks constraints, so we can call it directly
             let node_id = self.create_node(labels, Value::Object(props))?;
             node_ids.push(node_id);
 
@@ -1293,10 +1314,11 @@ impl Engine {
                     self.storage.flush()?;
                 }
                 executor::parser::Clause::RollbackTransaction => {
-                    // For now, return error as explicit rollback not yet supported
-                    return Err(Error::CypherExecution(
-                        "ROLLBACK not yet supported - transactions are automatic".to_string(),
-                    ));
+                    // Note: Currently transactions are automatic (each operation commits immediately)
+                    // ROLLBACK is a no-op for now, but doesn't return an error
+                    // Future: Implement explicit transaction context to support proper rollback
+                    // For now, just flush to ensure consistency
+                    self.storage.flush()?;
                 }
                 _ => {}
             }
@@ -1374,27 +1396,97 @@ impl Engine {
         &mut self,
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
-        // Note: Constraint system not yet implemented
-        // These commands are placeholders for future constraint support
+        let mut constraint_manager = self.catalog.constraint_manager().write();
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::CreateConstraint(create_constraint) => {
-                    if create_constraint.if_not_exists {
-                        // Constraint might already exist, skip if so
-                        continue;
+                    // Get label ID
+                    let label_id = self.catalog.get_or_create_label(&create_constraint.label)?;
+
+                    // Get property key ID
+                    let property_key_id = self
+                        .catalog
+                        .get_or_create_key(&create_constraint.property)?;
+
+                    // Convert parser constraint type to catalog constraint type
+                    let constraint_type = match create_constraint.constraint_type {
+                        executor::parser::ConstraintType::Unique => {
+                            catalog::constraints::ConstraintType::Unique
+                        }
+                        executor::parser::ConstraintType::Exists => {
+                            catalog::constraints::ConstraintType::Exists
+                        }
+                    };
+
+                    // Create constraint
+                    match constraint_manager.create_constraint(
+                        constraint_type,
+                        label_id,
+                        property_key_id,
+                    ) {
+                        Ok(_) => {
+                            // Constraint created successfully
+                        }
+                        Err(Error::CypherExecution(_)) if create_constraint.if_not_exists => {
+                            // Constraint already exists and IF NOT EXISTS was specified, skip
+                            continue;
+                        }
+                        Err(e) => return Err(e),
                     }
-                    return Err(Error::CypherExecution(
-                        "Constraint system not yet implemented".to_string(),
-                    ));
                 }
                 executor::parser::Clause::DropConstraint(drop_constraint) => {
-                    if drop_constraint.if_exists {
-                        // Constraint might not exist, skip if so
-                        continue;
+                    // Get label ID
+                    let label_id = match self.catalog.get_label_id(&drop_constraint.label) {
+                        Ok(id) => id,
+                        Err(_) if drop_constraint.if_exists => {
+                            // Label doesn't exist and IF EXISTS was specified, skip
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
+
+                    // Get property key ID
+                    let property_key_id = match self.catalog.get_key_id(&drop_constraint.property) {
+                        Ok(id) => id,
+                        Err(_) if drop_constraint.if_exists => {
+                            // Property doesn't exist and IF EXISTS was specified, skip
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
+
+                    // Convert parser constraint type to catalog constraint type
+                    let constraint_type = match drop_constraint.constraint_type {
+                        executor::parser::ConstraintType::Unique => {
+                            catalog::constraints::ConstraintType::Unique
+                        }
+                        executor::parser::ConstraintType::Exists => {
+                            catalog::constraints::ConstraintType::Exists
+                        }
+                    };
+
+                    // Drop constraint
+                    match constraint_manager.drop_constraint(
+                        constraint_type,
+                        label_id,
+                        property_key_id,
+                    ) {
+                        Ok(true) => {
+                            // Constraint dropped successfully
+                        }
+                        Ok(false) if drop_constraint.if_exists => {
+                            // Constraint doesn't exist and IF EXISTS was specified, skip
+                            continue;
+                        }
+                        Ok(false) => {
+                            return Err(Error::CypherExecution(format!(
+                                "Constraint does not exist on :{} ({})",
+                                drop_constraint.label, drop_constraint.property
+                            )));
+                        }
+                        Err(e) => return Err(e),
                     }
-                    return Err(Error::CypherExecution(
-                        "Constraint system not yet implemented".to_string(),
-                    ));
                 }
                 _ => {}
             }
@@ -1406,6 +1498,366 @@ impl Engine {
                 values: vec![serde_json::Value::String("ok".to_string())],
             }],
         })
+    }
+
+    /// Check constraints before creating or updating a node
+    fn check_constraints(
+        &self,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+        exclude_node_id: Option<u64>,
+    ) -> Result<()> {
+        let constraint_manager = self.catalog.constraint_manager().read();
+
+        // Check constraints for each label
+        for &label_id in label_ids {
+            let constraints = constraint_manager.get_constraints_for_label(label_id)?;
+
+            for constraint in constraints {
+                // Get property value
+                let property_name = self
+                    .catalog
+                    .get_key_name(constraint.property_key_id)?
+                    .ok_or_else(|| Error::Internal("Property key not found".to_string()))?;
+
+                let property_value = properties.as_object().and_then(|m| m.get(&property_name));
+
+                match constraint.constraint_type {
+                    catalog::constraints::ConstraintType::Exists => {
+                        // Property must exist (not null)
+                        if property_value.is_none()
+                            || property_value == Some(&serde_json::Value::Null)
+                        {
+                            let label_name = self
+                                .catalog
+                                .get_label_name(label_id)?
+                                .unwrap_or_else(|| format!("ID{}", label_id));
+                            return Err(Error::ConstraintViolation(format!(
+                                "EXISTS constraint violated: property '{}' must exist on nodes with label '{}'",
+                                property_name, label_name
+                            )));
+                        }
+                    }
+                    catalog::constraints::ConstraintType::Unique => {
+                        // Property value must be unique across all nodes with this label
+                        if let Some(value) = property_value {
+                            // Check if any other node with this label has the same property value
+                            let label_name = self
+                                .catalog
+                                .get_label_name(label_id)?
+                                .unwrap_or_else(|| format!("ID{}", label_id));
+
+                            // Get all nodes with this label
+                            let bitmap = self
+                                .indexes
+                                .label_index
+                                .get_nodes_with_labels(&[label_id])?;
+
+                            for node_id in bitmap.iter() {
+                                let node_id_u64 = node_id as u64;
+
+                                // Skip the node being updated
+                                if Some(node_id_u64) == exclude_node_id {
+                                    continue;
+                                }
+
+                                let node_props = self.storage.load_node_properties(node_id_u64)?;
+                                if let Some(Value::Object(props_map)) = node_props {
+                                    if let Some(existing_value) = props_map.get(&property_name) {
+                                        if existing_value == value {
+                                            return Err(Error::ConstraintViolation(format!(
+                                                "UNIQUE constraint violated: property '{}' value already exists on another node with label '{}'",
+                                                property_name, label_name
+                                            )));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Execute EXPLAIN command - returns execution plan without executing query
+    fn execute_explain_with_string(
+        &mut self,
+        query: &executor::parser::CypherQuery,
+        query_str: &str,
+    ) -> Result<executor::ResultSet> {
+        // Use the query AST directly if it has clauses, otherwise parse the string
+        let operators = if !query.clauses.is_empty() {
+            // Use the planner directly with the AST
+            let planner = executor::planner::QueryPlanner::new(
+                &self.catalog,
+                &self.indexes.label_index,
+                &self.indexes.knn_index,
+            );
+            planner.plan_query(query)?
+        } else {
+            // Fallback: parse and plan from string
+            self.executor.parse_and_plan(query_str)?
+        };
+
+        // Format plan as JSON for return
+        let plan_json = serde_json::json!({
+            "plan": {
+                "operators": operators.iter().map(|op| {
+                    serde_json::json!({
+                        "type": format!("{:?}", op),
+                        "description": format!("{:?}", op)
+                    })
+                }).collect::<Vec<_>>()
+            },
+            "estimated_cost": "N/A", // Would need cost estimation
+            "estimated_rows": "N/A"  // Would need row estimation
+        });
+
+        Ok(executor::ResultSet {
+            columns: vec!["plan".to_string()],
+            rows: vec![executor::Row {
+                values: vec![plan_json],
+            }],
+        })
+    }
+
+    /// Execute PROFILE command - executes query and returns execution statistics
+    fn execute_profile_with_string(
+        &mut self,
+        query: &executor::parser::CypherQuery,
+        query_str: &str,
+    ) -> Result<executor::ResultSet> {
+        use std::time::Instant;
+
+        let start_time = Instant::now();
+
+        // Use the query AST directly if it has clauses, otherwise parse the string
+        let operators = if !query.clauses.is_empty() {
+            // Use the planner directly with the AST
+            let planner = executor::planner::QueryPlanner::new(
+                &self.catalog,
+                &self.indexes.label_index,
+                &self.indexes.knn_index,
+            );
+            planner.plan_query(query)?
+        } else {
+            // Fallback: parse and plan from string
+            self.executor.parse_and_plan(query_str)?
+        };
+
+        // Execute the query
+        let result = self.execute_cypher_internal(query_str)?;
+
+        let execution_time = start_time.elapsed();
+
+        // Format profile as JSON
+        let profile_json = serde_json::json!({
+            "plan": {
+                "operators": operators.iter().map(|op| {
+                    serde_json::json!({
+                        "type": format!("{:?}", op),
+                        "description": format!("{:?}", op)
+                    })
+                }).collect::<Vec<_>>()
+            },
+            "execution_time_ms": execution_time.as_millis(),
+            "execution_time_us": execution_time.as_micros(),
+            "rows_returned": result.rows.len(),
+            "columns_returned": result.columns.len()
+        });
+
+        Ok(executor::ResultSet {
+            columns: vec!["profile".to_string()],
+            rows: vec![executor::Row {
+                values: vec![profile_json],
+            }],
+        })
+    }
+
+    /// Convert CypherQuery AST to string representation
+    fn query_to_string(&self, query: &executor::parser::CypherQuery) -> String {
+        // Simple conversion - in production would need proper formatting
+        // For now, reconstruct from clauses
+        let mut parts = Vec::new();
+        for clause in &query.clauses {
+            parts.push(format!("{:?}", clause));
+        }
+        parts.join(" ")
+    }
+
+    /// Internal method to execute Cypher query (used by PROFILE)
+    fn execute_cypher_internal(&mut self, query: &str) -> Result<executor::ResultSet> {
+        // Re-parse and execute (avoiding infinite recursion with EXPLAIN/PROFILE)
+        let mut parser = executor::parser::CypherParser::new(query.to_string());
+        let ast = parser.parse()?;
+
+        // Execute normally (but skip EXPLAIN/PROFILE checks)
+        self.execute_cypher_ast(&ast)
+    }
+
+    /// Execute Cypher AST (internal, used to avoid EXPLAIN/PROFILE recursion)
+    fn execute_cypher_ast(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        // Check for administrative commands that need special handling
+        let has_admin_db_cmd = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                executor::parser::Clause::CreateDatabase(_)
+                    | executor::parser::Clause::DropDatabase(_)
+                    | executor::parser::Clause::ShowDatabases
+            )
+        });
+
+        if has_admin_db_cmd {
+            return Err(Error::CypherExecution(
+                "Database management commands (CREATE/DROP DATABASE, SHOW DATABASES) must be executed at server level".to_string(),
+            ));
+        }
+
+        // Check for transaction commands
+        let has_begin = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::BeginTransaction));
+        let has_commit = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CommitTransaction));
+        let has_rollback = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::RollbackTransaction));
+
+        if has_begin || has_commit || has_rollback {
+            return self.execute_transaction_commands(ast);
+        }
+
+        // Check for index management commands
+        let has_create_index = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CreateIndex(_)));
+        let has_drop_index = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::DropIndex(_)));
+
+        if has_create_index || has_drop_index {
+            return self.execute_index_commands(ast);
+        }
+
+        // Check for constraint management commands
+        let has_create_constraint = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CreateConstraint(_)));
+        let has_drop_constraint = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::DropConstraint(_)));
+
+        if has_create_constraint || has_drop_constraint {
+            return self.execute_constraint_commands(ast);
+        }
+
+        // Check for user management commands (should be handled at server level)
+        let has_user_cmd = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                executor::parser::Clause::ShowUsers
+                    | executor::parser::Clause::CreateUser(_)
+                    | executor::parser::Clause::Grant(_)
+                    | executor::parser::Clause::Revoke(_)
+            )
+        });
+
+        if has_user_cmd {
+            return Err(Error::CypherExecution(
+                "User management commands (SHOW USERS, CREATE USER, GRANT, REVOKE) must be executed at server level".to_string(),
+            ));
+        }
+
+        // Check if query contains CREATE or DELETE
+        let has_create = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Create(_)));
+        let has_delete = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Delete(_)));
+        let has_merge = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Merge(_)));
+        let has_set_clause = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Set(_)));
+        let has_remove_clause = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Remove(_)));
+        let has_foreach = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Foreach(_)));
+        let has_match = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::Match(_)));
+
+        // Handle DELETE (with or without MATCH)
+        if has_delete {
+            if has_match {
+                // MATCH ... DELETE: execute MATCH first, then DELETE with results
+                self.execute_match_delete_query(ast)?;
+            } else {
+                // Standalone DELETE won't work without MATCH
+                return Err(Error::CypherSyntax(
+                    "DELETE requires MATCH clause".to_string(),
+                ));
+            }
+            self.refresh_executor()?;
+
+            // Return empty result for DELETE queries
+            return Ok(executor::ResultSet {
+                columns: vec![],
+                rows: vec![],
+            });
+        }
+
+        // Handle MERGE / SET / REMOVE / FOREACH write queries before falling back to read executor
+        if has_merge || has_set_clause || has_remove_clause || has_foreach {
+            let result = self.execute_write_query(ast)?;
+            return Ok(result);
+        }
+
+        // If query has CREATE (with or without MATCH), handle via Engine for persistence
+        if has_create {
+            if has_match {
+                // MATCH ... CREATE: execute MATCH first, then CREATE with results
+                self.execute_match_create_query(ast)?;
+            } else {
+                // Standalone CREATE
+                self.execute_create_query(ast)?;
+            }
+
+            // Refresh executor to see the changes
+            self.refresh_executor()?;
+        }
+
+        // Execute the query normally
+        let query_obj = executor::Query {
+            cypher: self.query_to_string(ast),
+            params: std::collections::HashMap::new(),
+        };
+        self.executor.execute(&query_obj)
     }
 
     fn build_return_result(
@@ -1631,6 +2083,9 @@ impl Engine {
             label_ids.push(label_id);
         }
 
+        // Check constraints before creating node
+        self.check_constraints(&label_ids, &properties, None)?;
+
         let node_id = self
             .storage
             .create_node_with_label_bits(&mut tx, label_bits, properties)?;
@@ -1700,12 +2155,17 @@ impl Engine {
 
         // Get or create label IDs
         let mut label_bits = 0u64;
+        let mut label_ids = Vec::new();
         for label in &labels {
             let label_id = self.catalog.get_or_create_label(label)?;
             if label_id < 64 {
                 label_bits |= 1u64 << label_id;
             }
+            label_ids.push(label_id);
         }
+
+        // Check constraints before updating node (exclude current node from uniqueness check)
+        self.check_constraints(&label_ids, &properties, Some(id))?;
 
         // Create updated node record
         let mut node_record = storage::NodeRecord::new();

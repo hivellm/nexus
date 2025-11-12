@@ -781,13 +781,28 @@ impl<'a> QueryPlanner<'a> {
                             None
                         };
 
-                        operators.push(Operator::Expand {
-                            type_id,
-                            source_var,
-                            target_var,
-                            rel_var: rel.variable.clone().unwrap_or_default(),
-                            direction,
-                        });
+                        // Check if this is a variable-length path (has quantifier)
+                        if let Some(quantifier) = &rel.quantifier {
+                            // Use VariableLengthPath operator for variable-length paths
+                            operators.push(Operator::VariableLengthPath {
+                                type_id,
+                                direction,
+                                source_var,
+                                target_var,
+                                rel_var: rel.variable.clone().unwrap_or_default(),
+                                path_var: String::new(), // Path variable not used in basic patterns
+                                quantifier: quantifier.clone(),
+                            });
+                        } else {
+                            // Use regular Expand operator for single-hop relationships
+                            operators.push(Operator::Expand {
+                                type_id,
+                                source_var,
+                                target_var,
+                                rel_var: rel.variable.clone().unwrap_or_default(),
+                                direction,
+                            });
+                        }
                     }
                 }
             }
@@ -943,6 +958,10 @@ impl<'a> QueryPlanner<'a> {
                     // UNWIND expands list into rows - moderately cheap
                     total_cost += 15.0;
                 }
+                Operator::VariableLengthPath { .. } => {
+                    // Variable-length paths are expensive (BFS traversal)
+                    total_cost += 500.0;
+                }
             }
         }
 
@@ -972,7 +991,7 @@ mod tests {
     use crate::executor::parser::{
         BinaryOperator, Clause, CypherQuery, Expression, LimitClause, Literal, MatchClause,
         NodePattern, Pattern, PatternElement, RelationshipDirection, RelationshipPattern,
-        ReturnClause, ReturnItem, WhereClause,
+        RelationshipQuantifier, ReturnClause, ReturnItem, WhereClause,
     };
     use crate::index::{KnnIndex, LabelIndex};
 
@@ -1219,6 +1238,133 @@ mod tests {
             .iter()
             .any(|op| matches!(op, Operator::Expand { .. }));
         assert!(has_expand, "Expected Expand operator for relationship");
+    }
+
+    #[test]
+    fn test_plan_query_with_variable_length_path() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    pattern: Pattern {
+                        elements: vec![
+                            PatternElement::Node(NodePattern {
+                                variable: Some("a".to_string()),
+                                labels: vec!["Person".to_string()],
+                                properties: None,
+                            }),
+                            PatternElement::Relationship(RelationshipPattern {
+                                variable: Some("r".to_string()),
+                                types: vec!["KNOWS".to_string()],
+                                direction: RelationshipDirection::Outgoing,
+                                properties: None,
+                                quantifier: Some(RelationshipQuantifier::ZeroOrMore),
+                            }),
+                            PatternElement::Node(NodePattern {
+                                variable: Some("b".to_string()),
+                                labels: vec!["Person".to_string()],
+                                properties: None,
+                            }),
+                        ],
+                    },
+                    where_clause: None,
+                    optional: false,
+                }),
+                Clause::Return(ReturnClause {
+                    items: vec![ReturnItem {
+                        expression: Expression::Variable("a".to_string()),
+                        alias: None,
+                    }],
+                    distinct: false,
+                }),
+            ],
+            params: std::collections::HashMap::new(),
+        };
+
+        let operators = planner.plan_query(&query).unwrap();
+
+        // Check for VariableLengthPath operator
+        let has_variable_length_path = operators
+            .iter()
+            .any(|op| matches!(op, Operator::VariableLengthPath { .. }));
+        assert!(
+            has_variable_length_path,
+            "Expected VariableLengthPath operator for variable-length relationship"
+        );
+
+        // Should NOT have regular Expand operator
+        let has_expand = operators
+            .iter()
+            .any(|op| matches!(op, Operator::Expand { .. }));
+        assert!(
+            !has_expand,
+            "Should not have Expand operator when quantifier is present"
+        );
+    }
+
+    #[test]
+    fn test_plan_query_with_range_quantifier() {
+        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(128).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let query = CypherQuery {
+            clauses: vec![
+                Clause::Match(MatchClause {
+                    pattern: Pattern {
+                        elements: vec![
+                            PatternElement::Node(NodePattern {
+                                variable: Some("a".to_string()),
+                                labels: vec!["Person".to_string()],
+                                properties: None,
+                            }),
+                            PatternElement::Relationship(RelationshipPattern {
+                                variable: Some("r".to_string()),
+                                types: vec!["KNOWS".to_string()],
+                                direction: RelationshipDirection::Outgoing,
+                                properties: None,
+                                quantifier: Some(RelationshipQuantifier::Range(1, 3)),
+                            }),
+                            PatternElement::Node(NodePattern {
+                                variable: Some("b".to_string()),
+                                labels: vec!["Person".to_string()],
+                                properties: None,
+                            }),
+                        ],
+                    },
+                    where_clause: None,
+                    optional: false,
+                }),
+                Clause::Return(ReturnClause {
+                    items: vec![ReturnItem {
+                        expression: Expression::Variable("a".to_string()),
+                        alias: None,
+                    }],
+                    distinct: false,
+                }),
+            ],
+            params: std::collections::HashMap::new(),
+        };
+
+        let operators = planner.plan_query(&query).unwrap();
+
+        // Check for VariableLengthPath operator with Range quantifier
+        let has_variable_length_path = operators.iter().any(|op| {
+            if let Operator::VariableLengthPath { quantifier, .. } = op {
+                matches!(quantifier, RelationshipQuantifier::Range(1, 3))
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_variable_length_path,
+            "Expected VariableLengthPath operator with Range quantifier"
+        );
     }
 
     #[test]

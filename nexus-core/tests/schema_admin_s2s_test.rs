@@ -335,26 +335,17 @@ async fn test_schema_admin_s2s() {
         failed += 1;
     }
 
-    if test_query_error(
-        &client,
-        &server_url,
-        "ROLLBACK transaction",
-        "ROLLBACK",
-        "ROLLBACK not yet supported",
-    )
-    .await
-    {
+    if test_query_success(&client, &server_url, "ROLLBACK transaction", "ROLLBACK").await {
         passed += 1;
     } else {
         failed += 1;
     }
 
-    if test_query_error(
+    if test_query_success(
         &client,
         &server_url,
         "ROLLBACK TRANSACTION explicit",
         "ROLLBACK TRANSACTION",
-        "ROLLBACK not yet supported",
     )
     .await
     {

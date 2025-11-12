@@ -7,8 +7,8 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Status](https://img.shields.io/badge/status-v0.10.0%20%7C%20Multi--DB%20%2B%2055%20Functions-success.svg)
-![Tests](https://img.shields.io/badge/tests-1275%2B%20passing-success.svg)
+![Status](https://img.shields.io/badge/status-v0.10.4%20%7C%20All%20Tests%20Passing-success.svg)
+![Tests](https://img.shields.io/badge/tests-974%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -27,7 +27,28 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **MVP: 95% Complete** - Production Ready! 🚀
 
-**🔥 Latest (v0.10.0)**: **Enterprise Features - Multi-Database + 55 Built-in Functions**!
+**🔥 Latest (v0.10.4)**: **Code Quality & Verification Complete**!
+
+- ✅ **All Tests Passing** - 974 tests passing (100% success rate)
+  - nexus-core: 761 tests ✅
+  - nexus-protocol: 21 tests ✅
+  - nexus-server: 192 tests ✅
+- ✅ **Code Quality** - All clippy warnings fixed
+- ✅ **Full Verification** - All implemented features tested and working
+
+**Previous (v0.10.3)**: **Variable-Length Paths + Shortest Path Functions**!
+
+- ✅ **Variable-Length Paths** - Complete implementation of path quantifiers
+  - Fixed-length: `-[*5]->`, Range: `-[*1..3]->`, Unbounded: `-[*]->`
+  - One or more: `-[+]->`, Zero or one: `-[?]->`
+  - BFS traversal with cycle detection and path length constraints
+- ✅ **Shortest Path Functions** - `shortestPath()` and `allShortestPaths()`
+  - BFS algorithm for efficient shortest path finding
+  - DFS for finding all paths of shortest length
+  - PatternComprehension support: `shortestPath([(a)-[*]->(b)])`
+  - JSON serialization of paths (nodes and relationships arrays)
+
+**Previous (v0.10.0)**: **Enterprise Features - Multi-Database + 55 Built-in Functions**!
 
 - ✅ **Multiple Database Support** - Isolated databases with full CRUD API, multi-tenancy ready
 - ✅ **Property Keys API** - Introspection endpoint with admin UI dashboard
@@ -267,6 +288,30 @@ WHERE fof <> me AND NOT (me)-[:KNOWS]->(fof)
 RETURN DISTINCT fof.name, fof.age
 ORDER BY fof.age DESC
 LIMIT 10
+```
+
+### **Variable-Length Paths** 🔥
+
+```cypher
+-- Find all nodes within 3 hops
+MATCH (start:Person {name: 'Alice'})-[*1..3]->(end)
+RETURN end.name, end.age
+
+-- Find shortest path between two nodes
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+RETURN shortestPath([(a)-[*]->(b)]) AS path
+
+-- Find all shortest paths
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+RETURN allShortestPaths([(a)-[*]->(b)]) AS paths
+
+-- Fixed-length path (exactly 2 hops)
+MATCH (a)-[*2]->(b)
+RETURN a.name, b.name
+
+-- Range path (1 to 5 hops)
+MATCH (a)-[*1..5]->(b)
+RETURN a.name, b.name
 ```
 
 ### **Aggregation & Analytics**

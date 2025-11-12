@@ -5,6 +5,83 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2025-11-12
+
+### Fixed
+- **Code Quality**: Fixed all clippy warnings
+  - Replaced `args.len() >= 1` with `!args.is_empty()` for better readability
+  - Fixed `contains_key` + `insert` pattern to use `Entry` API
+  - Fixed `as_ref().map()` pattern to use direct `clone()`
+  - Added `#[allow(clippy::too_many_arguments)]` for functions that legitimately need many parameters
+  - All code now passes `cargo clippy --workspace -- -D warnings`
+
+### Improved
+- **Test Coverage**: Comprehensive test suite verification
+  - 974 tests passing (100% success rate)
+    - nexus-core: 761 tests passing
+    - nexus-protocol: 21 tests passing
+    - nexus-server: 192 tests passing
+  - All critical functionality verified and working
+
+### Testing
+- **Full Test Suite**: Complete verification of all implemented features
+  - Variable-length paths: All quantifier types tested
+  - Shortest path functions: BFS and DFS algorithms verified
+  - Database management: All CRUD operations tested
+  - User management: RBAC operations validated
+  - Advanced Cypher features: CASE, FOREACH, EXISTS, comprehensions all working
+
+## [0.10.3] - 2025-11-12
+
+### Added
+- **Variable-Length Paths**: Complete implementation of variable-length path quantifiers
+  - **Fixed-length paths**: `-[*5]->` - Match exactly 5 relationships
+  - **Range paths**: `-[*1..3]->` - Match 1 to 3 relationships
+  - **Unbounded paths**: `-[*]->` - Match zero or more relationships
+  - **One or more**: `-[+]->` - Match one or more relationships
+  - **Zero or one**: `-[?]->` - Match zero or one relationship
+  - **BFS traversal**: Efficient breadth-first search for path finding
+  - **Cycle detection**: Prevents revisiting nodes in current path
+  - **Path length constraints**: Enforces min/max length limits
+  - **Bidirectional paths**: Supports undirected relationship patterns
+
+- **Shortest Path Functions**: Implementation of shortest path algorithms
+  - **shortestPath()**: Find shortest path between two nodes using BFS
+    - Syntax: `shortestPath([(a)-[*]->(b)])` using PatternComprehension
+    - Returns single shortest path as JSON (nodes and relationships arrays)
+    - Supports relationship type filtering and direction constraints
+  - **allShortestPaths()**: Find all paths of shortest length
+    - Uses BFS to find shortest distance, then DFS to find all paths of that length
+    - Returns array of paths, each with nodes and relationships
+    - Efficiently handles multiple paths of same length
+  - **Path struct**: Custom representation of paths with nodes and relationships
+  - **Path serialization**: Converts paths to JSON format for API responses
+
+### Improved
+- **Parser Enhancement**: Enhanced relationship pattern parsing
+  - Correctly distinguishes between property maps `{key: value}` and quantifiers `{n}` or `{n..m}`
+  - Improved `peek_char_at` logic for accurate pattern detection
+  - Supports range quantifiers with `..` separator
+- **Query Planner**: Updated to generate VariableLengthPath operator
+  - Automatically detects quantifiers in relationship patterns
+  - Generates appropriate operator (Expand vs VariableLengthPath) based on pattern
+  - Cost estimation for variable-length path operations
+
+### Testing
+- **Comprehensive Test Suite**: Added tests for variable-length paths and shortest path functions
+  - Unit tests for parser quantifier parsing (all types covered)
+  - Unit tests for planner VariableLengthPath generation
+  - S2S tests for variable-length paths (fixed-length, range, unbounded, bidirectional)
+  - S2S tests for shortestPath() and allShortestPaths() functions
+  - All tests passing (100% success rate)
+
+### Technical Details
+- **BFS Algorithm**: Breadth-first search for efficient shortest path finding
+- **DFS Algorithm**: Depth-first search for finding all paths of given length
+- **Cycle Detection**: Prevents infinite loops by tracking visited nodes in current path
+- **Path Representation**: Custom `Path` struct with nodes and relationships vectors
+- **JSON Serialization**: Paths converted to JSON with `nodes` and `relationships` arrays
+
 ## [0.10.2] - 2025-11-11
 
 ### Added

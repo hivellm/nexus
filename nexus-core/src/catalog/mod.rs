@@ -20,6 +20,9 @@
 //! Plus databases for:
 //! - `metadata`: Version, epoch, config
 //! - `statistics`: Node counts, relationship counts
+//! - `constraints`: Database constraints (UNIQUE, EXISTS)
+
+pub mod constraints;
 
 use crate::{Error, Result};
 use heed::types::*;
@@ -102,6 +105,9 @@ pub struct Catalog {
     /// Statistics database
     stats_db: Database<Str, SerdeBincode<CatalogStats>>,
 
+    /// Constraint manager
+    constraint_manager: Arc<RwLock<crate::catalog::constraints::ConstraintManager>>,
+
     /// Next label ID counter (cached for performance)
     next_label_id: Arc<RwLock<u32>>,
     /// Next type ID counter
@@ -130,11 +136,11 @@ impl Catalog {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&path)?;
 
-        // Open LMDB environment (10GB max size, 8 databases)
+        // Open LMDB environment (10GB max size, 10 databases)
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(10 * 1024 * 1024 * 1024) // 10GB
-                .max_dbs(8)
+                .max_dbs(10) // Increased for constraints databases
                 .open(path.as_ref())?
         };
         let env = Arc::new(env);
@@ -153,6 +159,14 @@ impl Catalog {
 
         let metadata_db = env.create_database(&mut wtxn, Some("metadata"))?;
         let stats_db = env.create_database(&mut wtxn, Some("statistics"))?;
+
+        // Create constraint databases
+        let constraints_db: Database<
+            SerdeBincode<(u32, u32)>,
+            SerdeBincode<crate::catalog::constraints::Constraint>,
+        > = env.create_database(&mut wtxn, Some("constraints"))?;
+        let constraint_id_to_key: Database<U32<byteorder::NativeEndian>, SerdeBincode<(u32, u32)>> =
+            env.create_database(&mut wtxn, Some("constraint_id_to_key"))?;
 
         // Initialize metadata if not exists
         if metadata_db.get(&wtxn, "main")?.is_none() {
@@ -200,6 +214,14 @@ impl Catalog {
 
         drop(rtxn);
 
+        // Initialize constraint manager with existing databases
+        let constraint_manager =
+            crate::catalog::constraints::ConstraintManager::new_with_databases(
+                &env,
+                constraints_db,
+                constraint_id_to_key,
+            )?;
+
         Ok(Self {
             env,
             label_name_to_id,
@@ -210,6 +232,7 @@ impl Catalog {
             key_id_to_name,
             metadata_db,
             stats_db,
+            constraint_manager: Arc::new(RwLock::new(constraint_manager)),
             next_label_id: Arc::new(RwLock::new(next_label_id)),
             next_type_id: Arc::new(RwLock::new(next_type_id)),
             next_key_id: Arc::new(RwLock::new(next_key_id)),
@@ -353,6 +376,15 @@ impl Catalog {
         wtxn.commit()?;
 
         Ok(id)
+    }
+
+    /// Get key ID by name
+    pub fn get_key_id(&self, key: &str) -> Result<KeyId> {
+        let rtxn = self.env.read_txn()?;
+        match self.key_name_to_id.get(&rtxn, key)? {
+            Some(id) => Ok(id),
+            None => Err(Error::NotFound(format!("Key '{}' not found", key))),
+        }
     }
 
     /// Get key name by ID
@@ -508,6 +540,13 @@ impl Catalog {
             Some(id) => Ok(id),
             None => Err(Error::NotFound(format!("Label '{}' not found", label))),
         }
+    }
+
+    /// Get constraint manager
+    pub fn constraint_manager(
+        &self,
+    ) -> &Arc<RwLock<crate::catalog::constraints::ConstraintManager>> {
+        &self.constraint_manager
     }
 }
 
