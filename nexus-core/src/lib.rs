@@ -111,8 +111,8 @@ pub struct Engine {
     pub page_cache: page_cache::PageCache,
     /// Write-ahead log for durability
     pub wal: wal::Wal,
-    /// Transaction manager for MVCC
-    pub transaction_manager: transaction::TransactionManager,
+    /// Transaction manager for MVCC (shared with SessionManager via Arc)
+    pub transaction_manager: Arc<RwLock<transaction::TransactionManager>>,
     /// Session manager for transaction context
     pub session_manager: session::SessionManager,
     /// Index subsystem
@@ -158,11 +158,11 @@ impl Engine {
         // Initialize WAL
         let wal = wal::Wal::new(data_dir.join("wal.log"))?;
 
-        // Initialize transaction manager
+        // Initialize transaction manager (shared between Engine and SessionManager)
         let transaction_manager = transaction::TransactionManager::new()?;
         let transaction_manager_arc = Arc::new(RwLock::new(transaction_manager));
 
-        // Initialize session manager
+        // Initialize session manager (shares TransactionManager Arc)
         let session_manager = session::SessionManager::new(transaction_manager_arc.clone());
 
         // Initialize index manager
@@ -172,17 +172,13 @@ impl Engine {
         let executor =
             executor::Executor::new(&catalog, &storage, &indexes.label_index, &indexes.knn_index)?;
 
-        // Extract TransactionManager from Arc for Engine
-        let transaction_manager = Arc::try_unwrap(transaction_manager_arc)
-            .map_err(|_| Error::internal("Failed to unwrap TransactionManager"))?
-            .into_inner();
-
+        // Engine shares the same TransactionManager Arc with SessionManager
         let mut engine = Engine {
             catalog,
             storage,
             page_cache,
             wal,
-            transaction_manager,
+            transaction_manager: transaction_manager_arc,
             session_manager,
             indexes,
             executor,
@@ -780,7 +776,7 @@ impl Engine {
             page_cache_hits: self.page_cache.hit_count(),
             page_cache_misses: self.page_cache.miss_count(),
             wal_entries: self.wal.entry_count(),
-            active_transactions: self.transaction_manager.active_count(),
+            active_transactions: self.transaction_manager.read().active_count(),
         })
     }
 
@@ -1735,7 +1731,7 @@ impl Engine {
                     let mut batch_count = 0;
                     loop {
                         // Start write transaction for this batch
-                        let mut tx = self.transaction_manager.begin_write()?;
+                        let mut tx = self.transaction_manager.write().begin_write()?;
                         
                         // Execute subquery for this batch
                         let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
@@ -1748,7 +1744,7 @@ impl Engine {
                         let batch_rows: Vec<_> = subquery_result.rows.into_iter().take(batch_size).collect();
                         if batch_rows.is_empty() {
                             // No more results, commit and break
-                            self.transaction_manager.commit(&mut tx)?;
+                            self.transaction_manager.write().commit(&mut tx)?;
                             break;
                         }
                         
@@ -1756,7 +1752,7 @@ impl Engine {
                         batch_count += 1;
                         
                         // Commit transaction for this batch
-                        self.transaction_manager.commit(&mut tx)?;
+                        self.transaction_manager.write().commit(&mut tx)?;
                         
                         // If we got fewer rows than batch size, we're done
                         if all_results.len() < batch_count * batch_size {
@@ -2347,7 +2343,7 @@ impl Engine {
 
         let mut tx = self.transaction_manager.begin_write()?;
         self.storage.write_node(node_id, &record)?;
-        self.transaction_manager.commit(&mut tx)?;
+        self.transaction_manager.write().commit(&mut tx)?;
 
         self.indexes
             .label_index
@@ -2388,7 +2384,7 @@ impl Engine {
         let node_id = self
             .storage
             .create_node_with_label_bits(&mut tx, label_bits, properties)?;
-        self.transaction_manager.commit(&mut tx)?;
+        self.transaction_manager.write().commit(&mut tx)?;
 
         // CRITICAL FIX: Flush storage to ensure data is persisted to disk
         self.storage.flush()?;
@@ -2415,7 +2411,7 @@ impl Engine {
         let rel_id = self
             .storage
             .create_relationship(&mut tx, from, to, type_id, properties)?;
-        self.transaction_manager.commit(&mut tx)?;
+        self.transaction_manager.write().commit(&mut tx)?;
 
         // CRITICAL FIX: Flush storage to ensure data is persisted to disk
         self.storage.flush()?;
@@ -2430,13 +2426,13 @@ impl Engine {
 
     /// Get node by ID
     pub fn get_node(&mut self, id: u64) -> Result<Option<storage::NodeRecord>> {
-        let tx = self.transaction_manager.begin_read()?;
+        let tx = self.transaction_manager.write().begin_read()?;
         self.storage.get_node(&tx, id)
     }
 
     /// Get relationship by ID
     pub fn get_relationship(&mut self, id: u64) -> Result<Option<storage::RelationshipRecord>> {
-        let tx = self.transaction_manager.begin_read()?;
+        let tx = self.transaction_manager.write().begin_read()?;
         self.storage.get_relationship(&tx, id)
     }
 
@@ -2485,7 +2481,7 @@ impl Engine {
         // Write updated record
         let mut tx = self.transaction_manager.begin_write()?;
         self.storage.write_node(id, &node_record)?;
-        self.transaction_manager.commit(&mut tx)?;
+        self.transaction_manager.write().commit(&mut tx)?;
 
         // Update statistics
         for label in &labels {
@@ -2511,7 +2507,7 @@ impl Engine {
 
             let mut tx = self.transaction_manager.begin_write()?;
             self.storage.write_node(id, &deleted_record)?;
-            self.transaction_manager.commit(&mut tx)?;
+            self.transaction_manager.write().commit(&mut tx)?;
 
             // Update statistics
             for bit in 0..64 {
@@ -2556,7 +2552,7 @@ impl Engine {
             }
         }
 
-        self.transaction_manager.commit(&mut tx)?;
+        self.transaction_manager.write().commit(&mut tx)?;
         Ok(())
     }
 
@@ -3108,7 +3104,7 @@ mod tests {
         let _ = engine.page_cache.hit_count();
         let _ = engine.page_cache.miss_count();
         let _ = engine.wal.entry_count();
-        let _ = engine.transaction_manager.active_count();
+        let _ = engine.transaction_manager.read().active_count();
     }
 
     #[test]
