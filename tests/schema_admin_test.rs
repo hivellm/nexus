@@ -64,6 +64,40 @@ fn test_create_index_if_not_exists() {
 }
 
 #[test]
+fn test_create_or_replace_index() {
+    let mut engine = create_engine();
+
+    // Create index first time
+    let query = "CREATE INDEX ON :Person(name)";
+    let result = engine.execute_cypher(query).unwrap();
+    assert_eq!(
+        extract_first_row_value(result),
+        Some(Value::String("ok".to_string()))
+    );
+
+    // Replace the index with OR REPLACE - should succeed
+    let query = "CREATE OR REPLACE INDEX ON :Person(name)";
+    let result = engine.execute_cypher(query).unwrap();
+    assert_eq!(
+        extract_first_row_value(result),
+        Some(Value::String("ok".to_string()))
+    );
+}
+
+#[test]
+fn test_create_or_replace_index_nonexistent() {
+    let mut engine = create_engine();
+
+    // Create OR REPLACE index that doesn't exist - should succeed (creates new index)
+    let query = "CREATE OR REPLACE INDEX ON :Person(name)";
+    let result = engine.execute_cypher(query).unwrap();
+    assert_eq!(
+        extract_first_row_value(result),
+        Some(Value::String("ok".to_string()))
+    );
+}
+
+#[test]
 fn test_create_index_multiple_properties() {
     let mut engine = create_engine();
 
@@ -529,6 +563,7 @@ fn test_index_parsing_complex() {
     let queries = vec![
         "CREATE INDEX ON :Label(property)",
         "CREATE INDEX IF NOT EXISTS ON :Label(property)",
+        "CREATE OR REPLACE INDEX ON :Label(property)",
         "DROP INDEX ON :Label(property)",
         "DROP INDEX IF EXISTS ON :Label(property)",
     ];

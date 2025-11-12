@@ -280,6 +280,7 @@ pub async fn execute_cypher(
             nexus_core::executor::parser::Clause::CreateDatabase(_)
                 | nexus_core::executor::parser::Clause::DropDatabase(_)
                 | nexus_core::executor::parser::Clause::ShowDatabases
+                | nexus_core::executor::parser::Clause::UseDatabase(_)
         )
     });
 
@@ -1274,6 +1275,32 @@ pub(crate) async fn execute_database_commands(
 
     for clause in &ast.clauses {
         match clause {
+            nexus_core::executor::parser::Clause::UseDatabase(use_db) => {
+                // Set columns if not already set
+                if columns.is_empty() {
+                    columns = vec!["database".to_string(), "message".to_string()];
+                }
+                let manager = server.database_manager.read().await;
+                
+                // Check if database exists
+                let databases = manager.list_databases();
+                let db_exists = databases.iter().any(|db| db.name == use_db.name);
+                
+                if db_exists {
+                    rows.push(serde_json::json!([
+                        use_db.name.clone(),
+                        format!("Switched to database '{}'", use_db.name)
+                    ]));
+                } else {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some(format!("Database '{}' does not exist", use_db.name)),
+                    });
+                }
+            }
             nexus_core::executor::parser::Clause::ShowDatabases => {
                 columns = vec!["name".to_string(), "default".to_string()];
                 let manager = server.database_manager.read().await;

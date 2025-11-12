@@ -56,6 +56,8 @@ pub enum Clause {
     DropDatabase(DropDatabaseClause),
     /// SHOW DATABASES command
     ShowDatabases,
+    /// USE DATABASE command
+    UseDatabase(UseDatabaseClause),
     /// BEGIN TRANSACTION command
     BeginTransaction,
     /// COMMIT TRANSACTION command
@@ -404,6 +406,13 @@ pub struct DropDatabaseClause {
     pub if_exists: bool,
 }
 
+/// USE DATABASE clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UseDatabaseClause {
+    /// Database name
+    pub name: String,
+}
+
 /// CREATE INDEX clause
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateIndexClause {
@@ -413,6 +422,8 @@ pub struct CreateIndexClause {
     pub property: String,
     /// Optional IF NOT EXISTS flag
     pub if_not_exists: bool,
+    /// Optional OR REPLACE flag
+    pub or_replace: bool,
 }
 
 /// DROP INDEX clause
@@ -970,6 +981,15 @@ impl CypherParser {
                     Ok(Clause::ShowApiKeys(show_api_keys_clause))
                 } else {
                     Err(self.error("SHOW must be followed by DATABASES, USERS, USER, or API KEYS"))
+                }
+            }
+            "USE" => {
+                self.skip_whitespace();
+                if self.peek_keyword("DATABASE") {
+                    let use_db_clause = self.parse_use_database_clause()?;
+                    Ok(Clause::UseDatabase(use_db_clause))
+                } else {
+                    Err(self.error("USE must be followed by DATABASE"))
                 }
             }
             "BEGIN" => {
@@ -1869,9 +1889,28 @@ impl CypherParser {
         Ok(DropDatabaseClause { name, if_exists })
     }
 
+    /// Parse USE DATABASE clause
+    /// Syntax: USE DATABASE name
+    fn parse_use_database_clause(&mut self) -> Result<UseDatabaseClause> {
+        self.expect_keyword("DATABASE")?;
+        self.skip_whitespace();
+        let name = self.parse_identifier()?;
+        Ok(UseDatabaseClause { name })
+    }
+
     /// Parse CREATE INDEX clause
-    /// Syntax: CREATE INDEX [IF NOT EXISTS] ON :Label(property)
+    /// Syntax: CREATE [OR REPLACE] INDEX [IF NOT EXISTS] ON :Label(property)
     fn parse_create_index_clause(&mut self) -> Result<CreateIndexClause> {
+        // Check for OR REPLACE before INDEX
+        let or_replace = if self.peek_keyword("OR") {
+            self.parse_keyword()?; // consume "OR"
+            self.expect_keyword("REPLACE")?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+
         self.expect_keyword("INDEX")?;
         self.skip_whitespace();
 
@@ -1899,6 +1938,7 @@ impl CypherParser {
             label,
             property,
             if_not_exists,
+            or_replace,
         })
     }
 

@@ -179,6 +179,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_use_database_success() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        // Create a database first
+        let mut parser1 = CypherParser::new("CREATE DATABASE testdb_use".to_string());
+        let ast1 = parser1.parse().unwrap();
+        let _ = execute_database_commands(server.clone(), &ast1, start_time).await;
+
+        // Use the database
+        let start_time2 = std::time::Instant::now();
+        let mut parser2 = CypherParser::new("USE DATABASE testdb_use".to_string());
+        let ast2 = parser2.parse().unwrap();
+        let response = execute_database_commands(server, &ast2, start_time2).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.columns, vec!["database", "message"]);
+        assert_eq!(response.rows.len(), 1);
+        
+        let row = &response.rows[0];
+        if let Some(arr) = row.as_array() {
+            assert_eq!(arr[0].as_str(), Some("testdb_use"));
+            assert!(arr[1].as_str().unwrap().contains("Switched to database"));
+        } else {
+            panic!("Expected array row");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_database_nonexistent_error() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        let mut parser = CypherParser::new("USE DATABASE nonexistent_db_use_12345".to_string());
+        let ast = parser.parse().unwrap();
+
+        let response = execute_database_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_some());
+        assert!(response.error.unwrap().contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_use_database_default() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        // Use the default database (neo4j)
+        let mut parser = CypherParser::new("USE DATABASE neo4j".to_string());
+        let ast = parser.parse().unwrap();
+        let response = execute_database_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.columns, vec!["database", "message"]);
+        assert_eq!(response.rows.len(), 1);
+        
+        let row = &response.rows[0];
+        if let Some(arr) = row.as_array() {
+            assert_eq!(arr[0].as_str(), Some("neo4j"));
+        } else {
+            panic!("Expected array row");
+        }
+    }
+
+    #[tokio::test]
     async fn test_show_users_empty() {
         let server = create_test_server().await;
         let start_time = std::time::Instant::now();

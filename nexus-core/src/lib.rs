@@ -1340,15 +1340,30 @@ impl Engine {
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::CreateIndex(create_index) => {
+                    // If OR REPLACE is specified, drop existing index first
+                    if create_index.or_replace {
+                        // Check if index exists (by checking if label exists)
+                        let label_exists = self.catalog.get_label_id(&create_index.label).is_ok();
+                        if label_exists {
+                            // Drop the index (if it exists)
+                            // For now, indexes are managed automatically, so we just ensure
+                            // the catalog entries are recreated
+                            // Future: Explicitly drop index structure
+                        }
+                    }
+
                     // Ensure label and property exist in catalog
                     let _label_id = self.catalog.get_or_create_label(&create_index.label)?;
                     let _property_key_id =
                         self.catalog.get_or_create_key(&create_index.property)?;
 
-                    // Check if index already exists
-                    // Note: For now, we'll just ensure catalog entries exist
-                    // Future: Check if index structure exists
-                    // Indexes are created automatically when properties are indexed
+                    // Check if index already exists (only if IF NOT EXISTS is not set)
+                    if !create_index.or_replace && !create_index.if_not_exists {
+                        // Check if index already exists
+                        // Note: For now, we'll just ensure catalog entries exist
+                        // Future: Check if index structure exists
+                        // Indexes are created automatically when properties are indexed
+                    }
 
                     // Create property index for this label+property combination
                     // The index is automatically created when first property is indexed

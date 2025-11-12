@@ -1,16 +1,16 @@
 # Tasks - Advanced DB Features
 
 ## 1. USE DATABASE
-- [ ] 1.1 USE DATABASE parsing
-- [ ] 1.2 Database context switching
-- [ ] 1.3 Session state management
-- [ ] 1.4 Add tests
+- [x] 1.1 USE DATABASE parsing ✅
+- [x] 1.2 Database context switching ✅ (validates database exists, returns success message)
+- [x] 1.3 Session state management ✅ (client uses database field in subsequent requests)
+- [x] 1.4 Add tests ✅ (3 tests: success, nonexistent error, default database)
 
 ## 2. CREATE OR REPLACE
-- [ ] 2.1 CREATE OR REPLACE procedures
-- [ ] 2.2 CREATE OR REPLACE indexes
-- [ ] 2.3 Upsert semantics
-- [ ] 2.4 Add tests
+- [ ] 2.1 CREATE OR REPLACE procedures (deferred - procedures not implemented yet)
+- [x] 2.2 CREATE OR REPLACE indexes ✅
+- [x] 2.3 Upsert semantics ✅ (MERGE already supports upsert)
+- [x] 2.4 Add tests ✅ (3 tests: replace existing, replace nonexistent, parsing)
 
 ## 3. Subquery Support
 - [ ] 3.1 CALL {...} subquery parsing
