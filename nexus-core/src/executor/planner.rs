@@ -1,6 +1,6 @@
 use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement,
-    RelationshipDirection, ReturnItem, UnaryOperator,
+    QueryHint, RelationshipDirection, ReturnItem, UnaryOperator,
 };
 use super::{Aggregation, Direction, Operator, ProjectionItem};
 use crate::catalog::Catalog;
@@ -251,7 +251,7 @@ impl<'a> QueryPlanner<'a> {
                     
                     // Check for hints for this variable
                     let use_index_hint = hints.iter().find(|h| {
-                        if let parser::QueryHint::UsingIndex { variable: hint_var, .. } = h {
+                        if let QueryHint::UsingIndex { variable: hint_var, .. } = h {
                             hint_var == variable
                         } else {
                             false
@@ -259,7 +259,7 @@ impl<'a> QueryPlanner<'a> {
                     });
                     
                     let use_scan_hint = hints.iter().find(|h| {
-                        if let parser::QueryHint::UsingScan { variable: hint_var, .. } = h {
+                        if let QueryHint::UsingScan { variable: hint_var, .. } = h {
                             hint_var == variable
                         } else {
                             false
@@ -272,7 +272,7 @@ impl<'a> QueryPlanner<'a> {
                         let label_id = self.catalog.get_or_create_label(first_label)?;
                         
                         // Apply USING INDEX hint if present
-                        if let Some(parser::QueryHint::UsingIndex { property, .. }) = use_index_hint {
+                        if let Some(QueryHint::UsingIndex { property: _property, .. }) = use_index_hint {
                             // Force index usage for this property
                             // The executor will use property index lookup instead of label scan
                             operators.push(Operator::NodeByLabel {
@@ -1402,7 +1402,6 @@ mod tests {
                     where_clause: None,
                     optional: false,
                     hints: vec![],
-                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -1662,7 +1661,6 @@ mod tests {
                     },
                     where_clause: None,
                     optional: false,
-                    hints: vec![],
                     hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
