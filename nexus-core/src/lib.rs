@@ -55,6 +55,7 @@ pub mod page_cache;
 pub mod performance;
 pub mod retry;
 pub mod security;
+pub mod session;
 pub mod storage;
 pub mod transaction;
 pub mod validation;
@@ -111,6 +112,8 @@ pub struct Engine {
     pub wal: wal::Wal,
     /// Transaction manager for MVCC
     pub transaction_manager: transaction::TransactionManager,
+    /// Session manager for transaction context
+    pub session_manager: session::SessionManager,
     /// Index subsystem
     pub indexes: index::IndexManager,
     /// Query executor

@@ -42,7 +42,7 @@ pub enum TxType {
 }
 
 /// Transaction handle
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Transaction {
     /// Transaction ID
     pub id: u64,
