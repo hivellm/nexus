@@ -1,8 +1,8 @@
 //! Cypher query execution endpoint
 
 use crate::NexusServer;
-use axum::extract::{Json, State};
-use nexus_core::auth::Permission;
+use axum::extract::{Extension, Json, State};
+use nexus_core::auth::{Permission, middleware::AuthContext};
 use nexus_core::executor::parser::PropertyMap;
 use nexus_core::executor::{Executor, Query};
 use serde::{Deserialize, Serialize};
@@ -236,11 +236,25 @@ pub struct CypherResponse {
 /// Execute Cypher query
 pub async fn execute_cypher(
     State(server): State<Arc<NexusServer>>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
     Json(request): Json<CypherRequest>,
 ) -> Json<CypherResponse> {
     let start_time = std::time::Instant::now();
 
     tracing::info!("Executing Cypher query: {}", request.query);
+
+    // Extract actor info from auth context for audit logging
+    let actor_info = auth_context
+        .as_ref()
+        .map(|ctx| {
+            let api_key_id = Some(ctx.api_key.id.clone());
+            let user_id = ctx.api_key.user_id.clone();
+            let username = None; // Username not available in ApiKey
+            (user_id, username, api_key_id)
+        })
+        .unwrap_or((None, None, None));
+    let get_actor_info =
+        || -> (Option<String>, Option<String>, Option<String>) { actor_info.clone() };
 
     // Parse query first to check for admin commands
     use nexus_core::executor::parser::CypherParser;
@@ -286,6 +300,21 @@ pub async fn execute_cypher(
         )
     });
 
+    // Check for API key management commands
+    let has_api_key_cmd = ast.clauses.iter().any(|c| {
+        matches!(
+            c,
+            nexus_core::executor::parser::Clause::CreateApiKey(_)
+                | nexus_core::executor::parser::Clause::ShowApiKeys(_)
+                | nexus_core::executor::parser::Clause::RevokeApiKey(_)
+                | nexus_core::executor::parser::Clause::DeleteApiKey(_)
+        )
+    });
+
+    if has_api_key_cmd {
+        return execute_api_key_commands(server, &ast, start_time).await;
+    }
+
     if has_user_cmd {
         return execute_user_commands(server, &ast, start_time).await;
     }
@@ -313,6 +342,7 @@ pub async fn execute_cypher(
                 if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
                     let elements = &create_clause.pattern.elements;
                     let mut index = 0;
+
                     while index < elements.len() {
                         match &elements[index] {
                             nexus_core::executor::parser::PatternElement::Node(node_pattern) => {
@@ -326,6 +356,28 @@ pub async fn execute_cypher(
                                         let execution_time =
                                             start_time.elapsed().as_millis() as u64;
                                         tracing::error!("{}", err);
+
+                                        // Log failed write operation
+                                        let (user_id, username, api_key_id) = get_actor_info();
+                                        let _ = server
+                                            .audit_logger
+                                            .log_write_operation(
+                                                nexus_core::auth::WriteOperationParams {
+                                                    actor_user_id: user_id,
+                                                    actor_username: username,
+                                                    api_key_id,
+                                                    operation_type: "CREATE".to_string(),
+                                                    entity_type: "NODE".to_string(),
+                                                    entity_id: None,
+                                                    cypher_query: Some(request.query.clone()),
+                                                    result:
+                                                        nexus_core::auth::AuditResult::Failure {
+                                                            error: err.clone(),
+                                                        },
+                                                },
+                                            )
+                                            .await;
+
                                         return Json(CypherResponse {
                                             columns: vec![],
                                             rows: vec![],
@@ -423,6 +475,22 @@ pub async fn execute_cypher(
                             }
                         }
                     }
+
+                    // Log successful CREATE operation
+                    let (user_id, username, api_key_id) = get_actor_info();
+                    let _ = server
+                        .audit_logger
+                        .log_write_operation(nexus_core::auth::WriteOperationParams {
+                            actor_user_id: user_id,
+                            actor_username: username,
+                            api_key_id,
+                            operation_type: "CREATE".to_string(),
+                            entity_type: "PATTERN".to_string(), // Could be NODE or RELATIONSHIP, using PATTERN as generic
+                            entity_id: None,
+                            cypher_query: Some(request.query.clone()),
+                            result: nexus_core::auth::AuditResult::Success,
+                        })
+                        .await;
                 } else if let nexus_core::executor::parser::Clause::Merge(merge_clause) = clause {
                     // Extract pattern and try to find existing node, or create new one
                     for element in &merge_clause.pattern.elements {
@@ -699,6 +767,24 @@ pub async fn execute_cypher(
                                                     node_id,
                                                     e
                                                 );
+
+                                                // Log failed SET operation
+                                                let (user_id, username, api_key_id) =
+                                                    get_actor_info();
+                                                let _ = server.audit_logger.log_write_operation(
+                                                    nexus_core::auth::WriteOperationParams {
+                                                        actor_user_id: user_id,
+                                                        actor_username: username,
+                                                        api_key_id,
+                                                        operation_type: "SET".to_string(),
+                                                        entity_type: "PROPERTY".to_string(),
+                                                        entity_id: Some(node_id.to_string()),
+                                                        cypher_query: Some(request.query.clone()),
+                                                        result: nexus_core::auth::AuditResult::Failure {
+                                                            error: format!("Failed to update node {}: {}", node_id, e),
+                                                        },
+                                                    },
+                                                ).await;
                                             } else {
                                                 tracing::info!(
                                                     "SET {}.{} on node {}",
@@ -706,6 +792,22 @@ pub async fn execute_cypher(
                                                     property,
                                                     node_id
                                                 );
+
+                                                // Log successful SET operation
+                                                let (user_id, username, api_key_id) =
+                                                    get_actor_info();
+                                                let _ = server.audit_logger.log_write_operation(
+                                                    nexus_core::auth::WriteOperationParams {
+                                                        actor_user_id: user_id,
+                                                        actor_username: username,
+                                                        api_key_id,
+                                                        operation_type: "SET".to_string(),
+                                                        entity_type: "PROPERTY".to_string(),
+                                                        entity_id: Some(node_id.to_string()),
+                                                        cypher_query: Some(request.query.clone()),
+                                                        result: nexus_core::auth::AuditResult::Success,
+                                                    },
+                                                ).await;
                                             }
                                         }
                                     }
@@ -749,6 +851,24 @@ pub async fn execute_cypher(
                                                     label,
                                                     e
                                                 );
+
+                                                // Log failed SET operation
+                                                let (user_id, username, api_key_id) =
+                                                    get_actor_info();
+                                                let _ = server.audit_logger.log_write_operation(
+                                                    nexus_core::auth::WriteOperationParams {
+                                                        actor_user_id: user_id,
+                                                        actor_username: username,
+                                                        api_key_id,
+                                                        operation_type: "SET".to_string(),
+                                                        entity_type: "LABEL".to_string(),
+                                                        entity_id: Some(node_id.to_string()),
+                                                        cypher_query: Some(request.query.clone()),
+                                                        result: nexus_core::auth::AuditResult::Failure {
+                                                            error: format!("Failed to update node {} with label {}: {}", node_id, label, e),
+                                                        },
+                                                    },
+                                                ).await;
                                             } else {
                                                 tracing::info!(
                                                     "SET {}:{} on node {}",
@@ -756,6 +876,22 @@ pub async fn execute_cypher(
                                                     label,
                                                     node_id
                                                 );
+
+                                                // Log successful SET operation
+                                                let (user_id, username, api_key_id) =
+                                                    get_actor_info();
+                                                let _ = server.audit_logger.log_write_operation(
+                                                    nexus_core::auth::WriteOperationParams {
+                                                        actor_user_id: user_id,
+                                                        actor_username: username,
+                                                        api_key_id,
+                                                        operation_type: "SET".to_string(),
+                                                        entity_type: "LABEL".to_string(),
+                                                        entity_id: Some(node_id.to_string()),
+                                                        cypher_query: Some(request.query.clone()),
+                                                        result: nexus_core::auth::AuditResult::Success,
+                                                    },
+                                                ).await;
                                             }
                                         }
                                     }
@@ -819,15 +955,82 @@ pub async fn execute_cypher(
                                     Ok(deleted) => {
                                         if deleted {
                                             tracing::info!("DELETE node {}", node_id);
+
+                                            // Log successful DELETE operation
+                                            let (user_id, username, api_key_id) = get_actor_info();
+                                            let _ = server
+                                                .audit_logger
+                                                .log_write_operation(
+                                                    nexus_core::auth::WriteOperationParams {
+                                                        actor_user_id: user_id,
+                                                        actor_username: username,
+                                                        api_key_id,
+                                                        operation_type: "DELETE".to_string(),
+                                                        entity_type: "NODE".to_string(),
+                                                        entity_id: Some(node_id.to_string()),
+                                                        cypher_query: Some(request.query.clone()),
+                                                        result:
+                                                            nexus_core::auth::AuditResult::Success,
+                                                    },
+                                                )
+                                                .await;
                                         } else {
                                             tracing::warn!(
                                                 "Node {} not found for deletion",
                                                 node_id
                                             );
+
+                                            // Log failed DELETE operation (node not found)
+                                            let (user_id, username, api_key_id) = get_actor_info();
+                                            let _ = server
+                                                .audit_logger
+                                                .log_write_operation(
+                                                    nexus_core::auth::WriteOperationParams {
+                                                        actor_user_id: user_id,
+                                                        actor_username: username,
+                                                        api_key_id,
+                                                        operation_type: "DELETE".to_string(),
+                                                        entity_type: "NODE".to_string(),
+                                                        entity_id: Some(node_id.to_string()),
+                                                        cypher_query: Some(request.query.clone()),
+                                                        result:
+                                                            nexus_core::auth::AuditResult::Failure {
+                                                                error: format!(
+                                                                    "Node {} not found",
+                                                                    node_id
+                                                                ),
+                                                            },
+                                                    },
+                                                )
+                                                .await;
                                         }
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to delete node {}: {}", node_id, e);
+
+                                        // Log failed DELETE operation
+                                        let (user_id, username, api_key_id) = get_actor_info();
+                                        let _ = server
+                                            .audit_logger
+                                            .log_write_operation(
+                                                nexus_core::auth::WriteOperationParams {
+                                                    actor_user_id: user_id,
+                                                    actor_username: username,
+                                                    api_key_id,
+                                                    operation_type: "DELETE".to_string(),
+                                                    entity_type: "NODE".to_string(),
+                                                    entity_id: Some(node_id.to_string()),
+                                                    cypher_query: Some(request.query.clone()),
+                                                    result:
+                                                        nexus_core::auth::AuditResult::Failure {
+                                                            error: format!(
+                                                                "Failed to delete node {}: {}",
+                                                                node_id, e
+                                                            ),
+                                                        },
+                                                },
+                                            )
+                                            .await;
                                     }
                                 }
                             }
@@ -1282,32 +1485,22 @@ pub(crate) async fn execute_user_commands(
                 if existing_user.is_none() {
                     let user_id = uuid::Uuid::new_v4().to_string();
                     let user = if let Some(password) = &create_user.password {
-                        // Hash password with Argon2
-                        use argon2::password_hash::{SaltString, rand_core::OsRng};
-                        use argon2::{Argon2, PasswordHasher};
-
-                        let argon2 = Argon2::default();
-                        let salt = SaltString::generate(&mut OsRng);
-                        match argon2.hash_password(password.as_bytes(), &salt) {
-                            Ok(password_hash) => nexus_core::auth::User::with_password_hash(
-                                user_id.clone(),
-                                create_user.username.clone(),
-                                password_hash.to_string(),
-                            ),
-                            Err(e) => {
-                                let execution_time = start_time.elapsed().as_millis() as u64;
-                                return Json(CypherResponse {
-                                    columns: vec![],
-                                    rows: vec![],
-                                    execution_time_ms: execution_time,
-                                    error: Some(format!("Failed to hash password: {}", e)),
-                                });
-                            }
-                        }
+                        // Hash password with SHA512
+                        let password_hash = nexus_core::auth::hash_password(password);
+                        nexus_core::auth::User::with_password_hash(
+                            user_id.clone(),
+                            create_user.username.clone(),
+                            password_hash,
+                        )
                     } else {
                         nexus_core::auth::User::new(user_id.clone(), create_user.username.clone())
                     };
                     rbac.add_user(user);
+
+                    // Check if root should be disabled after first admin creation
+                    drop(rbac); // Release lock before async call
+                    server.check_and_disable_root_if_needed().await;
+                    rbac = server.rbac.write().await; // Reacquire lock
                 }
 
                 rows.push(serde_json::json!([
@@ -1353,18 +1546,41 @@ pub(crate) async fn execute_user_commands(
 
                 // Check if target is a user (by username or id) or role
                 let users_list = rbac.list_users();
-                let user_id = users_list
+                let target_user = users_list
                     .iter()
-                    .find(|u| u.username == grant.target || u.id == grant.target)
-                    .map(|u| u.id.clone());
+                    .find(|u| u.username == grant.target || u.id == grant.target);
+
+                // Check if trying to modify root user
+                if let Some(user) = target_user {
+                    if user.is_root {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some("Cannot modify root user permissions. Only root users can modify root users.".to_string()),
+                        });
+                    }
+                }
+
+                let user_id = target_user.map(|u| u.id.clone());
 
                 if let Some(user_id) = user_id {
                     // Grant to user
+                    let is_admin_grant = permissions.iter().any(|p| matches!(p, Permission::Admin));
                     if let Some(user_mut) = rbac.get_user_mut(&user_id) {
                         for perm in &permissions {
                             user_mut.add_permission(perm.clone());
                         }
                     }
+
+                    // Check if root should be disabled after granting Admin permission
+                    if is_admin_grant {
+                        drop(rbac); // Release lock before async call
+                        server.check_and_disable_root_if_needed().await;
+                        rbac = server.rbac.write().await; // Reacquire lock
+                    }
+
                     rows.push(serde_json::json!([
                         grant.target.clone(),
                         grant.permissions.clone(),
@@ -1428,10 +1644,24 @@ pub(crate) async fn execute_user_commands(
 
                 // Check if target is a user (by username or id) or role
                 let users_list = rbac.list_users();
-                let user_id = users_list
+                let target_user = users_list
                     .iter()
-                    .find(|u| u.username == revoke.target || u.id == revoke.target)
-                    .map(|u| u.id.clone());
+                    .find(|u| u.username == revoke.target || u.id == revoke.target);
+
+                // Check if trying to modify root user
+                if let Some(user) = target_user {
+                    if user.is_root {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some("Cannot modify root user permissions. Only root users can modify root users.".to_string()),
+                        });
+                    }
+                }
+
+                let user_id = target_user.map(|u| u.id.clone());
 
                 if let Some(user_id) = user_id {
                     // Revoke from user
@@ -1478,6 +1708,293 @@ pub(crate) async fn execute_user_commands(
     })
 }
 
+/// Execute API key management commands
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn execute_api_key_commands(
+    server: Arc<NexusServer>,
+    ast: &nexus_core::executor::parser::CypherQuery,
+    start_time: std::time::Instant,
+) -> Json<CypherResponse> {
+    use chrono::{DateTime, Duration, Utc};
+    use nexus_core::auth::Permission;
+
+    let mut columns = Vec::new();
+    let mut rows = Vec::new();
+
+    let auth_manager = &server.auth_manager;
+
+    // Helper function to parse duration string (e.g., "7d", "24h", "30m")
+    fn parse_duration(duration_str: &str) -> Result<DateTime<Utc>, String> {
+        let duration_str = duration_str.trim();
+        if duration_str.is_empty() {
+            return Err("Duration cannot be empty".to_string());
+        }
+
+        let (num_str, unit) = if let Some(pos) = duration_str
+            .char_indices()
+            .find(|(_, c)| c.is_alphabetic())
+            .map(|(i, _)| i)
+        {
+            let (num, unit) = duration_str.split_at(pos);
+            (num, unit)
+        } else {
+            return Err(format!("Invalid duration format: {}", duration_str));
+        };
+
+        let num: i64 = num_str
+            .parse()
+            .map_err(|_| format!("Invalid number in duration: {}", num_str))?;
+
+        let duration = match unit.to_lowercase().as_str() {
+            "s" | "sec" | "second" | "seconds" => Duration::seconds(num),
+            "m" | "min" | "minute" | "minutes" => Duration::minutes(num),
+            "h" | "hr" | "hour" | "hours" => Duration::hours(num),
+            "d" | "day" | "days" => Duration::days(num),
+            "w" | "week" | "weeks" => Duration::weeks(num),
+            "mo" | "month" | "months" => Duration::days(num * 30), // Approximate
+            "y" | "yr" | "year" | "years" => Duration::days(num * 365), // Approximate
+            _ => return Err(format!("Unknown duration unit: {}", unit)),
+        };
+
+        Ok(Utc::now() + duration)
+    }
+
+    for clause in &ast.clauses {
+        match clause {
+            nexus_core::executor::parser::Clause::CreateApiKey(create_key) => {
+                columns = vec![
+                    "key_id".to_string(),
+                    "name".to_string(),
+                    "key".to_string(),
+                    "message".to_string(),
+                ];
+
+                // Parse permissions
+                let permissions: Result<Vec<Permission>, _> = create_key
+                    .permissions
+                    .iter()
+                    .map(|p| match p.to_uppercase().as_str() {
+                        "READ" => Ok(Permission::Read),
+                        "WRITE" => Ok(Permission::Write),
+                        "ADMIN" => Ok(Permission::Admin),
+                        "SUPER" => Ok(Permission::Super),
+                        "QUEUE" => Ok(Permission::Queue),
+                        "CHATROOM" => Ok(Permission::Chatroom),
+                        "REST" => Ok(Permission::Rest),
+                        _ => Err(format!("Unknown permission: {}", p)),
+                    })
+                    .collect();
+
+                let permissions = match permissions {
+                    Ok(p) => {
+                        if p.is_empty() {
+                            // Default permissions if none specified
+                            vec![Permission::Read, Permission::Write]
+                        } else {
+                            p
+                        }
+                    }
+                    Err(e) => {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some(e),
+                        });
+                    }
+                };
+
+                // Resolve user_id if username is provided
+                let user_id = if let Some(ref username) = create_key.user_id {
+                    let rbac = server.rbac.read().await;
+                    let users_list = rbac.list_users();
+                    match users_list.iter().find(|u| u.username == *username) {
+                        Some(user) => Some(user.id.clone()),
+                        None => {
+                            let execution_time = start_time.elapsed().as_millis() as u64;
+                            return Json(CypherResponse {
+                                columns: vec![],
+                                rows: vec![],
+                                execution_time_ms: execution_time,
+                                error: Some(format!("User '{}' not found", username)),
+                            });
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // Parse expiration if provided
+                let expires_at = if let Some(ref duration_str) = create_key.expires_in {
+                    match parse_duration(duration_str) {
+                        Ok(dt) => Some(dt),
+                        Err(e) => {
+                            let execution_time = start_time.elapsed().as_millis() as u64;
+                            return Json(CypherResponse {
+                                columns: vec![],
+                                rows: vec![],
+                                execution_time_ms: execution_time,
+                                error: Some(e),
+                            });
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // Generate API key
+                let result = if let Some(user_id) = user_id {
+                    if let Some(expires_at) = expires_at {
+                        // User ID with expiration
+                        auth_manager.generate_api_key_for_user_with_expiration(
+                            create_key.name.clone(),
+                            user_id,
+                            permissions,
+                            expires_at,
+                        )
+                    } else {
+                        // User ID without expiration
+                        auth_manager.generate_api_key_for_user(
+                            create_key.name.clone(),
+                            user_id,
+                            permissions,
+                        )
+                    }
+                } else if let Some(expires_at) = expires_at {
+                    // Temporary key without user
+                    auth_manager.generate_temporary_api_key(
+                        create_key.name.clone(),
+                        permissions,
+                        expires_at,
+                    )
+                } else {
+                    // Regular key without user
+                    auth_manager.generate_api_key(create_key.name.clone(), permissions)
+                };
+
+                match result {
+                    Ok((api_key, full_key)) => {
+                        rows.push(serde_json::json!([
+                            api_key.id.clone(),
+                            api_key.name.clone(),
+                            full_key,
+                            format!("API key '{}' created successfully", create_key.name)
+                        ]));
+                    }
+                    Err(e) => {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some(format!("Failed to create API key: {}", e)),
+                        });
+                    }
+                }
+            }
+            nexus_core::executor::parser::Clause::ShowApiKeys(show_keys) => {
+                columns = vec![
+                    "key_id".to_string(),
+                    "name".to_string(),
+                    "user_id".to_string(),
+                    "permissions".to_string(),
+                    "created_at".to_string(),
+                    "expires_at".to_string(),
+                    "is_active".to_string(),
+                    "is_revoked".to_string(),
+                ];
+
+                let api_keys = if let Some(ref username) = show_keys.user_id {
+                    // Get keys for specific user
+                    let rbac = server.rbac.read().await;
+                    let users_list = rbac.list_users();
+                    if let Some(user) = users_list.iter().find(|u| u.username == *username) {
+                        auth_manager.get_api_keys_for_user(&user.id)
+                    } else {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some(format!("User '{}' not found", username)),
+                        });
+                    }
+                } else {
+                    // Get all keys
+                    auth_manager.list_api_keys()
+                };
+
+                for api_key in api_keys {
+                    let permissions: Vec<String> =
+                        api_key.permissions.iter().map(|p| p.to_string()).collect();
+                    rows.push(serde_json::json!([
+                        api_key.id.clone(),
+                        api_key.name.clone(),
+                        api_key.user_id.clone().unwrap_or_default(),
+                        permissions,
+                        api_key.created_at.to_rfc3339(),
+                        api_key
+                            .expires_at
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        api_key.is_active,
+                        api_key.is_revoked,
+                    ]));
+                }
+            }
+            nexus_core::executor::parser::Clause::RevokeApiKey(revoke_key) => {
+                columns = vec!["key_id".to_string(), "message".to_string()];
+
+                match auth_manager.revoke_api_key(&revoke_key.key_id, revoke_key.reason.clone()) {
+                    Ok(_) => {
+                        rows.push(serde_json::json!([
+                            revoke_key.key_id.clone(),
+                            format!("API key '{}' revoked successfully", revoke_key.key_id)
+                        ]));
+                    }
+                    Err(e) => {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some(format!("Failed to revoke API key: {}", e)),
+                        });
+                    }
+                }
+            }
+            nexus_core::executor::parser::Clause::DeleteApiKey(delete_key) => {
+                columns = vec!["key_id".to_string(), "message".to_string()];
+
+                if auth_manager.delete_api_key(&delete_key.key_id) {
+                    rows.push(serde_json::json!([
+                        delete_key.key_id.clone(),
+                        format!("API key '{}' deleted successfully", delete_key.key_id)
+                    ]));
+                } else {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some(format!("API key '{}' not found", delete_key.key_id)),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let execution_time = start_time.elapsed().as_millis() as u64;
+    Json(CypherResponse {
+        columns,
+        rows,
+        execution_time_ms: execution_time,
+        error: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     // Note: These tests need to be updated to use State<Arc<NexusServer>>
@@ -1499,7 +2016,20 @@ mod tests {
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
-        let server = Arc::new(NexusServer::new(executor_arc, engine_arc, database_manager_arc, rbac_arc));
+        let auth_config = nexus_core::auth::AuthConfig::default();
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+        let jwt_config = nexus_core::auth::JwtConfig::default();
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+        let server = Arc::new(NexusServer::new(executor_arc, engine_arc, database_manager_arc, rbac_arc, auth_manager, jwt_manager, audit_logger, nexus_server::config::RootUserConfig::default()));
 
         let request = CypherRequest {
             query: "MATCH (n) RETURN n LIMIT 1".to_string(),

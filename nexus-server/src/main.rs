@@ -18,6 +18,7 @@
 use axum::{
     Router,
     extract::Request,
+    middleware::Next,
     routing::{any, delete, get, post, put},
 };
 use std::sync::Arc;
@@ -26,7 +27,12 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use nexus_server::{NexusServer, api, config::Config, middleware::RateLimiter};
+use axum::middleware as axum_middleware;
+use nexus_core::auth::middleware::AuthMiddleware;
+use nexus_server::{
+    NexusServer, api, config,
+    middleware::{RateLimiter, create_auth_middleware, mcp_auth_middleware_handler},
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,8 +45,8 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Load configuration
-    let config = Config::default();
+    // Load configuration (from env vars and/or config/auth.toml)
+    let config = config::Config::from_env();
 
     // Initialize Engine (contains all core components)
     // Use persistent data directory instead of tempdir
@@ -76,18 +82,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Create root user if enabled in config
     if config.root_user.enabled {
-        use argon2::password_hash::{SaltString, rand_core::OsRng};
-        use argon2::{Argon2, PasswordHasher};
+        // Hash password with SHA512
+        let password_hash = nexus_core::auth::hash_password(&config.root_user.password);
 
-        let argon2 = Argon2::default();
-        let salt = SaltString::generate(&mut OsRng);
-        let password_hash = argon2
-            .hash_password(config.root_user.password.as_bytes(), &salt)
-            .map_err(|e| anyhow::anyhow!("Failed to hash root password: {}", e))?;
-
-        if let Err(e) =
-            rbac.create_root_user(config.root_user.username.clone(), password_hash.to_string())
-        {
+        if let Err(e) = rbac.create_root_user(config.root_user.username.clone(), password_hash) {
             warn!("Failed to create root user: {}", e);
         } else {
             info!(
@@ -99,13 +97,75 @@ async fn main() -> anyhow::Result<()> {
 
     let rbac_arc = Arc::new(RwLock::new(rbac));
 
+    // Initialize AuthManager for API key management with LMDB persistence
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = if auth_config.enabled {
+        // Use persistent storage when authentication is enabled
+        let auth_storage_path = std::path::Path::new(&data_dir).join("auth");
+        std::fs::create_dir_all(&auth_storage_path)?;
+        Arc::new(
+            nexus_core::auth::AuthManager::with_storage(auth_config, auth_storage_path)
+                .map_err(|e| anyhow::anyhow!("Failed to initialize auth storage: {}", e))?,
+        )
+    } else {
+        // Use in-memory storage when authentication is disabled
+        Arc::new(nexus_core::auth::AuthManager::new(auth_config))
+    };
+
+    // Initialize JWT manager
+    let jwt_config = nexus_core::auth::JwtConfig::from_env();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+    // Initialize audit logger
+    let audit_config = nexus_core::auth::AuditConfig {
+        enabled: true,
+        log_dir: std::path::PathBuf::from(&data_dir).join("audit"),
+        retention_days: 90,
+        compress_logs: true,
+    };
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(audit_config)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize audit logger: {}", e))?,
+    );
+
     // Create Nexus server state
     let nexus_server = Arc::new(NexusServer::new(
         api::cypher::get_executor(),
         engine_arc,
         database_manager_arc,
         rbac_arc,
+        auth_manager.clone(),
+        jwt_manager.clone(),
+        audit_logger.clone(),
+        config.root_user.clone(),
     ));
+
+    // Start expired API keys cleanup job (runs every hour)
+    // Only start if authentication is enabled
+    if auth_manager.config().enabled {
+        NexusServer::start_expired_keys_cleanup_job(auth_manager.clone(), 3600); // 1 hour = 3600 seconds
+        info!("Started expired API keys cleanup job (runs every hour)");
+    }
+
+    // Validate MCP API key if provided
+    if let Some(mcp_api_key) = config::Config::mcp_api_key() {
+        if auth_manager.config().enabled {
+            match auth_manager.verify_api_key(&mcp_api_key) {
+                Ok(Some(_)) => {
+                    info!("MCP API key validated successfully");
+                }
+                Ok(None) | Err(_) => {
+                    warn!(
+                        "MCP API key from NEXUS_MCP_API_KEY environment variable is invalid or not found"
+                    );
+                }
+            }
+        } else {
+            warn!(
+                "NEXUS_MCP_API_KEY is set but authentication is disabled. MCP authentication will not be enforced."
+            );
+        }
+    }
 
     info!("Starting Nexus Server on {}", config.addr);
 
@@ -148,26 +208,23 @@ async fn main() -> anyhow::Result<()> {
     // Initialize rate limiter (for future use)
     let _rate_limiter = RateLimiter::new();
 
+    // Initialize authentication middleware if enabled
+    // For now, we'll enable it based on config.auth.enabled
+    // In the future, this can be made more granular per route
+    let auth_middleware_state = if config.auth.enabled {
+        Some(create_auth_middleware(nexus_server.clone(), true))
+    } else {
+        None
+    };
+
     // Build main router
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/", get(api::health::health_check))
         .route("/health", get(api::health::health_check))
         .route("/metrics", get(api::health::metrics))
-        .route(
-            "/cypher",
-            post({
-                let server = nexus_server.clone();
-                move |request| api::cypher::execute_cypher(axum::extract::State(server), request)
-            }),
-        )
+        .route("/cypher", post(api::cypher::execute_cypher))
         // Authentication endpoints
-        .route(
-            "/auth/users",
-            post({
-                let server = nexus_server.clone();
-                move |request| api::auth::create_user(axum::extract::State(server), request)
-            }),
-        )
+        .route("/auth/users", post(api::auth::create_user))
         .route(
             "/auth/users",
             get({
@@ -176,41 +233,48 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .route(
-            "/auth/users/:username",
+            "/auth/users/{username}",
             get({
                 let server = nexus_server.clone();
                 move |path| api::auth::get_user(axum::extract::State(server), path)
             }),
         )
+        .route("/auth/users/{username}", delete(api::auth::delete_user))
         .route(
-            "/auth/users/:username",
-            delete({
-                let server = nexus_server.clone();
-                move |path| api::auth::delete_user(axum::extract::State(server), path)
-            }),
+            "/auth/users/{username}/permissions",
+            post(api::auth::grant_permissions),
         )
         .route(
-            "/auth/users/:username/permissions",
-            post({
-                let server = nexus_server.clone();
-                move |path, request| {
-                    api::auth::grant_permissions(axum::extract::State(server), path, request)
-                }
-            }),
-        )
-        .route(
-            "/auth/users/:username/permissions",
+            "/auth/users/{username}/permissions",
             get({
                 let server = nexus_server.clone();
                 move |path| api::auth::get_user_permissions(axum::extract::State(server), path)
             }),
         )
         .route(
-            "/auth/users/:username/permissions/:permission",
-            delete({
+            "/auth/users/{username}/permissions/{permission}",
+            delete(api::auth::revoke_permission),
+        )
+        // API key management endpoints
+        .route("/auth/keys", post(api::auth::create_api_key))
+        .route(
+            "/auth/keys",
+            get({
                 let server = nexus_server.clone();
-                move |path| api::auth::revoke_permission(axum::extract::State(server), path)
+                move |query| api::auth::list_api_keys(axum::extract::State(server), query)
             }),
+        )
+        .route(
+            "/auth/keys/{key_id}",
+            get({
+                let server = nexus_server.clone();
+                move |path| api::auth::get_api_key(axum::extract::State(server), path)
+            }),
+        )
+        .route("/auth/keys/{key_id}", delete(api::auth::delete_api_key))
+        .route(
+            "/auth/keys/{key_id}/revoke",
+            post(api::auth::revoke_api_key),
         )
         .route("/knn_traverse", post(api::knn::knn_traverse))
         .route("/ingest", post(api::ingest::ingest_data))
@@ -288,7 +352,21 @@ async fn main() -> anyhow::Result<()> {
         )
         // MCP StreamableHTTP endpoint
         .nest("/mcp", mcp_router)
-        .layer(TraceLayer::new_for_http());
+        // Add state to router (must be after all routes)
+        .with_state(nexus_server.clone());
+
+    // Apply authentication middleware if enabled
+    if let Some(auth_middleware) = auth_middleware_state {
+        app = app.layer(axum_middleware::from_fn_with_state(
+            auth_middleware,
+            |state: axum::extract::State<AuthMiddleware>, request: Request, next: Next| async move {
+                nexus_server::middleware::auth::auth_middleware_handler(state, request, next).await
+            },
+        ));
+    }
+
+    // Apply tracing layer
+    let app = app.layer(TraceLayer::new_for_http());
 
     // Start server
     let listener = tokio::net::TcpListener::bind(&config.addr).await?;
@@ -300,7 +378,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Create MCP router with StreamableHTTP transport
-async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Router> {
+async fn create_mcp_router(
+    nexus_server: Arc<NexusServer>,
+) -> anyhow::Result<Router<Arc<NexusServer>>> {
     use hyper::service::Service;
     use hyper_util::service::TowerToHyperService;
     use rmcp::transport::streamable_http_server::StreamableHttpService;
@@ -311,7 +391,7 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
 
     // Create StreamableHTTP service
     let streamable_service = StreamableHttpService::new(
-        move || Ok(api::streaming::NexusMcpService::new(server.clone())),
+        move || Ok(crate::api::streaming::NexusMcpService::new(server.clone())),
         LocalSessionManager::default().into(),
         Default::default(),
     );
@@ -320,19 +400,38 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
     let hyper_service = TowerToHyperService::new(streamable_service);
 
     // Create router with the MCP endpoint
-    let router = Router::new().route(
-        "/",
-        any(move |req: Request| {
-            let service = hyper_service.clone();
-            async move {
-                // Forward request to hyper service
-                match service.call(req).await {
-                    Ok(response) => Ok(response),
-                    Err(_) => Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+    let mut router = Router::new()
+        .route(
+            "/",
+            any(move |req: Request| {
+                let service = hyper_service.clone();
+                async move {
+                    // Forward request to hyper service
+                    match service.call(req).await {
+                        Ok(response) => Ok(response),
+                        Err(_) => Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                    }
                 }
-            }
-        }),
-    );
+            }),
+        )
+        .with_state(nexus_server.clone());
+
+    // Apply MCP authentication middleware if authentication is enabled
+    if nexus_server.auth_manager.config().enabled {
+        let auth_middleware = create_auth_middleware(
+            nexus_server.clone(),
+            true, // Require authentication for MCP
+        );
+
+        router = router.layer(axum_middleware::from_fn_with_state(
+            auth_middleware,
+            |state: axum::extract::State<nexus_core::auth::middleware::AuthMiddleware>,
+             request: Request,
+             next: Next| async move {
+                mcp_auth_middleware_handler(state, request, next).await
+            },
+        ));
+    }
 
     Ok(router)
 }
@@ -340,11 +439,13 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
 #[cfg(test)]
 mod tests {
     use super::*;
+    use config::RootUserConfig;
     use std::net::{IpAddr, Ipv4Addr};
     use tempfile::TempDir;
 
     #[test]
     fn test_config_default() {
+        use config::Config;
         let config = Config::default();
         assert_eq!(config.addr.port(), 15474);
         assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
@@ -365,11 +466,31 @@ mod tests {
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
 
+        let auth_config = nexus_core::auth::AuthConfig::default();
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+
+        let jwt_config = nexus_core::auth::JwtConfig::default();
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+
         let server = NexusServer::new(
             executor_arc.clone(),
             engine_arc.clone(),
             database_manager_arc,
             rbac_arc,
+            auth_manager,
+            jwt_manager,
+            audit_logger,
+            RootUserConfig::default(),
         );
 
         // Test that the server can be created
@@ -395,7 +516,32 @@ mod tests {
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
 
-        let server = NexusServer::new(executor_arc, engine_arc, database_manager_arc, rbac_arc);
+        let auth_config = nexus_core::auth::AuthConfig::default();
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+
+        let jwt_config = nexus_core::auth::JwtConfig::default();
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+
+        let server = NexusServer::new(
+            executor_arc,
+            engine_arc,
+            database_manager_arc,
+            rbac_arc,
+            auth_manager.clone(),
+            jwt_manager,
+            audit_logger,
+            RootUserConfig::default(),
+        );
         let cloned = server.clone();
 
         // Test that clone works and references the same underlying data
@@ -406,6 +552,7 @@ mod tests {
             &cloned.database_manager
         ));
         assert!(Arc::ptr_eq(&server.rbac, &cloned.rbac));
+        assert!(Arc::ptr_eq(&server.auth_manager, &cloned.auth_manager));
     }
 
     #[tokio::test]
@@ -423,11 +570,31 @@ mod tests {
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
 
+        let auth_config = nexus_core::auth::AuthConfig::default();
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+
+        let jwt_config = nexus_core::auth::JwtConfig::default();
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+
         let server = Arc::new(NexusServer::new(
             executor_arc,
             engine_arc,
             database_manager_arc,
             rbac_arc,
+            auth_manager,
+            jwt_manager,
+            audit_logger,
+            RootUserConfig::default(),
         ));
 
         // Test that MCP router can be created
@@ -441,6 +608,7 @@ mod tests {
 
     #[test]
     fn test_config_parsing() {
+        use config::Config;
         let config = Config::default();
 
         // Test that default config has expected values
@@ -464,6 +632,7 @@ mod tests {
             std::env::set_var("NEXUS_DATA_DIR", "/custom/data");
         }
 
+        use config::Config;
         let config = Config::from_env();
         assert_eq!(config.addr.port(), 8080);
         assert_eq!(
@@ -488,6 +657,7 @@ mod tests {
             std::env::remove_var("NEXUS_DATA_DIR");
         }
 
+        use config::Config;
         let config = Config::from_env();
         assert_eq!(config.addr.port(), 15474);
         assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
@@ -513,6 +683,7 @@ mod tests {
             std::env::set_var("NEXUS_ADDR", "invalid-address");
         }
 
+        use config::Config;
         let _config = Config::from_env();
 
         // Note: cleanup won't run due to panic - test framework handles it
@@ -534,11 +705,31 @@ mod tests {
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
 
+        let auth_config = nexus_core::auth::AuthConfig::default();
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+
+        let jwt_config = nexus_core::auth::JwtConfig::default();
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+
         let server = Arc::new(NexusServer::new(
             executor_arc,
             engine_arc,
             database_manager_arc,
             rbac_arc,
+            auth_manager,
+            jwt_manager,
+            audit_logger,
+            RootUserConfig::default(),
         ));
 
         // Test that we can create the MCP router
@@ -566,11 +757,31 @@ mod tests {
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
 
+        let auth_config = nexus_core::auth::AuthConfig::default();
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+
+        let jwt_config = nexus_core::auth::JwtConfig::default();
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+
         let server = NexusServer::new(
             executor_arc.clone(),
             engine_arc.clone(),
             database_manager_arc.clone(),
             rbac_arc.clone(),
+            auth_manager.clone(),
+            jwt_manager,
+            audit_logger,
+            RootUserConfig::default(),
         );
 
         // Test that all fields are accessible
@@ -578,5 +789,6 @@ mod tests {
         assert!(Arc::ptr_eq(&server.engine, &engine_arc));
         assert!(Arc::ptr_eq(&server.database_manager, &database_manager_arc));
         assert!(Arc::ptr_eq(&server.rbac, &rbac_arc));
+        assert!(Arc::ptr_eq(&server.auth_manager, &auth_manager));
     }
 }

@@ -1,6 +1,8 @@
 //! Server configuration
 
+use serde::Deserialize;
 use std::net::SocketAddr;
+use std::path::Path;
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -12,10 +14,25 @@ pub struct Config {
     pub data_dir: String,
     /// Root user configuration
     pub root_user: RootUserConfig,
+    /// Authentication configuration
+    pub auth: AuthConfig,
+}
+
+/// Authentication configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Whether authentication is enabled
+    pub enabled: bool,
+    /// Whether authentication is required for public binding (0.0.0.0)
+    pub required_for_public: bool,
+    /// Whether /health endpoint requires authentication
+    pub require_health_auth: bool,
 }
 
 /// Root user configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct RootUserConfig {
     /// Root username
     pub username: String,
@@ -38,18 +55,67 @@ impl Default for RootUserConfig {
     }
 }
 
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Disabled by default for development
+            required_for_public: true,
+            require_health_auth: false,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             addr: "127.0.0.1:15474".parse().unwrap(),
             data_dir: "./data".to_string(),
             root_user: RootUserConfig::default(),
+            auth: AuthConfig::default(),
         }
     }
 }
 
+/// Authentication configuration file structure
+#[derive(Debug, Deserialize)]
+struct AuthConfigFile {
+    #[serde(default)]
+    root_user: RootUserConfig,
+    #[serde(default)]
+    auth: AuthConfig,
+}
+
 impl Config {
-    /// Load configuration from environment variables
+    /// Load authentication configuration from `config/auth.toml` file
+    /// Returns None if file doesn't exist or can't be parsed
+    pub fn from_auth_file(config_dir: impl AsRef<Path>) -> Option<(RootUserConfig, AuthConfig)> {
+        let config_path = config_dir.as_ref().join("auth.toml");
+
+        if !config_path.exists() {
+            tracing::debug!("Auth config file not found: {:?}", config_path);
+            return None;
+        }
+
+        match std::fs::read_to_string(&config_path) {
+            Ok(content) => match toml::from_str::<AuthConfigFile>(&content) {
+                Ok(config) => {
+                    tracing::info!("Loaded auth configuration from {:?}", config_path);
+                    Some((config.root_user, config.auth))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse auth config file {:?}: {}", config_path, e);
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to read auth config file {:?}: {}", config_path, e);
+                None
+            }
+        }
+    }
+
+    /// Load configuration from environment variables and config file
+    /// Priority: Environment variables > config file > defaults
     #[allow(dead_code)]
     pub fn from_env() -> Self {
         let addr = std::env::var("NEXUS_ADDR")
@@ -59,42 +125,57 @@ impl Config {
 
         let data_dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
 
-        // Load root user configuration from environment
-        let root_username =
-            std::env::var("NEXUS_ROOT_USERNAME").unwrap_or_else(|_| "root".to_string());
+        // Try to load from config file first (will be overridden by env vars)
+        let (mut root_user, mut auth) = Self::from_auth_file("config")
+            .unwrap_or_else(|| (RootUserConfig::default(), AuthConfig::default()));
+
+        // Load root user configuration from environment (overrides config file)
+        if let Ok(root_username) = std::env::var("NEXUS_ROOT_USERNAME") {
+            root_user.username = root_username;
+        }
 
         // Support Docker secrets: try NEXUS_ROOT_PASSWORD_FILE first, then NEXUS_ROOT_PASSWORD
-        let root_password = if let Ok(password_file) = std::env::var("NEXUS_ROOT_PASSWORD_FILE") {
-            std::fs::read_to_string(&password_file)
-                .unwrap_or_else(|_| "root".to_string())
+        if let Ok(password_file) = std::env::var("NEXUS_ROOT_PASSWORD_FILE") {
+            root_user.password = std::fs::read_to_string(&password_file)
+                .unwrap_or_else(|_| root_user.password.clone())
                 .trim()
-                .to_string()
-        } else {
-            std::env::var("NEXUS_ROOT_PASSWORD").unwrap_or_else(|_| "root".to_string())
-        };
+                .to_string();
+        } else if let Ok(password) = std::env::var("NEXUS_ROOT_PASSWORD") {
+            root_user.password = password;
+        }
 
-        let root_enabled = std::env::var("NEXUS_ROOT_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse::<bool>()
-            .unwrap_or(true);
+        if let Ok(root_enabled) = std::env::var("NEXUS_ROOT_ENABLED") {
+            root_user.enabled = root_enabled.parse::<bool>().unwrap_or(root_user.enabled);
+        }
 
-        let disable_after_setup = std::env::var("NEXUS_DISABLE_ROOT_AFTER_SETUP")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse::<bool>()
-            .unwrap_or(false);
+        if let Ok(disable_after_setup) = std::env::var("NEXUS_DISABLE_ROOT_AFTER_SETUP") {
+            root_user.disable_after_setup = disable_after_setup
+                .parse::<bool>()
+                .unwrap_or(root_user.disable_after_setup);
+        }
 
-        let root_user = RootUserConfig {
-            username: root_username,
-            password: root_password,
-            enabled: root_enabled,
-            disable_after_setup,
-        };
+        // Load auth configuration from environment (overrides config file)
+        if let Ok(auth_enabled) = std::env::var("NEXUS_AUTH_ENABLED") {
+            auth.enabled = auth_enabled.parse::<bool>().unwrap_or(auth.enabled);
+        }
+
+        if let Ok(require_health_auth) = std::env::var("NEXUS_REQUIRE_HEALTH_AUTH") {
+            auth.require_health_auth = require_health_auth
+                .parse::<bool>()
+                .unwrap_or(auth.require_health_auth);
+        }
 
         Self {
             addr,
             data_dir,
             root_user,
+            auth,
         }
+    }
+
+    /// Get MCP API key from environment variable
+    pub fn mcp_api_key() -> Option<String> {
+        std::env::var("NEXUS_MCP_API_KEY").ok()
     }
 
     /// Get the bind address
@@ -290,5 +371,95 @@ mod tests {
         assert_eq!(config.root_user.username, "root");
         assert_eq!(config.root_user.password, "root");
         assert!(config.root_user.enabled);
+    }
+
+    #[test]
+    fn test_from_auth_file_not_found() {
+        // Test when file doesn't exist
+        let result = Config::from_auth_file("/nonexistent/path");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_from_auth_file_valid() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path();
+        let config_file = config_dir.join("auth.toml");
+
+        // Create a valid config file
+        std::fs::write(
+            &config_file,
+            r#"
+[root_user]
+username = "admin"
+password = "secret123"
+enabled = false
+disable_after_setup = true
+
+[auth]
+enabled = true
+required_for_public = false
+require_health_auth = true
+"#,
+        )
+        .unwrap();
+
+        let result = Config::from_auth_file(config_dir);
+        assert!(result.is_some());
+
+        let (root_user, auth) = result.unwrap();
+        assert_eq!(root_user.username, "admin");
+        assert_eq!(root_user.password, "secret123");
+        assert!(!root_user.enabled);
+        assert!(root_user.disable_after_setup);
+        assert!(auth.enabled);
+        assert!(!auth.required_for_public);
+        assert!(auth.require_health_auth);
+    }
+
+    #[test]
+    fn test_from_auth_file_invalid_toml() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path();
+        let config_file = config_dir.join("auth.toml");
+
+        // Create an invalid TOML file
+        std::fs::write(&config_file, "invalid toml content [").unwrap();
+
+        let result = Config::from_auth_file(config_dir);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_from_auth_file_partial_config() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path();
+        let config_file = config_dir.join("auth.toml");
+
+        // Create a config file with only root_user section
+        std::fs::write(
+            &config_file,
+            r#"
+[root_user]
+username = "custom_root"
+password = "custom_pass"
+"#,
+        )
+        .unwrap();
+
+        let result = Config::from_auth_file(config_dir);
+        assert!(result.is_some());
+
+        let (root_user, auth) = result.unwrap();
+        assert_eq!(root_user.username, "custom_root");
+        assert_eq!(root_user.password, "custom_pass");
+        // Auth should use defaults
+        assert!(!auth.enabled);
     }
 }

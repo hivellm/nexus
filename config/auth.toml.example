@@ -1,0 +1,30 @@
+# Authentication Configuration File
+# Copy this file to config/auth.toml and customize as needed
+# Environment variables take precedence over this file
+
+# Root user configuration
+[root_user]
+# Root username (default: "root")
+username = "root"
+
+# Root password (default: "root")
+# Note: This will be hashed before storage
+password = "root"
+
+# Whether root user is enabled (default: true)
+enabled = true
+
+# Whether to disable root after first admin user is created (default: false)
+disable_after_setup = false
+
+# Authentication configuration
+[auth]
+# Whether authentication is enabled (default: false)
+enabled = false
+
+# Whether authentication is required for public binding (0.0.0.0) (default: true)
+required_for_public = true
+
+# Whether /health endpoint requires authentication (default: false)
+require_health_auth = false
+

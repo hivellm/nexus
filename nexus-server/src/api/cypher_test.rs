@@ -5,7 +5,9 @@
 #[cfg(test)]
 mod tests {
     use crate::NexusServer;
-    use crate::api::cypher::{execute_database_commands, execute_user_commands};
+    use crate::api::cypher::{
+        execute_api_key_commands, execute_database_commands, execute_user_commands,
+    };
     use nexus_core::auth::RoleBasedAccessControl;
     use nexus_core::database::DatabaseManager;
     use nexus_core::executor::parser::CypherParser;
@@ -29,11 +31,31 @@ mod tests {
         let rbac = RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
 
+        let auth_config = nexus_core::auth::AuthConfig::default();
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+
+        let jwt_config = nexus_core::auth::JwtConfig::default();
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+
         Arc::new(NexusServer::new(
             executor_arc,
             engine_arc,
             database_manager_arc,
             rbac_arc,
+            auth_manager,
+            jwt_manager,
+            audit_logger,
+            crate::config::RootUserConfig::default(),
         ))
     }
 
@@ -398,5 +420,256 @@ mod tests {
 
         assert!(response.error.is_none());
         assert_eq!(response.rows.len(), 1);
+    }
+
+    // ============================================================================
+    // API Key Management Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_create_api_key_success() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        let mut parser = CypherParser::new("CREATE API KEY testkey".to_string());
+        let ast = parser.parse().unwrap();
+
+        let response = execute_api_key_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.columns, vec!["key_id", "name", "key", "message"]);
+        assert_eq!(response.rows.len(), 1);
+
+        // Verify key was created with nx_ prefix
+        if let Some(arr) = response.rows[0].as_array() {
+            assert_eq!(arr.len(), 4);
+            assert!(arr[2].as_str().unwrap().starts_with("nx_"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_api_key_with_permissions() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        let mut parser = CypherParser::new(
+            "CREATE API KEY testkey2 WITH PERMISSIONS READ, WRITE, ADMIN".to_string(),
+        );
+        let ast = parser.parse().unwrap();
+
+        let response = execute_api_key_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_api_key_with_expiration() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        let mut parser = CypherParser::new("CREATE API KEY testkey3 EXPIRES IN '7d'".to_string());
+        let ast = parser.parse().unwrap();
+
+        let response = execute_api_key_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_api_key_for_user() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        // Create user first
+        let mut parser1 = CypherParser::new("CREATE USER testuser_key".to_string());
+        let ast1 = parser1.parse().unwrap();
+        let _ = execute_user_commands(server.clone(), &ast1, start_time).await;
+
+        // Create API key for user
+        let start_time2 = std::time::Instant::now();
+        let mut parser2 = CypherParser::new("CREATE API KEY testkey4 FOR testuser_key".to_string());
+        let ast2 = parser2.parse().unwrap();
+        let response = execute_api_key_commands(server, &ast2, start_time2).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_api_key_invalid_permission_error() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        let mut parser =
+            CypherParser::new("CREATE API KEY testkey5 WITH PERMISSIONS INVALID_PERM".to_string());
+        let ast = parser.parse().unwrap();
+
+        let response = execute_api_key_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_some());
+        assert!(response.error.unwrap().contains("Unknown permission"));
+    }
+
+    #[tokio::test]
+    async fn test_create_api_key_nonexistent_user_error() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        let mut parser =
+            CypherParser::new("CREATE API KEY testkey6 FOR nonexistent_user_12345".to_string());
+        let ast = parser.parse().unwrap();
+
+        let response = execute_api_key_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_some());
+        assert!(response.error.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_show_api_keys() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        // Create a key first
+        let mut parser1 = CypherParser::new("CREATE API KEY testkey_show".to_string());
+        let ast1 = parser1.parse().unwrap();
+        let _ = execute_api_key_commands(server.clone(), &ast1, start_time).await;
+
+        // Show all keys
+        let start_time2 = std::time::Instant::now();
+        let mut parser2 = CypherParser::new("SHOW API KEYS".to_string());
+        let ast2 = parser2.parse().unwrap();
+        let response = execute_api_key_commands(server, &ast2, start_time2).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(
+            response.columns,
+            vec![
+                "key_id",
+                "name",
+                "user_id",
+                "permissions",
+                "created_at",
+                "expires_at",
+                "is_active",
+                "is_revoked"
+            ]
+        );
+        assert!(!response.rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_show_api_keys_for_user() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        // Create user first
+        let mut parser1 = CypherParser::new("CREATE USER testuser_showkeys".to_string());
+        let ast1 = parser1.parse().unwrap();
+        let _ = execute_user_commands(server.clone(), &ast1, start_time).await;
+
+        // Create API key for user
+        let start_time2 = std::time::Instant::now();
+        let mut parser2 =
+            CypherParser::new("CREATE API KEY testkey_showuser FOR testuser_showkeys".to_string());
+        let ast2 = parser2.parse().unwrap();
+        let _ = execute_api_key_commands(server.clone(), &ast2, start_time2).await;
+
+        // Show keys for user
+        let start_time3 = std::time::Instant::now();
+        let mut parser3 = CypherParser::new("SHOW API KEYS FOR testuser_showkeys".to_string());
+        let ast3 = parser3.parse().unwrap();
+        let response = execute_api_key_commands(server, &ast3, start_time3).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert!(!response.rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_revoke_api_key() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        // Create a key first
+        let mut parser1 = CypherParser::new("CREATE API KEY testkey_revoke".to_string());
+        let ast1 = parser1.parse().unwrap();
+        let response1 = execute_api_key_commands(server.clone(), &ast1, start_time).await;
+        let response1 = response1.0;
+
+        // Extract key_id from response
+        let key_id = if let Some(arr) = response1.rows[0].as_array() {
+            arr[0].as_str().unwrap().to_string()
+        } else {
+            panic!("Expected array in response");
+        };
+
+        // Revoke the key
+        let start_time2 = std::time::Instant::now();
+        let mut parser2 = CypherParser::new(format!(
+            "REVOKE API KEY '{}' REASON 'test revocation'",
+            key_id
+        ));
+        let ast2 = parser2.parse().unwrap();
+        let response = execute_api_key_commands(server, &ast2, start_time2).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.columns, vec!["key_id", "message"]);
+        assert_eq!(response.rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_api_key() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        // Create a key first
+        let mut parser1 = CypherParser::new("CREATE API KEY testkey_delete".to_string());
+        let ast1 = parser1.parse().unwrap();
+        let response1 = execute_api_key_commands(server.clone(), &ast1, start_time).await;
+        let response1 = response1.0;
+
+        // Extract key_id from response
+        let key_id = if let Some(arr) = response1.rows[0].as_array() {
+            arr[0].as_str().unwrap().to_string()
+        } else {
+            panic!("Expected array in response");
+        };
+
+        // Delete the key
+        let start_time2 = std::time::Instant::now();
+        let mut parser2 = CypherParser::new(format!("DELETE API KEY '{}'", key_id));
+        let ast2 = parser2.parse().unwrap();
+        let response = execute_api_key_commands(server, &ast2, start_time2).await;
+        let response = response.0;
+
+        assert!(response.error.is_none());
+        assert_eq!(response.columns, vec!["key_id", "message"]);
+        assert_eq!(response.rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_api_key_nonexistent_error() {
+        let server = create_test_server().await;
+        let start_time = std::time::Instant::now();
+
+        let mut parser = CypherParser::new("DELETE API KEY 'nonexistent_key_12345'".to_string());
+        let ast = parser.parse().unwrap();
+
+        let response = execute_api_key_commands(server, &ast, start_time).await;
+        let response = response.0;
+
+        assert!(response.error.is_some());
+        assert!(response.error.unwrap().contains("not found"));
     }
 }

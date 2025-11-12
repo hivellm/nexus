@@ -396,50 +396,44 @@ pub async fn create_rel(Json(request): Json<CreateRelRequest>) -> Json<CreateRel
         }
     };
 
-    // Implement actual relationship creation
-    // TODO: Refactor to use shared executor like create_node
-    Json(CreateRelResponse {
-        rel_id: 0,
-        message: "Not yet implemented with shared executor".to_string(),
-        error: Some("Use Cypher query with executor".to_string()),
-    })
-    /*
-    match create_engine() {
-        Ok(mut engine) => {
-            match engine.create_relationship(
-                request.source_id,
-                request.target_id,
-                request.rel_type,
-                serde_json::Value::Object(request.properties.into_iter().collect()),
-            ) {
-                Ok(rel_id) => {
-                    tracing::info!("Relationship created successfully with ID: {}", rel_id);
-                    Json(CreateRelResponse {
-                        rel_id,
-                        message: "Relationship created successfully".to_string(),
-                        error: None,
-                    })
-                }
-                Err(e) => {
-                    tracing::error!("Failed to create relationship: {}", e);
-                    Json(CreateRelResponse {
-                        rel_id: 0,
-                        message: "".to_string(),
-                        error: Some(format!("Failed to create relationship: {}", e)),
-                    })
-                }
-            }
+    // Use the shared Engine instance to create the relationship
+    let engine_guard = match ENGINE.get() {
+        Some(engine) => engine,
+        None => {
+            return Json(CreateRelResponse {
+                rel_id: 0,
+                message: "".to_string(),
+                error: Some("Engine not initialized".to_string()),
+            });
+        }
+    };
+
+    let mut engine = engine_guard.write().await;
+
+    // Create the relationship using the engine
+    match engine.create_relationship(
+        request.source_id,
+        request.target_id,
+        request.rel_type,
+        serde_json::Value::Object(request.properties.into_iter().collect()),
+    ) {
+        Ok(rel_id) => {
+            tracing::info!("Relationship created successfully with ID: {}", rel_id);
+            Json(CreateRelResponse {
+                rel_id,
+                message: "Relationship created successfully".to_string(),
+                error: None,
+            })
         }
         Err(e) => {
-            tracing::error!("Failed to initialize engine: {}", e);
+            tracing::error!("Failed to create relationship: {}", e);
             Json(CreateRelResponse {
                 rel_id: 0,
                 message: "".to_string(),
-                error: Some(format!("Failed to initialize engine: {}", e)),
+                error: Some(format!("Failed to create relationship: {}", e)),
             })
         }
     }
-    */
 }
 
 /// Update a node

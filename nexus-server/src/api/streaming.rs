@@ -660,7 +660,7 @@ async fn handle_execute_cypher(
 /// Handle KNN search tool
 async fn handle_knn_search(
     request: CallToolRequestParam,
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
         .arguments
@@ -684,20 +684,40 @@ async fn handle_knn_search(
     let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
-    // TODO: Access KNN index from Engine instead of separate instance
-    // For now, return a placeholder response
-    let response = json!({
-        "status": "not_implemented",
-        "message": "KNN traverse requires refactoring to use Engine's IndexManager",
-        "label": label,
-        "k": k,
-        "limit": limit,
-        "vector_dimension": vector.len()
-    });
+    // Access KNN index from Engine instance
+    let engine = server.engine.read().await;
+    match engine.knn_search(label, &vector, k) {
+        Ok(results) => {
+            let results_json: Vec<_> = results
+                .iter()
+                .map(|(node_id, similarity)| {
+                    json!({
+                        "node_id": node_id,
+                        "similarity": similarity,
+                        "score": similarity
+                    })
+                })
+                .take(limit)
+                .collect();
 
-    Ok(CallToolResult::success(vec![Content::text(
-        response.to_string(),
-    )]))
+            let response = json!({
+                "status": "completed",
+                "label": label,
+                "k": k,
+                "limit": limit,
+                "vector_dimension": vector.len(),
+                "results": results_json
+            });
+
+            Ok(CallToolResult::success(vec![Content::text(
+                response.to_string(),
+            )]))
+        }
+        Err(e) => Err(ErrorData::internal_error(
+            format!("KNN search failed: {}", e),
+            None,
+        )),
+    }
 
     /* COMMENTED OUT - needs refactoring to use Engine's indexes
     // Use real KNN index for search

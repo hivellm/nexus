@@ -3,12 +3,36 @@
 // Note: RMCP client types are not available in the current version
 // We'll implement a simplified MCP client for now
 
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
 /// MCP client for communicating with AI services
 pub struct McpClient {
     /// Server endpoint
     endpoint: String,
     /// Connection status
     connected: bool,
+    /// API key for authentication (optional)
+    api_key: Option<Arc<RwLock<String>>>,
+}
+
+/// Error types for MCP client operations
+#[derive(Debug, thiserror::Error)]
+pub enum McpClientError {
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
+    #[error("HTTP error: {0}")]
+    HttpError(String),
+    #[error("Network error: {0}")]
+    NetworkError(#[from] reqwest::Error),
+    #[error("MCP protocol error: {0}")]
+    ProtocolError(String),
+    #[error("Client not connected")]
+    NotConnected,
 }
 
 impl McpClient {
@@ -17,7 +41,27 @@ impl McpClient {
         Self {
             endpoint: endpoint.into(),
             connected: false,
+            api_key: None,
         }
+    }
+
+    /// Create a new MCP client with API key
+    pub fn with_api_key(endpoint: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            connected: false,
+            api_key: Some(Arc::new(RwLock::new(api_key.into()))),
+        }
+    }
+
+    /// Set or update the API key (for key rotation)
+    pub async fn set_api_key(&mut self, api_key: impl Into<String>) {
+        self.api_key = Some(Arc::new(RwLock::new(api_key.into())));
+    }
+
+    /// Rotate the API key (alias for set_api_key)
+    pub async fn rotate_key(&mut self, new_api_key: impl Into<String>) {
+        self.set_api_key(new_api_key).await;
     }
 
     /// Initialize the MCP connection
@@ -28,17 +72,54 @@ impl McpClient {
         Ok(())
     }
 
+    /// Build request headers with authentication
+    async fn build_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            reqwest::header::HeaderValue::from_static("Nexus-MCP-Client/1.0"),
+        );
+
+        // Add Bearer token authentication if API key is set
+        if let Some(api_key) = &self.api_key {
+            let key = api_key.read().await;
+            if let Ok(bearer_value) =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", *key))
+            {
+                headers.insert(reqwest::header::AUTHORIZATION, bearer_value);
+            }
+        }
+
+        headers
+    }
+
+    /// Handle HTTP error responses (401, 403, 429)
+    fn handle_error_response(
+        &self,
+        status: reqwest::StatusCode,
+        message: String,
+    ) -> McpClientError {
+        match status {
+            reqwest::StatusCode::UNAUTHORIZED => McpClientError::Unauthorized(message),
+            reqwest::StatusCode::FORBIDDEN => McpClientError::Forbidden(message),
+            reqwest::StatusCode::TOO_MANY_REQUESTS => McpClientError::RateLimitExceeded(message),
+            _ => McpClientError::HttpError(message),
+        }
+    }
+
     /// Call an MCP method
     pub async fn call(
         &self,
         method: &str,
         params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> Result<serde_json::Value, McpClientError> {
         // Check if client is connected
         if !self.connected {
-            return Err(anyhow::anyhow!(
-                "MCP client not connected. Call connect() first."
-            ));
+            return Err(McpClientError::NotConnected);
         }
 
         // Create HTTP client for MCP over HTTP
@@ -52,20 +133,24 @@ impl McpClient {
             "params": params
         });
 
+        // Build headers with authentication
+        let headers = self.build_headers().await;
+
         // Send request
         let response = client
             .post(&self.endpoint)
-            .header("Content-Type", "application/json")
-            .header("User-Agent", "Nexus-MCP-Client/1.0")
+            .headers(headers)
             .json(&mcp_request)
             .send()
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "MCP call failed with status: {}",
-                response.status()
-            ));
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(self.handle_error_response(status, error_text));
         }
 
         // Parse response
@@ -73,12 +158,11 @@ impl McpClient {
 
         // Check for MCP error
         if let Some(error) = response_json.get("error") {
-            return Err(anyhow::anyhow!(
-                "MCP error: {}",
-                error
-                    .get("message")
-                    .unwrap_or(&serde_json::Value::String("Unknown error".to_string()))
-            ));
+            let error_message = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error");
+            return Err(McpClientError::ProtocolError(error_message.to_string()));
         }
 
         // Return result
@@ -89,7 +173,7 @@ impl McpClient {
     }
 
     /// List available tools
-    pub async fn list_tools(&self) -> anyhow::Result<Vec<String>> {
+    pub async fn list_tools(&self) -> Result<Vec<String>, McpClientError> {
         let result = self.call("tools/list", serde_json::json!({})).await?;
 
         if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
@@ -112,7 +196,7 @@ impl McpClient {
         &self,
         tool_name: &str,
         arguments: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> Result<serde_json::Value, McpClientError> {
         let params = serde_json::json!({
             "name": tool_name,
             "arguments": arguments
@@ -171,6 +255,19 @@ mod tests {
             }
             Err(e) => println!("MCP call failed as expected: {}", e),
         }
+    }
+
+    #[test]
+    fn test_mcp_client_with_api_key() {
+        let client = McpClient::with_api_key("http://localhost:8080", "nx_test123456789");
+        assert_eq!(client.endpoint(), "http://localhost:8080");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_client_key_rotation() {
+        let mut client = McpClient::with_api_key("http://localhost:8080", "nx_old_key");
+        client.rotate_key("nx_new_key").await;
+        // Key rotation should succeed without panicking
     }
 
     #[tokio::test]

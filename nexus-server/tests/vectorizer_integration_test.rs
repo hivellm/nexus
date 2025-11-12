@@ -23,6 +23,7 @@ use nexus_core::{
 use nexus_protocol::mcp::McpClient;
 use nexus_server::NexusServer;
 use nexus_server::api;
+use nexus_server::config::RootUserConfig;
 // use thiserror::Error;
 
 // ============================================================================
@@ -474,11 +475,33 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
     api::health::init();
 
     // Create server state
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+
+    // Initialize JWT manager
+    let jwt_config = nexus_core::auth::JwtConfig::from_env();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+
+    // Initialize audit logger
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false, // Disable audit logging in tests
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+
     let server = Arc::new(NexusServer::new(
         executor_arc,
         engine_arc,
         database_manager_arc,
         rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        RootUserConfig::default(),
     ));
 
     // Create mock vectorizer

@@ -82,6 +82,14 @@ pub enum Clause {
     Grant(GrantClause),
     /// REVOKE command
     Revoke(RevokeClause),
+    /// CREATE API KEY command
+    CreateApiKey(CreateApiKeyClause),
+    /// SHOW API KEYS command
+    ShowApiKeys(ShowApiKeysClause),
+    /// REVOKE API KEY command
+    RevokeApiKey(RevokeApiKeyClause),
+    /// DELETE API KEY command
+    DeleteApiKey(DeleteApiKeyClause),
     /// EXPLAIN command for query plan analysis
     Explain(ExplainClause),
     /// PROFILE command for query execution profiling
@@ -498,6 +506,42 @@ pub struct RevokeClause {
     pub target: String,
 }
 
+/// CREATE API KEY clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateApiKeyClause {
+    /// Key name
+    pub name: String,
+    /// User ID (optional, if FOR username is specified)
+    pub user_id: Option<String>,
+    /// Permissions (optional)
+    pub permissions: Vec<String>,
+    /// Expiration duration (optional, e.g., "7d", "24h", "30m")
+    pub expires_in: Option<String>,
+}
+
+/// SHOW API KEYS clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowApiKeysClause {
+    /// User ID (optional, if FOR username is specified)
+    pub user_id: Option<String>,
+}
+
+/// REVOKE API KEY clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevokeApiKeyClause {
+    /// Key ID
+    pub key_id: String,
+    /// Revocation reason (optional)
+    pub reason: Option<String>,
+}
+
+/// DELETE API KEY clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteApiKeyClause {
+    /// Key ID
+    pub key_id: String,
+}
+
 /// EXPLAIN clause for query plan analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainClause {
@@ -822,7 +866,7 @@ impl CypherParser {
             }
             "CREATE" => {
                 self.skip_whitespace();
-                // Check for CREATE DATABASE/INDEX/CONSTRAINT/USER before regular CREATE
+                // Check for CREATE DATABASE/INDEX/CONSTRAINT/USER/API KEY before regular CREATE
                 if self.peek_keyword("DATABASE") {
                     let create_db_clause = self.parse_create_database_clause()?;
                     Ok(Clause::CreateDatabase(create_db_clause))
@@ -835,6 +879,11 @@ impl CypherParser {
                 } else if self.peek_keyword("USER") {
                     let create_user_clause = self.parse_create_user_clause()?;
                     Ok(Clause::CreateUser(create_user_clause))
+                } else if self.peek_keyword("API") {
+                    self.parse_keyword()?; // consume "API"
+                    self.expect_keyword("KEY")?;
+                    let create_api_key_clause = self.parse_create_api_key_clause()?;
+                    Ok(Clause::CreateApiKey(create_api_key_clause))
                 } else {
                     // Regular CREATE clause
                     let create_clause = self.parse_create_clause()?;
@@ -850,8 +899,17 @@ impl CypherParser {
                 Ok(Clause::Set(set_clause))
             }
             "DELETE" => {
-                let delete_clause = self.parse_delete_clause()?;
-                Ok(Clause::Delete(delete_clause))
+                self.skip_whitespace();
+                // Check if this is DELETE API KEY or regular DELETE
+                if self.peek_keyword("API") {
+                    self.parse_keyword()?; // consume "API"
+                    self.expect_keyword("KEY")?;
+                    let delete_api_key_clause = self.parse_delete_api_key_clause()?;
+                    Ok(Clause::DeleteApiKey(delete_api_key_clause))
+                } else {
+                    let delete_clause = self.parse_delete_clause()?;
+                    Ok(Clause::Delete(delete_clause))
+                }
             }
             "REMOVE" => {
                 let remove_clause = self.parse_remove_clause()?;
@@ -905,8 +963,13 @@ impl CypherParser {
                 } else if self.peek_keyword("USER") {
                     let show_user_clause = self.parse_show_user_clause()?;
                     Ok(Clause::ShowUser(show_user_clause))
+                } else if self.peek_keyword("API") {
+                    self.parse_keyword()?; // consume "API"
+                    self.expect_keyword("KEYS")?;
+                    let show_api_keys_clause = self.parse_show_api_keys_clause()?;
+                    Ok(Clause::ShowApiKeys(show_api_keys_clause))
                 } else {
-                    Err(self.error("SHOW must be followed by DATABASES, USERS, or USER"))
+                    Err(self.error("SHOW must be followed by DATABASES, USERS, USER, or API KEYS"))
                 }
             }
             "BEGIN" => {
@@ -953,8 +1016,17 @@ impl CypherParser {
                 Ok(Clause::Grant(grant_clause))
             }
             "REVOKE" => {
-                let revoke_clause = self.parse_revoke_clause()?;
-                Ok(Clause::Revoke(revoke_clause))
+                self.skip_whitespace();
+                // Check if this is REVOKE API KEY or regular REVOKE
+                if self.peek_keyword("API") {
+                    self.parse_keyword()?; // consume "API"
+                    self.expect_keyword("KEY")?;
+                    let revoke_api_key_clause = self.parse_revoke_api_key_clause()?;
+                    Ok(Clause::RevokeApiKey(revoke_api_key_clause))
+                } else {
+                    let revoke_clause = self.parse_revoke_clause()?;
+                    Ok(Clause::Revoke(revoke_clause))
+                }
             }
             _ => Err(self.error(&format!("Unexpected keyword: {}", keyword))),
         }
@@ -2063,6 +2135,119 @@ impl CypherParser {
         self.skip_whitespace();
         let username = self.parse_identifier()?;
         Ok(ShowUserClause { username })
+    }
+
+    /// Parse CREATE API KEY clause
+    /// Syntax: CREATE API KEY name [FOR username] [WITH PERMISSIONS ...] [EXPIRES IN 'duration']
+    fn parse_create_api_key_clause(&mut self) -> Result<CreateApiKeyClause> {
+        self.skip_whitespace();
+        let name = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        let mut user_id = None;
+        let mut permissions = Vec::new();
+        let mut expires_in = None;
+
+        // Parse optional FOR username
+        if self.peek_keyword("FOR") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            user_id = Some(self.parse_identifier()?);
+            self.skip_whitespace();
+        }
+
+        // Parse optional WITH PERMISSIONS
+        if self.peek_keyword("WITH") {
+            self.parse_keyword()?;
+            self.expect_keyword("PERMISSIONS")?;
+            self.skip_whitespace();
+            loop {
+                let permission = self.parse_identifier()?;
+                permissions.push(permission);
+                self.skip_whitespace();
+                if self.peek_char() == Some(',') {
+                    self.consume_char();
+                    self.skip_whitespace();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Parse optional EXPIRES IN
+        if self.peek_keyword("EXPIRES") {
+            self.parse_keyword()?;
+            self.expect_keyword("IN")?;
+            self.skip_whitespace();
+            let duration_str = self.parse_string_literal()?;
+            if let Expression::Literal(crate::executor::parser::Literal::String(s)) = duration_str {
+                expires_in = Some(s);
+            }
+        }
+
+        Ok(CreateApiKeyClause {
+            name,
+            user_id,
+            permissions,
+            expires_in,
+        })
+    }
+
+    /// Parse SHOW API KEYS clause
+    /// Syntax: SHOW API KEYS [FOR username]
+    fn parse_show_api_keys_clause(&mut self) -> Result<ShowApiKeysClause> {
+        self.skip_whitespace();
+        let mut user_id = None;
+
+        if self.peek_keyword("FOR") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            user_id = Some(self.parse_identifier()?);
+        }
+
+        Ok(ShowApiKeysClause { user_id })
+    }
+
+    /// Parse REVOKE API KEY clause
+    /// Syntax: REVOKE API KEY 'key_id' [REASON 'reason']
+    fn parse_revoke_api_key_clause(&mut self) -> Result<RevokeApiKeyClause> {
+        self.skip_whitespace();
+        let key_id_str = self.parse_string_literal()?;
+        let key_id =
+            if let Expression::Literal(crate::executor::parser::Literal::String(s)) = key_id_str {
+                s
+            } else {
+                return Err(self.error("API key ID must be a string literal"));
+            };
+
+        self.skip_whitespace();
+        let mut reason = None;
+
+        if self.peek_keyword("REASON") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            let reason_str = self.parse_string_literal()?;
+            if let Expression::Literal(crate::executor::parser::Literal::String(s)) = reason_str {
+                reason = Some(s);
+            }
+        }
+
+        Ok(RevokeApiKeyClause { key_id, reason })
+    }
+
+    /// Parse DELETE API KEY clause
+    /// Syntax: DELETE API KEY 'key_id'
+    fn parse_delete_api_key_clause(&mut self) -> Result<DeleteApiKeyClause> {
+        self.skip_whitespace();
+        let key_id_str = self.parse_string_literal()?;
+        let key_id =
+            if let Expression::Literal(crate::executor::parser::Literal::String(s)) = key_id_str {
+                s
+            } else {
+                return Err(self.error("API key ID must be a string literal"));
+            };
+
+        Ok(DeleteApiKeyClause { key_id })
     }
 
     /// Parse GRANT clause

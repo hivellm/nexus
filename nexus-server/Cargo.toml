@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Core engine
-nexus-core.workspace = true
+nexus-core = { workspace = true, features = ["axum"] }
 nexus-protocol.workspace = true
 
 # Web framework
@@ -41,6 +41,7 @@ futures = "0.3"
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+toml = "0.8"
 chrono.workspace = true
 uuid = { version = "1.10", features = ["v4"] }
 argon2 = "0.5"

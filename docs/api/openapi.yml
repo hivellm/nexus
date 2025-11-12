@@ -13,7 +13,11 @@ info:
     - Schema management
     
     ## Authentication
-    Currently no authentication is required. All endpoints are publicly accessible.
+    Authentication is supported via:
+    - **API Keys**: Long-lived credentials for programmatic access (`X-API-Key` header or `Authorization: Bearer nx_...`)
+    - **JWT Tokens**: Short-lived tokens for user sessions (`Authorization: Bearer <token>`)
+    
+    Most endpoints require authentication unless explicitly marked as public. See security requirements on each endpoint.
     
     ## Rate Limiting
     Rate limiting is implemented per-IP with token bucket algorithm (100 req/min default).
@@ -73,6 +77,8 @@ paths:
       description: |
         Execute a Cypher query against the graph database.
         
+        **Authentication Required**: Yes (READ permission for read queries, WRITE permission for write queries)
+        
         ## Supported Cypher Features
         
         ### Read Operations
@@ -130,6 +136,9 @@ paths:
       operationId: executeCypher
       tags:
         - Queries
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
       requestBody:
         required: true
         content:
@@ -192,12 +201,55 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized - Invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: "INVALID_TOKEN"
+                  message: "Invalid or expired API key"
+        '403':
+          description: Forbidden - Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: "FORBIDDEN"
+                  message: "Insufficient permissions: WRITE required"
         '408':
           description: Query timeout
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Too Many Requests - Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: "RATE_LIMIT_EXCEEDED"
+                  message: "Rate limit exceeded. Try again later."
+          headers:
+            X-RateLimit-Limit:
+              schema:
+                type: integer
+              description: Rate limit per window
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+              description: Remaining requests in current window
+            X-RateLimit-Reset:
+              schema:
+                type: integer
+              description: Unix timestamp when rate limit resets
         '500':
           description: Internal server error
           content:
@@ -494,6 +546,17 @@ paths:
                 $ref: '#/components/schemas/StatsResponse'
 
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for programmatic access (format: nx_...)
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token or API key (format: nx_...) for authentication
   schemas:
     CypherRequest:
       type: object
@@ -894,15 +957,20 @@ components:
       type: object
       properties:
         error:
-          type: string
-          description: Error message
-        code:
-          type: string
-          description: Error code
-        details:
           type: object
-          description: Additional error details
-          additionalProperties: true
+          properties:
+            code:
+              type: string
+              description: Error code (e.g., INVALID_TOKEN, FORBIDDEN, RATE_LIMIT_EXCEEDED)
+              example: "INVALID_TOKEN"
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Invalid or expired API key"
+            details:
+              type: object
+              description: Additional error details
+              additionalProperties: true
 
 tags:
   - name: System

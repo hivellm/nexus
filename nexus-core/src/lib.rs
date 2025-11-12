@@ -2395,10 +2395,17 @@ impl Engine {
                 let labels = self
                     .catalog
                     .get_labels_from_bitmap(node_record.label_bits)?;
+                // Load node properties
+                let properties = self
+                    .storage
+                    .load_node_properties(node_id)
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| serde_json::json!({}));
+
                 let node_data = serde_json::json!({
                     "id": node_id,
                     "labels": labels,
-                    "properties": {} // TODO: Add property loading when property store is implemented
+                    "properties": properties
                 });
                 nodes.push(node_data);
             }
@@ -2419,12 +2426,19 @@ impl Engine {
                 let src_id = rel_record.src_id;
                 let dst_id = rel_record.dst_id;
 
+                // Load relationship properties
+                let properties = self
+                    .storage
+                    .load_relationship_properties(rel_id)
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| serde_json::json!({}));
+
                 let rel_data = serde_json::json!({
                     "id": rel_id,
                     "source": src_id,
                     "target": dst_id,
                     "type": rel_type,
-                    "properties": {} // TODO: Add property loading when property store is implemented
+                    "properties": properties
                 });
                 relationships.push(rel_data);
             }

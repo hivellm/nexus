@@ -56,9 +56,14 @@ impl Permission {
         matches!(
             (self, other),
             (Permission::Super, _)
-                | (Permission::Admin, Permission::Read | Permission::Write)
+                | (
+                    Permission::Admin,
+                    Permission::Read | Permission::Write | Permission::Queue | Permission::Chatroom
+                )
                 | (Permission::Write, Permission::Read)
                 | (Permission::Read, Permission::Read)
+                | (Permission::Queue, Permission::Queue)
+                | (Permission::Chatroom, Permission::Chatroom)
         )
     }
 

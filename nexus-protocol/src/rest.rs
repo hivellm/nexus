@@ -1,11 +1,30 @@
 //! REST/HTTP streaming client
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// REST client for external service integration
 pub struct RestClient {
     /// Base URL
     base_url: String,
+    /// API key for authentication (optional)
+    api_key: Option<Arc<RwLock<String>>>,
+}
+
+/// Error types for REST client operations
+#[derive(Debug, thiserror::Error)]
+pub enum RestClientError {
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
+    #[error("HTTP error: {0}")]
+    HttpError(String),
+    #[error("Network error: {0}")]
+    NetworkError(#[from] reqwest::Error),
 }
 
 impl RestClient {
@@ -13,6 +32,64 @@ impl RestClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
+            api_key: None,
+        }
+    }
+
+    /// Create a new REST client with API key
+    pub fn with_api_key(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            api_key: Some(Arc::new(RwLock::new(api_key.into()))),
+        }
+    }
+
+    /// Set or update the API key (for key rotation)
+    pub async fn set_api_key(&mut self, api_key: impl Into<String>) {
+        self.api_key = Some(Arc::new(RwLock::new(api_key.into())));
+    }
+
+    /// Rotate the API key (alias for set_api_key)
+    pub async fn rotate_key(&mut self, new_api_key: impl Into<String>) {
+        self.set_api_key(new_api_key).await;
+    }
+
+    /// Build request headers with authentication
+    async fn build_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            reqwest::header::HeaderValue::from_static("Nexus-REST-Client/1.0"),
+        );
+
+        // Add Bearer token authentication if API key is set
+        if let Some(api_key) = &self.api_key {
+            let key = api_key.read().await;
+            if let Ok(bearer_value) =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", *key))
+            {
+                headers.insert(reqwest::header::AUTHORIZATION, bearer_value);
+            }
+        }
+
+        headers
+    }
+
+    /// Handle HTTP error responses (401, 403, 429)
+    fn handle_error_response(
+        &self,
+        status: reqwest::StatusCode,
+        message: String,
+    ) -> RestClientError {
+        match status {
+            reqwest::StatusCode::UNAUTHORIZED => RestClientError::Unauthorized(message),
+            reqwest::StatusCode::FORBIDDEN => RestClientError::Forbidden(message),
+            reqwest::StatusCode::TOO_MANY_REQUESTS => RestClientError::RateLimitExceeded(message),
+            _ => RestClientError::HttpError(message),
         }
     }
 
@@ -21,23 +98,20 @@ impl RestClient {
         &self,
         path: &str,
         body: &T,
-    ) -> anyhow::Result<R> {
+    ) -> Result<R, RestClientError> {
         let client = reqwest::Client::new();
         let url = self.build_url(path);
+        let headers = self.build_headers().await;
 
-        let response = client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("User-Agent", "Nexus-REST-Client/1.0")
-            .json(body)
-            .send()
-            .await?;
+        let response = client.post(&url).headers(headers).json(body).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "REST POST request failed with status: {}",
-                response.status()
-            ));
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(self.handle_error_response(status, error_text));
         }
 
         let result: R = response.json().await?;
@@ -45,21 +119,23 @@ impl RestClient {
     }
 
     /// Send a GET request
-    pub async fn get<R: for<'de> Deserialize<'de>>(&self, path: &str) -> anyhow::Result<R> {
+    pub async fn get<R: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+    ) -> Result<R, RestClientError> {
         let client = reqwest::Client::new();
         let url = self.build_url(path);
+        let headers = self.build_headers().await;
 
-        let response = client
-            .get(&url)
-            .header("User-Agent", "Nexus-REST-Client/1.0")
-            .send()
-            .await?;
+        let response = client.get(&url).headers(headers).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "REST GET request failed with status: {}",
-                response.status()
-            ));
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(self.handle_error_response(status, error_text));
         }
 
         let result: R = response.json().await?;
@@ -67,23 +143,29 @@ impl RestClient {
     }
 
     /// Stream data via Server-Sent Events (SSE)
-    pub async fn stream(&self, path: &str) -> anyhow::Result<()> {
+    pub async fn stream(&self, path: &str) -> Result<(), RestClientError> {
         let client = reqwest::Client::new();
         let url = self.build_url(path);
+        let mut headers = self.build_headers().await;
 
-        let response = client
-            .get(&url)
-            .header("Accept", "text/event-stream")
-            .header("Cache-Control", "no-cache")
-            .header("User-Agent", "Nexus-REST-Client/1.0")
-            .send()
-            .await?;
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("text/event-stream"),
+        );
+        headers.insert(
+            reqwest::header::CACHE_CONTROL,
+            reqwest::header::HeaderValue::from_static("no-cache"),
+        );
+
+        let response = client.get(&url).headers(headers).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "REST streaming request failed with status: {}",
-                response.status()
-            ));
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(self.handle_error_response(status, error_text));
         }
 
         // For now, we just verify the connection is established
@@ -164,6 +246,19 @@ mod tests {
             }
             Err(e) => println!("POST request failed as expected: {}", e),
         }
+    }
+
+    #[test]
+    fn test_rest_client_with_api_key() {
+        let client = RestClient::with_api_key("http://localhost:8080", "nx_test123456789");
+        assert_eq!(client.base_url(), "http://localhost:8080");
+    }
+
+    #[tokio::test]
+    async fn test_rest_client_key_rotation() {
+        let mut client = RestClient::with_api_key("http://localhost:8080", "nx_old_key");
+        client.rotate_key("nx_new_key").await;
+        // Key rotation should succeed without panicking
     }
 
     #[tokio::test]

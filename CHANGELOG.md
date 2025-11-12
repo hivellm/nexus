@@ -5,6 +5,97 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2025-11-12
+
+### Added
+- **V1 Authentication & Security - Phase 1 & Phase 2**: Complete implementation of authentication and security features
+  - **Phase 1**: Root user and authentication foundation
+  - **Root User Configuration**: Configurable root user with environment variables and TOML file support
+    - Support for `NEXUS_ROOT_USERNAME`, `NEXUS_ROOT_PASSWORD`, `NEXUS_ROOT_ENABLED` environment variables
+    - Configuration file support: `config/auth.toml` with TOML parsing
+    - Default root credentials: `root/root` (configurable)
+    - `NEXUS_DISABLE_ROOT_AFTER_SETUP` flag for automatic root user disabling
+    - Docker secrets support via `NEXUS_ROOT_PASSWORD_FILE`
+  - **Root User Management**: Secure root user handling
+    - Root user creation on startup
+    - Root user disable functionality
+    - Prevention of root user deletion (only disable allowed)
+    - Root user validation (cannot be modified by non-root users)
+    - Auto-disable root user after first admin user creation
+  - **User CRUD Operations**: Complete user management via Cypher and REST API
+    - `CREATE USER username [SET PASSWORD 'password']` Cypher command with password hashing
+    - `DROP USER username` Cypher command
+    - `SHOW USERS` and `SHOW USER username` Cypher commands
+    - REST endpoints: `POST /auth/users`, `DELETE /auth/users/{username}`, `GET /auth/users`, `GET /auth/users/{username}`
+  - **Permission Management**: Fine-grained permission system
+    - `GRANT permission TO username` and `REVOKE permission FROM username` Cypher commands
+    - Fine-grained permissions: QUEUE, CHATROOM, REST
+    - REST endpoints: `POST /auth/users/{username}/permissions`, `DELETE /auth/users/{username}/permissions/{permission}`, `GET /auth/users/{username}/permissions`
+  - **API Key Management**: Complete API key lifecycle with LMDB persistence
+    - API key generation (32-char random, prefixed with `nx_`)
+    - Argon2 hashing for API keys
+    - LMDB persistence for API keys (replacing in-memory storage)
+    - Key metadata: name, permissions, expiry, created_at, user_id, revocation
+    - `CREATE API KEY`, `REVOKE API KEY`, `SHOW API KEYS`, `DELETE API KEY` Cypher commands
+    - REST endpoints: `POST /auth/keys`, `GET /auth/keys`, `GET /auth/keys/{key_id}`, `DELETE /auth/keys/{key_id}`, `POST /auth/keys/{key_id}/revoke`
+    - Expiration date support with automatic expiration check
+    - `EXPIRES IN 'duration'` parsing (e.g., "7d", "24h", "30m")
+    - Cleanup job for expired keys (runs hourly)
+    - Key revocation with reason/comment support
+  - **REST Endpoint Protection**: Authentication middleware for all REST routes
+    - Bearer token extraction (`Authorization: Bearer nx_...`)
+    - API key header extraction (`X-API-Key: nx_...`)
+    - 401 Unauthorized responses for missing/invalid credentials
+    - 403 Forbidden responses for insufficient permissions
+    - Protection for all `/cypher`, `/data/*`, `/schema/*`, `/knn_traverse`, `/ingest`, `/clustering/*`, `/stats` endpoints
+    - Optional authentication for `/health` endpoint (configurable)
+  - **Phase 2**: API Key Management & REST Protection
+    - **Rate Limiting Integration**: Complete rate limiting system with API key authentication
+      - Rate limiter integrated with API key authentication middleware
+      - 429 Too Many Requests responses when rate limit is exceeded
+      - Rate limit headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+      - Per-API-key rate limiting with configurable windows
+      - Automatic cleanup of expired rate limit entries
+      - Comprehensive unit tests for rate limiting functionality
+  - **Phase 3**: Audit Logging
+    - **Audit Log Structure**: Complete audit logging system with JSON format
+      - Structured JSON log entries with timestamp, operation, user context, and result
+      - Support for multiple operation types: user management, permissions, API keys, authentication, write operations
+      - Metadata field for additional context
+      - IP address tracking for security events
+    - **Security Event Logging**: Comprehensive logging of security-sensitive operations
+      - User creation and deletion events
+      - Permission grants and revocations
+      - API key creation, revocation, and deletion
+      - Authentication failures and successes
+      - All write operations (CREATE, SET, DELETE) in Cypher queries
+    - **Log Management**: Advanced log file management
+      - Daily log rotation (creates new log file each day)
+      - Automatic log compression (gzip) for old log files
+      - Configurable retention period (default: 30 days, 0 = keep forever)
+      - Asynchronous file I/O to prevent blocking the main runtime
+      - Configurable log directory and enable/disable flag
+    - **Integration**: Complete integration with authentication system
+      - Audit logging integrated into authentication middleware
+      - Audit logging integrated into all REST API endpoints
+      - Audit logging integrated into Cypher query executor
+      - Actor information extraction from authentication context
+
+### Testing
+- **Comprehensive Unit Tests**: Complete test coverage for Phase 1 features
+  - Unit tests for user CRUD operations (create, read, update, delete, list)
+  - Unit tests for permission management (grant, revoke, check permissions)
+  - Unit tests for API key revocation logic
+  - Unit tests for root user validation and management
+  - Unit tests for configuration file loading
+  - All tests passing with high coverage
+
+### Improved
+- **Code Quality**: All code passes clippy with `-D warnings` (no warnings allowed)
+- **Storage**: LMDB persistence for API keys provides durable storage
+- **Security**: Root user auto-disable enhances security after initial setup
+- **Configuration**: Flexible configuration via environment variables and TOML files
+
 ## [0.10.4] - 2025-11-12
 
 ### Fixed

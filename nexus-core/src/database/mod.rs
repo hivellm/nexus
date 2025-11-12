@@ -191,13 +191,28 @@ impl DatabaseManager {
                     Err(_) => (0, 0),
                 };
 
+                let db_path = self.base_dir.join(name);
+
+                // Get creation time from directory metadata
+                let created_at = std::fs::metadata(&db_path)
+                    .and_then(|m| m.created())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64
+                    })
+                    .unwrap_or(0);
+
+                // Calculate storage size by summing all files in the database directory
+                let storage_size = Self::calculate_directory_size(&db_path).unwrap_or(0);
+
                 DatabaseInfo {
                     name: name.clone(),
-                    path: self.base_dir.join(name),
-                    created_at: 0, // TODO: Track creation time
+                    path: db_path,
+                    created_at,
                     node_count,
                     relationship_count,
-                    storage_size: 0, // TODO: Calculate storage size
+                    storage_size,
                 }
             })
             .collect();
@@ -205,6 +220,33 @@ impl DatabaseManager {
         // Sort by name
         databases.sort_by(|a, b| a.name.cmp(&b.name));
         databases
+    }
+
+    /// Calculate total size of all files in a directory (recursive)
+    fn calculate_directory_size(path: &PathBuf) -> Result<u64> {
+        let mut total_size = 0u64;
+
+        if !path.exists() {
+            return Ok(0);
+        }
+
+        if path.is_file() {
+            return Ok(std::fs::metadata(path)?.len());
+        }
+
+        let entries = std::fs::read_dir(path)?;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() {
+                total_size += std::fs::metadata(&path)?.len();
+            } else if path.is_dir() {
+                total_size += Self::calculate_directory_size(&path)?;
+            }
+        }
+
+        Ok(total_size)
     }
 
     /// Check if a database exists

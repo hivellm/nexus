@@ -97,8 +97,15 @@
 ## Other Active Changes
 
 ### `implement-v1-authentication/`
-- Status: 85% complete
-- API key auth, RBAC, rate limiting
+- Status: Phase 3 Complete (Phases 1-3 done, 85% complete)
+- API key auth, RBAC, rate limiting, JWT, audit logging
+- Phase 4 (Testing & Documentation) pending
+
+### `implement-v1-authentication-remaining-todos/`
+- Status: Not Started
+- Phase 4: Testing, Documentation, Security Audit, Quality Checks
+- Code TODOs: AuthContext extraction, API key improvements
+- ~50 tasks remaining, estimated 2-3 weeks
 
 ### `implement-graph-correlation-analysis/`
 - Status: In progress (57.5% MVP complete)

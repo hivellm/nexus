@@ -12,4 +12,6 @@ pub mod mcp;
 pub mod rest;
 pub mod umicp;
 
-pub use rest::RestClient;
+pub use mcp::{McpClient, McpClientError};
+pub use rest::{RestClient, RestClientError};
+pub use umicp::{UmicpClient, UmicpClientError};

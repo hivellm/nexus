@@ -69,7 +69,7 @@ pub struct User {
     pub username: String,
     /// Email address
     pub email: Option<String>,
-    /// Password hash (Argon2)
+    /// Password hash (SHA512)
     pub password_hash: Option<String>,
     /// Roles assigned to this user
     pub roles: Vec<String>,
@@ -316,6 +316,36 @@ impl RoleBasedAccessControl {
             .map(|user| user.effective_permissions(self))
     }
 
+    /// Check if a user can modify another user
+    /// Only root users can modify root users
+    pub fn can_modify_user(&self, current_user_id: &str, target_user_id: &str) -> bool {
+        // Check if target user is root
+        if let Some(target_user) = self.get_user(target_user_id) {
+            if target_user.is_root {
+                // Only root can modify root
+                if let Some(current_user) = self.get_user(current_user_id) {
+                    return current_user.is_root;
+                }
+                return false;
+            }
+        }
+        // Non-root users can be modified by anyone with appropriate permissions
+        true
+    }
+
+    /// Get a mutable reference to a user by ID with permission check
+    /// Returns None if the current user cannot modify the target user
+    pub fn get_user_mut_with_check(
+        &mut self,
+        current_user_id: &str,
+        target_user_id: &str,
+    ) -> Option<&mut User> {
+        if !self.can_modify_user(current_user_id, target_user_id) {
+            return None;
+        }
+        self.users.get_mut(target_user_id)
+    }
+
     /// Create default roles
     pub fn create_default_roles(&mut self) {
         // Read-only role
@@ -559,5 +589,325 @@ mod tests {
         assert!(rbac.get_role("read_write").is_some());
         assert!(rbac.get_role("admin").is_some());
         assert!(rbac.get_role("super").is_some());
+    }
+
+    #[test]
+    fn test_can_modify_user_root_validation() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        // Create root user
+        rbac.create_root_user("root".to_string(), "hashed_password".to_string())
+            .unwrap();
+
+        // Create regular user
+        let user1 = User::new("user1".to_string(), "user1".to_string());
+        rbac.add_user(user1);
+
+        // Root can modify root
+        assert!(rbac.can_modify_user("root", "root"));
+
+        // Root can modify regular user
+        assert!(rbac.can_modify_user("root", "user1"));
+
+        // Regular user can modify regular user
+        assert!(rbac.can_modify_user("user1", "user1"));
+
+        // Regular user cannot modify root
+        assert!(!rbac.can_modify_user("user1", "root"));
+    }
+
+    #[test]
+    fn test_get_user_mut_with_check() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        // Create root user
+        rbac.create_root_user("root".to_string(), "hashed_password".to_string())
+            .unwrap();
+
+        // Create regular user
+        let user1 = User::new("user1".to_string(), "user1".to_string());
+        rbac.add_user(user1);
+
+        // Root can get mutable reference to root
+        assert!(rbac.get_user_mut_with_check("root", "root").is_some());
+
+        // Root can get mutable reference to regular user
+        assert!(rbac.get_user_mut_with_check("root", "user1").is_some());
+
+        // Regular user can get mutable reference to itself
+        assert!(rbac.get_user_mut_with_check("user1", "user1").is_some());
+
+        // Regular user cannot get mutable reference to root
+        assert!(rbac.get_user_mut_with_check("user1", "root").is_none());
+    }
+
+    #[test]
+    fn test_is_root_enabled() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        // Initially no root user
+        assert!(!rbac.is_root_enabled());
+
+        // Create root user
+        rbac.create_root_user("root".to_string(), "hashed_password".to_string())
+            .unwrap();
+        assert!(rbac.is_root_enabled());
+
+        // Disable root user
+        rbac.disable_root_user().unwrap();
+        assert!(!rbac.is_root_enabled());
+    }
+
+    // 1.3.9 - Unit tests for user CRUD operations
+    #[test]
+    fn test_create_user_with_password() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let user = User::with_password_hash(
+            "user1".to_string(),
+            "testuser".to_string(),
+            "hashed_password".to_string(),
+        );
+
+        rbac.add_user(user);
+
+        let retrieved = rbac.get_user("user1");
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.username, "testuser");
+        assert_eq!(retrieved.password_hash, Some("hashed_password".to_string()));
+        assert!(retrieved.is_active);
+    }
+
+    #[test]
+    fn test_read_user() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let user = User::new("user1".to_string(), "testuser".to_string());
+        rbac.add_user(user);
+
+        // Test get_user
+        let retrieved = rbac.get_user("user1");
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().username, "testuser");
+
+        // Test get_user for non-existent user
+        assert!(rbac.get_user("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_update_user() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let user = User::new("user1".to_string(), "testuser".to_string());
+        rbac.add_user(user);
+
+        // Update user via mutable reference
+        if let Some(user) = rbac.get_user_mut("user1") {
+            user.email = Some("test@example.com".to_string());
+            user.is_active = false;
+        }
+
+        let updated = rbac.get_user("user1").unwrap();
+        assert_eq!(updated.email, Some("test@example.com".to_string()));
+        assert!(!updated.is_active);
+    }
+
+    #[test]
+    fn test_delete_user() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let user1 = User::new("user1".to_string(), "testuser1".to_string());
+        let user2 = User::new("user2".to_string(), "testuser2".to_string());
+
+        rbac.add_user(user1);
+        rbac.add_user(user2);
+
+        assert_eq!(rbac.list_users().len(), 2);
+
+        // Delete user1
+        let deleted = rbac.remove_user("user1");
+        assert!(deleted.is_some());
+        assert_eq!(rbac.list_users().len(), 1);
+        assert!(rbac.get_user("user1").is_none());
+        assert!(rbac.get_user("user2").is_some());
+    }
+
+    #[test]
+    fn test_list_users() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        assert_eq!(rbac.list_users().len(), 0);
+
+        rbac.add_user(User::new("user1".to_string(), "testuser1".to_string()));
+        rbac.add_user(User::new("user2".to_string(), "testuser2".to_string()));
+        rbac.add_user(User::new("user3".to_string(), "testuser3".to_string()));
+
+        let users = rbac.list_users();
+        assert_eq!(users.len(), 3);
+
+        let usernames: Vec<&str> = users.iter().map(|u| u.username.as_str()).collect();
+        assert!(usernames.contains(&"testuser1"));
+        assert!(usernames.contains(&"testuser2"));
+        assert!(usernames.contains(&"testuser3"));
+    }
+
+    #[test]
+    fn test_user_duplicate_id() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let user1 = User::new("user1".to_string(), "testuser1".to_string());
+        let user2 = User::new("user1".to_string(), "testuser2".to_string());
+
+        rbac.add_user(user1);
+        rbac.add_user(user2); // Should overwrite
+
+        assert_eq!(rbac.list_users().len(), 1);
+        assert_eq!(rbac.get_user("user1").unwrap().username, "testuser2");
+    }
+
+    // 1.4.7 - Unit tests for permission management
+    #[test]
+    fn test_grant_permission_to_user() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let user = User::new("user1".to_string(), "testuser".to_string());
+        rbac.add_user(user);
+
+        // Grant permission via mutable reference
+        if let Some(user) = rbac.get_user_mut("user1") {
+            user.add_permission(Permission::Read);
+            user.add_permission(Permission::Write);
+        }
+
+        let user = rbac.get_user("user1").unwrap();
+        assert!(
+            user.additional_permissions
+                .has_permission(&Permission::Read)
+        );
+        assert!(
+            user.additional_permissions
+                .has_permission(&Permission::Write)
+        );
+        assert!(
+            !user
+                .additional_permissions
+                .has_permission(&Permission::Admin)
+        );
+    }
+
+    #[test]
+    fn test_revoke_permission_from_user() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let mut user = User::new("user1".to_string(), "testuser".to_string());
+        user.add_permission(Permission::Read);
+        user.add_permission(Permission::Write);
+        rbac.add_user(user);
+
+        // Revoke permission
+        if let Some(user) = rbac.get_user_mut("user1") {
+            user.remove_permission(&Permission::Read);
+        }
+
+        let user = rbac.get_user("user1").unwrap();
+        assert!(!user.additional_permissions.contains(&Permission::Read));
+        assert!(user.additional_permissions.contains(&Permission::Write));
+    }
+
+    #[test]
+    fn test_user_permission_checking_with_roles() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        // Create role with permissions
+        let admin_role = Role::new(
+            "admin".to_string(),
+            "Administrator".to_string(),
+            PermissionSet::from_vec(vec![Permission::Admin, Permission::Read, Permission::Write]),
+        );
+        rbac.add_role(admin_role);
+
+        // Create user with role
+        let mut user = User::new("user1".to_string(), "testuser".to_string());
+        user.add_role("admin".to_string());
+        rbac.add_user(user);
+
+        // Check permissions
+        assert!(rbac.user_has_permission("user1", &Permission::Read));
+        assert!(rbac.user_has_permission("user1", &Permission::Write));
+        assert!(rbac.user_has_permission("user1", &Permission::Admin));
+        assert!(!rbac.user_has_permission("user1", &Permission::Super));
+    }
+
+    #[test]
+    fn test_user_permission_checking_with_additional_permissions() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let mut user = User::new("user1".to_string(), "testuser".to_string());
+        user.add_permission(Permission::Read);
+        user.add_permission(Permission::Queue);
+        rbac.add_user(user);
+
+        assert!(rbac.user_has_permission("user1", &Permission::Read));
+        assert!(rbac.user_has_permission("user1", &Permission::Queue));
+        assert!(!rbac.user_has_permission("user1", &Permission::Write));
+    }
+
+    #[test]
+    fn test_user_effective_permissions() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        // Create role
+        let read_write_role = Role::new(
+            "read_write".to_string(),
+            "Read Write".to_string(),
+            PermissionSet::from_vec(vec![Permission::Read, Permission::Write]),
+        );
+        rbac.add_role(read_write_role);
+
+        // Create user with role and additional permissions
+        let mut user = User::new("user1".to_string(), "testuser".to_string());
+        user.add_role("read_write".to_string());
+        user.add_permission(Permission::Queue);
+        rbac.add_user(user);
+
+        let permissions = rbac.user_permissions("user1").unwrap();
+        assert!(permissions.has_permission(&Permission::Read));
+        assert!(permissions.has_permission(&Permission::Write));
+        assert!(permissions.has_permission(&Permission::Queue));
+        assert!(!permissions.has_permission(&Permission::Admin));
+    }
+
+    #[test]
+    fn test_grant_multiple_permissions() {
+        let mut rbac = RoleBasedAccessControl::new();
+
+        let user = User::new("user1".to_string(), "testuser".to_string());
+        rbac.add_user(user);
+
+        if let Some(user) = rbac.get_user_mut("user1") {
+            user.add_permission(Permission::Read);
+            user.add_permission(Permission::Write);
+            user.add_permission(Permission::Queue);
+            user.add_permission(Permission::Chatroom);
+        }
+
+        let user = rbac.get_user("user1").unwrap();
+        assert!(
+            user.additional_permissions
+                .has_permission(&Permission::Read)
+        );
+        assert!(
+            user.additional_permissions
+                .has_permission(&Permission::Write)
+        );
+        assert!(
+            user.additional_permissions
+                .has_permission(&Permission::Queue)
+        );
+        assert!(
+            user.additional_permissions
+                .has_permission(&Permission::Chatroom)
+        );
     }
 }

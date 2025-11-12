@@ -261,10 +261,10 @@ impl<'a> QueryPlanner<'a> {
                         }
                     } else {
                         // No label specified - need to scan all nodes
-                        // For now, use label_id 0 as a fallback (this might need lower-level storage access)
-                        // TODO: Add a proper AllNodesScan operator for better performance
+                        // Use label_id 0 as a special case to scan all nodes
+                        // The executor handles label_id 0 specially to scan all nodes efficiently
                         operators.push(Operator::NodeByLabel {
-                            label_id: 0, // Temporary: scan all (will need proper implementation)
+                            label_id: 0, // Special case: scan all nodes (handled in executor)
                             variable: variable.clone(),
                         });
                     }
