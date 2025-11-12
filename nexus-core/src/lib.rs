@@ -1515,6 +1515,89 @@ impl Engine {
         })
     }
 
+    /// Execute LOAD CSV commands
+    /// LOAD CSV loads CSV data and binds each row to a variable
+    /// Typically used with FOREACH or UNWIND to process rows
+    fn execute_load_csv_commands(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        use std::fs;
+        use std::path::Path;
+        
+        let mut all_rows = Vec::new();
+        let mut columns = Vec::new();
+        
+        for clause in &ast.clauses {
+            if let executor::parser::Clause::LoadCsv(load_csv) = clause {
+                // Extract file path from URL (support file:///path/to/file.csv)
+                let file_path = if load_csv.url.starts_with("file:///") {
+                    &load_csv.url[8..] // Remove "file:///"
+                } else if load_csv.url.starts_with("file://") {
+                    &load_csv.url[7..] // Remove "file://"
+                } else {
+                    &load_csv.url // Use as-is if no protocol
+                };
+                
+                let path = Path::new(file_path);
+                if !path.exists() {
+                    return Err(Error::CypherExecution(format!(
+                        "CSV file not found: {}",
+                        file_path
+                    )));
+                }
+                
+                // Read CSV file
+                let content = fs::read_to_string(path)
+                    .map_err(|e| Error::CypherExecution(format!("Failed to read CSV file: {}", e)))?;
+                
+                // Parse CSV lines
+                let field_terminator = load_csv.field_terminator.as_deref().unwrap_or(",");
+                let mut lines = content.lines();
+                
+                // Skip header if WITH HEADERS
+                if load_csv.with_headers {
+                    lines.next(); // Skip header line
+                }
+                
+                // Parse each row
+                for line in lines {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    
+                    // Simple CSV parsing (split by field terminator)
+                    // Note: This doesn't handle quoted fields with commas inside
+                    // For production, should use a proper CSV parser library
+                    let fields: Vec<String> = line
+                        .split(field_terminator)
+                        .map(|s| s.trim().to_string())
+                        .collect();
+                    
+                    // Convert fields to JSON array
+                    let row_value: serde_json::Value = fields
+                        .into_iter()
+                        .map(|f| serde_json::Value::String(f))
+                        .collect();
+                    
+                    all_rows.push(executor::Row {
+                        values: vec![row_value],
+                    });
+                }
+                
+                // Set columns if not already set
+                if columns.is_empty() {
+                    columns = vec![load_csv.variable.clone()];
+                }
+            }
+        }
+        
+        Ok(executor::ResultSet {
+            columns,
+            rows: all_rows,
+        })
+    }
+
     /// Execute CALL subquery commands
     fn execute_call_subquery_commands(
         &mut self,

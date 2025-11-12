@@ -768,6 +768,52 @@ impl PropertyIndex {
         total_size
     }
 
+    /// Check if an index exists for a (label_id, key_id) combination
+    pub fn has_index(&self, label_id: u32, key_id: u32) -> bool {
+        let trees = self.property_trees.read();
+        trees.contains_key(&(label_id, key_id))
+    }
+
+    /// Create an index for a (label_id, key_id) combination
+    /// This initializes an empty index structure. The index will be populated
+    /// as properties are added via add_property().
+    pub fn create_index(&self, label_id: u32, key_id: u32) -> Result<()> {
+        let mut trees = self.property_trees.write();
+        let mut stats = self.stats.write();
+
+        // Create empty index if it doesn't exist
+        if !trees.contains_key(&(label_id, key_id)) {
+            trees.insert((label_id, key_id), BTreeMap::new());
+            stats.indexed_properties = trees.len() as u32;
+        }
+
+        Ok(())
+    }
+
+    /// Drop an index for a (label_id, key_id) combination
+    /// This removes all indexed data for this property.
+    pub fn drop_index(&self, label_id: u32, key_id: u32) -> Result<()> {
+        let mut trees = self.property_trees.write();
+        let mut stats = self.stats.write();
+
+        if let Some(tree) = trees.remove(&(label_id, key_id)) {
+            // Update stats: subtract entries from this index
+            let mut removed_entries = 0u64;
+            for bitmap in tree.values() {
+                removed_entries += bitmap.len() as u64;
+            }
+            stats.total_entries = stats.total_entries.saturating_sub(removed_entries);
+            stats.indexed_properties = trees.len() as u32;
+            stats.avg_entries_per_property = if stats.indexed_properties > 0 {
+                stats.total_entries as f64 / stats.indexed_properties as f64
+            } else {
+                0.0
+            };
+        }
+
+        Ok(())
+    }
+
     /// Health check for the property index
     pub fn health_check(&self) -> Result<()> {
         let trees = self.property_trees.read();
