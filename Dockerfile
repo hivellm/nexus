@@ -1,4 +1,43 @@
 # Multi-stage Dockerfile for Nexus Graph Database
+#
+# HOW TO BUILD:
+#   docker build -t nexus-graph-db:latest .
+#   docker build -t nexus-graph-db:v0.11.0 -t nexus-graph-db:latest .
+#
+# HOW TO RUN:
+#   # Using docker run (basic):
+#   docker run -d \
+#     --name nexus \
+#     -p 15474:15474 \
+#     -v nexus-data:/app/data \
+#     -e NEXUS_ROOT_USERNAME=admin \
+#     -e NEXUS_ROOT_PASSWORD=secure_password \
+#     -e NEXUS_AUTH_ENABLED=true \
+#     nexus-graph-db:latest
+#
+#   # Using docker run with Docker secrets (recommended for production):
+#   echo "secure_password" > secrets/root_password.txt
+#   chmod 600 secrets/root_password.txt
+#   docker run -d \
+#     --name nexus \
+#     -p 15474:15474 \
+#     -v nexus-data:/app/data \
+#     -v $(pwd)/secrets/root_password.txt:/run/secrets/nexus_root_password:ro \
+#     -e NEXUS_ROOT_USERNAME=admin \
+#     -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
+#     -e NEXUS_AUTH_ENABLED=true \
+#     -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
+#     nexus-graph-db:latest
+#
+#   # Using docker-compose (recommended):
+#   docker-compose up -d
+#
+# HOW TO VERIFY:
+#   curl http://localhost:15474/health
+#   docker logs nexus
+#
+# For more details, see docs/DEPLOYMENT_GUIDE.md
+
 # Build stage
 FROM rustlang/rust:nightly AS builder
 
