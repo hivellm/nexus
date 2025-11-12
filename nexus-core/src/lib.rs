@@ -81,8 +81,8 @@ pub use graph::simple::{
     GraphStats as SimpleGraphStats, Node as SimpleNode, NodeId as SimpleNodeId, PropertyValue,
 };
 pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 pub use validation::{
     GraphValidator, ValidationConfig, ValidationError, ValidationErrorType, ValidationResult,
     ValidationSeverity, ValidationStats, ValidationWarning, ValidationWarningType,
@@ -191,6 +191,9 @@ impl Engine {
     }
 
     fn rebuild_indexes_from_storage(&mut self) -> Result<()> {
+        // Clear the index first to ensure we start fresh
+        self.indexes.label_index.clear()?;
+
         let total_nodes = self.storage.node_count();
 
         for node_id in 0..total_nodes {
@@ -365,6 +368,27 @@ impl Engine {
 
     /// Execute MATCH ... CREATE query
     fn execute_match_create_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
+        // Get session and check if it has an active transaction
+        let session_id = "default";
+
+        // Check if session has active transaction
+        let has_active_tx = {
+            let session = self.session_manager.get_session(&session_id.to_string());
+            session.map(|s| s.has_active_transaction()).unwrap_or(false)
+        };
+
+        // Get transaction from session if available
+        let mut session_tx_opt = if has_active_tx {
+            let mut session = self
+                .session_manager
+                .get_session(&session_id.to_string())
+                .ok_or_else(|| Error::transaction("Session not found".to_string()))?;
+
+            session.active_transaction.take().map(|tx| (session, tx))
+        } else {
+            None
+        };
+
         // First, execute the MATCH part to get the matching nodes
         let mut match_query_clauses = Vec::new();
         let mut create_clause_opt = None;
@@ -489,9 +513,31 @@ impl Engine {
                     }
                 }
 
-                // Create relationships from the pattern
-                self.create_from_pattern_with_context(&create_clause.pattern, &node_vars)?;
+                // Create relationships from the pattern with session transaction if available
+                if let Some((ref mut sess, ref mut tx)) = session_tx_opt {
+                    let mut tx_ref: Option<&mut transaction::Transaction> = Some(tx);
+                    self.create_from_pattern_with_context_and_transaction(
+                        &create_clause.pattern,
+                        &node_vars,
+                        &mut tx_ref,
+                        Some(&mut sess.created_nodes),
+                    )?;
+                } else {
+                    let mut tx_ref: Option<&mut transaction::Transaction> = None;
+                    self.create_from_pattern_with_context_and_transaction(
+                        &create_clause.pattern,
+                        &node_vars,
+                        &mut tx_ref,
+                        None,
+                    )?;
+                }
             }
+        }
+
+        // Put transaction back in session if we extracted it
+        if let Some((mut session, tx)) = session_tx_opt {
+            session.active_transaction = Some(tx);
+            self.session_manager.update_session(session);
         }
 
         Ok(())
@@ -502,6 +548,18 @@ impl Engine {
         &mut self,
         pattern: &executor::parser::Pattern,
         node_vars: &std::collections::HashMap<String, u64>,
+    ) -> Result<()> {
+        let mut tx_ref: Option<&mut transaction::Transaction> = None;
+        self.create_from_pattern_with_context_and_transaction(pattern, node_vars, &mut tx_ref, None)
+    }
+
+    /// Create from pattern with existing node context and optional transaction
+    fn create_from_pattern_with_context_and_transaction(
+        &mut self,
+        pattern: &executor::parser::Pattern,
+        node_vars: &std::collections::HashMap<String, u64>,
+        session_tx: &mut Option<&mut transaction::Transaction>,
+        mut created_nodes_tracker: Option<&mut Vec<u64>>,
     ) -> Result<()> {
         let mut current_node_id: Option<u64> = None;
 
@@ -526,7 +584,21 @@ impl Engine {
                                 serde_json::Value::Null
                             };
 
-                            let node_id = self.create_node(node.labels.clone(), properties)?;
+                            let node_id = if let Some(ref mut tracker) = created_nodes_tracker {
+                                self.create_node_with_transaction(
+                                    node.labels.clone(),
+                                    properties,
+                                    session_tx,
+                                    Some(tracker),
+                                )?
+                            } else {
+                                self.create_node_with_transaction(
+                                    node.labels.clone(),
+                                    properties,
+                                    session_tx,
+                                    None,
+                                )?
+                            };
                             current_node_id = Some(node_id);
                         }
                     }
@@ -578,11 +650,12 @@ impl Engine {
                                 serde_json::Value::Null
                             };
 
-                            self.create_relationship(
+                            self.create_relationship_with_transaction(
                                 source_id,
                                 target_id,
                                 rel_type.clone(),
                                 rel_properties,
+                                session_tx,
                             )?;
                         } else {
                             return Err(Error::CypherExecution(
@@ -603,6 +676,42 @@ impl Engine {
 
     /// Execute CREATE query via Engine to ensure proper persistence
     fn execute_create_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
+        // Get session and check if it has an active transaction
+        let session_id = "default";
+
+        // Get session once and check if it has an active transaction
+        let mut session = self.session_manager.get_session(&session_id.to_string());
+
+        if let Some(ref mut sess) = session {
+            if sess.has_active_transaction() {
+                // Extract transaction from session
+                if let Some(mut tx) = sess.active_transaction.take() {
+                    // Execute CREATE operations with this transaction
+                    let mut tx_ref: Option<&mut transaction::Transaction> = Some(&mut tx);
+                    let result =
+                        self.execute_create_query_with_transaction(ast, &mut tx_ref, Some(sess));
+
+                    // Put transaction back in session and update session with tracked nodes
+                    sess.active_transaction = Some(tx);
+                    self.session_manager.update_session(sess.clone());
+
+                    return result;
+                }
+            }
+        }
+
+        // No active transaction, execute normally (will create own transactions)
+        let mut tx_ref: Option<&mut transaction::Transaction> = None;
+        self.execute_create_query_with_transaction(ast, &mut tx_ref, None)
+    }
+
+    /// Execute CREATE query with optional transaction
+    fn execute_create_query_with_transaction(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+        session_tx: &mut Option<&mut transaction::Transaction>,
+        mut session: Option<&mut session::Session>,
+    ) -> Result<()> {
         use std::collections::HashMap;
 
         // Map of variable names to created node IDs
@@ -628,8 +737,13 @@ impl Engine {
                                 serde_json::Value::Null
                             };
 
-                            // Create node using Engine API
-                            let node_id = self.create_node(node.labels.clone(), properties)?;
+                            // Create node using Engine API with session transaction if available
+                            let node_id = self.create_node_with_transaction(
+                                node.labels.clone(),
+                                properties,
+                                session_tx,
+                                session.as_mut().map(|s| &mut s.created_nodes),
+                            )?;
 
                             // Store node ID if variable exists
                             if let Some(var) = &node.variable {
@@ -665,10 +779,12 @@ impl Engine {
                                             serde_json::Value::Null
                                         };
 
-                                    // Create target node
-                                    let tid = self.create_node(
+                                    // Create target node with session transaction if available
+                                    let tid = self.create_node_with_transaction(
                                         target_node.labels.clone(),
                                         target_properties,
+                                        session_tx,
+                                        session.as_mut().map(|s| &mut s.created_nodes),
                                     )?;
 
                                     // Store target node ID
@@ -706,12 +822,13 @@ impl Engine {
                                 serde_json::Value::Null
                             };
 
-                            // Create relationship using Engine API
-                            self.create_relationship(
+                            // Create relationship using Engine API with session transaction if available
+                            self.create_relationship_with_transaction(
                                 source_id,
                                 target_id,
                                 rel_type.to_string(),
                                 rel_properties,
+                                session_tx,
                             )?;
                         }
                     }
@@ -955,8 +1072,17 @@ impl Engine {
                 self.execute_create_query(&ast)?;
             }
 
-            // Refresh executor to see the changes
-            self.refresh_executor()?;
+            // Refresh executor to see the changes (only if not in transaction)
+            // Transactions will refresh after commit/rollback
+            let session_id = "default";
+            let in_transaction = {
+                let session = self.session_manager.get_session(&session_id.to_string());
+                session.map(|s| s.has_active_transaction()).unwrap_or(false)
+            };
+
+            if !in_transaction {
+                self.refresh_executor()?;
+            }
         }
 
         // Execute the query normally
@@ -1315,52 +1441,84 @@ impl Engine {
         // Use provided session_id or generate a default one
         // In a full implementation, session_id would come from HTTP headers or connection context
         let session_id = session_id.unwrap_or("default");
-        
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::BeginTransaction => {
                     // Get or create session
-                    let mut session = self.session_manager.get_or_create_session(session_id.to_string());
-                    
+                    let mut session = self
+                        .session_manager
+                        .get_or_create_session(session_id.to_string());
+
                     // Begin transaction for this session
                     session.begin_transaction()?;
-                    
+
                     // Update session in manager
                     self.session_manager.update_session(session);
                 }
                 executor::parser::Clause::CommitTransaction => {
                     // Get session
-                    let mut session = self.session_manager
+                    let mut session = self
+                        .session_manager
                         .get_session(&session_id.to_string())
-                        .ok_or_else(|| Error::transaction(format!(
-                            "Session {} not found or expired",
-                            session_id
-                        )))?;
-                    
+                        .ok_or_else(|| {
+                            Error::transaction(format!(
+                                "Session {} not found or expired",
+                                session_id
+                            ))
+                        })?;
+
                     // Commit transaction
                     session.commit_transaction()?;
-                    
+
                     // Flush storage to ensure durability
                     self.storage.flush()?;
-                    
+
+                    // Rebuild indexes from storage after commit
+                    // This ensures indexes reflect committed changes and are not affected by rollback
+                    self.rebuild_indexes_from_storage()?;
+
+                    // Refresh executor to see the updated indexes
+                    self.refresh_executor()?;
+
                     // Update session in manager
                     self.session_manager.update_session(session);
                 }
                 executor::parser::Clause::RollbackTransaction => {
                     // Get session
-                    let mut session = self.session_manager
+                    let mut session = self
+                        .session_manager
                         .get_session(&session_id.to_string())
-                        .ok_or_else(|| Error::transaction(format!(
-                            "Session {} not found or expired",
-                            session_id
-                        )))?;
-                    
+                        .ok_or_else(|| {
+                            Error::transaction(format!(
+                                "Session {} not found or expired",
+                                session_id
+                            ))
+                        })?;
+
+                    // Mark all nodes created during this transaction as deleted
+                    for node_id in &session.created_nodes {
+                        self.storage.delete_node(*node_id)?;
+                    }
+
+                    // Mark all relationships created during this transaction as deleted
+                    for rel_id in &session.created_relationships {
+                        self.storage.delete_rel(*rel_id)?;
+                    }
+
                     // Rollback transaction
                     session.rollback_transaction()?;
-                    
+
                     // Flush storage to ensure consistency
                     self.storage.flush()?;
-                    
+
+                    // Rebuild indexes from storage after rollback
+                    // This ensures indexes reflect the rolled-back state (without uncommitted changes)
+                    self.rebuild_indexes_from_storage()?;
+
+                    // Refresh executor to see the updated indexes
+                    self.refresh_executor()?;
+
                     // Update session in manager
                     self.session_manager.update_session(session);
                 }
@@ -1386,16 +1544,20 @@ impl Engine {
                 executor::parser::Clause::CreateIndex(create_index) => {
                     // Get label and property IDs
                     let label_id = self.catalog.get_or_create_label(&create_index.label)?;
-                    let property_key_id =
-                        self.catalog.get_or_create_key(&create_index.property)?;
+                    let property_key_id = self.catalog.get_or_create_key(&create_index.property)?;
 
                     // Check if index already exists
-                    let index_exists = self.indexes.property_index.has_index(label_id, property_key_id);
+                    let index_exists = self
+                        .indexes
+                        .property_index
+                        .has_index(label_id, property_key_id);
 
                     // Handle OR REPLACE
                     if create_index.or_replace && index_exists {
                         // Drop existing index first
-                        self.indexes.property_index.drop_index(label_id, property_key_id)?;
+                        self.indexes
+                            .property_index
+                            .drop_index(label_id, property_key_id)?;
                     }
 
                     // Handle IF NOT EXISTS
@@ -1413,7 +1575,9 @@ impl Engine {
                     }
 
                     // Create the index structure
-                    self.indexes.property_index.create_index(label_id, property_key_id)?;
+                    self.indexes
+                        .property_index
+                        .create_index(label_id, property_key_id)?;
 
                     // Populate index with existing nodes that have this label and property
                     self.populate_index(label_id, property_key_id)?;
@@ -1439,7 +1603,11 @@ impl Engine {
                     };
 
                     // Check if index exists
-                    if !self.indexes.property_index.has_index(label_id, property_key_id) {
+                    if !self
+                        .indexes
+                        .property_index
+                        .has_index(label_id, property_key_id)
+                    {
                         if drop_index.if_exists {
                             // Index doesn't exist and IF EXISTS was specified, skip
                             continue;
@@ -1452,7 +1620,9 @@ impl Engine {
                     }
 
                     // Drop the index
-                    self.indexes.property_index.drop_index(label_id, property_key_id)?;
+                    self.indexes
+                        .property_index
+                        .drop_index(label_id, property_key_id)?;
                 }
                 _ => {}
             }
@@ -1472,21 +1642,24 @@ impl Engine {
         use serde_json::Value as JsonValue;
 
         // Get property key name
-        let property_name = self.catalog.get_key_name(property_key_id)?
-            .ok_or_else(|| Error::CypherExecution(format!(
-                "Property key {} not found",
-                property_key_id
-            )))?;
+        let property_name = self.catalog.get_key_name(property_key_id)?.ok_or_else(|| {
+            Error::CypherExecution(format!("Property key {} not found", property_key_id))
+        })?;
 
         // Get all nodes with this label
-        let label_bitmap = self.indexes.label_index.get_nodes_with_labels(&[label_id])?;
-        
+        let label_bitmap = self
+            .indexes
+            .label_index
+            .get_nodes_with_labels(&[label_id])?;
+
         // Iterate through all nodes with this label
         for node_id in label_bitmap.iter() {
             let node_id_u64 = node_id as u64;
-            
+
             // Load node properties
-            if let Some(JsonValue::Object(props)) = self.storage.load_node_properties(node_id_u64)? {
+            if let Some(JsonValue::Object(props)) =
+                self.storage.load_node_properties(node_id_u64)?
+            {
                 // Check if this node has the property we're indexing
                 if let Some(prop_value) = props.get(&property_name) {
                     // Convert JSON value to PropertyValue
@@ -1638,10 +1811,10 @@ impl Engine {
     ) -> Result<executor::ResultSet> {
         use std::fs;
         use std::path::Path;
-        
+
         let mut all_rows = Vec::new();
         let mut columns = Vec::new();
-        
+
         for clause in &ast.clauses {
             if let executor::parser::Clause::LoadCsv(load_csv) = clause {
                 // Extract file path from URL (support file:///path/to/file.csv)
@@ -1652,7 +1825,7 @@ impl Engine {
                 } else {
                     &load_csv.url // Use as-is if no protocol
                 };
-                
+
                 let path = Path::new(file_path);
                 if !path.exists() {
                     return Err(Error::CypherExecution(format!(
@@ -1660,26 +1833,27 @@ impl Engine {
                         file_path
                     )));
                 }
-                
+
                 // Read CSV file
-                let content = fs::read_to_string(path)
-                    .map_err(|e| Error::CypherExecution(format!("Failed to read CSV file: {}", e)))?;
-                
+                let content = fs::read_to_string(path).map_err(|e| {
+                    Error::CypherExecution(format!("Failed to read CSV file: {}", e))
+                })?;
+
                 // Parse CSV lines
                 let field_terminator = load_csv.field_terminator.as_deref().unwrap_or(",");
                 let mut lines = content.lines();
-                
+
                 // Skip header if WITH HEADERS
                 if load_csv.with_headers {
                     lines.next(); // Skip header line
                 }
-                
+
                 // Parse each row
                 for line in lines {
                     if line.trim().is_empty() {
                         continue;
                     }
-                    
+
                     // Simple CSV parsing (split by field terminator)
                     // Note: This doesn't handle quoted fields with commas inside
                     // For production, should use a proper CSV parser library
@@ -1687,25 +1861,23 @@ impl Engine {
                         .split(field_terminator)
                         .map(|s| s.trim().to_string())
                         .collect();
-                    
+
                     // Convert fields to JSON array
-                    let row_value: serde_json::Value = fields
-                        .into_iter()
-                        .map(|f| serde_json::Value::String(f))
-                        .collect();
-                    
+                    let row_value: serde_json::Value =
+                        fields.into_iter().map(serde_json::Value::String).collect();
+
                     all_rows.push(executor::Row {
                         values: vec![row_value],
                     });
                 }
-                
+
                 // Set columns if not already set
                 if columns.is_empty() {
                     columns = vec![load_csv.variable.clone()];
                 }
             }
         }
-        
+
         Ok(executor::ResultSet {
             columns,
             rows: all_rows,
@@ -1725,35 +1897,36 @@ impl Engine {
                 if call_subquery.in_transactions {
                     // Execute with batching in transactions
                     let batch_size = call_subquery.batch_size.unwrap_or(1000);
-                    
+
                     // Execute subquery in batches with transactions
                     // For each batch, start a write transaction, execute, and commit
                     let mut batch_count = 0;
                     loop {
                         // Start write transaction for this batch
                         let mut tx = self.transaction_manager.write().begin_write()?;
-                        
+
                         // Execute subquery for this batch
                         let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
-                        
+
                         if columns.is_empty() {
                             columns = subquery_result.columns.clone();
                         }
-                        
+
                         // Add results for this batch
-                        let batch_rows: Vec<_> = subquery_result.rows.into_iter().take(batch_size).collect();
+                        let batch_rows: Vec<_> =
+                            subquery_result.rows.into_iter().take(batch_size).collect();
                         if batch_rows.is_empty() {
                             // No more results, commit and break
                             self.transaction_manager.write().commit(&mut tx)?;
                             break;
                         }
-                        
+
                         all_results.extend(batch_rows);
                         batch_count += 1;
-                        
+
                         // Commit transaction for this batch
                         self.transaction_manager.write().commit(&mut tx)?;
-                        
+
                         // If we got fewer rows than batch size, we're done
                         if all_results.len() < batch_count * batch_size {
                             break;
@@ -1762,7 +1935,7 @@ impl Engine {
                 } else {
                     // Execute subquery normally (no batching)
                     let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
-                    
+
                     if columns.is_empty() {
                         columns = subquery_result.columns.clone();
                     }
@@ -2043,18 +2216,20 @@ impl Engine {
         }
 
         // Check for LOAD CSV commands
-        let has_load_csv = ast.clauses.iter().any(|c| {
-            matches!(c, executor::parser::Clause::LoadCsv(_))
-        });
+        let has_load_csv = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::LoadCsv(_)));
 
         if has_load_csv {
             return self.execute_load_csv_commands(ast);
         }
 
         // Check for CALL subquery commands
-        let has_call_subquery = ast.clauses.iter().any(|c| {
-            matches!(c, executor::parser::Clause::CallSubquery(_))
-        });
+        let has_call_subquery = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CallSubquery(_)));
 
         if has_call_subquery {
             return self.execute_call_subquery_commands(ast);
@@ -2360,12 +2535,36 @@ impl Engine {
     }
 
     /// Create a new node
+    /// If `session_tx` is provided, uses that transaction instead of creating a new one
     pub fn create_node(
         &mut self,
         labels: Vec<String>,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let mut tx = self.transaction_manager.write().begin_write()?;
+        let mut tx_ref: Option<&mut transaction::Transaction> = None;
+        self.create_node_with_transaction(labels, properties, &mut tx_ref, None)
+    }
+
+    /// Create a new node with optional transaction from session
+    fn create_node_with_transaction(
+        &mut self,
+        labels: Vec<String>,
+        properties: serde_json::Value,
+        session_tx: &mut Option<&mut transaction::Transaction>,
+        created_nodes_tracker: Option<&mut Vec<u64>>,
+    ) -> Result<u64> {
+        let has_session_tx = session_tx.is_some();
+        let mut own_tx = if has_session_tx {
+            None
+        } else {
+            Some(self.transaction_manager.write().begin_write()?)
+        };
+
+        let tx = if let Some(stx) = session_tx.as_mut() {
+            stx
+        } else {
+            own_tx.as_mut().unwrap()
+        };
 
         // Create labels in catalog and get their IDs
         let mut label_bits = 0u64;
@@ -2383,22 +2582,32 @@ impl Engine {
 
         let node_id = self
             .storage
-            .create_node_with_label_bits(&mut tx, label_bits, properties)?;
-        self.transaction_manager.write().commit(&mut tx)?;
+            .create_node_with_label_bits(tx, label_bits, properties)?;
 
-        // CRITICAL FIX: Flush storage to ensure data is persisted to disk
-        self.storage.flush()?;
+        // Track node creation if we're in a session transaction
+        if let Some(tracker) = created_nodes_tracker {
+            tracker.push(node_id);
+        }
 
-        // Update label_index to track this node
-        self.indexes.label_index.add_node(node_id, &label_ids)?;
+        // Only commit if we created our own transaction
+        if !has_session_tx {
+            self.transaction_manager.write().commit(tx)?;
+            // CRITICAL FIX: Flush storage to ensure data is persisted to disk
+            self.storage.flush()?;
+            // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
+            self.refresh_executor()?;
 
-        // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
-        self.refresh_executor()?;
+            // Update label_index to track this node (only when transaction is committed)
+            self.indexes.label_index.add_node(node_id, &label_ids)?;
+        }
+        // When there's a session transaction, index will be updated after commit
+        // This ensures rollback can properly revert changes
 
         Ok(node_id)
     }
 
     /// Create a new relationship
+    /// If `session_tx` is provided, uses that transaction instead of creating a new one
     pub fn create_relationship(
         &mut self,
         from: u64,
@@ -2406,20 +2615,47 @@ impl Engine {
         rel_type: String,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let mut tx = self.transaction_manager.write().begin_write()?;
+        let mut tx_ref: Option<&mut transaction::Transaction> = None;
+        self.create_relationship_with_transaction(from, to, rel_type, properties, &mut tx_ref)
+    }
+
+    /// Create a new relationship with optional transaction from session
+    fn create_relationship_with_transaction(
+        &mut self,
+        from: u64,
+        to: u64,
+        rel_type: String,
+        properties: serde_json::Value,
+        session_tx: &mut Option<&mut transaction::Transaction>,
+    ) -> Result<u64> {
+        let has_session_tx = session_tx.is_some();
+        let mut own_tx = if has_session_tx {
+            None
+        } else {
+            Some(self.transaction_manager.write().begin_write()?)
+        };
+
+        let tx = if let Some(stx) = session_tx.as_mut() {
+            stx
+        } else {
+            own_tx.as_mut().unwrap()
+        };
+
         let type_id = self.catalog.get_or_create_type(&rel_type)?;
         let rel_id = self
             .storage
-            .create_relationship(&mut tx, from, to, type_id, properties)?;
-        self.transaction_manager.write().commit(&mut tx)?;
+            .create_relationship(tx, from, to, type_id, properties)?;
 
-        // CRITICAL FIX: Flush storage to ensure data is persisted to disk
-        self.storage.flush()?;
+        // Only commit if we created our own transaction
+        if !has_session_tx {
+            self.transaction_manager.write().commit(tx)?;
+            // CRITICAL FIX: Flush storage to ensure data is persisted to disk
+            self.storage.flush()?;
+            // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
+            self.refresh_executor()?;
+        }
 
         self.catalog.increment_rel_count(type_id)?;
-
-        // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
-        self.refresh_executor()?;
 
         Ok(rel_id)
     }

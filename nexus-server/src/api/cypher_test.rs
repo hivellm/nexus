@@ -198,7 +198,7 @@ mod tests {
         assert!(response.error.is_none());
         assert_eq!(response.columns, vec!["database", "message"]);
         assert_eq!(response.rows.len(), 1);
-        
+
         let row = &response.rows[0];
         if let Some(arr) = row.as_array() {
             assert_eq!(arr[0].as_str(), Some("testdb_use"));
@@ -237,7 +237,7 @@ mod tests {
         assert!(response.error.is_none());
         assert_eq!(response.columns, vec!["database", "message"]);
         assert_eq!(response.rows.len(), 1);
-        
+
         let row = &response.rows[0];
         if let Some(arr) = row.as_array() {
             assert_eq!(arr[0].as_str(), Some("neo4j"));

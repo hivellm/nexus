@@ -23,6 +23,10 @@ pub struct Session {
     pub active_transaction: Option<Transaction>,
     /// Transaction manager reference
     pub transaction_manager: Arc<RwLock<TransactionManager>>,
+    /// Nodes created during this transaction (for rollback)
+    pub created_nodes: Vec<u64>,
+    /// Relationships created during this transaction (for rollback)
+    pub created_relationships: Vec<u64>,
     /// Last activity timestamp
     pub last_activity: Instant,
     /// Session timeout (default: 30 minutes)
@@ -31,14 +35,13 @@ pub struct Session {
 
 impl Session {
     /// Create a new session
-    pub fn new(
-        id: SessionId,
-        transaction_manager: Arc<RwLock<TransactionManager>>,
-    ) -> Self {
+    pub fn new(id: SessionId, transaction_manager: Arc<RwLock<TransactionManager>>) -> Self {
         Self {
             id,
             active_transaction: None,
             transaction_manager,
+            created_nodes: Vec::new(),
+            created_relationships: Vec::new(),
             last_activity: Instant::now(),
             timeout: Duration::from_secs(30 * 60), // 30 minutes
         }
@@ -64,6 +67,9 @@ impl Session {
         let mut tx_mgr = self.transaction_manager.write();
         let tx = tx_mgr.begin_write()?;
         self.active_transaction = Some(tx);
+        // Clear tracking for new transaction
+        self.created_nodes.clear();
+        self.created_relationships.clear();
         self.last_activity = Instant::now();
 
         Ok(())
@@ -133,7 +139,7 @@ impl SessionManager {
     /// Get or create a session
     pub fn get_or_create_session(&self, session_id: SessionId) -> Session {
         let mut sessions = self.sessions.write();
-        
+
         // Check if session exists and is not expired
         if let Some(session) = sessions.get(&session_id) {
             if !session.is_expired() {
@@ -157,7 +163,7 @@ impl SessionManager {
     /// Get a session (returns None if not found or expired)
     pub fn get_session(&self, session_id: &SessionId) -> Option<Session> {
         let mut sessions = self.sessions.write();
-        
+
         if let Some(session) = sessions.get(session_id) {
             if session.is_expired() {
                 sessions.remove(session_id);
@@ -167,6 +173,8 @@ impl SessionManager {
                 id: session.id.clone(),
                 active_transaction: session.active_transaction.clone(),
                 transaction_manager: session.transaction_manager.clone(),
+                created_nodes: session.created_nodes.clone(),
+                created_relationships: session.created_relationships.clone(),
                 last_activity: Instant::now(),
                 timeout: session.timeout,
             };
@@ -200,12 +208,7 @@ impl SessionManager {
         let sessions = self.sessions.read();
         sessions
             .keys()
-            .filter(|id| {
-                sessions
-                    .get(*id)
-                    .map(|s| !s.is_expired())
-                    .unwrap_or(false)
-            })
+            .filter(|id| sessions.get(*id).map(|s| !s.is_expired()).unwrap_or(false))
             .cloned()
             .collect()
     }
@@ -257,4 +260,3 @@ mod tests {
         assert_eq!(session2.id, "test-session");
     }
 }
-

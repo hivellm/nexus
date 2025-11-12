@@ -1,6 +1,6 @@
 use super::parser::{
-    BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement,
-    QueryHint, RelationshipDirection, ReturnItem, UnaryOperator,
+    BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement, QueryHint,
+    RelationshipDirection, ReturnItem, UnaryOperator,
 };
 use super::{Aggregation, Direction, Operator, ProjectionItem};
 use crate::catalog::Catalog;
@@ -248,31 +248,41 @@ impl<'a> QueryPlanner<'a> {
                     if all_target_nodes.contains(variable) {
                         continue;
                     }
-                    
+
                     // Check for hints for this variable
                     let use_index_hint = hints.iter().find(|h| {
-                        if let QueryHint::UsingIndex { variable: hint_var, .. } = h {
+                        if let QueryHint::UsingIndex {
+                            variable: hint_var, ..
+                        } = h
+                        {
                             hint_var == variable
                         } else {
                             false
                         }
                     });
-                    
+
                     let use_scan_hint = hints.iter().find(|h| {
-                        if let QueryHint::UsingScan { variable: hint_var, .. } = h {
+                        if let QueryHint::UsingScan {
+                            variable: hint_var, ..
+                        } = h
+                        {
                             hint_var == variable
                         } else {
                             false
                         }
                     });
-                    
+
                     if !node.labels.is_empty() {
                         // Use first label for initial scan
                         let first_label = &node.labels[0];
                         let label_id = self.catalog.get_or_create_label(first_label)?;
-                        
+
                         // Apply USING INDEX hint if present
-                        if let Some(QueryHint::UsingIndex { property: _property, .. }) = use_index_hint {
+                        if let Some(QueryHint::UsingIndex {
+                            property: _property,
+                            ..
+                        }) = use_index_hint
+                        {
                             // Force index usage for this property
                             // The executor will use property index lookup instead of label scan
                             operators.push(Operator::NodeByLabel {

@@ -1281,11 +1281,11 @@ pub(crate) async fn execute_database_commands(
                     columns = vec!["database".to_string(), "message".to_string()];
                 }
                 let manager = server.database_manager.read().await;
-                
+
                 // Check if database exists
                 let databases = manager.list_databases();
                 let db_exists = databases.iter().any(|db| db.name == use_db.name);
-                
+
                 if db_exists {
                     rows.push(serde_json::json!([
                         use_db.name.clone(),

@@ -17,7 +17,10 @@ fn create_engine() -> Engine {
 
 /// Helper function to extract the first value from the first row of a result set
 fn extract_first_row_value(result: nexus_core::executor::ResultSet) -> Option<Value> {
-    result.rows.first().and_then(|row| row.values.first().cloned())
+    result
+        .rows
+        .first()
+        .and_then(|row| row.values.first().cloned())
 }
 
 #[test]
@@ -87,7 +90,7 @@ fn test_commit_without_begin_returns_error() {
     // Try to commit without beginning a transaction
     let query = "COMMIT TRANSACTION";
     let result = engine.execute_cypher(query);
-    
+
     assert!(result.is_err(), "COMMIT without BEGIN should return error");
     let error_msg = result.unwrap_err().to_string();
     assert!(
@@ -103,8 +106,11 @@ fn test_rollback_without_begin_returns_error() {
     // Try to rollback without beginning a transaction
     let query = "ROLLBACK TRANSACTION";
     let result = engine.execute_cypher(query);
-    
-    assert!(result.is_err(), "ROLLBACK without BEGIN should return error");
+
+    assert!(
+        result.is_err(),
+        "ROLLBACK without BEGIN should return error"
+    );
     let error_msg = result.unwrap_err().to_string();
     assert!(
         error_msg.contains("not found") || error_msg.contains("expired"),
@@ -123,7 +129,7 @@ fn test_double_begin_returns_error() {
     // Try to begin another transaction in the same session
     let query = "BEGIN TRANSACTION";
     let result = engine.execute_cypher(query);
-    
+
     assert!(result.is_err(), "Double BEGIN should return error");
     let error_msg = result.unwrap_err().to_string();
     assert!(
@@ -139,10 +145,10 @@ fn test_commit_then_begin_new_transaction() {
     // Begin and commit first transaction
     let query = "BEGIN TRANSACTION";
     engine.execute_cypher(query).unwrap();
-    
+
     let query = "CREATE (n:Person {name: 'Charlie'}) RETURN n";
     engine.execute_cypher(query).unwrap();
-    
+
     let query = "COMMIT TRANSACTION";
     engine.execute_cypher(query).unwrap();
 
@@ -265,7 +271,8 @@ fn test_begin_commit_rollback_sequence() {
     );
 
     // Verify only first node exists
-    let query = "MATCH (n:Person) WHERE n.name IN ['Grace', 'Henry'] RETURN n.name AS name ORDER BY n.name";
+    let query =
+        "MATCH (n:Person) WHERE n.name IN ['Grace', 'Henry'] RETURN n.name AS name ORDER BY n.name";
     let result = engine.execute_cypher(query).unwrap();
     assert_eq!(result.rows.len(), 1);
     assert_eq!(
@@ -307,4 +314,3 @@ fn test_transaction_with_create_index() {
     let result = engine.execute_cypher(query).unwrap();
     assert_eq!(result.rows.len(), 1);
 }
-

@@ -1135,13 +1135,13 @@ impl CypherParser {
     /// Parse MATCH clause
     fn parse_match_clause(&mut self) -> Result<MatchClause> {
         self.skip_whitespace();
-        
+
         // Check for path variable assignment: p = (pattern)
         let path_variable = if self.is_identifier_start() {
             let saved_pos = self.pos;
             let var_name = self.parse_identifier()?;
             self.skip_whitespace();
-            
+
             if self.peek_char() == Some('=') {
                 // This is a path variable assignment
                 self.consume_char(); // consume '='
@@ -1155,9 +1155,9 @@ impl CypherParser {
         } else {
             None
         };
-        
+
         let mut pattern = self.parse_pattern()?;
-        
+
         // Set path variable if detected
         if let Some(path_var) = path_variable {
             pattern.path_variable = Some(path_var);
@@ -1166,15 +1166,15 @@ impl CypherParser {
         // Parse hints after pattern: USING INDEX, USING SCAN, USING JOIN
         let mut hints = Vec::new();
         self.skip_whitespace();
-        
+
         while self.peek_keyword("USING") {
             self.parse_keyword()?; // consume "USING"
             self.skip_whitespace();
-            
+
             if self.peek_keyword("INDEX") {
                 self.parse_keyword()?; // consume "INDEX"
                 self.skip_whitespace();
-                
+
                 // Parse: variable:Label(property)
                 let variable = self.parse_identifier()?;
                 self.skip_whitespace();
@@ -1184,7 +1184,7 @@ impl CypherParser {
                 self.expect_char('(')?;
                 let property = self.parse_identifier()?;
                 self.expect_char(')')?;
-                
+
                 hints.push(QueryHint::UsingIndex {
                     variable,
                     label,
@@ -1193,36 +1193,31 @@ impl CypherParser {
             } else if self.peek_keyword("SCAN") {
                 self.parse_keyword()?; // consume "SCAN"
                 self.skip_whitespace();
-                
+
                 // Parse: variable:Label
                 let variable = self.parse_identifier()?;
                 self.skip_whitespace();
                 self.expect_char(':')?;
                 let label = self.parse_identifier()?;
-                
-                hints.push(QueryHint::UsingScan {
-                    variable,
-                    label,
-                });
+
+                hints.push(QueryHint::UsingScan { variable, label });
             } else if self.peek_keyword("JOIN") {
                 self.parse_keyword()?; // consume "JOIN"
                 self.skip_whitespace();
-                
+
                 if self.peek_keyword("ON") {
                     self.parse_keyword()?; // consume "ON"
                     self.skip_whitespace();
                 }
-                
+
                 // Parse: variable
                 let variable = self.parse_identifier()?;
-                
-                hints.push(QueryHint::UsingJoin {
-                    variable,
-                });
+
+                hints.push(QueryHint::UsingJoin { variable });
             } else {
                 return Err(self.error("USING must be followed by INDEX, SCAN, or JOIN"));
             }
-            
+
             self.skip_whitespace();
         }
 
@@ -1458,7 +1453,7 @@ impl CypherParser {
             }
         }
 
-        Ok(Pattern { 
+        Ok(Pattern {
             elements,
             path_variable: None, // Set by caller if path variable assignment detected
         })
@@ -2076,11 +2071,11 @@ impl CypherParser {
     fn parse_load_csv_clause(&mut self) -> Result<LoadCsvClause> {
         self.parse_keyword()?; // consume "CSV"
         self.skip_whitespace();
-        
+
         // Parse FROM keyword
         self.expect_keyword("FROM")?;
         self.skip_whitespace();
-        
+
         // Parse URL (string literal)
         let url_expr = self.parse_string_literal()?;
         let url = if let Expression::Literal(Literal::String(s)) = url_expr {
@@ -2088,9 +2083,9 @@ impl CypherParser {
         } else {
             return Err(self.error("Expected string literal for CSV file URL"));
         };
-        
+
         self.skip_whitespace();
-        
+
         // Parse optional WITH HEADERS
         let mut with_headers = false;
         if self.peek_keyword("WITH") {
@@ -2104,13 +2099,13 @@ impl CypherParser {
                 return Err(self.error("WITH must be followed by HEADERS"));
             }
         }
-        
+
         // Parse optional FIELDTERMINATOR
         let mut field_terminator = None;
         if self.peek_keyword("FIELDTERMINATOR") {
             self.parse_keyword()?; // consume "FIELDTERMINATOR"
             self.skip_whitespace();
-            
+
             // Parse terminator character (string literal)
             let term_expr = self.parse_string_literal()?;
             let term_str = if let Expression::Literal(Literal::String(s)) = term_expr {
@@ -2118,21 +2113,21 @@ impl CypherParser {
             } else {
                 return Err(self.error("Expected string literal for FIELDTERMINATOR"));
             };
-            
+
             if term_str.len() == 1 {
                 field_terminator = Some(term_str);
             } else {
                 return Err(self.error("FIELDTERMINATOR must be a single character"));
             }
-            
+
             self.skip_whitespace();
         }
-        
+
         // Parse AS variable
         self.expect_keyword("AS")?;
         self.skip_whitespace();
         let variable = self.parse_identifier()?;
-        
+
         Ok(LoadCsvClause {
             url,
             variable,
@@ -2154,7 +2149,7 @@ impl CypherParser {
         // Parse clauses until we find the closing brace
         while self.pos < self.input.len() {
             self.skip_whitespace();
-            
+
             // Check for closing brace
             if self.peek_char() == Some('}') {
                 self.consume_char();
@@ -3738,7 +3733,7 @@ impl CypherParser {
             }
         }
 
-        Ok(Pattern { 
+        Ok(Pattern {
             elements,
             path_variable: None, // Set by caller if path variable assignment detected
         })

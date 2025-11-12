@@ -147,17 +147,22 @@ fn test_using_index_hint_parsing() {
     use nexus_core::executor::parser::CypherParser;
 
     // Test USING INDEX hint parsing
-    let query = "MATCH (n:Person) USING INDEX n:Person(email) WHERE n.email = 'test@example.com' RETURN n";
+    let query =
+        "MATCH (n:Person) USING INDEX n:Person(email) WHERE n.email = 'test@example.com' RETURN n";
     let mut parser = CypherParser::new(query.to_string());
     let result = parser.parse();
-    
+
     assert!(result.is_ok(), "USING INDEX hint should parse successfully");
     let ast = result.unwrap();
-    
+
     if let Some(nexus_core::executor::parser::Clause::Match(match_clause)) = ast.clauses.first() {
         assert_eq!(match_clause.hints.len(), 1, "Should have one hint");
         match &match_clause.hints[0] {
-            nexus_core::executor::parser::QueryHint::UsingIndex { variable, label, property } => {
+            nexus_core::executor::parser::QueryHint::UsingIndex {
+                variable,
+                label,
+                property,
+            } => {
                 assert_eq!(variable, "n");
                 assert_eq!(label, "Person");
                 assert_eq!(property, "email");
@@ -177,10 +182,10 @@ fn test_using_scan_hint_parsing() {
     let query = "MATCH (n:Person) USING SCAN n:Person RETURN n";
     let mut parser = CypherParser::new(query.to_string());
     let result = parser.parse();
-    
+
     assert!(result.is_ok(), "USING SCAN hint should parse successfully");
     let ast = result.unwrap();
-    
+
     if let Some(nexus_core::executor::parser::Clause::Match(match_clause)) = ast.clauses.first() {
         assert_eq!(match_clause.hints.len(), 1, "Should have one hint");
         match &match_clause.hints[0] {
@@ -203,10 +208,10 @@ fn test_using_join_hint_parsing() {
     let query = "MATCH (a:Person)-[r:KNOWS]->(b:Person) USING JOIN ON r RETURN a, b";
     let mut parser = CypherParser::new(query.to_string());
     let result = parser.parse();
-    
+
     assert!(result.is_ok(), "USING JOIN hint should parse successfully");
     let ast = result.unwrap();
-    
+
     if let Some(nexus_core::executor::parser::Clause::Match(match_clause)) = ast.clauses.first() {
         assert_eq!(match_clause.hints.len(), 1, "Should have one hint");
         match &match_clause.hints[0] {
@@ -228,10 +233,10 @@ fn test_multiple_hints_parsing() {
     let query = "MATCH (n:Person) USING INDEX n:Person(email) USING SCAN n:Person RETURN n";
     let mut parser = CypherParser::new(query.to_string());
     let result = parser.parse();
-    
+
     assert!(result.is_ok(), "Multiple hints should parse successfully");
     let ast = result.unwrap();
-    
+
     if let Some(nexus_core::executor::parser::Clause::Match(match_clause)) = ast.clauses.first() {
         assert_eq!(match_clause.hints.len(), 2, "Should have two hints");
     } else {
