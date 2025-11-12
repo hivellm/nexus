@@ -782,8 +782,7 @@ impl PropertyIndex {
         let mut stats = self.stats.write();
 
         // Create empty index if it doesn't exist
-        if !trees.contains_key(&(label_id, key_id)) {
-            trees.insert((label_id, key_id), BTreeMap::new());
+        if trees.entry((label_id, key_id)).or_insert_with(BTreeMap::new).is_empty() {
             stats.indexed_properties = trees.len() as u32;
         }
 
