@@ -47,7 +47,7 @@
 ### 1.4 Permission Management
 - [x] 1.4.1 Implement `GRANT permission TO username` Cypher command ✅ (already existed)
 - [x] 1.4.2 Implement `REVOKE permission FROM username` Cypher command ✅ (already existed)
-- [ ] 1.4.3 Add fine-grained permissions: QUEUE, CHATROOM, REST
+- [x] 1.4.3 Add fine-grained permissions: QUEUE, CHATROOM, REST ✅
 - [x] 1.4.4 Add REST endpoint: `POST /auth/users/{username}/permissions` ✅
 - [x] 1.4.5 Add REST endpoint: `DELETE /auth/users/{username}/permissions/{permission}` ✅
 - [x] 1.4.6 Add REST endpoint: `GET /auth/users/{username}/permissions` ✅
