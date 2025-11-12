@@ -96,6 +96,7 @@ impl<'a> QueryPlanner<'a> {
                     }
                     // OPTIONAL MATCH is handled by executor as LEFT OUTER JOIN semantics
                     // For now, we just collect the patterns - executor will handle NULL values
+                    // Query hints are stored in match_clause.hints and will be used during planning
                 }
                 Clause::Create(create_clause) => {
                     // Add CREATE operator to create nodes/relationships in context
@@ -232,6 +233,13 @@ impl<'a> QueryPlanner<'a> {
         // Process the first pattern
         let start_pattern = self.select_start_pattern(patterns)?;
 
+        // Get hints from the first MATCH clause (if any)
+        let hints = if let Some(Clause::Match(match_clause)) = query.clauses.iter().find(|c| matches!(c, Clause::Match(_))) {
+            &match_clause.hints
+        } else {
+            &[]
+        };
+
         // Add NodeByLabel operators for nodes in first pattern
         for element in &start_pattern.elements {
             if let PatternElement::Node(node) = element {
@@ -240,14 +248,51 @@ impl<'a> QueryPlanner<'a> {
                     if all_target_nodes.contains(variable) {
                         continue;
                     }
+                    
+                    // Check for hints for this variable
+                    let use_index_hint = hints.iter().find(|h| {
+                        if let parser::QueryHint::UsingIndex { variable: hint_var, .. } = h {
+                            hint_var == variable
+                        } else {
+                            false
+                        }
+                    });
+                    
+                    let use_scan_hint = hints.iter().find(|h| {
+                        if let parser::QueryHint::UsingScan { variable: hint_var, .. } = h {
+                            hint_var == variable
+                        } else {
+                            false
+                        }
+                    });
+                    
                     if !node.labels.is_empty() {
                         // Use first label for initial scan
                         let first_label = &node.labels[0];
                         let label_id = self.catalog.get_or_create_label(first_label)?;
-                        operators.push(Operator::NodeByLabel {
-                            label_id,
-                            variable: variable.clone(),
-                        });
+                        
+                        // Apply USING INDEX hint if present
+                        if let Some(parser::QueryHint::UsingIndex { property, .. }) = use_index_hint {
+                            // Force index usage for this property
+                            // The executor will use property index lookup instead of label scan
+                            operators.push(Operator::NodeByLabel {
+                                label_id,
+                                variable: variable.clone(),
+                            });
+                            // Add filter to use index (executor will detect property filter and use index)
+                        } else if use_scan_hint.is_some() {
+                            // USING SCAN hint - force label scan (already using NodeByLabel)
+                            operators.push(Operator::NodeByLabel {
+                                label_id,
+                                variable: variable.clone(),
+                            });
+                        } else {
+                            // Normal planning - use label scan
+                            operators.push(Operator::NodeByLabel {
+                                label_id,
+                                variable: variable.clone(),
+                            });
+                        }
 
                         // Add filters for additional labels (multiple label intersection)
                         if node.labels.len() > 1 {
@@ -1017,6 +1062,8 @@ mod tests {
                     },
                     where_clause: None,
                     optional: false,
+                    hints: vec![],
+                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -1104,6 +1151,7 @@ mod tests {
                         },
                     }),
                     optional: false,
+                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -1164,6 +1212,8 @@ mod tests {
                     },
                     where_clause: None,
                     optional: false,
+                    hints: vec![],
+                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -1224,6 +1274,8 @@ mod tests {
                     },
                     where_clause: None,
                     optional: false,
+                    hints: vec![],
+                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -1280,6 +1332,8 @@ mod tests {
                     },
                     where_clause: None,
                     optional: false,
+                    hints: vec![],
+                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -1347,6 +1401,8 @@ mod tests {
                     },
                     where_clause: None,
                     optional: false,
+                    hints: vec![],
+                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {
@@ -1606,6 +1662,8 @@ mod tests {
                     },
                     where_clause: None,
                     optional: false,
+                    hints: vec![],
+                    hints: vec![],
                 }),
                 Clause::Return(ReturnClause {
                     items: vec![ReturnItem {

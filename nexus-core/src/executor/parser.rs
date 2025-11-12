@@ -109,6 +109,34 @@ pub struct MatchClause {
     pub where_clause: Option<WhereClause>,
     /// Whether this is an OPTIONAL MATCH
     pub optional: bool,
+    /// Query hints (USING INDEX, USING SCAN, USING JOIN)
+    pub hints: Vec<QueryHint>,
+}
+
+/// Query hint for planner optimization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum QueryHint {
+    /// USING INDEX hint: MATCH (n:Label) USING INDEX n:Label(property)
+    UsingIndex {
+        /// Variable name
+        variable: String,
+        /// Label name
+        label: String,
+        /// Property name
+        property: String,
+    },
+    /// USING SCAN hint: MATCH (n:Label) USING SCAN n:Label
+    UsingScan {
+        /// Variable name
+        variable: String,
+        /// Label name
+        label: String,
+    },
+    /// USING JOIN hint: MATCH (a)-[r]->(b) USING JOIN ON r
+    UsingJoin {
+        /// Variable name (relationship or node)
+        variable: String,
+    },
 }
 
 /// CREATE clause for creating nodes and relationships
@@ -1110,10 +1138,74 @@ impl CypherParser {
             pattern.path_variable = Some(path_var);
         }
 
+        // Parse hints after pattern: USING INDEX, USING SCAN, USING JOIN
+        let mut hints = Vec::new();
+        self.skip_whitespace();
+        
+        while self.peek_keyword("USING") {
+            self.parse_keyword()?; // consume "USING"
+            self.skip_whitespace();
+            
+            if self.peek_keyword("INDEX") {
+                self.parse_keyword()?; // consume "INDEX"
+                self.skip_whitespace();
+                
+                // Parse: variable:Label(property)
+                let variable = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_char(':')?;
+                let label = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_char('(')?;
+                let property = self.parse_identifier()?;
+                self.expect_char(')')?;
+                
+                hints.push(QueryHint::UsingIndex {
+                    variable,
+                    label,
+                    property,
+                });
+            } else if self.peek_keyword("SCAN") {
+                self.parse_keyword()?; // consume "SCAN"
+                self.skip_whitespace();
+                
+                // Parse: variable:Label
+                let variable = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_char(':')?;
+                let label = self.parse_identifier()?;
+                
+                hints.push(QueryHint::UsingScan {
+                    variable,
+                    label,
+                });
+            } else if self.peek_keyword("JOIN") {
+                self.parse_keyword()?; // consume "JOIN"
+                self.skip_whitespace();
+                
+                if self.peek_keyword("ON") {
+                    self.parse_keyword()?; // consume "ON"
+                    self.skip_whitespace();
+                }
+                
+                // Parse: variable
+                let variable = self.parse_identifier()?;
+                
+                hints.push(QueryHint::UsingJoin {
+                    variable,
+                });
+            } else {
+                return Err(self.error("USING must be followed by INDEX, SCAN, or JOIN"));
+            }
+            
+            self.skip_whitespace();
+        }
+
         Ok(MatchClause {
             pattern,
             where_clause: None, // WHERE is now a separate clause
             optional: false,    // Set by caller if this is OPTIONAL MATCH
+            hints,
         })
     }
 
