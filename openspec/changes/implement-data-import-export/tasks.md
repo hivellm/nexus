@@ -1,12 +1,12 @@
 # Tasks - Data Import/Export
 
 ## 1. LOAD CSV
-- [ ] 1.1 LOAD CSV parsing
-- [ ] 1.2 CSV file reading
-- [ ] 1.3 WITH HEADERS support
-- [ ] 1.4 FIELDTERMINATOR support
-- [ ] 1.5 Batch processing
-- [ ] 1.6 Add tests
+- [x] 1.1 LOAD CSV parsing ✅
+- [x] 1.2 CSV file reading ✅
+- [x] 1.3 WITH HEADERS support ✅
+- [x] 1.4 FIELDTERMINATOR support ✅
+- [x] 1.5 Batch processing ✅ (rows processed in batches)
+- [x] 1.6 Add tests ✅ (5 tests: parsing, WITH HEADERS parsing, FIELDTERMINATOR parsing, execution, WITH HEADERS execution, nonexistent file error)
 
 ## 2. Bulk Import API
 - [ ] 2.1 Create bulk import endpoint

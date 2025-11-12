@@ -98,6 +98,8 @@ pub enum Clause {
     Profile(ProfileClause),
     /// CALL subquery clause
     CallSubquery(CallSubqueryClause),
+    /// LOAD CSV clause for importing CSV data
+    LoadCsv(LoadCsvClause),
 }
 
 /// MATCH clause with pattern matching
@@ -616,6 +618,20 @@ pub struct CallSubqueryClause {
     pub batch_size: Option<usize>,
 }
 
+/// LOAD CSV clause for importing CSV data
+/// Syntax: LOAD CSV FROM 'file:///path/to/file.csv' [WITH HEADERS] [FIELDTERMINATOR ','] AS row
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadCsvClause {
+    /// CSV file URL/path
+    pub url: String,
+    /// Variable name to bind each row to (default: 'row')
+    pub variable: String,
+    /// Whether CSV has headers (WITH HEADERS)
+    pub with_headers: bool,
+    /// Field terminator character (default: ',')
+    pub field_terminator: Option<String>,
+}
+
 /// Expression types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Expression {
@@ -1045,6 +1061,15 @@ impl CypherParser {
                     // This is a procedure call, not a subquery
                     // For now, we'll return an error as procedure calls are not fully implemented
                     Err(self.error("CALL procedures are not yet supported. Use CALL { subquery } for subqueries."))
+                }
+            }
+            "LOAD" => {
+                self.skip_whitespace();
+                if self.peek_keyword("CSV") {
+                    let load_csv = self.parse_load_csv_clause()?;
+                    Ok(Clause::LoadCsv(load_csv))
+                } else {
+                    Err(self.error("LOAD must be followed by CSV"))
                 }
             }
             "BEGIN" => {
@@ -2044,6 +2069,76 @@ impl CypherParser {
         self.skip_whitespace();
         let name = self.parse_identifier()?;
         Ok(UseDatabaseClause { name })
+    }
+
+    /// Parse LOAD CSV clause
+    /// Syntax: LOAD CSV FROM 'file:///path/to/file.csv' [WITH HEADERS] [FIELDTERMINATOR ','] AS row
+    fn parse_load_csv_clause(&mut self) -> Result<LoadCsvClause> {
+        self.parse_keyword()?; // consume "CSV"
+        self.skip_whitespace();
+        
+        // Parse FROM keyword
+        self.expect_keyword("FROM")?;
+        self.skip_whitespace();
+        
+        // Parse URL (string literal)
+        let url_expr = self.parse_string_literal()?;
+        let url = if let Expression::Literal(Literal::String(s)) = url_expr {
+            s
+        } else {
+            return Err(self.error("Expected string literal for CSV file URL"));
+        };
+        
+        self.skip_whitespace();
+        
+        // Parse optional WITH HEADERS
+        let mut with_headers = false;
+        if self.peek_keyword("WITH") {
+            self.parse_keyword()?; // consume "WITH"
+            self.skip_whitespace();
+            if self.peek_keyword("HEADERS") {
+                self.parse_keyword()?; // consume "HEADERS"
+                with_headers = true;
+                self.skip_whitespace();
+            } else {
+                return Err(self.error("WITH must be followed by HEADERS"));
+            }
+        }
+        
+        // Parse optional FIELDTERMINATOR
+        let mut field_terminator = None;
+        if self.peek_keyword("FIELDTERMINATOR") {
+            self.parse_keyword()?; // consume "FIELDTERMINATOR"
+            self.skip_whitespace();
+            
+            // Parse terminator character (string literal)
+            let term_expr = self.parse_string_literal()?;
+            let term_str = if let Expression::Literal(Literal::String(s)) = term_expr {
+                s
+            } else {
+                return Err(self.error("Expected string literal for FIELDTERMINATOR"));
+            };
+            
+            if term_str.len() == 1 {
+                field_terminator = Some(term_str);
+            } else {
+                return Err(self.error("FIELDTERMINATOR must be a single character"));
+            }
+            
+            self.skip_whitespace();
+        }
+        
+        // Parse AS variable
+        self.expect_keyword("AS")?;
+        self.skip_whitespace();
+        let variable = self.parse_identifier()?;
+        
+        Ok(LoadCsvClause {
+            url,
+            variable,
+            with_headers,
+            field_terminator,
+        })
     }
 
     /// Parse CALL subquery clause

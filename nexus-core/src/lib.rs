@@ -1845,6 +1845,15 @@ impl Engine {
             return self.execute_constraint_commands(ast);
         }
 
+        // Check for LOAD CSV commands
+        let has_load_csv = ast.clauses.iter().any(|c| {
+            matches!(c, executor::parser::Clause::LoadCsv(_))
+        });
+
+        if has_load_csv {
+            return self.execute_load_csv_commands(ast);
+        }
+
         // Check for CALL subquery commands
         let has_call_subquery = ast.clauses.iter().any(|c| {
             matches!(c, executor::parser::Clause::CallSubquery(_))
