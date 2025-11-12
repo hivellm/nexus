@@ -348,7 +348,7 @@ mod tests {
         };
         let manager = AuthManager::new(config);
 
-        let api_key = manager
+        let (api_key, full_key) = manager
             .generate_api_key(
                 "test-key".to_string(),
                 vec![Permission::Read, Permission::Write],
@@ -359,6 +359,8 @@ mod tests {
         assert!(api_key.permissions.contains(&Permission::Read));
         assert!(api_key.permissions.contains(&Permission::Write));
         assert!(api_key.is_active);
+        assert!(full_key.starts_with("nx_"));
+        assert_eq!(full_key.len(), 35); // nx_ + 32 chars
     }
 
     #[test]
@@ -369,11 +371,15 @@ mod tests {
         let api_key = ApiKey {
             id: "test".to_string(),
             name: "test".to_string(),
+            user_id: None,
             permissions: vec![Permission::Read],
             hashed_key: "test".to_string(),
             created_at: Utc::now(),
+            expires_at: None,
             last_used: None,
             is_active: true,
+            is_revoked: false,
+            revocation_reason: None,
         };
 
         assert!(manager.has_permission(&api_key, Permission::Read));
