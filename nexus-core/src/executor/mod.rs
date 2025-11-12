@@ -17,8 +17,10 @@ pub mod parser;
 pub mod planner;
 
 use crate::catalog::Catalog;
+use crate::graph::{algorithms::Graph, procedures::ProcedureRegistry};
 use crate::index::{KnnIndex, LabelIndex};
 use crate::storage::RecordStore;
+use crate::udf::UdfRegistry;
 use crate::{Error, Result};
 use chrono::{Datelike, TimeZone};
 use planner::QueryPlanner;
@@ -187,6 +189,15 @@ pub enum Operator {
         /// Quantifier specifying path length constraints
         quantifier: parser::RelationshipQuantifier,
     },
+    /// Call a procedure
+    CallProcedure {
+        /// Procedure name (e.g., "gds.shortestPath.dijkstra")
+        procedure_name: String,
+        /// Procedure arguments (as expressions)
+        arguments: Vec<parser::Expression>,
+        /// YIELD columns (optional) - columns to return from procedure
+        yield_columns: Option<Vec<String>>,
+    },
 }
 
 /// Projection entry describing an expression and its alias
@@ -334,6 +345,8 @@ pub struct Executor {
     label_index: LabelIndex,
     /// KNN index for vector operations
     knn_index: KnnIndex,
+    /// UDF registry for user-defined functions
+    udf_registry: UdfRegistry,
 }
 
 impl Executor {
@@ -349,7 +362,35 @@ impl Executor {
             store: store.clone(),
             label_index: label_index.clone(),
             knn_index: knn_index.clone(),
+            udf_registry: UdfRegistry::new(),
         })
+    }
+
+    /// Create a new executor with custom UDF registry
+    pub fn with_udf_registry(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+        udf_registry: UdfRegistry,
+    ) -> Result<Self> {
+        Ok(Self {
+            catalog: catalog.clone(),
+            store: store.clone(),
+            label_index: label_index.clone(),
+            knn_index: knn_index.clone(),
+            udf_registry,
+        })
+    }
+
+    /// Get reference to UDF registry
+    pub fn udf_registry(&self) -> &UdfRegistry {
+        &self.udf_registry
+    }
+
+    /// Get mutable reference to UDF registry
+    pub fn udf_registry_mut(&mut self) -> &mut UdfRegistry {
+        &mut self.udf_registry
     }
 
     /// Execute a Cypher query
@@ -471,6 +512,18 @@ impl Executor {
                         &rel_var,
                         &path_var,
                         &quantifier,
+                    )?;
+                }
+                Operator::CallProcedure {
+                    procedure_name,
+                    arguments,
+                    yield_columns,
+                } => {
+                    self.execute_call_procedure(
+                        &mut context,
+                        &procedure_name,
+                        &arguments,
+                        yield_columns.as_ref(),
                     )?;
                 }
             }
@@ -1924,6 +1977,18 @@ impl Executor {
                     quantifier,
                 )?;
             }
+            Operator::CallProcedure {
+                procedure_name,
+                arguments,
+                yield_columns,
+            } => {
+                self.execute_call_procedure(
+                    context,
+                    procedure_name,
+                    arguments,
+                    yield_columns.as_ref(),
+                )?;
+            }
         }
         Ok(())
     }
@@ -3176,6 +3241,153 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute CALL procedure operator
+    fn execute_call_procedure(
+        &self,
+        context: &mut ExecutionContext,
+        procedure_name: &str,
+        arguments: &[parser::Expression],
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        // Get procedure registry (for now, create a new one - in full implementation would be shared)
+        let registry = ProcedureRegistry::new();
+
+        // Find procedure
+        let procedure = registry.get(procedure_name).ok_or_else(|| {
+            Error::CypherSyntax(format!("Procedure '{}' not found", procedure_name))
+        })?;
+
+        // Evaluate arguments
+        let mut args_map = HashMap::new();
+        for arg_expr in arguments {
+            // Evaluate argument expression
+            // For now, we'll use a simple evaluation - in a full implementation,
+            // we'd need to evaluate expressions in the context of current rows
+            let arg_value = self.evaluate_expression_in_context(context, arg_expr)?;
+            // Use the expression string representation as key (simplified)
+            args_map.insert("arg".to_string(), arg_value);
+        }
+
+        // Convert args_map to the format expected by procedures (HashMap<String, Value>)
+        // For now, we'll create a simple graph from the current engine state
+        // In a full implementation, we'd convert the entire graph from Engine
+        let graph = Graph::new(); // Empty graph for now - full implementation would convert from Engine
+
+        // Check if procedure supports streaming and use it for better memory efficiency
+        let use_streaming = procedure.supports_streaming();
+
+        if use_streaming {
+            // Use streaming execution for better memory efficiency
+            use std::sync::{Arc, Mutex};
+
+            let rows = Arc::new(Mutex::new(Vec::new()));
+            let columns = Arc::new(Mutex::new(Option::<Vec<String>>::None));
+
+            let rows_clone = rows.clone();
+            let columns_clone = columns.clone();
+
+            procedure.execute_streaming(
+                &graph,
+                &args_map,
+                Box::new(move |cols, row| {
+                    // Store columns on first call
+                    {
+                        let mut cols_ref = columns_clone.lock().unwrap();
+                        if cols_ref.is_none() {
+                            *cols_ref = Some(cols.to_vec());
+                        }
+                    }
+
+                    // Convert row to Row format
+                    rows_clone.lock().unwrap().push(Row {
+                        values: row.to_vec(),
+                    });
+
+                    Ok(())
+                }),
+            )?;
+
+            let final_columns = columns.lock().unwrap().clone().ok_or_else(|| {
+                Error::CypherSyntax("No columns returned from procedure".to_string())
+            })?;
+
+            // Filter columns based on YIELD clause if specified
+            let filtered_columns = if let Some(yield_cols) = yield_columns {
+                let mut filtered = Vec::new();
+                for col in yield_cols {
+                    if final_columns.iter().any(|c| c == col) {
+                        filtered.push(col.clone());
+                    }
+                }
+                filtered
+            } else {
+                final_columns
+            };
+
+            let final_rows = rows.lock().unwrap().clone();
+            context.set_columns_and_rows(filtered_columns, final_rows);
+        } else {
+            // Use standard execution (collect all results first)
+            let procedure_result = procedure
+                .execute(&graph, &args_map)
+                .map_err(|e| Error::CypherSyntax(format!("Procedure execution failed: {}", e)))?;
+
+            // Convert procedure result to rows
+            let mut rows = Vec::new();
+            for procedure_row in &procedure_result.rows {
+                rows.push(Row {
+                    values: procedure_row.clone(),
+                });
+            }
+
+            // Set columns and rows in context
+            let columns = if let Some(yield_cols) = yield_columns {
+                // Filter columns based on YIELD clause
+                let mut filtered_columns = Vec::new();
+                for col in yield_cols {
+                    if procedure_result.columns.iter().any(|c| c == col) {
+                        filtered_columns.push(col.clone());
+                    }
+                }
+                filtered_columns
+            } else {
+                // Use all columns from procedure result
+                procedure_result.columns.clone()
+            };
+
+            context.set_columns_and_rows(columns, rows);
+        }
+
+        Ok(())
+    }
+
+    /// Evaluate an expression in the current context
+    fn evaluate_expression_in_context(
+        &self,
+        context: &ExecutionContext,
+        expr: &parser::Expression,
+    ) -> Result<Value> {
+        // Simple evaluation - for literals and variables
+        match expr {
+            parser::Expression::Literal(parser::Literal::String(s)) => Ok(Value::String(s.clone())),
+            parser::Expression::Literal(parser::Literal::Integer(i)) => {
+                Ok(Value::Number((*i).into()))
+            }
+            parser::Expression::Literal(parser::Literal::Float(f)) => Ok(Value::Number(
+                serde_json::Number::from_f64(*f).unwrap_or_else(|| 0.into()),
+            )),
+            parser::Expression::Literal(parser::Literal::Boolean(b)) => Ok(Value::Bool(*b)),
+            parser::Expression::Literal(parser::Literal::Null) => Ok(Value::Null),
+            parser::Expression::Variable(var) => context
+                .get_variable(var)
+                .cloned()
+                .ok_or_else(|| Error::CypherSyntax(format!("Variable '{}' not found", var))),
+            _ => Err(Error::CypherSyntax(
+                "Complex expressions in procedure arguments not yet supported".to_string(),
+            )),
+        }
+    }
+
     fn materialize_rows_from_variables(
         &self,
         context: &ExecutionContext,
@@ -3268,6 +3480,24 @@ impl Executor {
             }
             parser::Expression::FunctionCall { name, args } => {
                 let lowered = name.to_lowercase();
+
+                // First, check if it's a registered UDF
+                if let Some(udf) = self.udf_registry.get(&lowered) {
+                    // Evaluate arguments
+                    let mut evaluated_args = Vec::new();
+                    for arg_expr in args {
+                        let arg_value =
+                            self.evaluate_projection_expression(row, context, &arg_expr)?;
+                        evaluated_args.push(arg_value);
+                    }
+
+                    // Execute UDF
+                    return udf
+                        .execute(&evaluated_args)
+                        .map_err(|e| Error::CypherSyntax(format!("UDF execution error: {}", e)));
+                }
+
+                // If not a UDF, check built-in functions
                 match lowered.as_str() {
                     "labels" => {
                         if let Some(arg) = args.first() {

@@ -8,6 +8,7 @@ use nexus_core::executor::{Executor, Query};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Global executor instance
@@ -233,6 +234,19 @@ pub struct CypherResponse {
     pub error: Option<String>,
 }
 
+/// Helper function to record query execution for performance monitoring
+fn record_query_execution(
+    query: &str,
+    execution_time: Duration,
+    success: bool,
+    error: Option<String>,
+    rows_returned: usize,
+) {
+    if let Some(stats) = crate::api::performance::get_query_stats() {
+        stats.record_query(query, execution_time, success, error, rows_returned);
+    }
+}
+
 /// Execute Cypher query
 pub async fn execute_cypher(
     State(server): State<Arc<NexusServer>>,
@@ -240,6 +254,7 @@ pub async fn execute_cypher(
     Json(request): Json<CypherRequest>,
 ) -> Json<CypherResponse> {
     let start_time = std::time::Instant::now();
+    let query_for_tracking = request.query.clone();
 
     tracing::info!("Executing Cypher query: {}", request.query);
 
@@ -929,17 +944,8 @@ pub async fn execute_cypher(
                                                 || rel_record.dst_id == *node_id
                                             {
                                                 // Delete the relationship by marking it as deleted
-                                                let mut tx = engine
-                                                    .transaction_manager
-                                                    .begin_write()
-                                                    .unwrap();
-                                                let mut deleted_record = rel_record;
-                                                deleted_record.mark_deleted();
-                                                engine
-                                                    .storage
-                                                    .write_rel(rel_id, &deleted_record)
-                                                    .unwrap();
-                                                engine.transaction_manager.commit(&mut tx).unwrap();
+                                                // Use storage's delete_rel method which handles transaction internally
+                                                engine.storage.delete_rel(rel_id).unwrap();
                                                 deleted_rels += 1;
                                             }
                                         }
@@ -1229,13 +1235,18 @@ pub async fn execute_cypher(
     let mut executor = executor_guard.write().await;
     match executor.execute(&query) {
         Ok(result_set) => {
-            let execution_time = start_time.elapsed().as_millis() as u64;
+            let execution_time = start_time.elapsed();
+            let execution_time_ms = execution_time.as_millis() as u64;
+            let rows_count = result_set.rows.len();
 
             tracing::info!(
                 "Query executed successfully in {}ms, {} rows returned",
-                execution_time,
-                result_set.rows.len()
+                execution_time_ms,
+                rows_count
             );
+
+            // Record successful query execution
+            record_query_execution(&query_for_tracking, execution_time, true, None, rows_count);
 
             Json(CypherResponse {
                 columns: result_set.columns,
@@ -1244,20 +1255,31 @@ pub async fn execute_cypher(
                     .into_iter()
                     .map(|row| serde_json::Value::Array(row.values))
                     .collect(),
-                execution_time_ms: execution_time,
+                execution_time_ms,
                 error: None,
             })
         }
         Err(e) => {
-            let execution_time = start_time.elapsed().as_millis() as u64;
+            let execution_time = start_time.elapsed();
+            let execution_time_ms = execution_time.as_millis() as u64;
+            let error_msg = e.to_string();
 
-            tracing::error!("Query execution failed: {}", e);
+            tracing::error!("Query execution failed: {}", error_msg);
+
+            // Record failed query execution
+            record_query_execution(
+                &query_for_tracking,
+                execution_time,
+                false,
+                Some(error_msg.clone()),
+                0,
+            );
 
             Json(CypherResponse {
                 columns: vec![],
                 rows: vec![],
-                execution_time_ms: execution_time,
-                error: Some(e.to_string()),
+                execution_time_ms,
+                error: Some(error_msg),
             })
         }
     }

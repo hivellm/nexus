@@ -14,6 +14,7 @@ pub mod clustering;
 pub mod comparison;
 pub mod construction;
 pub mod correlation;
+pub mod procedures;
 pub mod simple;
 
 // Re-export main types from the original graph module

@@ -158,6 +158,14 @@ impl<'a> QueryPlanner<'a> {
                 Clause::Union(_) => {
                     // Should have been handled above
                 }
+                Clause::CallProcedure(call_procedure_clause) => {
+                    // Add CallProcedure operator
+                    operators.push(Operator::CallProcedure {
+                        procedure_name: call_procedure_clause.procedure_name.clone(),
+                        arguments: call_procedure_clause.arguments.clone(),
+                        yield_columns: call_procedure_clause.yield_columns.clone(),
+                    });
+                }
                 _ => {
                     // Other clauses not implemented in MVP
                 }
@@ -1018,6 +1026,10 @@ impl<'a> QueryPlanner<'a> {
                 Operator::VariableLengthPath { .. } => {
                     // Variable-length paths are expensive (BFS traversal)
                     total_cost += 500.0;
+                }
+                Operator::CallProcedure { .. } => {
+                    // Procedure calls are moderately expensive (depends on procedure)
+                    total_cost += 200.0;
                 }
             }
         }

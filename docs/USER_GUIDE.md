@@ -5,12 +5,14 @@
 1. [Introduction](#introduction)
 2. [Quick Start](#quick-start)
 3. [Basic Operations](#basic-operations)
-4. [Cypher Query Language](#cypher-query-lan5. [KNN Vector Search](#knn-vector-search)
-6. [Graph Comparison](#graph-comparison)
-7. [API Reference](#api-reference)
-8. [Performance Tips](#performance-tips)
-9. [Examples](#examples)
-10. [Troubleshooting](#troubleshooting)bleshooting)
+4. [Cypher Query Language](#cypher-query-language)
+5. [User-Defined Functions (UDFs) and Procedures](#user-defined-functions-udfs-and-procedures)
+6. [KNN Vector Search](#knn-vector-search)
+7. [Graph Comparison](#graph-comparison)
+8. [API Reference](#api-reference)
+9. [Performance Tips](#performance-tips)
+10. [Examples](#examples)
+11. [Troubleshooting](#troubleshooting)
 
 ## Introduction
 
@@ -199,6 +201,319 @@ MATCH (a:Person {name: "Alice"}),
       p = shortestPath((a)-[:KNOWS*]-(b)) 
 RETURN p
 ```
+
+## User-Defined Functions (UDFs) and Procedures
+
+Nexus supports user-defined functions (UDFs) and custom procedures for extending query capabilities.
+
+### User-Defined Functions (UDFs)
+
+UDFs allow you to create custom functions that can be used in Cypher expressions. UDFs are persisted in the catalog and survive server restarts.
+
+#### Registering a UDF
+
+UDFs can be registered programmatically using the Rust API:
+
+```rust
+use nexus_core::udf::{BuiltinUdf, UdfSignature, UdfReturnType, UdfParameter};
+use nexus_core::catalog::Catalog;
+use nexus_core::udf::registry::PersistentUdfRegistry;
+use std::sync::Arc;
+
+let catalog = Arc::new(Catalog::new("./data/catalog")?);
+let registry = PersistentUdfRegistry::new(catalog.clone());
+
+let signature = UdfSignature {
+    name: "multiply".to_string(),
+    parameters: vec![
+        UdfParameter {
+            name: "a".to_string(),
+            param_type: UdfReturnType::Integer,
+            required: true,
+            default: None,
+        },
+        UdfParameter {
+            name: "b".to_string(),
+            param_type: UdfReturnType::Integer,
+            required: true,
+            default: None,
+        },
+    ],
+    return_type: UdfReturnType::Integer,
+    description: Some("Multiply two integers".to_string()),
+};
+
+let udf = BuiltinUdf::new(signature, |args| {
+    let a = args[0].as_i64().unwrap();
+    let b = args[1].as_i64().unwrap();
+    Ok(Value::Number((a * b).into()))
+});
+
+registry.register(Arc::new(udf))?;
+```
+
+#### Using UDFs in Cypher
+
+Once registered, UDFs can be used in Cypher queries:
+
+```cypher
+// Use custom UDF in RETURN clause
+MATCH (n:Person)
+RETURN n.name, multiply(n.age, 2) AS double_age
+```
+
+#### UDF Return Types
+
+UDFs support multiple return types:
+- `Integer`: Integer values
+- `Float`: Floating-point values
+- `String`: String values
+- `Boolean`: Boolean values
+- `Any`: Dynamic type
+- `List(T)`: Lists of a specific type
+- `Map`: Map/dictionary values
+
+#### UDF Persistence
+
+UDF signatures are automatically persisted to the catalog when registered. When the server restarts, UDF signatures are loaded from the catalog, but function implementations need to be re-registered.
+
+### Custom Procedures
+
+Procedures extend Cypher with custom algorithms and operations. They can be called using the `CALL` statement.
+
+#### Registering a Custom Procedure
+
+```rust
+use nexus_core::graph::procedures::{CustomProcedure, ProcedureParameter, ParameterType, ProcedureRegistry};
+use nexus_core::catalog::Catalog;
+use std::sync::Arc;
+
+let catalog = Arc::new(Catalog::new("./data/catalog")?);
+let registry = ProcedureRegistry::with_catalog(catalog.clone());
+
+let procedure = CustomProcedure::new(
+    "custom.add".to_string(),
+    vec![
+        ProcedureParameter {
+            name: "a".to_string(),
+            param_type: ParameterType::Integer,
+            required: true,
+            default: None,
+        },
+        ProcedureParameter {
+            name: "b".to_string(),
+            param_type: ParameterType::Integer,
+            required: true,
+            default: None,
+        },
+    ],
+    |_graph, args| {
+        let a = args.get("a").and_then(|v| v.as_i64()).unwrap_or(0);
+        let b = args.get("b").and_then(|v| v.as_i64()).unwrap_or(0);
+        Ok(ProcedureResult {
+            columns: vec!["sum".to_string()],
+            rows: vec![vec![Value::Number((a + b).into())]],
+        })
+    },
+);
+
+registry.register_custom(procedure)?;
+```
+
+#### Using Procedures in Cypher
+
+```cypher
+// Call custom procedure
+CALL custom.add(10, 20) YIELD sum
+RETURN sum
+
+// Call with YIELD to select specific columns
+CALL custom.add(5, 7) YIELD sum
+RETURN sum AS result
+```
+
+#### Built-in Procedures
+
+Nexus includes built-in graph algorithm procedures:
+
+- **Shortest Path**: `gds.shortestPath.dijkstra`, `gds.shortestPath.astar`, `gds.shortestPath.bellmanFord`
+- **Centrality**: `gds.centrality.pagerank`, `gds.centrality.betweenness`, `gds.centrality.closeness`, `gds.centrality.degree`
+- **Community Detection**: `gds.community.louvain`, `gds.community.labelPropagation`, `gds.community.stronglyConnectedComponents`, `gds.community.weaklyConnectedComponents`
+- **Similarity**: `gds.similarity.jaccard`, `gds.similarity.cosine`
+
+#### Procedure Persistence
+
+Custom procedure signatures are automatically persisted to the catalog. Built-in procedures cannot be unregistered.
+
+#### Streaming Results
+
+Procedures can support streaming results for better memory efficiency with large result sets. When a procedure supports streaming, results are processed row-by-row instead of loading everything into memory at once.
+
+To enable streaming for a custom procedure, override the `supports_streaming` method:
+
+```rust
+impl GraphProcedure for MyCustomProcedure {
+    // ... other methods ...
+    
+    fn supports_streaming(&self) -> bool {
+        true  // Enable streaming for this procedure
+    }
+    
+    fn execute_streaming(
+        &self,
+        graph: &Graph,
+        args: &HashMap<String, Value>,
+        mut callback: Box<dyn FnMut(&[String], &[Value]) -> Result<()> + Send>,
+    ) -> Result<()> {
+        // Stream results as they are generated
+        for result_row in self.generate_results(graph, args)? {
+            callback(&self.output_columns(), &result_row)?;
+        }
+        Ok(())
+    }
+}
+```
+
+The executor automatically uses streaming when available, providing better performance for large result sets.
+
+## Plugin System
+
+Nexus provides a plugin system that allows extending functionality with custom UDFs, procedures, and other extensions. Plugins are loaded at runtime and can register their extensions during initialization.
+
+### Creating a Plugin
+
+To create a plugin, implement the `Plugin` trait:
+
+```rust
+use nexus_core::plugin::{Plugin, PluginContext, PluginResult};
+use nexus_core::udf::{BuiltinUdf, UdfSignature, UdfReturnType};
+use std::sync::Arc;
+
+#[derive(Debug)]
+pub struct MyPlugin;
+
+impl Plugin for MyPlugin {
+    fn name(&self) -> &str {
+        "my_plugin"
+    }
+
+    fn version(&self) -> &str {
+        "1.0.0"
+    }
+
+    fn initialize(&self, ctx: &mut PluginContext) -> PluginResult<()> {
+        // Register a custom UDF
+        let udf = BuiltinUdf::new(
+            UdfSignature {
+                name: "plugin_function".to_string(),
+                parameters: vec![],
+                return_type: UdfReturnType::Integer,
+                description: Some("Function from plugin".to_string()),
+            },
+            |_args| Ok(serde_json::Value::Number(42.into())),
+        );
+        ctx.register_udf(Arc::new(udf))?;
+        
+        // Register a custom procedure
+        use nexus_core::graph::procedures::{CustomProcedure, ProcedureParameter, ParameterType};
+        let procedure = CustomProcedure::new(
+            "plugin.procedure".to_string(),
+            vec![],
+            |_graph, _args| {
+                Ok(nexus_core::graph::procedures::ProcedureResult {
+                    columns: vec!["result".to_string()],
+                    rows: vec![vec![serde_json::Value::String("Hello from plugin".to_string())]],
+                })
+            },
+        );
+        ctx.register_procedure(procedure)?;
+        
+        Ok(())
+    }
+
+    fn shutdown(&self) -> PluginResult<()> {
+        // Clean up resources if needed
+        Ok(())
+    }
+}
+```
+
+### Loading Plugins
+
+Plugins are loaded using the `PluginManager`:
+
+```rust
+use nexus_core::plugin::PluginManager;
+use nexus_core::udf::UdfRegistry;
+use nexus_core::graph::procedures::ProcedureRegistry;
+use nexus_core::catalog::Catalog;
+use std::sync::Arc;
+
+// Create registries
+let udf_registry = Arc::new(UdfRegistry::new());
+let procedure_registry = Arc::new(ProcedureRegistry::new());
+let catalog = Arc::new(Catalog::new("./data/catalog")?);
+
+// Create plugin manager with registries
+let manager = PluginManager::with_registries(
+    Some(udf_registry.clone()),
+    Some(procedure_registry.clone()),
+    Some(catalog.clone()),
+);
+
+// Load plugin
+let plugin = Arc::new(MyPlugin);
+manager.load_plugin(plugin)?;
+
+// Plugin extensions are now available
+assert!(udf_registry.contains("plugin_function"));
+assert!(procedure_registry.contains("plugin.procedure"));
+```
+
+### Plugin Lifecycle
+
+1. **Initialization**: When a plugin is loaded, `initialize()` is called. Plugins should register their extensions here.
+
+2. **Runtime**: Plugins remain loaded and their extensions are available for use.
+
+3. **Shutdown**: When a plugin is unloaded, `shutdown()` is called. Plugins should clean up resources here.
+
+### Plugin Management
+
+```rust
+// List all loaded plugins
+let plugins = manager.list_plugins();
+
+// Check if a plugin is loaded
+if manager.is_loaded("my_plugin") {
+    // Plugin is loaded
+}
+
+// Get plugin metadata
+if let Some(metadata) = manager.get_metadata("my_plugin") {
+    println!("Plugin: {} v{}", metadata.name, metadata.version);
+}
+
+// Unload a plugin
+manager.unload_plugin("my_plugin")?;
+
+// Shutdown all plugins
+manager.shutdown_all()?;
+```
+
+### Plugin Context
+
+The `PluginContext` provides access to registries during plugin initialization:
+
+- `register_udf()`: Register a UDF
+- `register_procedure()`: Register a custom procedure
+- `catalog()`: Access the catalog (if available)
+- `udf_registry()`: Access the UDF registry (if available)
+- `procedure_registry()`: Access the procedure registry (if available)
+
+### Dynamic Loading
+
+Currently, plugins must be statically linked. Dynamic loading from shared libraries (.so/.dll) is planned for future releases.
 
 ## KNN Vector Search
 

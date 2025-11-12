@@ -61,7 +61,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Share executor with other modules
     api::knn::init_executor(executor.clone())?;
-    api::ingest::init_executor(executor)?;
 
     // The Engine already contains Catalog, LabelIndex, KnnIndex etc.
     // For the new data endpoints, we'll use the Engine's components directly via engine_arc.
@@ -72,6 +71,8 @@ async fn main() -> anyhow::Result<()> {
     api::stats::init_engine(engine_arc.clone())?;
     // Initialize cypher engine
     api::cypher::init_engine(engine_arc.clone())?;
+    // Initialize performance monitoring
+    api::performance::init_performance_monitoring(1000, 1000, 100, 10)?; // 1000ms threshold, 1000 max slow queries, 100 plan cache size, 10MB memory
 
     // Initialize DatabaseManager for multi-database support
     let database_manager = nexus_core::database::DatabaseManager::new(data_dir.clone().into())?;
@@ -277,7 +278,22 @@ async fn main() -> anyhow::Result<()> {
             post(api::auth::revoke_api_key),
         )
         .route("/knn_traverse", post(api::knn::knn_traverse))
-        .route("/ingest", post(api::ingest::ingest_data))
+        .route(
+            "/ingest",
+            post(
+                move |state: axum::extract::State<std::sync::Arc<NexusServer>>, request| {
+                    api::ingest::ingest_data(state, request)
+                },
+            ),
+        )
+        .route(
+            "/export",
+            get(
+                move |state: axum::extract::State<std::sync::Arc<NexusServer>>, query| {
+                    api::export::export_data(state, query)
+                },
+            ),
+        )
         // Schema management endpoints
         .route("/schema/labels", post(api::schema::create_label))
         .route("/schema/labels", get(api::schema::list_labels))
@@ -291,6 +307,23 @@ async fn main() -> anyhow::Result<()> {
         .route("/data/relationships", post(api::data::create_rel))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
+        // Performance monitoring endpoints
+        .route(
+            "/performance/statistics",
+            get(api::performance::get_query_statistics),
+        )
+        .route(
+            "/performance/slow-queries",
+            get(api::performance::get_slow_queries),
+        )
+        .route(
+            "/performance/plan-cache",
+            get(api::performance::get_plan_cache_statistics),
+        )
+        .route(
+            "/performance/plan-cache/clear",
+            post(api::performance::clear_plan_cache),
+        )
         // Graph comparison endpoints
         .route("/comparison/compare", post(api::comparison::compare_graphs))
         .route(

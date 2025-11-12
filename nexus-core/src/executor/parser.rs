@@ -98,6 +98,8 @@ pub enum Clause {
     Profile(ProfileClause),
     /// CALL subquery clause
     CallSubquery(CallSubqueryClause),
+    /// CALL procedure clause
+    CallProcedure(CallProcedureClause),
     /// LOAD CSV clause for importing CSV data
     LoadCsv(LoadCsvClause),
 }
@@ -618,6 +620,18 @@ pub struct CallSubqueryClause {
     pub batch_size: Option<usize>,
 }
 
+/// CALL procedure clause
+/// Syntax: CALL procedure.name(arg1, arg2, ...) [YIELD column1, column2, ...]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallProcedureClause {
+    /// Procedure name (e.g., "gds.shortestPath.dijkstra")
+    pub procedure_name: String,
+    /// Procedure arguments (as expressions)
+    pub arguments: Vec<Expression>,
+    /// YIELD clause (optional) - columns to return
+    pub yield_columns: Option<Vec<String>>,
+}
+
 /// LOAD CSV clause for importing CSV data
 /// Syntax: LOAD CSV FROM 'file:///path/to/file.csv' [WITH HEADERS] [FIELDTERMINATOR ','] AS row
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1059,8 +1073,8 @@ impl CypherParser {
                     Ok(Clause::CallSubquery(call_subquery_clause))
                 } else {
                     // This is a procedure call, not a subquery
-                    // For now, we'll return an error as procedure calls are not fully implemented
-                    Err(self.error("CALL procedures are not yet supported. Use CALL { subquery } for subqueries."))
+                    let call_procedure_clause = self.parse_call_procedure_clause()?;
+                    Ok(Clause::CallProcedure(call_procedure_clause))
                 }
             }
             "LOAD" => {
@@ -2207,6 +2221,116 @@ impl CypherParser {
             query,
             in_transactions,
             batch_size,
+        })
+    }
+
+    /// Parse CALL procedure clause
+    /// Syntax: CALL procedure.name(arg1, arg2, ...) [YIELD column1, column2, ...]
+    fn parse_call_procedure_clause(&mut self) -> Result<CallProcedureClause> {
+        // Parse procedure name (can contain dots, e.g., "gds.shortestPath.dijkstra")
+        let mut procedure_name = String::new();
+
+        // Parse first identifier part
+        if !self.is_identifier_start() {
+            return Err(self.error("Invalid procedure name"));
+        }
+
+        let start = self.pos;
+        self.consume_char();
+        while self.pos < self.input.len() && self.is_identifier_char() {
+            self.consume_char();
+        }
+        procedure_name.push_str(&self.input[start..self.pos]);
+
+        // Continue parsing dots and identifiers
+        while self.pos < self.input.len() {
+            if self.peek_char() == Some('.') {
+                procedure_name.push('.');
+                self.consume_char(); // consume '.'
+
+                // Parse next identifier part
+                if !self.is_identifier_start() {
+                    return Err(self.error("Invalid procedure name after dot"));
+                }
+                let part_start = self.pos;
+                self.consume_char();
+                while self.pos < self.input.len() && self.is_identifier_char() {
+                    self.consume_char();
+                }
+                procedure_name.push_str(&self.input[part_start..self.pos]);
+            } else if self.peek_char() == Some('(')
+                || self.peek_char().map_or(false, |c| c.is_whitespace())
+            {
+                break;
+            } else {
+                return Err(self.error("Invalid character in procedure name"));
+            }
+        }
+
+        if procedure_name.is_empty() {
+            return Err(self.error("Procedure name cannot be empty"));
+        }
+
+        // Parse arguments
+        self.skip_whitespace();
+        self.expect_char('(')?;
+        self.skip_whitespace();
+
+        let mut arguments = Vec::new();
+
+        // Check for empty argument list
+        if self.peek_char() != Some(')') {
+            loop {
+                // Parse argument expression
+                let arg = self.parse_expression()?;
+                arguments.push(arg);
+
+                self.skip_whitespace();
+
+                if self.peek_char() == Some(',') {
+                    self.consume_char();
+                    self.skip_whitespace();
+                } else if self.peek_char() == Some(')') {
+                    break;
+                } else {
+                    return Err(self.error("Expected ',' or ')' in procedure arguments"));
+                }
+            }
+        }
+
+        self.expect_char(')')?;
+        self.skip_whitespace();
+
+        // Parse optional YIELD clause
+        let yield_columns = if self.peek_keyword("YIELD") {
+            self.parse_keyword()?; // consume "YIELD"
+            self.skip_whitespace();
+
+            let mut columns = Vec::new();
+
+            loop {
+                let column = self.parse_identifier()?;
+                columns.push(column);
+
+                self.skip_whitespace();
+
+                if self.peek_char() == Some(',') {
+                    self.consume_char();
+                    self.skip_whitespace();
+                } else {
+                    break;
+                }
+            }
+
+            Some(columns)
+        } else {
+            None
+        };
+
+        Ok(CallProcedureClause {
+            procedure_name,
+            arguments,
+            yield_columns,
         })
     }
 

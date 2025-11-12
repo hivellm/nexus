@@ -53,11 +53,13 @@ pub mod memory_management;
 pub mod monitoring;
 pub mod page_cache;
 pub mod performance;
+pub mod plugin;
 pub mod retry;
 pub mod security;
 pub mod session;
 pub mod storage;
 pub mod transaction;
+pub mod udf;
 pub mod validation;
 pub mod vectorizer_cache;
 pub mod wal;
@@ -535,8 +537,10 @@ impl Engine {
         }
 
         // Put transaction back in session if we extracted it
+        // IMPORTANT: Update session with tracked nodes before putting it back
         if let Some((mut session, tx)) = session_tx_opt {
             session.active_transaction = Some(tx);
+            // Session already has tracked nodes from create_from_pattern_with_context_and_transaction
             self.session_manager.update_session(session);
         }
 
@@ -1496,23 +1500,35 @@ impl Engine {
                             ))
                         })?;
 
-                    // Mark all nodes created during this transaction as deleted
-                    for node_id in &session.created_nodes {
+                    // CRITICAL: Clone created_nodes list before marking as deleted
+                    // because get_session may return a cloned session
+                    let nodes_to_delete = session.created_nodes.clone();
+                    let rels_to_delete = session.created_relationships.clone();
+
+                    // Rollback transaction first (abort the transaction)
+                    session.rollback_transaction()?;
+
+                    // Clear tracking lists after rollback
+                    session.created_nodes.clear();
+                    session.created_relationships.clear();
+
+                    // Remove nodes from index and mark as deleted in storage
+                    for node_id in &nodes_to_delete {
+                        // Mark as deleted in storage first
                         self.storage.delete_node(*node_id)?;
+                        // Remove from label index after marking as deleted
+                        self.indexes.label_index.remove_node(*node_id)?;
                     }
 
                     // Mark all relationships created during this transaction as deleted
-                    for rel_id in &session.created_relationships {
+                    for rel_id in &rels_to_delete {
                         self.storage.delete_rel(*rel_id)?;
                     }
 
-                    // Rollback transaction
-                    session.rollback_transaction()?;
-
-                    // Flush storage to ensure consistency
+                    // Flush storage to ensure consistency (must be done before rebuilding indexes)
                     self.storage.flush()?;
 
-                    // Rebuild indexes from storage after rollback
+                    // Rebuild indexes from storage to ensure consistency
                     // This ensures indexes reflect the rolled-back state (without uncommitted changes)
                     self.rebuild_indexes_from_storage()?;
 
@@ -2589,6 +2605,10 @@ impl Engine {
             tracker.push(node_id);
         }
 
+        // Update label_index immediately so MATCH can find nodes during transaction
+        // We'll remove from index on rollback if needed
+        self.indexes.label_index.add_node(node_id, &label_ids)?;
+
         // Only commit if we created our own transaction
         if !has_session_tx {
             self.transaction_manager.write().commit(tx)?;
@@ -2596,12 +2616,9 @@ impl Engine {
             self.storage.flush()?;
             // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
             self.refresh_executor()?;
-
-            // Update label_index to track this node (only when transaction is committed)
-            self.indexes.label_index.add_node(node_id, &label_ids)?;
         }
-        // When there's a session transaction, index will be updated after commit
-        // This ensures rollback can properly revert changes
+        // When there's a session transaction, index is updated immediately for MATCH visibility
+        // On rollback, we'll remove nodes from index and mark them as deleted in storage
 
         Ok(node_id)
     }

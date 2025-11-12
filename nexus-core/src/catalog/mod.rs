@@ -108,6 +108,12 @@ pub struct Catalog {
     /// Constraint manager
     constraint_manager: Arc<RwLock<crate::catalog::constraints::ConstraintManager>>,
 
+    /// UDF storage database
+    udf_db: Database<Str, SerdeBincode<crate::udf::UdfSignature>>,
+
+    /// Procedure storage database
+    procedure_db: Database<Str, SerdeBincode<crate::graph::procedures::ProcedureSignature>>,
+
     /// Next label ID counter (cached for performance)
     next_label_id: Arc<RwLock<u32>>,
     /// Next type ID counter
@@ -136,11 +142,11 @@ impl Catalog {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&path)?;
 
-        // Open LMDB environment (10GB max size, 10 databases)
+        // Open LMDB environment (10GB max size, 15 databases)
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(10 * 1024 * 1024 * 1024) // 10GB
-                .max_dbs(10) // Increased for constraints databases
+                .max_dbs(15) // Increased for constraints, UDFs, and procedures databases
                 .open(path.as_ref())?
         };
         let env = Arc::new(env);
@@ -167,6 +173,16 @@ impl Catalog {
         > = env.create_database(&mut wtxn, Some("constraints"))?;
         let constraint_id_to_key: Database<U32<byteorder::NativeEndian>, SerdeBincode<(u32, u32)>> =
             env.create_database(&mut wtxn, Some("constraint_id_to_key"))?;
+
+        // Create UDF storage database (name -> signature)
+        let udf_db: Database<Str, SerdeBincode<crate::udf::UdfSignature>> =
+            env.create_database(&mut wtxn, Some("udfs"))?;
+
+        // Create procedure storage database (name -> signature)
+        let procedure_db: Database<
+            Str,
+            SerdeBincode<crate::graph::procedures::ProcedureSignature>,
+        > = env.create_database(&mut wtxn, Some("procedures"))?;
 
         // Initialize metadata if not exists
         if metadata_db.get(&wtxn, "main")?.is_none() {
@@ -233,6 +249,8 @@ impl Catalog {
             metadata_db,
             stats_db,
             constraint_manager: Arc::new(RwLock::new(constraint_manager)),
+            udf_db,
+            procedure_db,
             next_label_id: Arc::new(RwLock::new(next_label_id)),
             next_type_id: Arc::new(RwLock::new(next_type_id)),
             next_key_id: Arc::new(RwLock::new(next_key_id)),
@@ -547,6 +565,77 @@ impl Catalog {
         &self,
     ) -> &Arc<RwLock<crate::catalog::constraints::ConstraintManager>> {
         &self.constraint_manager
+    }
+
+    /// Store a UDF signature in the catalog
+    pub fn store_udf(&self, signature: &crate::udf::UdfSignature) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.udf_db.put(&mut wtxn, &signature.name, signature)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Get a UDF signature from the catalog
+    pub fn get_udf(&self, name: &str) -> Result<Option<crate::udf::UdfSignature>> {
+        let rtxn = self.env.read_txn()?;
+        Ok(self.udf_db.get(&rtxn, name)?)
+    }
+
+    /// List all UDF names stored in the catalog
+    pub fn list_udfs(&self) -> Result<Vec<String>> {
+        let rtxn = self.env.read_txn()?;
+        let iter = self.udf_db.iter(&rtxn)?;
+        Ok(iter
+            .filter_map(|r| r.ok())
+            .map(|(name, _)| name.to_string())
+            .collect())
+    }
+
+    /// Remove a UDF from the catalog
+    pub fn remove_udf(&self, name: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.udf_db.delete(&mut wtxn, name)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Store a procedure signature in the catalog
+    pub fn store_procedure(
+        &self,
+        signature: &crate::graph::procedures::ProcedureSignature,
+    ) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.procedure_db
+            .put(&mut wtxn, &signature.name, signature)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Get a procedure signature from the catalog
+    pub fn get_procedure(
+        &self,
+        name: &str,
+    ) -> Result<Option<crate::graph::procedures::ProcedureSignature>> {
+        let rtxn = self.env.read_txn()?;
+        Ok(self.procedure_db.get(&rtxn, name)?)
+    }
+
+    /// List all procedure names stored in the catalog
+    pub fn list_procedures(&self) -> Result<Vec<String>> {
+        let rtxn = self.env.read_txn()?;
+        let iter = self.procedure_db.iter(&rtxn)?;
+        Ok(iter
+            .filter_map(|r| r.ok())
+            .map(|(name, _)| name.to_string())
+            .collect())
+    }
+
+    /// Remove a procedure from the catalog
+    pub fn remove_procedure(&self, name: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.procedure_db.delete(&mut wtxn, name)?;
+        wtxn.commit()?;
+        Ok(())
     }
 }
 
@@ -1089,5 +1178,78 @@ mod tests {
         let test_id = 5;
         let result = catalog.get_label_id_by_id(test_id).unwrap();
         assert_eq!(result, test_id);
+    }
+
+    #[test]
+    fn test_udf_storage() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let signature = crate::udf::UdfSignature {
+            name: "test_udf".to_string(),
+            parameters: vec![],
+            return_type: crate::udf::UdfReturnType::Integer,
+            description: Some("Test UDF".to_string()),
+        };
+
+        // Store UDF
+        catalog.store_udf(&signature).unwrap();
+
+        // Retrieve UDF
+        let retrieved = catalog.get_udf("test_udf").unwrap();
+        assert!(retrieved.is_some());
+        let retrieved_sig = retrieved.unwrap();
+        assert_eq!(retrieved_sig.name, "test_udf");
+        assert_eq!(
+            retrieved_sig.return_type,
+            crate::udf::UdfReturnType::Integer
+        );
+
+        // List UDFs
+        let udfs = catalog.list_udfs().unwrap();
+        assert_eq!(udfs.len(), 1);
+        assert_eq!(udfs[0], "test_udf");
+
+        // Remove UDF
+        catalog.remove_udf("test_udf").unwrap();
+        let retrieved_after = catalog.get_udf("test_udf").unwrap();
+        assert!(retrieved_after.is_none());
+    }
+
+    #[test]
+    fn test_procedure_storage() {
+        let (catalog, _dir) = create_test_catalog();
+
+        let signature = crate::graph::procedures::ProcedureSignature {
+            name: "custom.test".to_string(),
+            parameters: vec![crate::graph::procedures::ProcedureParameter {
+                name: "param1".to_string(),
+                param_type: crate::graph::procedures::ParameterType::Integer,
+                required: true,
+                default: None,
+            }],
+            output_columns: vec!["result".to_string()],
+            description: Some("Test procedure".to_string()),
+        };
+
+        // Store procedure
+        catalog.store_procedure(&signature).unwrap();
+
+        // Retrieve procedure
+        let retrieved = catalog.get_procedure("custom.test").unwrap();
+        assert!(retrieved.is_some());
+        let retrieved_sig = retrieved.unwrap();
+        assert_eq!(retrieved_sig.name, "custom.test");
+        assert_eq!(retrieved_sig.parameters.len(), 1);
+        assert_eq!(retrieved_sig.output_columns.len(), 1);
+
+        // List procedures
+        let procedures = catalog.list_procedures().unwrap();
+        assert_eq!(procedures.len(), 1);
+        assert_eq!(procedures[0], "custom.test");
+
+        // Remove procedure
+        catalog.remove_procedure("custom.test").unwrap();
+        let retrieved_after = catalog.get_procedure("custom.test").unwrap();
+        assert!(retrieved_after.is_none());
     }
 }

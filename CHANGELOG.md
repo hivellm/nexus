@@ -5,9 +5,95 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added - Graph Algorithms (Phase 13)
+- **Pathfinding Algorithms**:
+  - Bellman-Ford algorithm for shortest paths with negative cycle detection
+  - Dijkstra and A* already implemented
+- **Centrality Algorithms**:
+  - PageRank algorithm with configurable damping factor and convergence tolerance
+  - Betweenness Centrality calculation
+  - Closeness Centrality calculation
+  - Degree Centrality calculation
+- **Community Detection**:
+  - Louvain algorithm for modularity-based community detection
+  - Label Propagation algorithm
+  - Strongly Connected Components using Kosaraju's algorithm
+  - Weakly Connected Components (already implemented)
+- **Similarity Algorithms**:
+  - Jaccard Similarity between nodes
+  - Cosine Similarity (graph-based) between nodes
+  - Node Similarity calculation for all pairs
+- All algorithms include comprehensive unit tests (15 tests passing)
+- **Procedure Wrappers**: Complete procedure registry structure created for all algorithms
+  - Pathfinding: `gds.shortestPath.dijkstra`, `gds.shortestPath.astar`, `gds.shortestPath.bellmanFord`
+  - Centrality: `gds.centrality.pagerank`, `gds.centrality.betweenness`, `gds.centrality.closeness`, `gds.centrality.degree`
+  - Community: `gds.community.louvain`, `gds.community.labelPropagation`, `gds.community.stronglyConnectedComponents`, `gds.community.weaklyConnectedComponents`
+  - Similarity: `gds.similarity.jaccard`, `gds.similarity.cosine`
+  - Procedures ready for integration once CALL procedure support is fully implemented
+- **Engine Integration**: Added `Graph::from_engine()` helper function to convert Engine storage data to algorithm Graph structure, enabling direct use of algorithms on database data
+
+### Added - Performance Monitoring (Phase 11)
+- **Query Statistics**: Comprehensive query execution tracking
+  - Query execution time tracking with min/max/average
+  - Query pattern statistics (normalized queries)
+  - Success/failure rate tracking
+  - Total queries and execution time aggregation
+- **Slow Query Logging**: Configurable slow query detection and logging
+  - Configurable threshold (default: 100ms)
+  - Detailed query records with timestamps, errors, and row counts
+  - Circular buffer with configurable max entries
+- **Query Plan Cache**: LRU-based query plan caching
+  - Plan caching with AST and operators
+  - LRU eviction policy
+  - Memory-based eviction
+  - Cache invalidation on schema changes
+  - Cache statistics and management
+- **DBMS Procedures**: System management procedures
+  - `dbms.showCurrentUser()` - Show current authenticated user
+  - `dbms.listConfig()` - List database configuration
+  - `dbms.listConnections()` - List active connections (structure ready)
+  - `dbms.killQuery()` - Kill running queries (structure ready)
+  - `dbms.clearQueryCaches()` - Clear query plan cache
+- All features include comprehensive unit tests (8 tests passing)
+- **API Endpoints**: REST endpoints for performance monitoring
+  - `GET /performance/statistics` - Get query execution statistics
+  - `GET /performance/slow-queries` - Get slow query log
+  - `GET /performance/plan-cache` - Get plan cache statistics
+  - `POST /performance/plan-cache/clear` - Clear plan cache
+- **Automatic Query Tracking**: Integrated query statistics tracking in Cypher endpoint
+  - All queries executed via `/cypher` endpoint are automatically tracked
+  - Success/failure, execution time, and row counts are recorded
+  - Slow queries are automatically logged based on configurable threshold
+- **Test Coverage**: Comprehensive test suite added (34 tests total)
+  - Query statistics: 10 tests covering edge cases, normalization, min/max tracking, pattern statistics, clear operations, eviction
+  - Plan cache: 9 tests covering LRU eviction, pattern invalidation, statistics, access counting, time-based eviction
+  - DBMS procedures: 8 tests covering all procedures, user management, anonymous users, config listing
+  - API endpoints: 8 tests covering all endpoints with data validation and error handling
+
 ## [0.11.0] - 2025-11-12
 
 ### Added
+- **Data Import/Export - Phase 9**: Complete implementation of bulk import and export functionality
+  - **Bulk Import API**: Enhanced `/ingest` endpoint with transaction batching and progress reporting
+    - Transaction batching: Process data in batches with automatic transaction management
+    - Configurable batch size (default: 1000 items per batch)
+    - Progress reporting: `batches_processed` and `progress_percent` in response
+    - Support for `use_batching` flag to enable/disable batching
+    - JSON batch format support for nodes and relationships with properties
+    - Automatic transaction commit/rollback on errors
+  - **Export API**: New `/export` endpoint for data export
+    - JSON export format: Structured JSON output with query results
+    - CSV export format: Comma-separated values with proper escaping
+    - Streaming export support for large datasets
+    - Customizable Cypher queries for selective data export
+    - Proper HTTP headers: Content-Type and Content-Disposition
+  - **LOAD CSV**: Complete CSV import functionality (already implemented)
+    - `LOAD CSV FROM 'file:///path/to/file.csv' AS row` syntax
+    - `WITH HEADERS` support for CSV files with header rows
+    - `FIELDTERMINATOR` support for custom field separators
+    - Integration with FOREACH and UNWIND clauses for processing CSV rows
 - **V1 Authentication & Security - Phase 1 & Phase 2**: Complete implementation of authentication and security features
   - **Phase 1**: Root user and authentication foundation
   - **Root User Configuration**: Configurable root user with environment variables and TOML file support

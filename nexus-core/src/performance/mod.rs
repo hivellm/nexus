@@ -11,10 +11,13 @@
 pub mod benchmarking;
 pub mod cache;
 pub mod config;
+pub mod dbms_procedures;
 pub mod memory;
 pub mod metrics;
 pub mod monitoring;
+pub mod plan_cache;
 pub mod profiler;
+pub mod query_stats;
 pub mod recommendations;
 pub mod testing;
 pub mod visualization;

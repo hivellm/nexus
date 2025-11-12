@@ -99,6 +99,10 @@ pub enum Error {
     #[error("Deadlock detected: {0}")]
     DeadlockDetected(String),
 
+    /// Plugin errors
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+
     /// Format/display error
     #[error("Format error: {0}")]
     Format(#[from] std::fmt::Error),
