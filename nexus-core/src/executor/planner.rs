@@ -84,6 +84,7 @@ impl<'a> QueryPlanner<'a> {
         let mut limit_count = None;
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
+        let mut match_hints = Vec::new(); // Collect hints from MATCH clauses
 
         for clause in &query.clauses {
             match clause {
@@ -93,6 +94,10 @@ impl<'a> QueryPlanner<'a> {
                     patterns.push(match_clause.pattern.clone());
                     if let Some(where_clause) = &match_clause.where_clause {
                         where_clauses.push(where_clause.expression.clone());
+                    }
+                    // Collect hints from first MATCH clause
+                    if match_hints.is_empty() {
+                        match_hints = match_clause.hints.clone();
                     }
                     // OPTIONAL MATCH is handled by executor as LEFT OUTER JOIN semantics
                     // For now, we just collect the patterns - executor will handle NULL values
