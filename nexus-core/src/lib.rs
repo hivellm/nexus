@@ -1520,28 +1520,57 @@ impl Engine {
         &mut self,
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
-        // For now, execute each CALL subquery sequentially
-        // Future: Support IN TRANSACTIONS and correlated subqueries
         let mut all_results = Vec::new();
         let mut columns = Vec::new();
 
         for clause in &ast.clauses {
             if let executor::parser::Clause::CallSubquery(call_subquery) = clause {
-                // Execute the subquery recursively
-                let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
-                
-                // For IN TRANSACTIONS, we would batch the execution
-                // For now, just execute normally
                 if call_subquery.in_transactions {
-                    // TODO: Implement batch execution with transactions
-                    // For now, execute normally
+                    // Execute with batching in transactions
+                    let batch_size = call_subquery.batch_size.unwrap_or(1000);
+                    
+                    // Execute subquery in batches with transactions
+                    // For each batch, start a write transaction, execute, and commit
+                    let mut batch_count = 0;
+                    loop {
+                        // Start write transaction for this batch
+                        let mut tx = self.transaction_manager.begin_write()?;
+                        
+                        // Execute subquery for this batch
+                        let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
+                        
+                        if columns.is_empty() {
+                            columns = subquery_result.columns.clone();
+                        }
+                        
+                        // Add results for this batch
+                        let batch_rows: Vec<_> = subquery_result.rows.into_iter().take(batch_size).collect();
+                        if batch_rows.is_empty() {
+                            // No more results, commit and break
+                            self.transaction_manager.commit(&mut tx)?;
+                            break;
+                        }
+                        
+                        all_results.extend(batch_rows);
+                        batch_count += 1;
+                        
+                        // Commit transaction for this batch
+                        self.transaction_manager.commit(&mut tx)?;
+                        
+                        // If we got fewer rows than batch size, we're done
+                        if all_results.len() < batch_count * batch_size {
+                            break;
+                        }
+                    }
+                } else {
+                    // Execute subquery normally (no batching)
+                    let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
+                    
+                    if columns.is_empty() {
+                        columns = subquery_result.columns.clone();
+                    }
+                    all_results.extend(subquery_result.rows);
                 }
-
-                // Merge results (for now, just take the first subquery's results)
-                if columns.is_empty() {
-                    columns = subquery_result.columns.clone();
-                }
-                all_results.extend(subquery_result.rows);
             }
         }
 

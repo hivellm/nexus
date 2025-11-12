@@ -199,6 +199,8 @@ pub enum RemoveItem {
 pub struct Pattern {
     /// Pattern elements (nodes and relationships)
     pub elements: Vec<PatternElement>,
+    /// Optional path variable assignment (e.g., p = (a)-[*]-(b))
+    pub path_variable: Option<String>,
 }
 
 /// Pattern element (node or relationship)
@@ -1080,7 +1082,33 @@ impl CypherParser {
     /// Parse MATCH clause
     fn parse_match_clause(&mut self) -> Result<MatchClause> {
         self.skip_whitespace();
-        let pattern = self.parse_pattern()?;
+        
+        // Check for path variable assignment: p = (pattern)
+        let path_variable = if self.is_identifier_start() {
+            let saved_pos = self.pos;
+            let var_name = self.parse_identifier()?;
+            self.skip_whitespace();
+            
+            if self.peek_char() == Some('=') {
+                // This is a path variable assignment
+                self.consume_char(); // consume '='
+                self.skip_whitespace();
+                Some(var_name)
+            } else {
+                // Not a path variable, restore position
+                self.pos = saved_pos;
+                None
+            }
+        } else {
+            None
+        };
+        
+        let mut pattern = self.parse_pattern()?;
+        
+        // Set path variable if detected
+        if let Some(path_var) = path_variable {
+            pattern.path_variable = Some(path_var);
+        }
 
         Ok(MatchClause {
             pattern,
@@ -1313,7 +1341,10 @@ impl CypherParser {
             }
         }
 
-        Ok(Pattern { elements })
+        Ok(Pattern { 
+            elements,
+            path_variable: None, // Set by caller if path variable assignment detected
+        })
     }
 
     /// Parse node pattern
@@ -3520,7 +3551,10 @@ impl CypherParser {
             }
         }
 
-        Ok(Pattern { elements })
+        Ok(Pattern { 
+            elements,
+            path_variable: None, // Set by caller if path variable assignment detected
+        })
     }
 
     /// Parse comparison operator

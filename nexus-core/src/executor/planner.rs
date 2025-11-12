@@ -784,13 +784,15 @@ impl<'a> QueryPlanner<'a> {
                         // Check if this is a variable-length path (has quantifier)
                         if let Some(quantifier) = &rel.quantifier {
                             // Use VariableLengthPath operator for variable-length paths
+                            // Check if pattern has a path variable assigned
+                            let path_var = pattern.path_variable.clone().unwrap_or_default();
                             operators.push(Operator::VariableLengthPath {
                                 type_id,
                                 direction,
                                 source_var,
                                 target_var,
                                 rel_var: rel.variable.clone().unwrap_or_default(),
-                                path_var: String::new(), // Path variable not used in basic patterns
+                                path_var,
                                 quantifier: quantifier.clone(),
                             });
                         } else {

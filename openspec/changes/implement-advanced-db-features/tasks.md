@@ -15,13 +15,13 @@
 ## 3. Subquery Support
 - [x] 3.1 CALL {...} subquery parsing ✅
 - [x] 3.2 Correlated subqueries ✅ (basic support - subqueries can access outer context variables)
-- [x] 3.3 CALL {...} IN TRANSACTIONS ✅ (parsing complete, execution TODO for batching)
-- [ ] 3.4 Add tests (pending - basic parsing works)
+- [x] 3.3 CALL {...} IN TRANSACTIONS ✅ (parsing and execution with batching implemented)
+- [ ] 3.4 Add tests (pending - basic parsing and execution works)
 
 ## 4. Named Paths
-- [ ] 4.1 Path variable assignment (p = (a)-[*]-(b))
-- [ ] 4.2 Path operations on named paths
-- [ ] 4.3 Add tests
+- [x] 4.1 Path variable assignment (p = (a)-[*]-(b)) ✅
+- [x] 4.2 Path operations on named paths ✅ (path variable stored and accessible in RETURN)
+- [ ] 4.3 Add tests (pending - parsing and execution works)
 
 ## 5. Quality
 - [ ] 5.1 95%+ coverage
