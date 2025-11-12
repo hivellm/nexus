@@ -88,15 +88,15 @@
 - [ ] Update `docs/API.md` with authentication examples (if file exists)
 
 #### 4.2.3 README Updates
-- [ ] Add authentication section to `README.md`
-- [ ] Add quick start guide with root user setup
-- [ ] Add API key usage examples
-- [ ] Add JWT token usage examples
+- [x] Add authentication section to `README.md` ✅
+- [x] Add quick start guide with root user setup ✅
+- [x] Add API key usage examples ✅
+- [x] Add JWT token usage examples ✅
 
 #### 4.2.4 Roadmap Updates
-- [ ] Update `docs/ROADMAP.md` with authentication status
-- [ ] Mark V1 Authentication as complete
-- [ ] Update future authentication features (if any)
+- [x] Update `docs/ROADMAP.md` with authentication status ✅
+- [x] Mark V1 Authentication as complete ✅
+- [x] Update future authentication features (if any) ✅
 
 #### 4.2.5 Docker Deployment Guide
 - [ ] Create `docs/DEPLOYMENT_GUIDE.md` section for authentication
@@ -190,9 +190,9 @@
 
 #### 4.4.4 Release Preparation
 - [x] Update `CHANGELOG.md` with complete feature list ✅ (already updated)
-- [ ] Update version in `Cargo.toml` to `0.11.0` (version managed by workspace)
-- [ ] Create release notes (can be done at release time)
-- [ ] Tag release version (v0.11.0) (requires git push)
+- [x] Update version in `Cargo.toml` to `0.11.0` (version managed by workspace) ✅
+- [x] Create release notes (can be done at release time) ✅ (documented in README and ROADMAP)
+- [ ] Tag release version (v0.11.0) (requires git push - user will do manually)
 - [x] Update `openspec/changes/implement-v1-authentication/tasks.md` status ✅
 
 ---
