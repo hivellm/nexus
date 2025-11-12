@@ -50,6 +50,34 @@ pub enum Clause {
     Skip(SkipClause),
     /// FOREACH clause for iterating over lists
     Foreach(ForeachClause),
+    /// CREATE DATABASE command
+    CreateDatabase(CreateDatabaseClause),
+    /// DROP DATABASE command
+    DropDatabase(DropDatabaseClause),
+    /// SHOW DATABASES command
+    ShowDatabases,
+    /// BEGIN TRANSACTION command
+    BeginTransaction,
+    /// COMMIT TRANSACTION command
+    CommitTransaction,
+    /// ROLLBACK TRANSACTION command
+    RollbackTransaction,
+    /// CREATE INDEX command
+    CreateIndex(CreateIndexClause),
+    /// DROP INDEX command
+    DropIndex(DropIndexClause),
+    /// CREATE CONSTRAINT command
+    CreateConstraint(CreateConstraintClause),
+    /// DROP CONSTRAINT command
+    DropConstraint(DropConstraintClause),
+    /// SHOW USERS command
+    ShowUsers,
+    /// CREATE USER command
+    CreateUser(CreateUserClause),
+    /// GRANT command
+    Grant(GrantClause),
+    /// REVOKE command
+    Revoke(RevokeClause),
 }
 
 /// MATCH clause with pattern matching
@@ -340,6 +368,110 @@ pub enum ForeachUpdateClause {
     Set(SetClause),
     /// DELETE clause
     Delete(DeleteClause),
+}
+
+/// CREATE DATABASE clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateDatabaseClause {
+    /// Database name
+    pub name: String,
+    /// Optional IF NOT EXISTS flag
+    pub if_not_exists: bool,
+}
+
+/// DROP DATABASE clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropDatabaseClause {
+    /// Database name
+    pub name: String,
+    /// Optional IF EXISTS flag
+    pub if_exists: bool,
+}
+
+/// CREATE INDEX clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateIndexClause {
+    /// Label name
+    pub label: String,
+    /// Property name
+    pub property: String,
+    /// Optional IF NOT EXISTS flag
+    pub if_not_exists: bool,
+}
+
+/// DROP INDEX clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropIndexClause {
+    /// Label name
+    pub label: String,
+    /// Property name
+    pub property: String,
+    /// Optional IF EXISTS flag
+    pub if_exists: bool,
+}
+
+/// CREATE CONSTRAINT clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateConstraintClause {
+    /// Constraint type
+    pub constraint_type: ConstraintType,
+    /// Label name
+    pub label: String,
+    /// Property name
+    pub property: String,
+    /// Optional IF NOT EXISTS flag
+    pub if_not_exists: bool,
+}
+
+/// Constraint type
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConstraintType {
+    /// UNIQUE constraint
+    Unique,
+    /// EXISTS constraint (property must exist)
+    Exists,
+}
+
+/// DROP CONSTRAINT clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropConstraintClause {
+    /// Constraint type
+    pub constraint_type: ConstraintType,
+    /// Label name
+    pub label: String,
+    /// Property name
+    pub property: String,
+    /// Optional IF EXISTS flag
+    pub if_exists: bool,
+}
+
+/// CREATE USER clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateUserClause {
+    /// Username
+    pub username: String,
+    /// Password (optional, can be set later)
+    pub password: Option<String>,
+    /// Optional IF NOT EXISTS flag
+    pub if_not_exists: bool,
+}
+
+/// GRANT clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrantClause {
+    /// Permission(s) to grant
+    pub permissions: Vec<String>,
+    /// Role or user to grant to
+    pub target: String,
+}
+
+/// REVOKE clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevokeClause {
+    /// Permission(s) to revoke
+    pub permissions: Vec<String>,
+    /// Role or user to revoke from
+    pub target: String,
 }
 
 /// Expression types
@@ -691,7 +823,83 @@ impl CypherParser {
                 let foreach_clause = self.parse_foreach_clause()?;
                 Ok(Clause::Foreach(foreach_clause))
             }
-            _ => Err(self.error(&format!("Unexpected keyword: {}", keyword))),
+            "SHOW" => {
+                self.skip_whitespace();
+                if self.peek_keyword("DATABASES") {
+                    self.parse_keyword()?; // consume "DATABASES"
+                    Ok(Clause::ShowDatabases)
+                } else if self.peek_keyword("USERS") {
+                    self.parse_keyword()?; // consume "USERS"
+                    Ok(Clause::ShowUsers)
+                } else {
+                    Err(self.error("SHOW must be followed by DATABASES or USERS"))
+                }
+            }
+            "BEGIN" => {
+                self.skip_whitespace();
+                if self.peek_keyword("TRANSACTION") {
+                    self.parse_keyword()?; // consume "TRANSACTION"
+                }
+                Ok(Clause::BeginTransaction)
+            }
+            "COMMIT" => {
+                self.skip_whitespace();
+                if self.peek_keyword("TRANSACTION") {
+                    self.parse_keyword()?; // consume "TRANSACTION"
+                }
+                Ok(Clause::CommitTransaction)
+            }
+            "ROLLBACK" => {
+                self.skip_whitespace();
+                if self.peek_keyword("TRANSACTION") {
+                    self.parse_keyword()?; // consume "TRANSACTION"
+                }
+                Ok(Clause::RollbackTransaction)
+            }
+            _ => {
+                // Check for CREATE/DROP with administrative keywords
+                if keyword.to_uppercase() == "CREATE" {
+                    self.skip_whitespace();
+                    if self.peek_keyword("DATABASE") {
+                        let create_db_clause = self.parse_create_database_clause()?;
+                        return Ok(Clause::CreateDatabase(create_db_clause));
+                    } else if self.peek_keyword("INDEX") {
+                        let create_index_clause = self.parse_create_index_clause()?;
+                        return Ok(Clause::CreateIndex(create_index_clause));
+                    } else if self.peek_keyword("CONSTRAINT") {
+                        let create_constraint_clause = self.parse_create_constraint_clause()?;
+                        return Ok(Clause::CreateConstraint(create_constraint_clause));
+                    } else if self.peek_keyword("USER") {
+                        let create_user_clause = self.parse_create_user_clause()?;
+                        return Ok(Clause::CreateUser(create_user_clause));
+                    }
+                    // Fall back to regular CREATE clause
+                    let create_clause = self.parse_create_clause()?;
+                    Ok(Clause::Create(create_clause))
+                } else if keyword.to_uppercase() == "DROP" {
+                    self.skip_whitespace();
+                    if self.peek_keyword("DATABASE") {
+                        let drop_db_clause = self.parse_drop_database_clause()?;
+                        return Ok(Clause::DropDatabase(drop_db_clause));
+                    } else if self.peek_keyword("INDEX") {
+                        let drop_index_clause = self.parse_drop_index_clause()?;
+                        return Ok(Clause::DropIndex(drop_index_clause));
+                    } else if self.peek_keyword("CONSTRAINT") {
+                        let drop_constraint_clause = self.parse_drop_constraint_clause()?;
+                        return Ok(Clause::DropConstraint(drop_constraint_clause));
+                    }
+                    // DROP without keyword is not valid
+                    Err(self.error("DROP must be followed by DATABASE, INDEX, or CONSTRAINT"))
+                } else if keyword.to_uppercase() == "GRANT" {
+                    let grant_clause = self.parse_grant_clause()?;
+                    Ok(Clause::Grant(grant_clause))
+                } else if keyword.to_uppercase() == "REVOKE" {
+                    let revoke_clause = self.parse_revoke_clause()?;
+                    Ok(Clause::Revoke(revoke_clause))
+                } else {
+                    Err(self.error(&format!("Unexpected keyword: {}", keyword)))
+                }
+            }
         }
     }
 
@@ -1449,6 +1657,336 @@ impl CypherParser {
         };
 
         Ok(UnionClause { union_type })
+    }
+
+    /// Parse CREATE DATABASE clause
+    /// Syntax: CREATE DATABASE name [IF NOT EXISTS]
+    fn parse_create_database_clause(&mut self) -> Result<CreateDatabaseClause> {
+        self.expect_keyword("DATABASE")?;
+        self.skip_whitespace();
+
+        // Check for IF NOT EXISTS
+        let if_not_exists = if self.peek_keyword("IF") {
+            self.parse_keyword()?; // consume "IF"
+            self.expect_keyword("NOT")?;
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+
+        let name = self.parse_identifier()?;
+        Ok(CreateDatabaseClause {
+            name,
+            if_not_exists,
+        })
+    }
+
+    /// Parse DROP DATABASE clause
+    /// Syntax: DROP DATABASE name [IF EXISTS]
+    fn parse_drop_database_clause(&mut self) -> Result<DropDatabaseClause> {
+        self.expect_keyword("DATABASE")?;
+        self.skip_whitespace();
+
+        // Check for IF EXISTS
+        let if_exists = if self.peek_keyword("IF") {
+            self.parse_keyword()?; // consume "IF"
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+
+        let name = self.parse_identifier()?;
+        Ok(DropDatabaseClause { name, if_exists })
+    }
+
+    /// Parse CREATE INDEX clause
+    /// Syntax: CREATE INDEX [IF NOT EXISTS] ON :Label(property)
+    fn parse_create_index_clause(&mut self) -> Result<CreateIndexClause> {
+        self.expect_keyword("INDEX")?;
+        self.skip_whitespace();
+
+        // Check for IF NOT EXISTS
+        let if_not_exists = if self.peek_keyword("IF") {
+            self.parse_keyword()?; // consume "IF"
+            self.expect_keyword("NOT")?;
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+
+        self.expect_keyword("ON")?;
+        self.skip_whitespace();
+        self.expect_char(':')?;
+        let label = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_char('(')?;
+        let property = self.parse_identifier()?;
+        self.expect_char(')')?;
+
+        Ok(CreateIndexClause {
+            label,
+            property,
+            if_not_exists,
+        })
+    }
+
+    /// Parse DROP INDEX clause
+    /// Syntax: DROP INDEX [IF EXISTS] ON :Label(property)
+    fn parse_drop_index_clause(&mut self) -> Result<DropIndexClause> {
+        self.expect_keyword("INDEX")?;
+        self.skip_whitespace();
+
+        // Check for IF EXISTS
+        let if_exists = if self.peek_keyword("IF") {
+            self.parse_keyword()?; // consume "IF"
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+
+        self.expect_keyword("ON")?;
+        self.skip_whitespace();
+        self.expect_char(':')?;
+        let label = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_char('(')?;
+        let property = self.parse_identifier()?;
+        self.expect_char(')')?;
+
+        Ok(DropIndexClause {
+            label,
+            property,
+            if_exists,
+        })
+    }
+
+    /// Parse CREATE CONSTRAINT clause
+    /// Syntax: CREATE CONSTRAINT [IF NOT EXISTS] ON (n:Label) ASSERT n.property IS UNIQUE
+    /// or: CREATE CONSTRAINT [IF NOT EXISTS] ON (n:Label) ASSERT EXISTS(n.property)
+    fn parse_create_constraint_clause(&mut self) -> Result<CreateConstraintClause> {
+        self.expect_keyword("CONSTRAINT")?;
+        self.skip_whitespace();
+
+        // Check for IF NOT EXISTS
+        let if_not_exists = if self.peek_keyword("IF") {
+            self.parse_keyword()?; // consume "IF"
+            self.expect_keyword("NOT")?;
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+
+        self.expect_keyword("ON")?;
+        self.skip_whitespace();
+        self.expect_char('(')?;
+        let _variable = self.parse_identifier()?; // variable name (usually 'n')
+        self.skip_whitespace();
+        self.expect_char(':')?;
+        let label = self.parse_identifier()?;
+        self.expect_char(')')?;
+        self.skip_whitespace();
+        self.expect_keyword("ASSERT")?;
+        self.skip_whitespace();
+
+        // Parse constraint type and extract property name
+        let (constraint_type, property) = if self.peek_keyword("EXISTS") {
+            self.parse_keyword()?; // consume "EXISTS"
+            self.expect_char('(')?;
+            let _var = self.parse_identifier()?;
+            self.expect_char('.')?;
+            let prop = self.parse_identifier()?;
+            self.expect_char(')')?;
+            (ConstraintType::Exists, prop)
+        } else {
+            // Parse: variable.property IS UNIQUE
+            let _var = self.parse_identifier()?;
+            self.expect_char('.')?;
+            let prop = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_keyword("IS")?;
+            self.expect_keyword("UNIQUE")?;
+            (ConstraintType::Unique, prop)
+        };
+
+        Ok(CreateConstraintClause {
+            constraint_type,
+            label,
+            property,
+            if_not_exists,
+        })
+    }
+
+    /// Parse DROP CONSTRAINT clause
+    /// Syntax: DROP CONSTRAINT [IF EXISTS] ON (n:Label) ASSERT n.property IS UNIQUE
+    fn parse_drop_constraint_clause(&mut self) -> Result<DropConstraintClause> {
+        self.expect_keyword("CONSTRAINT")?;
+        self.skip_whitespace();
+
+        // Check for IF EXISTS
+        let if_exists = if self.peek_keyword("IF") {
+            self.parse_keyword()?; // consume "IF"
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            true
+        } else {
+            false
+        };
+
+        self.expect_keyword("ON")?;
+        self.skip_whitespace();
+        self.expect_char('(')?;
+        let _variable = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_char(':')?;
+        let label = self.parse_identifier()?;
+        self.expect_char(')')?;
+        self.skip_whitespace();
+        self.expect_keyword("ASSERT")?;
+        self.skip_whitespace();
+
+        // Parse constraint type and extract property name (same as CREATE)
+        let (constraint_type, property) = if self.peek_keyword("EXISTS") {
+            self.parse_keyword()?;
+            self.expect_char('(')?;
+            let _var = self.parse_identifier()?;
+            self.expect_char('.')?;
+            let prop = self.parse_identifier()?;
+            self.expect_char(')')?;
+            (ConstraintType::Exists, prop)
+        } else {
+            self.parse_identifier()?; // variable
+            self.expect_char('.')?;
+            let prop = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_keyword("IS")?;
+            self.expect_keyword("UNIQUE")?;
+            (ConstraintType::Unique, prop)
+        };
+
+        Ok(DropConstraintClause {
+            constraint_type,
+            label,
+            property,
+            if_exists,
+        })
+    }
+
+    /// Parse CREATE USER clause
+    /// Syntax: CREATE USER username [SET PASSWORD 'password'] [IF NOT EXISTS]
+    fn parse_create_user_clause(&mut self) -> Result<CreateUserClause> {
+        self.expect_keyword("USER")?;
+        self.skip_whitespace();
+
+        // Check for IF NOT EXISTS first (it can come before username in some dialects)
+        let mut if_not_exists = false;
+        if self.peek_keyword("IF") {
+            self.parse_keyword()?;
+            self.expect_keyword("NOT")?;
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            if_not_exists = true;
+        }
+
+        let username = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // Check for SET PASSWORD
+        let password = if self.peek_keyword("SET") {
+            self.parse_keyword()?;
+            self.expect_keyword("PASSWORD")?;
+            self.skip_whitespace();
+            let pwd_expr = self.parse_string_literal()?;
+            // Extract string value from Expression::Literal(Literal::String)
+            if let Expression::Literal(crate::executor::parser::Literal::String(s)) = pwd_expr {
+                Some(s)
+            } else {
+                return Err(self.error("PASSWORD must be a string literal"));
+            }
+        } else {
+            None
+        };
+
+        // Check for IF NOT EXISTS after username
+        if !if_not_exists && self.peek_keyword("IF") {
+            self.parse_keyword()?;
+            self.expect_keyword("NOT")?;
+            self.expect_keyword("EXISTS")?;
+            if_not_exists = true;
+        }
+
+        Ok(CreateUserClause {
+            username,
+            password,
+            if_not_exists,
+        })
+    }
+
+    /// Parse GRANT clause
+    /// Syntax: GRANT permission [, permission ...] TO target
+    fn parse_grant_clause(&mut self) -> Result<GrantClause> {
+        self.skip_whitespace();
+
+        // Parse permissions
+        let mut permissions = Vec::new();
+        loop {
+            let permission = self.parse_identifier()?;
+            permissions.push(permission);
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            } else {
+                break;
+            }
+        }
+
+        self.expect_keyword("TO")?;
+        self.skip_whitespace();
+        let target = self.parse_identifier()?;
+
+        Ok(GrantClause {
+            permissions,
+            target,
+        })
+    }
+
+    /// Parse REVOKE clause
+    /// Syntax: REVOKE permission [, permission ...] FROM target
+    fn parse_revoke_clause(&mut self) -> Result<RevokeClause> {
+        self.skip_whitespace();
+
+        // Parse permissions
+        let mut permissions = Vec::new();
+        loop {
+            let permission = self.parse_identifier()?;
+            permissions.push(permission);
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            } else {
+                break;
+            }
+        }
+
+        self.expect_keyword("FROM")?;
+        self.skip_whitespace();
+        let target = self.parse_identifier()?;
+
+        Ok(RevokeClause {
+            permissions,
+            target,
+        })
     }
 
     /// Parse expression

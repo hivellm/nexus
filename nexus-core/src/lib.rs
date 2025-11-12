@@ -776,6 +776,87 @@ impl Engine {
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let ast = parser.parse()?;
 
+        // Check for administrative commands that need special handling
+        // These commands (CREATE/DROP DATABASE, SHOW DATABASES) should be handled at server level
+        // as Engine doesn't have access to DatabaseManager
+        let has_admin_db_cmd = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                executor::parser::Clause::CreateDatabase(_)
+                    | executor::parser::Clause::DropDatabase(_)
+                    | executor::parser::Clause::ShowDatabases
+            )
+        });
+
+        if has_admin_db_cmd {
+            return Err(Error::CypherExecution(
+                "Database management commands (CREATE/DROP DATABASE, SHOW DATABASES) must be executed at server level".to_string(),
+            ));
+        }
+
+        // Check for transaction commands
+        let has_begin = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::BeginTransaction));
+        let has_commit = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CommitTransaction));
+        let has_rollback = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::RollbackTransaction));
+
+        if has_begin || has_commit || has_rollback {
+            return self.execute_transaction_commands(&ast);
+        }
+
+        // Check for index management commands
+        let has_create_index = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CreateIndex(_)));
+        let has_drop_index = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::DropIndex(_)));
+
+        if has_create_index || has_drop_index {
+            return self.execute_index_commands(&ast);
+        }
+
+        // Check for constraint management commands
+        let has_create_constraint = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CreateConstraint(_)));
+        let has_drop_constraint = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::DropConstraint(_)));
+
+        if has_create_constraint || has_drop_constraint {
+            return self.execute_constraint_commands(&ast);
+        }
+
+        // Check for user management commands (should be handled at server level)
+        let has_user_cmd = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                executor::parser::Clause::ShowUsers
+                    | executor::parser::Clause::CreateUser(_)
+                    | executor::parser::Clause::Grant(_)
+                    | executor::parser::Clause::Revoke(_)
+            )
+        });
+
+        if has_user_cmd {
+            return Err(Error::CypherExecution(
+                "User management commands (SHOW USERS, CREATE USER, GRANT, REVOKE) must be executed at server level".to_string(),
+            ));
+        }
+
         // Check if query contains CREATE or DELETE
         let has_create = ast
             .clauses
@@ -1191,6 +1272,140 @@ impl Engine {
         }
 
         Ok(())
+    }
+
+    /// Execute transaction commands (BEGIN, COMMIT, ROLLBACK)
+    fn execute_transaction_commands(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        // Note: Currently, transactions are automatic. These commands are placeholders
+        // for future explicit transaction support.
+        for clause in &ast.clauses {
+            match clause {
+                executor::parser::Clause::BeginTransaction => {
+                    // For now, transactions begin automatically on write operations
+                    // Future: Store transaction context
+                }
+                executor::parser::Clause::CommitTransaction => {
+                    // For now, transactions commit automatically
+                    // Future: Commit stored transaction context
+                    self.storage.flush()?;
+                }
+                executor::parser::Clause::RollbackTransaction => {
+                    // For now, return error as explicit rollback not yet supported
+                    return Err(Error::CypherExecution(
+                        "ROLLBACK not yet supported - transactions are automatic".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(executor::ResultSet {
+            columns: vec!["status".to_string()],
+            rows: vec![executor::Row {
+                values: vec![serde_json::Value::String("ok".to_string())],
+            }],
+        })
+    }
+
+    /// Execute index management commands (CREATE INDEX, DROP INDEX)
+    fn execute_index_commands(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        for clause in &ast.clauses {
+            match clause {
+                executor::parser::Clause::CreateIndex(create_index) => {
+                    // Ensure label and property exist in catalog
+                    let _label_id = self.catalog.get_or_create_label(&create_index.label)?;
+                    let _property_key_id =
+                        self.catalog.get_or_create_key(&create_index.property)?;
+
+                    // Check if index already exists
+                    // Note: For now, we'll just ensure catalog entries exist
+                    // Future: Check if index structure exists
+                    // Indexes are created automatically when properties are indexed
+
+                    // Create property index for this label+property combination
+                    // The index is automatically created when first property is indexed
+                    // For now, we just ensure the catalog entries exist
+                    // Future: Explicitly create index structure
+                }
+                executor::parser::Clause::DropIndex(drop_index) => {
+                    // Check if label and property exist in catalog
+                    // For now, we'll check if they exist by trying to get them
+                    // Future: Check if index structure actually exists
+                    let label_exists = self.catalog.get_label_id(&drop_index.label).is_ok();
+                    // Check if key exists by trying to get it (keys are created automatically)
+                    // For now, we'll assume index exists if label exists
+                    // Future: Track which indexes actually exist
+
+                    if !label_exists {
+                        if drop_index.if_exists {
+                            // Index doesn't exist and IF EXISTS was specified, skip
+                            continue;
+                        } else {
+                            return Err(Error::CypherExecution(format!(
+                                "Index on :{}({}) does not exist",
+                                drop_index.label, drop_index.property
+                            )));
+                        }
+                    }
+
+                    // For now, indexes are managed automatically
+                    // Future: Explicitly drop index structure
+                }
+                _ => {}
+            }
+        }
+
+        Ok(executor::ResultSet {
+            columns: vec!["status".to_string()],
+            rows: vec![executor::Row {
+                values: vec![serde_json::Value::String("ok".to_string())],
+            }],
+        })
+    }
+
+    /// Execute constraint management commands (CREATE CONSTRAINT, DROP CONSTRAINT)
+    fn execute_constraint_commands(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        // Note: Constraint system not yet implemented
+        // These commands are placeholders for future constraint support
+        for clause in &ast.clauses {
+            match clause {
+                executor::parser::Clause::CreateConstraint(create_constraint) => {
+                    if create_constraint.if_not_exists {
+                        // Constraint might already exist, skip if so
+                        continue;
+                    }
+                    return Err(Error::CypherExecution(
+                        "Constraint system not yet implemented".to_string(),
+                    ));
+                }
+                executor::parser::Clause::DropConstraint(drop_constraint) => {
+                    if drop_constraint.if_exists {
+                        // Constraint might not exist, skip if so
+                        continue;
+                    }
+                    return Err(Error::CypherExecution(
+                        "Constraint system not yet implemented".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(executor::ResultSet {
+            columns: vec!["status".to_string()],
+            rows: vec![executor::Row {
+                values: vec![serde_json::Value::String("ok".to_string())],
+            }],
+        })
     }
 
     fn build_return_result(
