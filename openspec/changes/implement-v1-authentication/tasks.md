@@ -33,10 +33,10 @@
 - [x] 1.2.5 Add unit tests for root user management ✅
 
 ### 1.3 User CRUD Operations
-- [ ] 1.3.1 Implement `CREATE USER username [WITH PASSWORD 'password']` Cypher command
-- [ ] 1.3.2 Implement `DROP USER username` Cypher command
-- [ ] 1.3.3 Implement `SHOW USERS` Cypher command
-- [ ] 1.3.4 Implement `SHOW USER username` Cypher command
+- [x] 1.3.1 Implement `CREATE USER username [SET PASSWORD 'password']` Cypher command ✅ (with password hashing)
+- [x] 1.3.2 Implement `DROP USER username` Cypher command ✅
+- [x] 1.3.3 Implement `SHOW USERS` Cypher command ✅ (already existed)
+- [x] 1.3.4 Implement `SHOW USER username` Cypher command ✅
 - [ ] 1.3.5 Add REST endpoint: `POST /auth/users`
 - [ ] 1.3.6 Add REST endpoint: `DELETE /auth/users/{username}`
 - [ ] 1.3.7 Add REST endpoint: `GET /auth/users`

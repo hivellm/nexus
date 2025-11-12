@@ -72,8 +72,12 @@ pub enum Clause {
     DropConstraint(DropConstraintClause),
     /// SHOW USERS command
     ShowUsers,
+    /// SHOW USER command (singular)
+    ShowUser(ShowUserClause),
     /// CREATE USER command
     CreateUser(CreateUserClause),
+    /// DROP USER command
+    DropUser(DropUserClause),
     /// GRANT command
     Grant(GrantClause),
     /// REVOKE command
@@ -458,6 +462,22 @@ pub struct CreateUserClause {
     pub password: Option<String>,
     /// Optional IF NOT EXISTS flag
     pub if_not_exists: bool,
+}
+
+/// DROP USER clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropUserClause {
+    /// Username
+    pub username: String,
+    /// Optional IF EXISTS flag
+    pub if_exists: bool,
+}
+
+/// SHOW USER clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowUserClause {
+    /// Username
+    pub username: String,
 }
 
 /// GRANT clause
@@ -882,8 +902,11 @@ impl CypherParser {
                 } else if self.peek_keyword("USERS") {
                     self.parse_keyword()?; // consume "USERS"
                     Ok(Clause::ShowUsers)
+                } else if self.peek_keyword("USER") {
+                    let show_user_clause = self.parse_show_user_clause()?;
+                    Ok(Clause::ShowUser(show_user_clause))
                 } else {
-                    Err(self.error("SHOW must be followed by DATABASES or USERS"))
+                    Err(self.error("SHOW must be followed by DATABASES, USERS, or USER"))
                 }
             }
             "BEGIN" => {
@@ -912,6 +935,9 @@ impl CypherParser {
                 if self.peek_keyword("DATABASE") {
                     let drop_db_clause = self.parse_drop_database_clause()?;
                     Ok(Clause::DropDatabase(drop_db_clause))
+                } else if self.peek_keyword("USER") {
+                    let drop_user_clause = self.parse_drop_user_clause()?;
+                    Ok(Clause::DropUser(drop_user_clause))
                 } else if self.peek_keyword("INDEX") {
                     let drop_index_clause = self.parse_drop_index_clause()?;
                     Ok(Clause::DropIndex(drop_index_clause))
@@ -919,7 +945,7 @@ impl CypherParser {
                     let drop_constraint_clause = self.parse_drop_constraint_clause()?;
                     Ok(Clause::DropConstraint(drop_constraint_clause))
                 } else {
-                    Err(self.error("DROP must be followed by DATABASE, INDEX, or CONSTRAINT"))
+                    Err(self.error("DROP must be followed by DATABASE, USER, INDEX, or CONSTRAINT"))
                 }
             }
             "GRANT" => {
@@ -1997,6 +2023,46 @@ impl CypherParser {
             password,
             if_not_exists,
         })
+    }
+
+    /// Parse DROP USER clause
+    /// Syntax: DROP USER username [IF EXISTS]
+    fn parse_drop_user_clause(&mut self) -> Result<DropUserClause> {
+        self.expect_keyword("USER")?;
+        self.skip_whitespace();
+
+        // Check for IF EXISTS first
+        let mut if_exists = false;
+        if self.peek_keyword("IF") {
+            self.parse_keyword()?;
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            if_exists = true;
+        }
+
+        let username = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // Check for IF EXISTS after username
+        if !if_exists && self.peek_keyword("IF") {
+            self.parse_keyword()?;
+            self.expect_keyword("EXISTS")?;
+            if_exists = true;
+        }
+
+        Ok(DropUserClause {
+            username,
+            if_exists,
+        })
+    }
+
+    /// Parse SHOW USER clause
+    /// Syntax: SHOW USER username
+    fn parse_show_user_clause(&mut self) -> Result<ShowUserClause> {
+        self.expect_keyword("USER")?;
+        self.skip_whitespace();
+        let username = self.parse_identifier()?;
+        Ok(ShowUserClause { username })
     }
 
     /// Parse GRANT clause

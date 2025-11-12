@@ -278,7 +278,9 @@ pub async fn execute_cypher(
         matches!(
             c,
             nexus_core::executor::parser::Clause::ShowUsers
+                | nexus_core::executor::parser::Clause::ShowUser(_)
                 | nexus_core::executor::parser::Clause::CreateUser(_)
+                | nexus_core::executor::parser::Clause::DropUser(_)
                 | nexus_core::executor::parser::Clause::Grant(_)
                 | nexus_core::executor::parser::Clause::Revoke(_)
         )
@@ -1165,6 +1167,99 @@ pub(crate) async fn execute_user_commands(
                     ]));
                 }
             }
+            nexus_core::executor::parser::Clause::ShowUser(show_user) => {
+                columns = vec![
+                    "username".to_string(),
+                    "id".to_string(),
+                    "email".to_string(),
+                    "roles".to_string(),
+                    "permissions".to_string(),
+                    "is_active".to_string(),
+                    "is_root".to_string(),
+                ];
+
+                let users_list = rbac.list_users();
+                let user = users_list.iter().find(|u| u.username == show_user.username);
+
+                if let Some(user) = user {
+                    let permissions: Vec<String> = user
+                        .additional_permissions
+                        .permissions()
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect();
+
+                    rows.push(serde_json::json!([
+                        user.username.clone(),
+                        user.id.clone(),
+                        user.email.clone().unwrap_or_default(),
+                        user.roles.clone(),
+                        permissions,
+                        user.is_active,
+                        user.is_root
+                    ]));
+                } else {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some(format!("User '{}' not found", show_user.username)),
+                    });
+                }
+            }
+            nexus_core::executor::parser::Clause::DropUser(drop_user) => {
+                columns = vec!["username".to_string(), "message".to_string()];
+
+                let users_list = rbac.list_users();
+                let user_info = users_list
+                    .iter()
+                    .find(|u| u.username == drop_user.username)
+                    .map(|u| (u.id.clone(), u.is_root));
+
+                if let Some((user_id, is_root)) = user_info {
+                    // Prevent deletion of root user
+                    if is_root {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some(
+                                "Cannot delete root user. Use DISABLE instead.".to_string(),
+                            ),
+                        });
+                    }
+
+                    if let Some(_removed_user) = rbac.remove_user(&user_id) {
+                        rows.push(serde_json::json!([
+                            drop_user.username.clone(),
+                            format!("User '{}' deleted successfully", drop_user.username)
+                        ]));
+                    } else {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some(format!("Failed to delete user '{}'", drop_user.username)),
+                        });
+                    }
+                } else if drop_user.if_exists {
+                    rows.push(serde_json::json!([
+                        drop_user.username.clone(),
+                        format!("User '{}' does not exist (IF EXISTS)", drop_user.username)
+                    ]));
+                } else {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some(format!("User '{}' not found", drop_user.username)),
+                    });
+                }
+            }
             nexus_core::executor::parser::Clause::CreateUser(create_user) => {
                 columns = vec!["username".to_string(), "message".to_string()];
 
@@ -1186,8 +1281,32 @@ pub(crate) async fn execute_user_commands(
 
                 if existing_user.is_none() {
                     let user_id = uuid::Uuid::new_v4().to_string();
-                    let user =
-                        nexus_core::auth::User::new(user_id.clone(), create_user.username.clone());
+                    let user = if let Some(password) = &create_user.password {
+                        // Hash password with Argon2
+                        use argon2::password_hash::{SaltString, rand_core::OsRng};
+                        use argon2::{Argon2, PasswordHasher};
+
+                        let argon2 = Argon2::default();
+                        let salt = SaltString::generate(&mut OsRng);
+                        match argon2.hash_password(password.as_bytes(), &salt) {
+                            Ok(password_hash) => nexus_core::auth::User::with_password_hash(
+                                user_id.clone(),
+                                create_user.username.clone(),
+                                password_hash.to_string(),
+                            ),
+                            Err(e) => {
+                                let execution_time = start_time.elapsed().as_millis() as u64;
+                                return Json(CypherResponse {
+                                    columns: vec![],
+                                    rows: vec![],
+                                    execution_time_ms: execution_time,
+                                    error: Some(format!("Failed to hash password: {}", e)),
+                                });
+                            }
+                        }
+                    } else {
+                        nexus_core::auth::User::new(user_id.clone(), create_user.username.clone())
+                    };
                     rbac.add_user(user);
                 }
 
