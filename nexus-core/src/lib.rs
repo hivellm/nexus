@@ -82,6 +82,7 @@ pub use graph::simple::{
 };
 pub use graph::{Edge, EdgeId, Graph, GraphStats, Node, NodeId};
 use std::sync::Arc;
+use parking_lot::RwLock;
 pub use validation::{
     GraphValidator, ValidationConfig, ValidationError, ValidationErrorType, ValidationResult,
     ValidationSeverity, ValidationStats, ValidationWarning, ValidationWarningType,
@@ -1309,41 +1310,63 @@ impl Engine {
     }
 
     /// Execute transaction commands (BEGIN, COMMIT, ROLLBACK)
+    /// Requires a session_id to track transaction context across queries
     fn execute_transaction_commands(
         &mut self,
         ast: &executor::parser::CypherQuery,
+        session_id: Option<&str>,
     ) -> Result<executor::ResultSet> {
+        // Use provided session_id or generate a default one
+        // In a full implementation, session_id would come from HTTP headers or connection context
+        let session_id = session_id.unwrap_or("default");
+        
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::BeginTransaction => {
-                    // Begin a write transaction
-                    // Note: The transaction is stored internally by TransactionManager
-                    // For explicit transaction support, we would need to track the transaction
-                    // handle per session/client. For now, we just ensure the transaction manager
-                    // is ready for write operations.
-                    let _tx = self.transaction_manager.begin_write()?;
-                    // In a full implementation, we would store this transaction handle
-                    // in a session context for later commit/rollback
+                    // Get or create session
+                    let mut session = self.session_manager.get_or_create_session(session_id.to_string());
+                    
+                    // Begin transaction for this session
+                    session.begin_transaction()?;
+                    
+                    // Update session in manager
+                    self.session_manager.update_session(session);
                 }
                 executor::parser::Clause::CommitTransaction => {
-                    // Commit the current transaction
-                    // Note: In a full implementation, we would retrieve the transaction handle
-                    // from the session context. For now, we create a transaction and commit it
-                    // to ensure consistency.
-                    let mut tx = self.transaction_manager.begin_write()?;
-                    self.transaction_manager.commit(&mut tx)?;
+                    // Get session
+                    let mut session = self.session_manager
+                        .get_session(&session_id.to_string())
+                        .ok_or_else(|| Error::transaction(format!(
+                            "Session {} not found or expired",
+                            session_id
+                        )))?;
+                    
+                    // Commit transaction
+                    session.commit_transaction()?;
+                    
                     // Flush storage to ensure durability
                     self.storage.flush()?;
+                    
+                    // Update session in manager
+                    self.session_manager.update_session(session);
                 }
                 executor::parser::Clause::RollbackTransaction => {
-                    // Rollback the current transaction
-                    // Note: In a full implementation, we would retrieve the transaction handle
-                    // from the session context and call abort/rollback. For now, we create
-                    // a transaction and abort it to ensure consistency.
-                    let mut tx = self.transaction_manager.begin_write()?;
-                    self.transaction_manager.abort(&mut tx)?;
+                    // Get session
+                    let mut session = self.session_manager
+                        .get_session(&session_id.to_string())
+                        .ok_or_else(|| Error::transaction(format!(
+                            "Session {} not found or expired",
+                            session_id
+                        )))?;
+                    
+                    // Rollback transaction
+                    session.rollback_transaction()?;
+                    
                     // Flush storage to ensure consistency
                     self.storage.flush()?;
+                    
+                    // Update session in manager
+                    self.session_manager.update_session(session);
                 }
                 _ => {}
             }
