@@ -220,9 +220,9 @@ This task covers the implementation of official SDKs for Nexus in 6 programming 
 
 #### 3.7 Advanced Features
 
-- [ ] 3.7.1 Implement query statistics
-- [ ] 3.7.2 Add slow query analysis
-- [ ] 3.7.3 Implement plan cache management
+- [x] 3.7.1 Implement query statistics
+- [x] 3.7.2 Add slow query analysis
+- [x] 3.7.3 Implement plan cache management
 - [ ] 3.7.4 Add graph algorithm wrappers
 
 #### 3.8 Testing

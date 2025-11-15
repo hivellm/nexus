@@ -4,7 +4,7 @@ resolver = "2"
 members = [
     "nexus-core",
     "nexus-server",
-    "nexus-protocol",
+    "nexus-protocol", "sdks/rust",
 ]
 
 [workspace.package]

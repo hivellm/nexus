@@ -48,6 +48,10 @@ path = "examples/basic_usage.rs"
 name = "with_auth"
 path = "examples/with_auth.rs"
 
+[[example]]
+name = "performance_monitoring"
+path = "examples/performance_monitoring.rs"
+
 [lib]
 name = "nexus_sdk_rust"
 path = "src/lib.rs"

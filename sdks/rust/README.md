@@ -88,6 +88,7 @@ println!("Types: {:?}", types.types);
 - ✅ Node CRUD operations (Create, Read, Update, Delete)
 - ✅ Relationship CRUD operations (Create)
 - ✅ Schema management (Labels, Relationship Types)
+- ✅ Performance monitoring (Query statistics, slow queries, plan cache)
 - ✅ API key authentication
 - ✅ Username/password authentication
 - ✅ Proper error handling
@@ -114,12 +115,14 @@ See the `examples/` directory for complete examples:
 
 - `basic_usage.rs` - Basic operations with nodes, relationships, and schema
 - `with_auth.rs` - Authentication examples
+- `performance_monitoring.rs` - Performance monitoring and statistics
 
 Run examples with:
 
 ```bash
 cargo run --example basic_usage
 cargo run --example with_auth
+cargo run --example performance_monitoring
 ```
 
 ## Testing
