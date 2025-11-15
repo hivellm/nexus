@@ -215,7 +215,7 @@ fn test_todate_in_queries() {
     );
     // May include events from previous tests - accept >= 1
     assert!(
-        result.rows.len() >= 1,
+        !result.rows.is_empty(),
         "Expected at least 1 event, got {}",
         result.rows.len()
     );

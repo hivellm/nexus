@@ -31,7 +31,7 @@ fn test_return_point_literal_2d() {
     assert_eq!(result.columns[0], "p");
 
     // Check that the first value is a Point object
-    if let Some(Value::Object(obj)) = result.rows[0].values.get(0) {
+    if let Some(Value::Object(obj)) = result.rows[0].values.first() {
         assert!(obj.contains_key("x"), "Point should have 'x' field");
         assert!(obj.contains_key("y"), "Point should have 'y' field");
         assert!(obj.contains_key("crs"), "Point should have 'crs' field");
@@ -56,7 +56,7 @@ fn test_return_point_literal_2d() {
     } else {
         panic!(
             "Expected Point object, got: {:?}",
-            result.rows[0].values.get(0)
+            result.rows[0].values.first()
         );
     }
 }

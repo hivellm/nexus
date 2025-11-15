@@ -166,7 +166,7 @@ fn test_distance_function_multiple_queries() {
     assert_eq!(result.columns.len(), 2);
 
     if let (Some(Value::Number(d1)), Some(Value::Number(d2))) =
-        (result.rows[0].values.get(0), result.rows[0].values.get(1))
+        (result.rows[0].values.first(), result.rows[0].values.get(1))
     {
         let d1_val = d1.as_f64().unwrap();
         let d2_val = d2.as_f64().unwrap();

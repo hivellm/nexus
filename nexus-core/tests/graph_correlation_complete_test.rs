@@ -146,7 +146,7 @@ fn test_pattern_detection_event_driven() {
     let result = detector.detect(&graph).unwrap();
 
     // May or may not find patterns depending on graph structure
-    assert!(result.patterns.len() >= 0);
+    // Patterns can be empty or have data - both are valid
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn test_pattern_detection_architectural() {
     let detector = ArchitecturalPatternDetector;
     let result = detector.detect(&graph).unwrap();
 
-    assert!(result.patterns.len() >= 0);
+    // Patterns can be empty or have data - both are valid
     assert!(result.quality_score >= 0.0);
 }
 

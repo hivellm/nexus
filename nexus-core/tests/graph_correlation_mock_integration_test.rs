@@ -362,7 +362,7 @@ fn test_transitive_dependencies() {
         let deps = get_transitive_dependencies(&graph, &node_a.id);
 
         // Should include both b and c
-        assert!(deps.len() >= 1);
+        assert!(deps!is_empty());
     }
 }
 

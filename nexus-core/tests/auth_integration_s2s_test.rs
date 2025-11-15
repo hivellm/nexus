@@ -12,7 +12,6 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -138,7 +137,7 @@ async fn test_complete_authentication_flow() {
 
     let client = reqwest::Client::new();
     let mut passed = 0;
-    let mut failed = 0;
+    let failed = 0;
 
     // Step 1: Create a user
     let username = generate_unique_username("testuser");
@@ -336,7 +335,7 @@ async fn test_api_key_lifecycle() {
 
     let client = reqwest::Client::new();
     let mut passed = 0;
-    let mut failed = 0;
+    let failed = 0;
 
     // Step 1: Create a user
     let username = generate_unique_username("apiuser");
@@ -538,7 +537,7 @@ async fn test_permission_enforcement() {
 
     let client = reqwest::Client::new();
     let mut passed = 0;
-    let mut failed = 0;
+    let failed = 0;
 
     // Step 1: Create user with READ permission only
     let username = generate_unique_username("readuser");
@@ -709,7 +708,7 @@ async fn test_rate_limiting() {
 
     let client = reqwest::Client::new();
     let mut passed = 0;
-    let mut failed = 0;
+    let failed = 0;
 
     // Create API key for testing
     let username = generate_unique_username("ratetest");
@@ -839,7 +838,7 @@ async fn test_user_permission_cascade() {
 
     let client = reqwest::Client::new();
     let mut passed = 0;
-    let mut failed = 0;
+    let failed = 0;
 
     // Step 1: Create user
     let username = generate_unique_username("cascadeuser");
@@ -1030,7 +1029,7 @@ async fn test_audit_log_generation() {
 
     let client = reqwest::Client::new();
     let mut passed = 0;
-    let mut failed = 0;
+    let failed = 0;
 
     // Step 1: Create user (should generate audit log)
     let username = generate_unique_username("audituser");
@@ -1141,7 +1140,7 @@ async fn test_root_user_disable_flow() {
 
     let client = reqwest::Client::new();
     let mut passed = 0;
-    let mut failed = 0;
+    let failed = 0;
 
     // Step 1: Try to login as root (if root is enabled)
     let root_login_req = LoginRequest {

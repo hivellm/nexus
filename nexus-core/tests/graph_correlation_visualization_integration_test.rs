@@ -52,11 +52,13 @@ fn test_complete_visualization_pipeline_call_graph() {
     }
 
     // Step 2: Configure visualization
-    let mut config = VisualizationConfig::default();
-    config.width = 800.0;
-    config.height = 600.0;
-    config.layout_algorithm = LayoutAlgorithm::Grid;
-    config.enable_caching = true;
+    let config = VisualizationConfig {
+        width: 800.0,
+        height: 600.0,
+        layout_algorithm: LayoutAlgorithm::Grid,
+        enable_caching: true,
+        ..Default::default()
+    };
 
     // Step 3: Apply layout
     let mut graph_with_layout = graph.clone();
@@ -117,12 +119,14 @@ fn test_complete_visualization_pipeline_dependency_graph() {
     assert!(!graph.nodes.is_empty());
 
     // Step 2: Configure visualization with circular layout
-    let mut config = VisualizationConfig::default();
-    config.width = 1000.0;
-    config.height = 800.0;
-    config.layout_algorithm = LayoutAlgorithm::Circular;
-    config.default_node_size = 20.0;
-    config.default_node_color = "#4A90E2".to_string();
+    let config = VisualizationConfig {
+        width: 1000.0,
+        height: 800.0,
+        layout_algorithm: LayoutAlgorithm::Circular,
+        default_node_size: 20.0,
+        default_node_color: "#4A90E2".to_string(),
+        ..Default::default()
+    };
 
     // Step 3: Apply layout
     let mut graph_with_layout = graph.clone();
@@ -156,15 +160,17 @@ fn test_visualization_pipeline_with_custom_styling() {
         .expect("Failed to build graph");
 
     // Configure with custom styling
-    let mut config = VisualizationConfig::default();
-    config.width = 600.0;
-    config.height = 400.0;
-    config.background_color = "#F5F5F5".to_string();
-    config.default_node_color = "#FF6B6B".to_string();
-    config.default_edge_color = "#4ECDC4".to_string();
-    config.default_node_size = 15.0;
-    config.default_edge_width = 2.0;
-    config.directed_edges = true;
+    let config = VisualizationConfig {
+        width: 600.0,
+        height: 400.0,
+        background_color: "#F5F5F5".to_string(),
+        default_node_color: "#FF6B6B".to_string(),
+        default_edge_color: "#4ECDC4".to_string(),
+        default_node_size: 15.0,
+        default_edge_width: 2.0,
+        directed_edges: true,
+        ..Default::default()
+    };
 
     // Apply layout
     let mut graph_with_layout = graph.clone();
@@ -185,8 +191,10 @@ fn test_visualization_cache_eviction() {
     let manager = GraphCorrelationManager::new();
     let mut cache = VisualizationCache::with_max_size(2); // Small cache for testing
 
-    let mut config = VisualizationConfig::default();
-    config.enable_caching = true;
+    let config = VisualizationConfig {
+        enable_caching: true,
+        ..Default::default()
+    };
 
     // Create first graph
     let mut source_data1 = GraphSourceData::new();
@@ -281,10 +289,12 @@ fn test_visualization_pipeline_large_graph() {
         eprintln!("⚠️  Warning: Large graph has no edges - relationships may not be detected");
     }
 
-    let mut config = VisualizationConfig::default();
-    config.width = 2000.0;
-    config.height = 1500.0;
-    config.layout_algorithm = LayoutAlgorithm::Grid;
+    let config = VisualizationConfig {
+        width: 2000.0,
+        height: 1500.0,
+        layout_algorithm: LayoutAlgorithm::Grid,
+        ..Default::default()
+    };
 
     // Apply layout
     let mut graph_with_layout = graph.clone();

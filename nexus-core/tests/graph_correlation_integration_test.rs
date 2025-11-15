@@ -226,7 +226,7 @@ fn test_large_scale_graph() {
         "Large graph should have many nodes"
     );
     assert!(
-        graph.edges.len() >= 100,
+        graph.edges!is_empty()00,
         "Large graph should have many edges"
     );
 

@@ -155,7 +155,7 @@ async fn test_auth_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(users_response) = response.json::<UsersResponse>().await {
-                    if users_response.users.len() > 0
+                    if !users_response.users.is_empty()
                         && users_response
                             .users
                             .iter()

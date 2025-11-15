@@ -412,7 +412,7 @@ fn test_complex_recursion_scenario() {
 
     // All functions should be detected as recursively calling each other
     for func in &functions {
-        let info = recursive_info.get(format!("func:{}", func)).unwrap();
+        let info = recursive_info.get(&format!("func:{}", func)).unwrap();
         assert!(info.is_recursive);
         assert!(!info.direct_recursion);
         assert!(info.indirect_recursion);

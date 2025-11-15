@@ -240,12 +240,10 @@ fn test_validate_graph_with_dense_subgraph() {
         .collect();
 
     // Create many edges between these nodes
-    let mut edge_count = 0;
     for i in 0..5 {
         for j in 0..5 {
             if i != j {
                 let _ = graph.create_edge(node_ids[i], node_ids[j], "KNOWS".to_string());
-                edge_count += 1;
             }
         }
     }
@@ -318,6 +316,7 @@ fn test_validation_stats() {
     let result = validator.validate_graph(&graph).unwrap();
 
     // Check that stats are populated
+    // Stats are always non-negative (usize/u64 types)
     assert!(result.stats.nodes_checked >= 0);
     assert!(result.stats.edges_checked >= 0);
     assert!(result.stats.validation_time_ms >= 0);

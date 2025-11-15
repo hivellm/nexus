@@ -41,9 +41,8 @@ fn test_sql_injection_prevention() {
 
         // These should either fail to parse or be handled safely
         // Cypher parser will reject invalid syntax, preventing injection
-        if result.is_ok() {
+        if let Ok(ast) = result {
             // If it parses, verify it doesn't execute dangerous operations
-            let ast = result.unwrap();
             // Check that no dangerous operations are present
             let has_dangerous = ast.clauses.iter().any(|c| {
                 format!("{:?}", c).contains("DROP")
@@ -139,7 +138,7 @@ async fn test_brute_force_prevention() {
     let mut success_count = 0;
     let mut blocked_count = 0;
 
-    for i in 0..20 {
+    for _i in 0..20 {
         let result = rate_limiter.check_rate_limit("attacker").await;
 
         if result.allowed {
@@ -200,11 +199,7 @@ async fn test_timing_attack_prevention() {
 
     // Timing difference should be minimal (Argon2 provides timing attack resistance)
     // In practice, Argon2 verification takes similar time regardless of correctness
-    let time_diff = if correct_time > wrong_time {
-        correct_time - wrong_time
-    } else {
-        wrong_time - correct_time
-    };
+    let time_diff = correct_time.abs_diff(wrong_time);
 
     // Time difference should be small (within 10ms for this test)
     // Real Argon2 provides better protection, but this verifies basic timing resistance
@@ -218,8 +213,10 @@ async fn test_timing_attack_prevention() {
 fn test_token_replay_prevention() {
     // JWT tokens should expire, preventing replay attacks
 
-    let mut config = nexus_core::auth::jwt::JwtConfig::default();
-    config.expiration_seconds = 1; // Very short expiration for testing
+    let config = nexus_core::auth::jwt::JwtConfig {
+        expiration_seconds: 1, // Very short expiration for testing
+        ..Default::default()
+    };
 
     let jwt_manager = JwtManager::new(config);
     use nexus_core::auth::User;
@@ -321,10 +318,10 @@ fn test_api_key_enumeration_prevention() {
     let valid_key_result = valid_result.unwrap();
     // If auth is enabled, should return Some; if disabled, returns None
     // The important thing is consistent return type (Option) regardless of validity
-    if valid_key_result.is_some() {
+    if let Some(valid_key) = valid_key_result {
         // Auth is enabled and key is valid
         assert!(
-            valid_key_result.unwrap().id == _valid_key.id,
+            valid_key.id == _valid_key.id,
             "Valid key should return correct API key"
         );
     }
@@ -477,7 +474,7 @@ async fn test_concurrent_authentication_requests() {
     // All requests should succeed (thread-safe)
     // Note: If auth is disabled, all will return None, which is also OK (consistent behavior)
     assert!(
-        success_count >= 0 && success_count <= 10,
+        (0..=10).contains(&success_count),
         "Concurrent requests should be handled safely (thread-safe)"
     );
 }
@@ -528,7 +525,7 @@ fn test_audit_log_injection_prevention() {
     let content = std::fs::read_to_string(&log_file).unwrap();
 
     // Content should be valid JSON (malicious content escaped)
-    let parsed: serde_json::Value = serde_json::from_str(&content.lines().next().unwrap()).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(content.lines().next().unwrap()).unwrap();
 
     // Malicious content should be safely stored in JSON (as string literals, not executable code)
     assert!(content.contains("user"), "Log should contain username");
@@ -537,5 +534,5 @@ fn test_audit_log_injection_prevention() {
     assert!(parsed.is_object(), "Log should be valid JSON object");
     // Verify the malicious content is stored as a string literal (safe)
     // The content may contain "DROP" as part of the username string, which is safe in JSON
-    assert!(content.len() > 0, "Log should contain content");
+    assert!(!content.is_empty(), "Log should contain content");
 }

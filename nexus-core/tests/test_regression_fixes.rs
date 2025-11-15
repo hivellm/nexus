@@ -241,7 +241,7 @@ fn regression_delete_with_return_count() {
             !result.rows.is_empty(),
             "DELETE with RETURN count should return count"
         );
-        if let Some(Value::Number(count)) = result.rows[0].values.get(0) {
+        if let Some(Value::Number(count)) = result.rows[0].values.first() {
             assert!(
                 count.as_u64().unwrap() > 0,
                 "Count should be greater than 0"
@@ -293,7 +293,7 @@ fn regression_coalesce_returns_first_non_null() {
         let result = executor.execute(&query).unwrap();
         assert!(!result.rows.is_empty(), "coalesce() should return a result");
 
-        if let Some(Value::String(value)) = result.rows[0].values.get(0) {
+        if let Some(Value::String(value)) = result.rows[0].values.first() {
             assert_eq!(
                 value, "default",
                 "coalesce() should return first non-null value"
@@ -301,7 +301,7 @@ fn regression_coalesce_returns_first_non_null() {
         } else {
             panic!(
                 "coalesce() should return 'default' string, got: {:?}",
-                result.rows[0].values.get(0)
+                result.rows[0].values.first()
             );
         }
     });
@@ -318,7 +318,7 @@ fn regression_coalesce_returns_first_value() {
         };
 
         let result = executor.execute(&query).unwrap();
-        if let Some(Value::String(value)) = result.rows[0].values.get(0) {
+        if let Some(Value::String(value)) = result.rows[0].values.first() {
             assert_eq!(
                 value, "first",
                 "coalesce() should return first non-null value"

@@ -70,7 +70,7 @@ fn test_create_single_node_without_return() {
         assert_eq!(result.columns[0], "n");
 
         // Verify the node has the correct properties
-        if let Some(Value::Object(obj)) = result.rows[0].values.get(0) {
+        if let Some(Value::Object(obj)) = result.rows[0].values.first() {
             if let Some(Value::String(name)) = obj.get("name") {
                 assert_eq!(name, "Alice");
             } else {
@@ -79,7 +79,7 @@ fn test_create_single_node_without_return() {
         } else {
             panic!(
                 "Expected node object, got: {:?}",
-                result.rows[0].values.get(0)
+                result.rows[0].values.first()
             );
         }
     });
@@ -129,7 +129,7 @@ fn test_create_node_with_multiple_labels_without_return() {
             assert_eq!(result.columns[0], "n");
 
             // Verify the node has the correct properties
-            if let Some(Value::Object(obj)) = result.rows[0].values.get(0) {
+            if let Some(Value::Object(obj)) = result.rows[0].values.first() {
                 if let Some(Value::String(name)) = obj.get("name") {
                     assert_eq!(name, "Alice");
                 } else {
@@ -143,7 +143,7 @@ fn test_create_node_with_multiple_labels_without_return() {
             } else {
                 panic!(
                     "Expected node object, got: {:?}",
-                    result.rows[0].values.get(0)
+                    result.rows[0].values.first()
                 );
             }
         },
@@ -229,7 +229,7 @@ fn test_create_single_node_with_return() {
         assert_eq!(result.columns[0], "n");
 
         // Verify the node has the correct properties
-        if let Some(Value::Object(obj)) = result.rows[0].values.get(0) {
+        if let Some(Value::Object(obj)) = result.rows[0].values.first() {
             if let Some(Value::String(name)) = obj.get("name") {
                 assert_eq!(name, "Alice");
             } else {
@@ -238,7 +238,7 @@ fn test_create_single_node_with_return() {
         } else {
             panic!(
                 "Expected node object, got: {:?}",
-                result.rows[0].values.get(0)
+                result.rows[0].values.first()
             );
         }
     });
@@ -288,7 +288,7 @@ fn test_create_node_with_multiple_labels_with_return() {
         assert_eq!(result.columns[0], "n");
 
         // Verify the node has the correct properties
-        if let Some(Value::Object(obj)) = result.rows[0].values.get(0) {
+        if let Some(Value::Object(obj)) = result.rows[0].values.first() {
             if let Some(Value::String(name)) = obj.get("name") {
                 assert_eq!(name, "Alice");
             } else {
@@ -302,7 +302,7 @@ fn test_create_node_with_multiple_labels_with_return() {
         } else {
             panic!(
                 "Expected node object, got: {:?}",
-                result.rows[0].values.get(0)
+                result.rows[0].values.first()
             );
         }
     });

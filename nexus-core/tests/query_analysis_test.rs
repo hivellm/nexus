@@ -33,7 +33,7 @@ fn test_explain_simple_query() {
 
     let result_set = result.unwrap();
     assert_eq!(result_set.columns, vec!["plan"]);
-    assert!(result_set.rows.len() >= 1);
+    assert!(!result_set.rows.is_empty());
 
     // Check that plan is valid JSON
     let plan_value = extract_first_row_value(result_set).unwrap();
@@ -64,7 +64,7 @@ fn test_explain_with_where() {
 
     let result_set = result.unwrap();
     assert_eq!(result_set.columns, vec!["plan"]);
-    assert!(result_set.rows.len() >= 1);
+    assert!(!result_set.rows.is_empty());
 
     let plan_value = extract_first_row_value(result_set).unwrap();
     assert!(plan_value.is_object());
@@ -91,7 +91,7 @@ fn test_profile_simple_query() {
 
     let result_set = result.unwrap();
     assert_eq!(result_set.columns, vec!["profile"]);
-    assert!(result_set.rows.len() >= 1);
+    assert!(!result_set.rows.is_empty());
 
     // Check that profile is valid JSON with execution stats
     let profile_value = extract_first_row_value(result_set).unwrap();
@@ -126,7 +126,7 @@ fn test_profile_with_where() {
 
     let result_set = result.unwrap();
     assert_eq!(result_set.columns, vec!["profile"]);
-    assert!(result_set.rows.len() >= 1);
+    assert!(!result_set.rows.is_empty());
 
     let profile_value = extract_first_row_value(result_set).unwrap();
     let profile_obj = profile_value.as_object().unwrap();
@@ -181,7 +181,7 @@ fn test_profile_create_query() {
     let check_result = engine
         .execute_cypher("MATCH (n:Person {name: 'ProfileTest'}) RETURN n")
         .unwrap();
-    assert!(check_result.rows.len() >= 1);
+    assert!(check_result.rows!is_empty());
 }
 
 #[test]
