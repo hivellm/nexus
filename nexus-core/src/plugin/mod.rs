@@ -19,6 +19,7 @@
 //! use nexus_core::udf::{BuiltinUdf, UdfSignature, UdfReturnType};
 //! use std::sync::Arc;
 //!
+//! #[derive(Debug)]
 //! pub struct MyPlugin;
 //!
 //! impl Plugin for MyPlugin {
