@@ -89,9 +89,11 @@ fn test_load_csv_execution() {
     fs::write(&csv_path, csv_content).expect("Failed to write test CSV");
 
     // Execute LOAD CSV
+    // Canonicalize path to ensure absolute path
+    let csv_path_abs = csv_path.canonicalize().unwrap_or_else(|_| csv_path.clone());
     let query = format!(
         "LOAD CSV FROM 'file://{}' AS row RETURN row",
-        csv_path.display()
+        csv_path_abs.to_string_lossy()
     );
     let result = engine.execute_cypher(&query).unwrap();
 
@@ -136,9 +138,11 @@ fn test_load_csv_with_headers_execution() {
     fs::write(&csv_path, csv_content).expect("Failed to write test CSV");
 
     // Execute LOAD CSV WITH HEADERS
+    // Canonicalize path to ensure absolute path
+    let csv_path_abs = csv_path.canonicalize().unwrap_or_else(|_| csv_path.clone());
     let query = format!(
         "LOAD CSV FROM 'file://{}' WITH HEADERS AS row RETURN row",
-        csv_path.display()
+        csv_path_abs.to_string_lossy()
     );
     let result = engine.execute_cypher(&query).unwrap();
 

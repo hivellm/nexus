@@ -200,6 +200,17 @@ pub enum Operator {
         /// YIELD columns (optional) - columns to return from procedure
         yield_columns: Option<Vec<String>>,
     },
+    /// Load CSV file
+    LoadCsv {
+        /// CSV file URL/path
+        url: String,
+        /// Variable name to bind each row to
+        variable: String,
+        /// Whether CSV has headers
+        with_headers: bool,
+        /// Field terminator character (default: ',')
+        field_terminator: Option<String>,
+    },
     /// Create an index
     CreateIndex {
         /// Label name
@@ -486,6 +497,20 @@ impl Executor {
                         Operator::Sort { columns, ascending } => {
                             self.execute_sort(&mut context, columns, ascending)?;
                         }
+                        Operator::LoadCsv {
+                            url,
+                            variable,
+                            with_headers,
+                            field_terminator,
+                        } => {
+                            self.execute_load_csv(
+                                &mut context,
+                                url,
+                                variable,
+                                *with_headers,
+                                field_terminator.as_deref(),
+                            )?;
+                        }
                         _ => {
                             // Other operators after CREATE standalone
                         }
@@ -684,6 +709,20 @@ impl Executor {
                         procedure_name,
                         arguments,
                         yield_columns.as_ref(),
+                    )?;
+                }
+                Operator::LoadCsv {
+                    url,
+                    variable,
+                    with_headers,
+                    field_terminator,
+                } => {
+                    self.execute_load_csv(
+                        &mut context,
+                        url,
+                        variable,
+                        *with_headers,
+                        field_terminator.as_deref(),
                     )?;
                 }
                 Operator::CreateIndex {
@@ -2600,6 +2639,20 @@ impl Executor {
                     yield_columns.as_ref(),
                 )?;
             }
+            Operator::LoadCsv {
+                url,
+                variable,
+                with_headers,
+                field_terminator,
+            } => {
+                self.execute_load_csv(
+                    context,
+                    url,
+                    variable,
+                    *with_headers,
+                    field_terminator.as_deref(),
+                )?;
+            }
             Operator::CreateIndex {
                 label,
                 property,
@@ -3922,6 +3975,140 @@ impl Executor {
         // Execute node by label scan
         let nodes = self.execute_node_by_label(label_id)?;
         context.set_variable("n", Value::Array(nodes));
+
+        Ok(())
+    }
+
+    /// Execute LOAD CSV operator
+    fn execute_load_csv(
+        &self,
+        context: &mut ExecutionContext,
+        url: &str,
+        variable: &str,
+        with_headers: bool,
+        field_terminator: Option<&str>,
+    ) -> Result<()> {
+        use std::fs;
+        use std::io::{BufRead, BufReader};
+
+        // Extract file path from URL (file:///path/to/file.csv or file://path/to/file.csv)
+        // Handle both absolute paths (file:///C:/path) and relative paths (file://path)
+        // Also handle Windows paths with backslashes
+        // Note: file:/// means absolute path (preserve leading slash), file:// means relative path
+        let file_path_str = if url.starts_with("file:///") {
+            // Absolute path: file:///path -> /path (preserve leading slash)
+            &url[7..]
+        } else if let Some(stripped) = url.strip_prefix("file://") {
+            // Relative path: file://path -> path
+            stripped
+        } else {
+            url
+        };
+
+        // Convert to PathBuf to handle path resolution properly
+        use std::path::PathBuf;
+        let path_buf = PathBuf::from(file_path_str);
+
+        // Try to resolve the path - if it's relative or doesn't exist, try to find it
+        let file_path = if path_buf.exists() {
+            // Path exists, canonicalize it
+            path_buf.canonicalize().unwrap_or(path_buf)
+        } else if path_buf.is_relative() {
+            // Relative path - try to resolve relative to current directory
+            std::env::current_dir()
+                .ok()
+                .and_then(|cwd| {
+                    let joined = cwd.join(&path_buf);
+                    if joined.exists() {
+                        joined.canonicalize().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(path_buf)
+        } else {
+            // Absolute path that doesn't exist - use as-is (will fail with proper error)
+            path_buf
+        };
+
+        // Read CSV file
+        let file = fs::File::open(&file_path).map_err(|e| {
+            Error::Internal(format!(
+                "Failed to open CSV file '{}': {}",
+                file_path.display(),
+                e
+            ))
+        })?;
+        let reader = BufReader::new(file);
+        let terminator = field_terminator.unwrap_or(",");
+        let mut lines = reader.lines();
+
+        // Skip header if WITH HEADERS
+        let headers = if with_headers {
+            if let Some(Ok(header_line)) = lines.next() {
+                header_line
+                    .split(terminator)
+                    .map(|s| s.trim().to_string())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Parse CSV rows
+        let mut rows = Vec::new();
+        for line_result in lines {
+            let line = line_result
+                .map_err(|e| Error::Internal(format!("Failed to read CSV line: {}", e)))?;
+
+            if line.trim().is_empty() {
+                continue; // Skip empty lines
+            }
+
+            let fields: Vec<String> = line
+                .split(terminator)
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            // Convert to Value based on whether we have headers
+            let row_value = if with_headers && !headers.is_empty() {
+                // Create a map with header keys
+                let mut row_map = serde_json::Map::new();
+                for (i, header) in headers.iter().enumerate() {
+                    let field_value = if i < fields.len() {
+                        Value::String(fields[i].clone())
+                    } else {
+                        Value::Null
+                    };
+                    row_map.insert(header.clone(), field_value);
+                }
+                Value::Object(row_map)
+            } else {
+                // Create an array of field values
+                let field_values: Vec<Value> = fields.into_iter().map(Value::String).collect();
+                Value::Array(field_values)
+            };
+
+            rows.push(row_value);
+        }
+
+        // Store rows in result_set
+        context.result_set.rows.clear();
+        context.result_set.columns = vec![variable.to_string()];
+
+        for row_value in rows {
+            context.result_set.rows.push(Row {
+                values: vec![row_value],
+            });
+        }
+
+        // Also update variables for compatibility
+        if !context.result_set.rows.is_empty() {
+            let row_maps = self.result_set_as_rows(context);
+            self.update_variables_from_rows(context, &row_maps);
+        }
 
         Ok(())
     }

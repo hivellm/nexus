@@ -182,6 +182,15 @@ impl<'a> QueryPlanner<'a> {
                         yield_columns: call_procedure_clause.yield_columns.clone(),
                     });
                 }
+                Clause::LoadCsv(load_csv_clause) => {
+                    // Add LoadCsv operator
+                    operators.push(Operator::LoadCsv {
+                        url: load_csv_clause.url.clone(),
+                        variable: load_csv_clause.variable.clone(),
+                        with_headers: load_csv_clause.with_headers,
+                        field_terminator: load_csv_clause.field_terminator.clone(),
+                    });
+                }
                 Clause::CreateIndex(create_index_clause) => {
                     // Add CreateIndex operator
                     operators.push(Operator::CreateIndex {
@@ -1273,6 +1282,10 @@ impl<'a> QueryPlanner<'a> {
                 Operator::CallProcedure { .. } => {
                     // Procedure calls are moderately expensive (depends on procedure)
                     total_cost += 200.0;
+                }
+                Operator::LoadCsv { .. } => {
+                    // CSV loading is moderately expensive (file I/O)
+                    total_cost += 50.0;
                 }
                 Operator::CreateIndex { .. } => {
                     // Index creation is cheap (metadata operation)
