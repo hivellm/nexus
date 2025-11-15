@@ -1,0 +1,45 @@
+[package]
+name = "nexus-sdk-rust"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nexus Contributors"]
+description = "Official Rust SDK for Nexus graph database"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hivellm/nexus"
+homepage = "https://github.com/hivellm/nexus"
+documentation = "https://docs.rs/nexus-sdk-rust"
+keywords = ["graph", "database", "cypher", "neo4j-compatible"]
+categories = ["database", "web-programming"]
+
+[dependencies]
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tokio = { version = "1.0", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async utilities
+futures = "0.3"
+
+# URL handling
+url = "2.5"
+
+# Base64 encoding for auth
+base64 = "0.22"
+
+# Logging (optional)
+tracing = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockito = "1.0"
+
+[lib]
+name = "nexus_sdk_rust"
+path = "src/lib.rs"

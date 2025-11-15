@@ -1,0 +1,259 @@
+//! Nexus client implementation
+
+use crate::error::{NexusError, Result};
+use crate::models::*;
+use base64::Engine;
+use reqwest::{Client, ClientBuilder, Response};
+use std::collections::HashMap;
+use std::time::Duration;
+use url::Url;
+
+/// Nexus client for interacting with the Nexus graph database
+#[derive(Debug, Clone)]
+pub struct NexusClient {
+    /// HTTP client
+    client: Client,
+    /// Base URL
+    base_url: Url,
+    /// API key (optional)
+    api_key: Option<String>,
+    /// Username (optional)
+    username: Option<String>,
+    /// Password (optional)
+    password: Option<String>,
+    /// Maximum retries (currently unused, reserved for future retry implementation)
+    #[allow(dead_code)]
+    max_retries: u32,
+}
+
+impl NexusClient {
+    /// Create a new Nexus client with default configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `base_url` - Base URL of the Nexus server (e.g., "http://localhost:15474")
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nexus_sdk_rust::NexusClient;
+    ///
+    /// let client = NexusClient::new("http://localhost:15474")?;
+    /// # Ok::<(), nexus_sdk_rust::NexusError>(())
+    /// ```
+    pub fn new(base_url: &str) -> Result<Self> {
+        Self::with_config(ClientConfig {
+            base_url: base_url.to_string(),
+            ..Default::default()
+        })
+    }
+
+    /// Create a new Nexus client with API key authentication
+    ///
+    /// # Arguments
+    ///
+    /// * `base_url` - Base URL of the Nexus server
+    /// * `api_key` - API key for authentication
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nexus_sdk_rust::NexusClient;
+    ///
+    /// let client = NexusClient::with_api_key("http://localhost:15474", "your-api-key")?;
+    /// # Ok::<(), nexus_sdk_rust::NexusError>(())
+    /// ```
+    pub fn with_api_key(base_url: &str, api_key: &str) -> Result<Self> {
+        Self::with_config(ClientConfig {
+            base_url: base_url.to_string(),
+            api_key: Some(api_key.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Create a new Nexus client with username/password authentication
+    ///
+    /// # Arguments
+    ///
+    /// * `base_url` - Base URL of the Nexus server
+    /// * `username` - Username for authentication
+    /// * `password` - Password for authentication
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nexus_sdk_rust::NexusClient;
+    ///
+    /// let client = NexusClient::with_credentials("http://localhost:15474", "user", "pass")?;
+    /// # Ok::<(), nexus_sdk_rust::NexusError>(())
+    /// ```
+    pub fn with_credentials(base_url: &str, username: &str, password: &str) -> Result<Self> {
+        Self::with_config(ClientConfig {
+            base_url: base_url.to_string(),
+            username: Some(username.to_string()),
+            password: Some(password.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Create a new Nexus client with custom configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Client configuration
+    pub fn with_config(config: ClientConfig) -> Result<Self> {
+        let base_url = Url::parse(&config.base_url)
+            .map_err(|e| NexusError::Configuration(format!("Invalid base URL: {}", e)))?;
+
+        let timeout = Duration::from_secs(config.timeout_secs);
+
+        let client_builder = ClientBuilder::new()
+            .timeout(timeout)
+            .user_agent("nexus-sdk-rust/0.1.0");
+
+        // Build HTTP client
+        let client = client_builder.build()?;
+
+        Ok(Self {
+            client,
+            base_url,
+            api_key: config.api_key,
+            username: config.username,
+            password: config.password,
+            max_retries: config.max_retries,
+        })
+    }
+
+    /// Execute a Cypher query
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Cypher query string
+    /// * `parameters` - Optional query parameters
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk_rust::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let result = client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None).await?;
+    /// println!("Found {} rows", result.rows.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_cypher(
+        &self,
+        query: &str,
+        parameters: Option<HashMap<String, Value>>,
+    ) -> Result<QueryResult> {
+        let request = CypherRequest {
+            query: query.to_string(),
+            parameters,
+        };
+
+        let url = self.base_url.join("/cypher")?;
+        let mut request_builder = self.client.post(url).json(&request);
+
+        // Add authentication headers
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        self.handle_response(response).await
+    }
+
+    /// Get database statistics
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk_rust::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let stats = client.get_stats().await?;
+    /// println!("Total nodes: {}", stats.catalog.node_count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_stats(&self) -> Result<DatabaseStats> {
+        let url = self.base_url.join("/stats")?;
+        let mut request_builder = self.client.get(url);
+
+        // Add authentication headers
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        let stats: DatabaseStats = response.json().await?;
+        Ok(stats)
+    }
+
+    /// Check server health
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk_rust::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let healthy = client.health_check().await?;
+    /// println!("Server is healthy: {}", healthy);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn health_check(&self) -> Result<bool> {
+        let url = self.base_url.join("/health")?;
+        let request_builder = self.client.get(url);
+
+        match self.execute_with_retry(request_builder).await {
+            Ok(response) => Ok(response.status().is_success()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Add authentication headers to request
+    fn add_auth_headers(
+        &self,
+        mut builder: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder> {
+        if let Some(api_key) = &self.api_key {
+            builder = builder.header("X-API-Key", api_key);
+        } else if let (Some(username), Some(password)) = (&self.username, &self.password) {
+            // For basic auth, we'll need to handle token management
+            // For now, we'll add basic auth header
+            let auth = base64::engine::general_purpose::STANDARD
+                .encode(format!("{}:{}", username, password));
+            builder = builder.header("Authorization", format!("Basic {}", auth));
+        }
+
+        Ok(builder)
+    }
+
+    /// Execute request with retry logic
+    async fn execute_with_retry(&self, builder: reqwest::RequestBuilder) -> Result<Response> {
+        // For now, execute without retry
+        // TODO: Implement proper retry logic with request rebuilding
+        builder.send().await.map_err(NexusError::Http)
+    }
+
+    /// Handle HTTP response and convert to result
+    async fn handle_response(&self, response: Response) -> Result<QueryResult> {
+        let status = response.status();
+
+        if status.is_success() {
+            let result: QueryResult = response.json().await?;
+            Ok(result)
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(NexusError::Api {
+                message: error_text,
+                status: status.as_u16(),
+            })
+        }
+    }
+}
