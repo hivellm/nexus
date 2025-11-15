@@ -63,7 +63,7 @@ fn get_server_url() -> String {
 async fn check_server_available(url: &str) -> bool {
     let client = reqwest::Client::new();
     client
-        .get(&format!("{}/health", url))
+        .get(format!("{}/health", url))
         .send()
         .await
         .map(|r| r.status().is_success())
@@ -113,7 +113,7 @@ async fn test_auth_s2s() {
     };
 
     match client
-        .post(&format!("{}/auth/users", server_url))
+        .post(format!("{}/auth/users", server_url))
         .json(&create_request)
         .send()
         .await
@@ -148,7 +148,7 @@ async fn test_auth_s2s() {
 
     // GET /auth/users - List users
     match client
-        .get(&format!("{}/auth/users", server_url))
+        .get(format!("{}/auth/users", server_url))
         .send()
         .await
     {
@@ -184,7 +184,7 @@ async fn test_auth_s2s() {
 
     // GET /auth/users/{username} - Get specific user
     match client
-        .get(&format!("{}/auth/users/{}", server_url, test_username))
+        .get(format!("{}/auth/users/{}", server_url, test_username))
         .send()
         .await
     {
@@ -229,7 +229,7 @@ async fn test_auth_s2s() {
     };
 
     match client
-        .post(&format!(
+        .post(format!(
             "{}/auth/users/{}/permissions",
             server_url, test_username
         ))
@@ -260,7 +260,7 @@ async fn test_auth_s2s() {
 
     // GET /auth/users/{username}/permissions - Get user permissions
     match client
-        .get(&format!(
+        .get(format!(
             "{}/auth/users/{}/permissions",
             server_url, test_username
         ))
@@ -309,7 +309,7 @@ async fn test_auth_s2s() {
 
     // DELETE /auth/users/{username}/permissions/{permission} - Revoke permission
     match client
-        .delete(&format!(
+        .delete(format!(
             "{}/auth/users/{}/permissions/READ",
             server_url, test_username
         ))
@@ -339,7 +339,7 @@ async fn test_auth_s2s() {
 
     // DELETE /auth/users/{username} - Delete user
     match client
-        .delete(&format!("{}/auth/users/{}", server_url, test_username))
+        .delete(format!("{}/auth/users/{}", server_url, test_username))
         .send()
         .await
     {
@@ -371,7 +371,7 @@ async fn test_auth_s2s() {
     // Check if authentication is enabled by trying to access a protected endpoint
     // If auth is disabled, these tests will be skipped
     let auth_enabled = match client
-        .post(&format!("{}/cypher", server_url))
+        .post(format!("{}/cypher", server_url))
         .json(&json!({
             "query": "MATCH (n) RETURN n LIMIT 1"
         }))
@@ -385,7 +385,7 @@ async fn test_auth_s2s() {
     if auth_enabled {
         // Test protected endpoint without authentication
         match client
-            .post(&format!("{}/cypher", server_url))
+            .post(format!("{}/cypher", server_url))
             .json(&json!({
                 "query": "MATCH (n) RETURN n LIMIT 1"
             }))
@@ -415,7 +415,7 @@ async fn test_auth_s2s() {
 
         // Test protected endpoint with invalid API key
         match client
-            .post(&format!("{}/cypher", server_url))
+            .post(format!("{}/cypher", server_url))
             .header("Authorization", "Bearer nx_invalid_key_12345")
             .json(&json!({
                 "query": "MATCH (n) RETURN n LIMIT 1"

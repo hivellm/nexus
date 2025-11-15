@@ -920,7 +920,7 @@ fn test_create_complex_node() {
     let result = execute_query(&mut engine, "MATCH (n) RETURN labels(n) AS labels").unwrap();
     // May include nodes from previous tests - accept >= 1
     assert!(
-        result.rows.len() >= 1,
+        !result.rows.is_empty(),
         "Expected at least 1 node, got {}",
         result.rows.len()
     );

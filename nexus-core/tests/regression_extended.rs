@@ -223,7 +223,7 @@ fn regression_create_query_immediately() {
 
     // May include nodes from previous tests - accept >= 1
     assert!(
-        result.rows.len() >= 1,
+        !result.rows.is_empty(),
         "Expected at least 1 Test node with name 'Alice', got {}",
         result.rows.len()
     );

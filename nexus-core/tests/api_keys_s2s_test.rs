@@ -80,7 +80,7 @@ fn get_server_url() -> String {
 async fn check_server_available(url: &str) -> bool {
     let client = reqwest::Client::new();
     client
-        .get(&format!("{}/health", url))
+        .get(format!("{}/health", url))
         .send()
         .await
         .map(|r| r.status().is_success())
@@ -99,7 +99,7 @@ async fn execute_query(
     };
 
     let response = client
-        .post(&format!("{}/cypher", url))
+        .post(format!("{}/cypher", url))
         .json(&request)
         .send()
         .await?;
@@ -258,7 +258,7 @@ async fn test_api_keys_s2s() {
     };
 
     match client
-        .post(&format!("{}/auth/keys", server_url))
+        .post(format!("{}/auth/keys", server_url))
         .json(&create_request)
         .send()
         .await
@@ -278,7 +278,7 @@ async fn test_api_keys_s2s() {
 
                         // Test GET /auth/keys/{key_id}
                         match client
-                            .get(&format!("{}/auth/keys/{}", server_url, api_key.id))
+                            .get(format!("{}/auth/keys/{}", server_url, api_key.id))
                             .send()
                             .await
                         {
@@ -328,7 +328,7 @@ async fn test_api_keys_s2s() {
                         };
 
                         match client
-                            .post(&format!("{}/auth/keys/{}/revoke", server_url, api_key.id))
+                            .post(format!("{}/auth/keys/{}/revoke", server_url, api_key.id))
                             .json(&revoke_request)
                             .send()
                             .await
@@ -356,7 +356,7 @@ async fn test_api_keys_s2s() {
 
                         // Test DELETE /auth/keys/{key_id}
                         match client
-                            .delete(&format!("{}/auth/keys/{}", server_url, api_key.id))
+                            .delete(format!("{}/auth/keys/{}", server_url, api_key.id))
                             .send()
                             .await
                         {
@@ -398,11 +398,7 @@ async fn test_api_keys_s2s() {
     }
 
     // Test GET /auth/keys
-    match client
-        .get(&format!("{}/auth/keys", server_url))
-        .send()
-        .await
-    {
+    match client.get(format!("{}/auth/keys", server_url)).send().await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.json::<ApiKeysResponse>().await {
@@ -432,7 +428,7 @@ async fn test_api_keys_s2s() {
 
     // Test GET /auth/keys?username=...
     match client
-        .get(&format!(
+        .get(format!(
             "{}/auth/keys?username=testuser_s2s_keys",
             server_url
         ))

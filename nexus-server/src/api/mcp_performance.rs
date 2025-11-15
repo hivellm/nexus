@@ -258,7 +258,7 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_performance_monitoring_initialization() {
         // Try to initialize - may succeed or fail if already initialized
-        let result = init_mcp_performance_monitoring(100, 1000, 3600, 100);
+        let _result = init_mcp_performance_monitoring(100, 1000, 3600, 100);
         // If already initialized, result will be Err, which is fine
 
         // Now should be able to get statistics (if initialized)

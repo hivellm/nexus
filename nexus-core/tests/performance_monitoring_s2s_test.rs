@@ -143,7 +143,7 @@ async fn execute_query(
     };
 
     let response = client
-        .post(&format!("{}/cypher", url))
+        .post(format!("{}/cypher", url))
         .json(&request)
         .send()
         .await?;
@@ -184,7 +184,7 @@ async fn test_performance_monitoring_s2s() {
     // Test 1: Get initial query statistics
     println!("--- Test 1: Query Statistics Endpoint ---");
     match client
-        .get(&format!("{}/performance/statistics", server_url))
+        .get(format!("{}/performance/statistics", server_url))
         .send()
         .await
     {
@@ -243,7 +243,7 @@ async fn test_performance_monitoring_s2s() {
 
     // Verify statistics were updated
     match client
-        .get(&format!("{}/performance/statistics", server_url))
+        .get(format!("{}/performance/statistics", server_url))
         .send()
         .await
     {
@@ -301,7 +301,7 @@ async fn test_performance_monitoring_s2s() {
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     match client
-        .get(&format!("{}/performance/slow-queries", server_url))
+        .get(format!("{}/performance/slow-queries", server_url))
         .send()
         .await
     {
@@ -335,7 +335,7 @@ async fn test_performance_monitoring_s2s() {
     // Test 4: Slow query analysis
     println!("\n--- Test 4: Slow Query Analysis ---");
     match client
-        .get(&format!("{}/performance/slow-queries/analysis", server_url))
+        .get(format!("{}/performance/slow-queries/analysis", server_url))
         .send()
         .await
     {
@@ -379,7 +379,7 @@ async fn test_performance_monitoring_s2s() {
     // Test 5: Plan cache statistics
     println!("\n--- Test 5: Plan Cache Statistics ---");
     match client
-        .get(&format!("{}/performance/plan-cache", server_url))
+        .get(format!("{}/performance/plan-cache", server_url))
         .send()
         .await
     {
@@ -415,7 +415,7 @@ async fn test_performance_monitoring_s2s() {
     // Test 6: Clear plan cache
     println!("\n--- Test 6: Clear Plan Cache ---");
     match client
-        .post(&format!("{}/performance/plan-cache/clear", server_url))
+        .post(format!("{}/performance/plan-cache/clear", server_url))
         .send()
         .await
     {
@@ -443,7 +443,7 @@ async fn test_performance_monitoring_s2s() {
     // Verify cache was cleared
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     match client
-        .get(&format!("{}/performance/plan-cache", server_url))
+        .get(format!("{}/performance/plan-cache", server_url))
         .send()
         .await
     {
@@ -483,7 +483,7 @@ async fn test_performance_monitoring_s2s() {
 
     // Get initial statistics
     let initial_total = match client
-        .get(&format!("{}/performance/statistics", server_url))
+        .get(format!("{}/performance/statistics", server_url))
         .send()
         .await
     {
@@ -511,7 +511,7 @@ async fn test_performance_monitoring_s2s() {
     // Verify statistics increased
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     match client
-        .get(&format!("{}/performance/statistics", server_url))
+        .get(format!("{}/performance/statistics", server_url))
         .send()
         .await
     {
@@ -555,7 +555,7 @@ async fn test_performance_monitoring_s2s() {
     // Test 8: Pattern statistics
     println!("\n--- Test 8: Query Pattern Statistics ---");
     match client
-        .get(&format!("{}/performance/statistics", server_url))
+        .get(format!("{}/performance/statistics", server_url))
         .send()
         .await
     {

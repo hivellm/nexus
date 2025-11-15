@@ -174,8 +174,8 @@ pub async fn get_query_statistics()
     let pattern_stats = stats.get_pattern_stats();
 
     let patterns: Vec<QueryPatternStatsResponse> = pattern_stats
-        .into_iter()
-        .map(|(_, stats)| QueryPatternStatsResponse {
+        .into_values()
+        .map(|stats| QueryPatternStatsResponse {
             pattern: stats.pattern,
             count: stats.count,
             avg_time_ms: stats.avg_time_ms,
@@ -369,7 +369,7 @@ mod tests {
     #[tokio::test]
     async fn test_performance_monitoring_initialization() {
         // Try to initialize - may succeed or fail if already initialized
-        let result = init_performance_monitoring(100, 1000, 100, 10);
+        let _result = init_performance_monitoring(100, 1000, 100, 10);
         // If already initialized, result will be Err, which is fine
 
         // Now should be able to get statistics (if initialized)

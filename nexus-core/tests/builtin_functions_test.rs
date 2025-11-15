@@ -557,7 +557,7 @@ fn test_collect_with_group_by() {
 
     // LA group should have at least 1 name (may have more from previous tests)
     let la_names = la_row.values[1].as_array().unwrap();
-    assert!(la_names.len() >= 1);
+    assert!(!la_names.is_empty());
     assert!(la_names.contains(&serde_json::json!("Charlie")));
 
     // NYC group should have at least 2 names (may have more from previous tests)
@@ -663,7 +663,7 @@ fn test_collect_with_count() {
     });
     assert!(la_count >= 1);
     let la_names = la_row.values[1].as_array().unwrap();
-    assert!(la_names.len() >= 1);
+    assert!(!la_names.is_empty());
 
     // NYC should have at least 2 people (may have more from previous tests)
     let nyc_count = nyc_row.values[2].as_i64().unwrap_or_else(|| {
@@ -1196,7 +1196,7 @@ fn test_path_functions_filter_correctly() {
     );
 
     // May have more rows if nodes persist from previous tests
-    assert!(result.rows.len() >= 1);
+    assert!(!result.rows.is_empty());
 
     // Verify functions return arrays (lenient test)
     let nodes = &result.rows[0].values[0];

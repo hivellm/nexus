@@ -5,7 +5,6 @@ use axum::extract::{Extension, Json, State};
 use nexus_core::auth::{Permission, middleware::AuthContext};
 use nexus_core::executor::parser::PropertyMap;
 use nexus_core::executor::{Executor, Query};
-use nexus_core::geospatial::Point;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -237,6 +236,7 @@ pub struct CypherResponse {
 }
 
 /// Helper function to record query execution for performance monitoring
+#[allow(dead_code)]
 fn record_query_execution(
     query: &str,
     execution_time: Duration,
@@ -257,6 +257,7 @@ fn record_query_execution(
 }
 
 /// Helper function to record query execution with additional metrics
+#[allow(clippy::too_many_arguments)]
 fn record_query_execution_with_metrics(
     query: &str,
     execution_time: Duration,
@@ -282,6 +283,7 @@ fn record_query_execution_with_metrics(
 }
 
 /// Register connection and query for tracking (with SocketAddr)
+#[allow(dead_code)]
 fn register_connection_and_query(
     query: &str,
     addr: &std::net::SocketAddr,
@@ -360,7 +362,7 @@ pub async fn execute_cypher(
     auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CypherRequest>,
 ) -> Json<CypherResponse> {
-    let auth_context = auth_context.map(|e| e.0).flatten();
+    let auth_context = auth_context.and_then(|e| e.0);
     let start_time = std::time::Instant::now();
     let query_for_tracking = request.query.clone();
 

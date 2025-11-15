@@ -1061,7 +1061,7 @@ fn test_rtree_distance_query_very_small_distance() {
     // Query with very small distance
     let results = index.query_distance(&center, 0.001).unwrap();
     // Should find points 1 and possibly 2 (depending on grid cell size)
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
     assert!(results.contains(1));
 }
 
