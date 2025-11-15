@@ -431,7 +431,7 @@ impl Executor {
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
                 let (created_node_ids, created_rel_ids) =
-                    self.execute_create_pattern_with_variables(&pattern)?;
+                    self.execute_create_pattern_with_variables(pattern)?;
 
                 // Collect all created entities (nodes and relationships)
                 let mut columns: Vec<String> = created_node_ids.keys().cloned().collect();
