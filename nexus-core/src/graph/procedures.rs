@@ -53,13 +53,12 @@ pub trait GraphProcedure: Send + Sync {
     ///
     /// Default implementation collects all results and calls the callback sequentially.
     /// Procedures that support true streaming should override this method.
+    #[allow(clippy::type_complexity)]
     fn execute_streaming(
         &self,
         graph: &Graph,
         args: &HashMap<String, Value>,
-        #[allow(clippy::type_complexity)] mut callback: Box<
-            dyn FnMut(&[String], &[Value]) -> Result<()> + Send,
-        >,
+        mut callback: Box<dyn FnMut(&[String], &[Value]) -> Result<()> + Send>,
     ) -> Result<()> {
         // Default implementation: collect all results and stream them
         let result = self.execute(graph, args)?;
@@ -1185,13 +1184,12 @@ mod tests {
                 true
             }
 
+            #[allow(clippy::type_complexity)]
             fn execute_streaming(
                 &self,
                 _graph: &Graph,
                 _args: &HashMap<String, Value>,
-                #[allow(clippy::type_complexity)] mut callback: Box<
-                    dyn FnMut(&[String], &[Value]) -> Result<()> + Send,
-                >,
+                mut callback: Box<dyn FnMut(&[String], &[Value]) -> Result<()> + Send>,
             ) -> Result<()> {
                 // Stream multiple rows
                 callback(&["value".to_string()], &[Value::Number(1.into())])?;
