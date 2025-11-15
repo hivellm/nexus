@@ -1408,21 +1408,20 @@ impl Executor {
                 .collect()
         } else {
             let materialized = self.materialize_rows_from_variables(context);
-            // If we have no rows from variables and no variables, but we have projection items with literals,
-            // we need to create at least one row to evaluate the literals
-            // This handles: RETURN 1+1 AS result, RETURN sum(1) AS sum_val (aggregations with literals)
+            // If we have no rows from variables and no variables, but we have projection items that can be evaluated,
+            // we need to create at least one row to evaluate the expressions
+            // This handles: RETURN 1+1 AS result, RETURN 5 > 3 AS gt, RETURN CASE WHEN ... END, etc.
             // But NOT: MATCH (n:NonExistent) RETURN n (which should return 0 rows)
             // And NOT: UNWIND [] AS x RETURN x (which should return 0 rows)
             if materialized.is_empty()
                 && context.variables.is_empty()
                 && !items.is_empty()
                 && items.iter().any(|item| {
-                    // Check if any projection item is a literal or can be evaluated without variables
-                    matches!(item.expression, parser::Expression::Literal(_))
-                        || matches!(item.expression, parser::Expression::FunctionCall { .. })
+                    // Check if any projection item can be evaluated without variables
+                    self.can_evaluate_without_variables(&item.expression)
                 })
             {
-                // Create single empty row for literal/function evaluation
+                // Create single empty row for expression evaluation
                 vec![std::collections::HashMap::new()]
             } else {
                 materialized
@@ -4372,6 +4371,61 @@ impl Executor {
                     .collect(),
             })
             .collect();
+    }
+
+    /// Check if an expression can be evaluated without variables (only literals and operations)
+    fn can_evaluate_without_variables(&self, expr: &parser::Expression) -> bool {
+        match expr {
+            parser::Expression::Literal(_) => true,
+            parser::Expression::Parameter(_) => true, // Parameters can be evaluated
+            parser::Expression::Variable(_) => false, // Variables need context
+            parser::Expression::PropertyAccess { .. } => false, // Property access needs variables
+            parser::Expression::BinaryOp { left, right, .. } => {
+                // Can evaluate if both operands can be evaluated
+                self.can_evaluate_without_variables(left)
+                    && self.can_evaluate_without_variables(right)
+            }
+            parser::Expression::UnaryOp { operand, .. } => {
+                // Can evaluate if operand can be evaluated
+                self.can_evaluate_without_variables(operand)
+            }
+            parser::Expression::FunctionCall { args, .. } => {
+                // Can evaluate if all arguments can be evaluated
+                args.iter()
+                    .all(|arg| self.can_evaluate_without_variables(arg))
+            }
+            parser::Expression::Case {
+                input,
+                when_clauses,
+                else_clause,
+            } => {
+                // Can evaluate if input (if present) and all when/else expressions can be evaluated
+                let input_ok = input
+                    .as_ref()
+                    .map(|e| self.can_evaluate_without_variables(e))
+                    .unwrap_or(true);
+                let when_ok = when_clauses.iter().all(|when| {
+                    self.can_evaluate_without_variables(&when.condition)
+                        && self.can_evaluate_without_variables(&when.result)
+                });
+                let else_ok = else_clause
+                    .as_ref()
+                    .map(|e| self.can_evaluate_without_variables(e))
+                    .unwrap_or(true);
+                input_ok && when_ok && else_ok
+            }
+            parser::Expression::IsNull { expr, .. } => self.can_evaluate_without_variables(expr),
+            parser::Expression::List(exprs) => {
+                exprs.iter().all(|e| self.can_evaluate_without_variables(e))
+            }
+            parser::Expression::Map(map) => {
+                map.values().all(|e| self.can_evaluate_without_variables(e))
+            }
+            parser::Expression::Exists { .. } => false, // EXISTS needs graph context
+            parser::Expression::PatternComprehension { .. } => false, // Pattern needs graph context
+            parser::Expression::MapProjection { .. } => false, // Map projection needs variables
+            parser::Expression::ListComprehension { .. } => false, // List comprehension needs graph context
+        }
     }
 
     fn evaluate_projection_expression(
