@@ -48,7 +48,7 @@ fn test_complete_visualization_pipeline_call_graph() {
     // Edges may be empty if call relationships are not detected
     // This is acceptable - the visualization pipeline should still work
     if graph.edges.is_empty() {
-        eprintln!("⚠️  Warning: Call graph has no edges - call relationships may not be detected");
+        eprintln!("WARNING: Call graph has no edges - call relationships may not be detected");
     }
 
     // Step 2: Configure visualization
@@ -280,13 +280,13 @@ fn test_visualization_pipeline_large_graph() {
     );
     if graph.nodes.len() <= 10 {
         eprintln!(
-            "⚠️  Warning: Large graph has only {} nodes (expected >10) - graph generation may not detect all functions",
+            "WARNING: Large graph has only {} nodes (expected >10) - graph generation may not detect all functions",
             graph.nodes.len()
         );
     }
     // Edges may be empty if relationships are not detected - still test visualization
     if graph.edges.is_empty() {
-        eprintln!("⚠️  Warning: Large graph has no edges - relationships may not be detected");
+        eprintln!("WARNING: Large graph has no edges - relationships may not be detected");
     }
 
     let config = VisualizationConfig {

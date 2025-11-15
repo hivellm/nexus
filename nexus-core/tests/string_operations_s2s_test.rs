@@ -89,16 +89,16 @@ async fn test_query_count(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if let Some(error) = response.error {
-                println!("✗ {}: FAILED - Error: {}", test_name, error);
+                println!("{}: FAILED - Error: {}", test_name, error);
                 false
             } else {
                 let actual_count = response.rows.len();
                 if actual_count == expected_count {
-                    println!("✓ {}: PASSED", test_name);
+                    println!("{}: PASSED", test_name);
                     true
                 } else {
                     println!(
-                        "✗ {}: FAILED - Expected {} rows, got {}",
+                        "{}: FAILED - Expected {} rows, got {}",
                         test_name, expected_count, actual_count
                     );
                     false
@@ -106,7 +106,7 @@ async fn test_query_count(
             }
         }
         Err(e) => {
-            println!("✗ {}: FAILED - Request error: {}", test_name, e);
+            println!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -119,14 +119,14 @@ async fn test_string_operations_s2s() {
     // Wait for server to be available
     println!("Waiting for server at {}...", server_url);
     if !wait_for_server(&server_url, 5).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test string_operations_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
-    println!("✅ Server is ready");
+    println!("Server is ready");
     println!();
 
     let client = reqwest::Client::new();
@@ -143,9 +143,9 @@ async fn test_string_operations_s2s() {
         .await
         .is_ok()
     {
-        println!("✅ Test data created");
+        println!("Test data created");
     } else {
-        println!("⚠️  Failed to create test data (may already exist)");
+        println!("WARNING: Failed to create test data (may already exist)");
     }
     println!();
 
@@ -360,13 +360,13 @@ async fn test_string_operations_s2s() {
     println!();
 
     if failed == 0 {
-        println!("✅ ALL TESTS PASSED!");
+        println!("ALL TESTS PASSED!");
     } else {
         println!(
-            "⚠️  SOME TESTS FAILED ({} passed, {} failed)",
+            "WARNING: SOME TESTS FAILED ({} passed, {} failed)",
             passed, failed
         );
-        println!("⚠️  Note: Some features may not be fully implemented yet.");
+        println!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

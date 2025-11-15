@@ -163,11 +163,11 @@ async fn test_performance_monitoring_s2s() {
 
     // Wait for server to be available
     if !wait_for_server(&server_url, 5).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test performance_monitoring_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -191,7 +191,7 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
-                    println!("✓ GET /performance/statistics: PASSED");
+                    println!("GET /performance/statistics: PASSED");
                     println!("  Total queries: {}", stats.statistics.total_queries);
                     println!(
                         "  Average time: {}ms",
@@ -199,22 +199,19 @@ async fn test_performance_monitoring_s2s() {
                     );
                     passed += 1;
                 } else {
-                    println!("✗ GET /performance/statistics: FAILED - Invalid response format");
+                    println!("GET /performance/statistics: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ GET /performance/statistics: FAILED - Status: {}",
+                    "GET /performance/statistics: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
             }
         }
         Err(e) => {
-            println!(
-                "✗ GET /performance/statistics: FAILED - Request error: {}",
-                e
-            );
+            println!("GET /performance/statistics: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -230,10 +227,10 @@ async fn test_performance_monitoring_s2s() {
     for query in &queries {
         match execute_query(&client, &server_url, query).await {
             Ok(_) => {
-                println!("✓ Query executed: {}", query);
+                println!("Query executed: {}", query);
             }
             Err(e) => {
-                println!("✗ Query failed: {} - Error: {}", query, e);
+                println!("Query failed: {} - Error: {}", query, e);
                 failed += 1;
             }
         }
@@ -251,7 +248,7 @@ async fn test_performance_monitoring_s2s() {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
                     if stats.statistics.total_queries >= queries.len() as u64 {
-                        println!("✓ Statistics collection: PASSED");
+                        println!("Statistics collection: PASSED");
                         println!(
                             "  Total queries recorded: {}",
                             stats.statistics.total_queries
@@ -259,26 +256,26 @@ async fn test_performance_monitoring_s2s() {
                         passed += 1;
                     } else {
                         println!(
-                            "✗ Statistics collection: FAILED - Expected at least {} queries, got {}",
+                            "Statistics collection: FAILED - Expected at least {} queries, got {}",
                             queries.len(),
                             stats.statistics.total_queries
                         );
                         failed += 1;
                     }
                 } else {
-                    println!("✗ Statistics collection: FAILED - Invalid response format");
+                    println!("Statistics collection: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ Statistics collection: FAILED - Status: {}",
+                    "Statistics collection: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ Statistics collection: FAILED - Request error: {}", e);
+            println!("Statistics collection: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -290,7 +287,7 @@ async fn test_performance_monitoring_s2s() {
     let slow_query = "MATCH (a)-[*1..3]-(b) RETURN a, b LIMIT 100";
     match execute_query(&client, &server_url, slow_query).await {
         Ok(_) => {
-            println!("✓ Slow query executed");
+            println!("Slow query executed");
         }
         Err(_) => {
             // Query might fail, but that's ok for testing
@@ -308,16 +305,16 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(slow_queries) = response.json::<SlowQueriesResponse>().await {
-                    println!("✓ GET /performance/slow-queries: PASSED");
+                    println!("GET /performance/slow-queries: PASSED");
                     println!("  Slow queries logged: {}", slow_queries.count);
                     passed += 1;
                 } else {
-                    println!("✗ GET /performance/slow-queries: FAILED - Invalid response format");
+                    println!("GET /performance/slow-queries: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ GET /performance/slow-queries: FAILED - Status: {}",
+                    "GET /performance/slow-queries: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -325,7 +322,7 @@ async fn test_performance_monitoring_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ GET /performance/slow-queries: FAILED - Request error: {}",
+                "GET /performance/slow-queries: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -342,7 +339,7 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(analysis) = response.json::<SlowQueryAnalysisResponse>().await {
-                    println!("✓ GET /performance/slow-queries/analysis: PASSED");
+                    println!("GET /performance/slow-queries/analysis: PASSED");
                     println!("  Patterns analyzed: {}", analysis.total_patterns);
                     for item in &analysis.analyses {
                         println!(
@@ -355,13 +352,13 @@ async fn test_performance_monitoring_s2s() {
                     passed += 1;
                 } else {
                     println!(
-                        "✗ GET /performance/slow-queries/analysis: FAILED - Invalid response format"
+                        "GET /performance/slow-queries/analysis: FAILED - Invalid response format"
                     );
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ GET /performance/slow-queries/analysis: FAILED - Status: {}",
+                    "GET /performance/slow-queries/analysis: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -369,7 +366,7 @@ async fn test_performance_monitoring_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ GET /performance/slow-queries/analysis: FAILED - Request error: {}",
+                "GET /performance/slow-queries/analysis: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -386,28 +383,25 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(cache_stats) = response.json::<PlanCacheStatisticsResponse>().await {
-                    println!("✓ GET /performance/plan-cache: PASSED");
+                    println!("GET /performance/plan-cache: PASSED");
                     println!("  Cached plans: {}", cache_stats.cached_plans);
                     println!("  Hit rate: {:.2}%", cache_stats.hit_rate * 100.0);
                     println!("  Memory usage: {} bytes", cache_stats.current_memory_bytes);
                     passed += 1;
                 } else {
-                    println!("✗ GET /performance/plan-cache: FAILED - Invalid response format");
+                    println!("GET /performance/plan-cache: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ GET /performance/plan-cache: FAILED - Status: {}",
+                    "GET /performance/plan-cache: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
             }
         }
         Err(e) => {
-            println!(
-                "✗ GET /performance/plan-cache: FAILED - Request error: {}",
-                e
-            );
+            println!("GET /performance/plan-cache: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -421,11 +415,11 @@ async fn test_performance_monitoring_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ POST /performance/plan-cache/clear: PASSED");
+                println!("POST /performance/plan-cache/clear: PASSED");
                 passed += 1;
             } else {
                 println!(
-                    "✗ POST /performance/plan-cache/clear: FAILED - Status: {}",
+                    "POST /performance/plan-cache/clear: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -433,7 +427,7 @@ async fn test_performance_monitoring_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ POST /performance/plan-cache/clear: FAILED - Request error: {}",
+                "POST /performance/plan-cache/clear: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -451,29 +445,26 @@ async fn test_performance_monitoring_s2s() {
             if response.status().is_success() {
                 if let Ok(cache_stats) = response.json::<PlanCacheStatisticsResponse>().await {
                     if cache_stats.cached_plans == 0 {
-                        println!("✓ Plan cache cleared: PASSED");
+                        println!("Plan cache cleared: PASSED");
                         passed += 1;
                     } else {
                         println!(
-                            "✗ Plan cache cleared: FAILED - Expected 0 plans, got {}",
+                            "Plan cache cleared: FAILED - Expected 0 plans, got {}",
                             cache_stats.cached_plans
                         );
                         failed += 1;
                     }
                 } else {
-                    println!("✗ Plan cache cleared: FAILED - Invalid response format");
+                    println!("Plan cache cleared: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!(
-                    "✗ Plan cache cleared: FAILED - Status: {}",
-                    response.status()
-                );
+                println!("Plan cache cleared: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ Plan cache cleared: FAILED - Request error: {}", e);
+            println!("Plan cache cleared: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -519,7 +510,7 @@ async fn test_performance_monitoring_s2s() {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
                     if stats.statistics.total_queries > initial_total {
-                        println!("✓ Automatic metrics collection: PASSED");
+                        println!("Automatic metrics collection: PASSED");
                         println!(
                             "  Queries before: {}, Queries after: {}",
                             initial_total, stats.statistics.total_queries
@@ -527,17 +518,17 @@ async fn test_performance_monitoring_s2s() {
                         passed += 1;
                     } else {
                         println!(
-                            "✗ Automatic metrics collection: FAILED - Statistics did not increase"
+                            "Automatic metrics collection: FAILED - Statistics did not increase"
                         );
                         failed += 1;
                     }
                 } else {
-                    println!("✗ Automatic metrics collection: FAILED - Invalid response format");
+                    println!("Automatic metrics collection: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ Automatic metrics collection: FAILED - Status: {}",
+                    "Automatic metrics collection: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -545,7 +536,7 @@ async fn test_performance_monitoring_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ Automatic metrics collection: FAILED - Request error: {}",
+                "Automatic metrics collection: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -562,7 +553,7 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
-                    println!("✓ Query pattern statistics: PASSED");
+                    println!("Query pattern statistics: PASSED");
                     println!("  Patterns tracked: {}", stats.patterns.len());
                     for pattern in &stats.patterns {
                         println!(
@@ -572,19 +563,19 @@ async fn test_performance_monitoring_s2s() {
                     }
                     passed += 1;
                 } else {
-                    println!("✗ Query pattern statistics: FAILED - Invalid response format");
+                    println!("Query pattern statistics: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ Query pattern statistics: FAILED - Status: {}",
+                    "Query pattern statistics: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ Query pattern statistics: FAILED - Request error: {}", e);
+            println!("Query pattern statistics: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -600,12 +591,12 @@ async fn test_performance_monitoring_s2s() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     } else {
-        println!("All tests passed! ✓");
+        println!("All tests passed!");
     }
 }

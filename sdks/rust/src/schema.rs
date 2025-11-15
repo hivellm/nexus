@@ -14,6 +14,9 @@ pub struct CreateLabelRequest {
 /// Create label response
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateLabelResponse {
+    /// Label ID (may be 0 if error)
+    #[serde(default)]
+    pub label_id: u32,
     /// Success message
     pub message: String,
     /// Error message if any
@@ -24,8 +27,8 @@ pub struct CreateLabelResponse {
 /// List labels response
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListLabelsResponse {
-    /// List of labels
-    pub labels: Vec<String>,
+    /// List of labels (as tuples of name and ID)
+    pub labels: Vec<(String, u32)>,
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -41,6 +44,9 @@ pub struct CreateRelTypeRequest {
 /// Create relationship type response
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateRelTypeResponse {
+    /// Relationship type ID (may be 0 if error)
+    #[serde(default)]
+    pub type_id: u32,
     /// Success message
     pub message: String,
     /// Error message if any
@@ -51,8 +57,8 @@ pub struct CreateRelTypeResponse {
 /// List relationship types response
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListRelTypesResponse {
-    /// List of relationship types
-    pub types: Vec<String>,
+    /// List of relationship types (as tuples of name and ID)
+    pub types: Vec<(String, u32)>,
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

@@ -84,15 +84,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("✅ {}: PASSED", test_name);
+                println!("{}: PASSED", test_name);
                 true
             } else {
-                println!("❌ {}: FAILED - Error: {:?}", test_name, response.error);
+                println!("{}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("❌ {}: FAILED - Request error: {}", test_name, e);
+            println!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -105,11 +105,11 @@ async fn test_write_operations_s2s() {
     // Wait for server to be available
     println!("Aguardando servidor iniciar...");
     if !wait_for_server(&server_url, 10).await {
-        eprintln!("❌ Servidor não iniciou após 10 tentativas");
+        eprintln!("Servidor não iniciou após 10 tentativas");
         eprintln!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
-    println!("✅ Servidor está pronto!");
+    println!("Servidor está pronto!");
     println!();
 
     let client = reqwest::Client::new();
@@ -284,9 +284,9 @@ async fn test_write_operations_s2s() {
     println!();
 
     if failed == 0 {
-        println!("✅ ALL TESTS PASSED!");
+        println!("ALL TESTS PASSED!");
     } else {
-        println!("❌ SOME TESTS FAILED");
+        println!("SOME TESTS FAILED");
         std::process::exit(1);
     }
 }

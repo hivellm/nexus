@@ -81,15 +81,21 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
             variable: _,
             property: _,
         } => {
-            eprintln!("⚠️  expression_to_json_value: Property expression not supported in CREATE");
+            eprintln!(
+                "WARNING: expression_to_json_value: Property expression not supported in CREATE"
+            );
             serde_json::Value::Null
         }
         nexus_core::executor::parser::Expression::Variable(_) => {
-            eprintln!("⚠️  expression_to_json_value: Variable expression not supported in CREATE");
+            eprintln!(
+                "WARNING: expression_to_json_value: Variable expression not supported in CREATE"
+            );
             serde_json::Value::Null
         }
         nexus_core::executor::parser::Expression::Parameter(_) => {
-            eprintln!("⚠️  expression_to_json_value: Parameter expression not supported in CREATE");
+            eprintln!(
+                "WARNING: expression_to_json_value: Parameter expression not supported in CREATE"
+            );
             serde_json::Value::Null
         }
         nexus_core::executor::parser::Expression::Map(map) => {
@@ -102,7 +108,7 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
         }
         _ => {
             eprintln!(
-                "⚠️  expression_to_json_value: Unsupported expression type: {:?}",
+                "WARNING: expression_to_json_value: Unsupported expression type: {:?}",
                 expr
             );
             serde_json::Value::Null

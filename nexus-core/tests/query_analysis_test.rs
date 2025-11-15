@@ -27,7 +27,7 @@ fn test_explain_simple_query() {
 
     if result.is_err() {
         // EXPLAIN may not be supported yet - accept this as valid
-        eprintln!("⚠️  Warning: EXPLAIN not yet implemented");
+        eprintln!("WARNING: EXPLAIN not yet implemented");
         return;
     }
 
@@ -58,7 +58,7 @@ fn test_explain_with_where() {
 
     if result.is_err() {
         // EXPLAIN may not be supported yet - accept this as valid
-        eprintln!("⚠️  Warning: EXPLAIN not yet implemented");
+        eprintln!("WARNING: EXPLAIN not yet implemented");
         return;
     }
 
@@ -85,7 +85,7 @@ fn test_profile_simple_query() {
 
     if result.is_err() {
         // PROFILE may not be supported yet - accept this as valid
-        eprintln!("⚠️  Warning: PROFILE not yet implemented");
+        eprintln!("WARNING: PROFILE not yet implemented");
         return;
     }
 
@@ -120,7 +120,7 @@ fn test_profile_with_where() {
 
     if result.is_err() {
         // PROFILE may not be supported yet - accept this as valid
-        eprintln!("⚠️  Warning: PROFILE not yet implemented");
+        eprintln!("WARNING: PROFILE not yet implemented");
         return;
     }
 
@@ -146,7 +146,7 @@ fn test_explain_create_query() {
 
     if result.is_err() {
         // EXPLAIN may not be supported yet - accept this as valid
-        eprintln!("⚠️  Warning: EXPLAIN not yet implemented");
+        eprintln!("WARNING: EXPLAIN not yet implemented");
         return;
     }
 
@@ -170,7 +170,7 @@ fn test_profile_create_query() {
 
     if result.is_err() {
         // PROFILE may not be supported yet - accept this as valid
-        eprintln!("⚠️  Warning: PROFILE not yet implemented");
+        eprintln!("WARNING: PROFILE not yet implemented");
         return;
     }
 

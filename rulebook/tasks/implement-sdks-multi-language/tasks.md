@@ -189,7 +189,7 @@ This task covers the implementation of official SDKs for Nexus in 6 programming 
 - [x] 3.2.2 Add connection configuration
 - [x] 3.2.3 Implement HTTP client (reqwest)
 - [x] 3.2.4 Add async/await support (tokio)
-- [🟡] 3.2.5 Implement retry logic (basic implementation, TODO: proper retry with request rebuilding)
+- [x] 3.2.5 Implement retry logic (exponential backoff with jitter for 5xx and network errors)
 - [x] 3.2.6 Add proper error types
 
 #### 3.3 Authentication
@@ -210,7 +210,7 @@ This task covers the implementation of official SDKs for Nexus in 6 programming 
 
 - [x] 3.5.1 Implement node CRUD operations
 - [x] 3.5.2 Implement relationship CRUD operations (Create implemented)
-- [ ] 3.5.3 Add batch operations
+- [x] 3.5.3 Add batch operations (sequential implementation, TODO: proper batch endpoint)
 
 #### 3.6 Schema Management
 

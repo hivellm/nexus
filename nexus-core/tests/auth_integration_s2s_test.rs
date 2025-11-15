@@ -100,7 +100,10 @@ fn get_server_url() -> String {
 
 /// Check if server is available
 async fn check_server_available(url: &str) -> bool {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     client
         .get(format!("{}/health", url))
         .send()
@@ -123,11 +126,11 @@ async fn test_complete_authentication_flow() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -157,16 +160,16 @@ async fn test_complete_authentication_flow() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ User created: {}", username);
+                println!("User created: {}", username);
                 passed += 1;
             } else {
-                println!("✗ Failed to create user: {}", response.status());
+                println!("Failed to create user: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("✗ Failed to create user: {}", e);
+            println!("Failed to create user: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -188,24 +191,24 @@ async fn test_complete_authentication_flow() {
             if response.status().is_success() {
                 match response.json::<LoginResponse>().await {
                     Ok(login_data) => {
-                        println!("✓ Login successful, got JWT tokens");
+                        println!("Login successful, got JWT tokens");
                         passed += 1;
                         login_data
                     }
                     Err(e) => {
-                        println!("✗ Failed to parse login response: {}", e);
+                        println!("Failed to parse login response: {}", e);
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("✗ Login failed: {}", response.status());
+                println!("Login failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("✗ Login request failed: {}", e);
+            println!("Login request failed: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -227,15 +230,15 @@ async fn test_complete_authentication_flow() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ Authenticated API call successful");
+                println!("Authenticated API call successful");
                 passed += 1;
             } else {
-                println!("✗ Authenticated API call failed: {}", response.status());
+                println!("Authenticated API call failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("✗ Authenticated API call error: {}", e);
+            println!("Authenticated API call error: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -255,7 +258,7 @@ async fn test_complete_authentication_flow() {
             if response.status().is_success() {
                 match response.json::<RefreshTokenResponse>().await {
                     Ok(refresh_data) => {
-                        println!("✓ Token refresh successful");
+                        println!("Token refresh successful");
                         passed += 1;
 
                         // Step 5: Use refreshed token
@@ -274,31 +277,31 @@ async fn test_complete_authentication_flow() {
                         {
                             Ok(response) => {
                                 if response.status().is_success() {
-                                    println!("✓ Refreshed token works");
+                                    println!("Refreshed token works");
                                     passed += 1;
                                 } else {
-                                    println!("✗ Refreshed token failed: {}", response.status());
+                                    println!("Refreshed token failed: {}", response.status());
                                     let _ = failed; // Track failures for debugging
                                 }
                             }
                             Err(e) => {
-                                println!("✗ Refreshed token error: {}", e);
+                                println!("Refreshed token error: {}", e);
                                 let _ = failed; // Track failures for debugging
                             }
                         }
                     }
                     Err(e) => {
-                        println!("✗ Failed to parse refresh response: {}", e);
+                        println!("Failed to parse refresh response: {}", e);
                         let _ = failed; // Track failures for debugging
                     }
                 }
             } else {
-                println!("✗ Token refresh failed: {}", response.status());
+                println!("Token refresh failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("✗ Token refresh request failed: {}", e);
+            println!("Token refresh request failed: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -308,10 +311,10 @@ async fn test_complete_authentication_flow() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -321,11 +324,11 @@ async fn test_api_key_lifecycle() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -353,10 +356,10 @@ async fn test_api_key_lifecycle() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✓ User created");
+        println!("User created");
         passed += 1;
     } else {
-        println!("✗ Failed to create user");
+        println!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -379,24 +382,24 @@ async fn test_api_key_lifecycle() {
             if response.status().is_success() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(key_data) => {
-                        println!("✓ API key created: {}", key_data.id);
+                        println!("API key created: {}", key_data.id);
                         passed += 1;
                         key_data
                     }
                     Err(e) => {
-                        println!("✗ Failed to parse API key response: {}", e);
+                        println!("Failed to parse API key response: {}", e);
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("✗ Failed to create API key: {}", response.status());
+                println!("Failed to create API key: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("✗ API key creation request failed: {}", e);
+            println!("API key creation request failed: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -415,15 +418,15 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ API key authentication successful");
+                println!("API key authentication successful");
                 passed += 1;
             } else {
-                println!("✗ API key authentication failed: {}", response.status());
+                println!("API key authentication failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("✗ API key authentication error: {}", e);
+            println!("API key authentication error: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -441,15 +444,15 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ API key revoked");
+                println!("API key revoked");
                 passed += 1;
             } else {
-                println!("✗ Failed to revoke API key: {}", response.status());
+                println!("Failed to revoke API key: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("✗ Revoke API key request failed: {}", e);
+            println!("Revoke API key request failed: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -467,19 +470,16 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status() == 401 || response.status() == 403 {
-                println!("✓ Revoked key correctly rejected");
+                println!("Revoked key correctly rejected");
                 passed += 1;
             } else {
-                println!(
-                    "✗ Revoked key should be rejected, got: {}",
-                    response.status()
-                );
+                println!("Revoked key should be rejected, got: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(_) => {
             // Network error is also acceptable for rejected requests
-            println!("✓ Revoked key rejected (network error)");
+            println!("Revoked key rejected (network error)");
             passed += 1;
         }
     }
@@ -492,15 +492,15 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ API key deleted");
+                println!("API key deleted");
                 passed += 1;
             } else {
-                println!("✗ Failed to delete API key: {}", response.status());
+                println!("Failed to delete API key: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("✗ Delete API key request failed: {}", e);
+            println!("Delete API key request failed: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -510,10 +510,10 @@ async fn test_api_key_lifecycle() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -523,11 +523,11 @@ async fn test_permission_enforcement() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -555,7 +555,7 @@ async fn test_permission_enforcement() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✗ Failed to create user");
+        println!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -576,7 +576,7 @@ async fn test_permission_enforcement() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✗ Failed to grant permissions");
+        println!("Failed to grant permissions");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -600,19 +600,19 @@ async fn test_permission_enforcement() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(key_data) => key_data,
                     Err(_) => {
-                        println!("✗ Failed to parse API key");
+                        println!("Failed to parse API key");
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("✗ Failed to create API key");
+                println!("Failed to create API key");
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(_) => {
-            println!("✗ API key creation failed");
+            println!("API key creation failed");
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -631,18 +631,18 @@ async fn test_permission_enforcement() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ READ operation allowed");
+                println!("READ operation allowed");
                 passed += 1;
             } else {
                 println!(
-                    "✗ READ operation should be allowed, got: {}",
+                    "READ operation should be allowed, got: {}",
                     response.status()
                 );
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("✗ READ operation error: {}", e);
+            println!("READ operation error: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -660,11 +660,11 @@ async fn test_permission_enforcement() {
     {
         Ok(response) => {
             if response.status() == 403 {
-                println!("✓ WRITE operation correctly denied (403)");
+                println!("WRITE operation correctly denied (403)");
                 passed += 1;
             } else {
                 println!(
-                    "✗ WRITE operation should be denied, got: {}",
+                    "WRITE operation should be denied, got: {}",
                     response.status()
                 );
                 let _ = failed; // Track failures for debugging
@@ -681,10 +681,10 @@ async fn test_permission_enforcement() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -694,11 +694,11 @@ async fn test_rate_limiting() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -726,7 +726,7 @@ async fn test_rate_limiting() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✗ Failed to create user");
+        println!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -749,19 +749,19 @@ async fn test_rate_limiting() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(key_data) => key_data,
                     Err(_) => {
-                        println!("✗ Failed to parse API key");
+                        println!("Failed to parse API key");
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("✗ Failed to create API key");
+                println!("Failed to create API key");
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(_) => {
-            println!("✗ API key creation failed");
+            println!("API key creation failed");
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -785,7 +785,7 @@ async fn test_rate_limiting() {
             Ok(response) => {
                 if response.status() == 429 {
                     rate_limited = true;
-                    println!("✓ Rate limit triggered at request {}", i + 1);
+                    println!("Rate limit triggered at request {}", i + 1);
                     passed += 1;
                     break;
                 } else if response.status().is_success() {
@@ -799,7 +799,7 @@ async fn test_rate_limiting() {
     }
 
     if rate_limited {
-        println!("✓ Rate limiting is working");
+        println!("Rate limiting is working");
         passed += 1;
     } else {
         println!("? Rate limiting not triggered (may be configured with high limits)");
@@ -811,10 +811,10 @@ async fn test_rate_limiting() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -824,11 +824,11 @@ async fn test_user_permission_cascade() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -836,7 +836,10 @@ async fn test_user_permission_cascade() {
     println!("User Permission Cascade Test");
     println!("==========================================");
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let mut passed = 0;
     let failed = 0;
 
@@ -856,7 +859,7 @@ async fn test_user_permission_cascade() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✗ Failed to create user");
+        println!("Failed to create user");
         return;
     }
 
@@ -876,10 +879,10 @@ async fn test_user_permission_cascade() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✓ Permissions granted");
+        println!("Permissions granted");
         passed += 1;
     } else {
-        println!("✗ Failed to grant permissions");
+        println!("Failed to grant permissions");
         return;
     }
 
@@ -906,23 +909,23 @@ async fn test_user_permission_cascade() {
                             if perm_strs.contains(&"READ".to_string())
                                 && perm_strs.contains(&"WRITE".to_string())
                             {
-                                println!("✓ Permissions verified");
+                                println!("Permissions verified");
                                 passed += 1;
                             } else {
-                                println!("✗ Permissions not as expected");
+                                println!("Permissions not as expected");
                                 let _ = failed; // Track failures for debugging
                             }
                         }
                     }
                     Err(_) => {
-                        println!("✗ Failed to parse permissions");
+                        println!("Failed to parse permissions");
                         let _ = failed; // Track failures for debugging
                     }
                 }
             }
         }
         Err(_) => {
-            println!("✗ Failed to get permissions");
+            println!("Failed to get permissions");
             let _ = failed; // Track failures for debugging
         }
     }
@@ -938,15 +941,15 @@ async fn test_user_permission_cascade() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ WRITE permission revoked");
+                println!("WRITE permission revoked");
                 passed += 1;
             } else {
-                println!("✗ Failed to revoke permission");
+                println!("Failed to revoke permission");
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(_) => {
-            println!("✗ Revoke permission request failed");
+            println!("Revoke permission request failed");
             let _ = failed; // Track failures for debugging
         }
     }
@@ -975,24 +978,24 @@ async fn test_user_permission_cascade() {
                                 && !perm_strs.contains(&"WRITE".to_string())
                             {
                                 println!(
-                                    "✓ Permission cascade verified (READ remains, WRITE removed)"
+                                    "Permission cascade verified (READ remains, WRITE removed)"
                                 );
                                 passed += 1;
                             } else {
-                                println!("✗ Permission cascade not as expected");
+                                println!("Permission cascade not as expected");
                                 let _ = failed; // Track failures for debugging
                             }
                         }
                     }
                     Err(_) => {
-                        println!("✗ Failed to parse permissions after revoke");
+                        println!("Failed to parse permissions after revoke");
                         let _ = failed; // Track failures for debugging
                     }
                 }
             }
         }
         Err(_) => {
-            println!("✗ Failed to verify permissions after revoke");
+            println!("Failed to verify permissions after revoke");
             let _ = failed; // Track failures for debugging
         }
     }
@@ -1002,10 +1005,10 @@ async fn test_user_permission_cascade() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -1015,11 +1018,11 @@ async fn test_audit_log_generation() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -1047,10 +1050,10 @@ async fn test_audit_log_generation() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✓ User created (audit log should be generated)");
+        println!("User created (audit log should be generated)");
         passed += 1;
     } else {
-        println!("✗ Failed to create user");
+        println!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -1069,10 +1072,10 @@ async fn test_audit_log_generation() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("✓ Login successful (audit log should be generated)");
+        println!("Login successful (audit log should be generated)");
         passed += 1;
     } else {
-        println!("✗ Login failed");
+        println!("Login failed");
         let _ = failed; // Track failures for debugging
     }
 
@@ -1092,15 +1095,15 @@ async fn test_audit_log_generation() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ API key created (audit log should be generated)");
+                println!("API key created (audit log should be generated)");
                 passed += 1;
             } else {
-                println!("✗ Failed to create API key");
+                println!("Failed to create API key");
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(_) => {
-            println!("✗ API key creation failed");
+            println!("API key creation failed");
             let _ = failed; // Track failures for debugging
         }
     }
@@ -1111,10 +1114,10 @@ async fn test_audit_log_generation() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -1124,11 +1127,11 @@ async fn test_root_user_disable_flow() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -1159,7 +1162,7 @@ async fn test_root_user_disable_flow() {
             if response.status().is_success() {
                 match response.json::<LoginResponse>().await {
                     Ok(login_data) => {
-                        println!("✓ Root user login successful");
+                        println!("Root user login successful");
                         passed += 1;
                         Some(login_data.access_token)
                     }
@@ -1209,16 +1212,16 @@ async fn test_root_user_disable_flow() {
     match create_admin_response {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ Admin user created");
+                println!("Admin user created");
                 passed += 1;
             } else {
-                println!("✗ Failed to create admin user: {}", response.status());
+                println!("Failed to create admin user: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("✗ Failed to create admin user: {}", e);
+            println!("Failed to create admin user: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -1253,15 +1256,15 @@ async fn test_root_user_disable_flow() {
     match grant_response {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ Admin permission granted");
+                println!("Admin permission granted");
                 passed += 1;
             } else {
-                println!("✗ Failed to grant admin permission: {}", response.status());
+                println!("Failed to grant admin permission: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("✗ Failed to grant admin permission: {}", e);
+            println!("Failed to grant admin permission: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -1276,7 +1279,7 @@ async fn test_root_user_disable_flow() {
     match root_login_after {
         Ok(response) => {
             if response.status() == 403 || response.status() == 401 {
-                println!("✓ Root user correctly disabled after admin creation");
+                println!("Root user correctly disabled after admin creation");
                 passed += 1;
             } else if response.status().is_success() {
                 println!("? Root user still enabled (auto-disable may not be configured)");
@@ -1296,10 +1299,10 @@ async fn test_root_user_disable_flow() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

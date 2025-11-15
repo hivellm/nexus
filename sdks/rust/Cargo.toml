@@ -52,6 +52,14 @@ path = "examples/with_auth.rs"
 name = "performance_monitoring"
 path = "examples/performance_monitoring.rs"
 
+[[example]]
+name = "transactions"
+path = "examples/transactions.rs"
+
+[[example]]
+name = "query_builder"
+path = "examples/query_builder.rs"
+
 [lib]
 name = "nexus_sdk_rust"
 path = "src/lib.rs"

@@ -20,17 +20,23 @@
 //! }
 //! ```
 
+pub mod batch;
 pub mod client;
 pub mod data;
 pub mod error;
 pub mod models;
 pub mod performance;
 pub mod query;
+pub mod query_builder;
 pub mod schema;
+pub mod transaction;
 
+pub use batch::*;
 pub use client::NexusClient;
 pub use data::*;
 pub use error::{NexusError, Result};
 pub use models::*;
 pub use performance::*;
+pub use query_builder::{BuiltQuery, QueryBuilder};
 pub use schema::*;
+pub use transaction::{Transaction, TransactionStatus};

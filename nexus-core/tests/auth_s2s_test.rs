@@ -76,11 +76,11 @@ async fn test_auth_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test auth_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -125,23 +125,23 @@ async fn test_auth_s2s() {
                         && user.email == Some("testuser@example.com".to_string())
                         && user.is_active
                     {
-                        println!("✓ POST /auth/users: PASSED");
+                        println!("POST /auth/users: PASSED");
                         passed += 1;
                     } else {
-                        println!("✗ POST /auth/users: FAILED - Response validation failed");
+                        println!("POST /auth/users: FAILED - Response validation failed");
                         failed += 1;
                     }
                 } else {
-                    println!("✗ POST /auth/users: FAILED - Invalid response format");
+                    println!("POST /auth/users: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("✗ POST /auth/users: FAILED - Status: {}", response.status());
+                println!("POST /auth/users: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ POST /auth/users: FAILED - Request error: {}", e);
+            println!("POST /auth/users: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -161,23 +161,23 @@ async fn test_auth_s2s() {
                             .iter()
                             .any(|u| u.username == test_username)
                     {
-                        println!("✓ GET /auth/users: PASSED");
+                        println!("GET /auth/users: PASSED");
                         passed += 1;
                     } else {
-                        println!("✗ GET /auth/users: FAILED - User not found in list");
+                        println!("GET /auth/users: FAILED - User not found in list");
                         failed += 1;
                     }
                 } else {
-                    println!("✗ GET /auth/users: FAILED - Invalid response format");
+                    println!("GET /auth/users: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("✗ GET /auth/users: FAILED - Status: {}", response.status());
+                println!("GET /auth/users: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ GET /auth/users: FAILED - Request error: {}", e);
+            println!("GET /auth/users: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -192,19 +192,19 @@ async fn test_auth_s2s() {
             if response.status().is_success() {
                 if let Ok(user) = response.json::<UserResponse>().await {
                     if user.username == test_username {
-                        println!("✓ GET /auth/users/{{username}}: PASSED");
+                        println!("GET /auth/users/{{username}}: PASSED");
                         passed += 1;
                     } else {
-                        println!("✗ GET /auth/users/{{username}}: FAILED - Username mismatch");
+                        println!("GET /auth/users/{{username}}: FAILED - Username mismatch");
                         failed += 1;
                     }
                 } else {
-                    println!("✗ GET /auth/users/{{username}}: FAILED - Invalid response format");
+                    println!("GET /auth/users/{{username}}: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ GET /auth/users/{{username}}: FAILED - Status: {}",
+                    "GET /auth/users/{{username}}: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -212,7 +212,7 @@ async fn test_auth_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ GET /auth/users/{{username}}: FAILED - Request error: {}",
+                "GET /auth/users/{{username}}: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -239,11 +239,11 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ POST /auth/users/{{username}}/permissions: PASSED");
+                println!("POST /auth/users/{{username}}/permissions: PASSED");
                 passed += 1;
             } else {
                 println!(
-                    "✗ POST /auth/users/{{username}}/permissions: FAILED - Status: {}",
+                    "POST /auth/users/{{username}}/permissions: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -251,7 +251,7 @@ async fn test_auth_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ POST /auth/users/{{username}}/permissions: FAILED - Request error: {}",
+                "POST /auth/users/{{username}}/permissions: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -276,23 +276,23 @@ async fn test_auth_s2s() {
                     if perms_upper.contains(&"READ".to_string())
                         && perms_upper.contains(&"WRITE".to_string())
                     {
-                        println!("✓ GET /auth/users/{{username}}/permissions: PASSED");
+                        println!("GET /auth/users/{{username}}/permissions: PASSED");
                         passed += 1;
                     } else {
                         println!(
-                            "✗ GET /auth/users/{{username}}/permissions: FAILED - Missing expected permissions"
+                            "GET /auth/users/{{username}}/permissions: FAILED - Missing expected permissions"
                         );
                         failed += 1;
                     }
                 } else {
                     println!(
-                        "✗ GET /auth/users/{{username}}/permissions: FAILED - Invalid response format"
+                        "GET /auth/users/{{username}}/permissions: FAILED - Invalid response format"
                     );
                     failed += 1;
                 }
             } else {
                 println!(
-                    "✗ GET /auth/users/{{username}}/permissions: FAILED - Status: {}",
+                    "GET /auth/users/{{username}}/permissions: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -300,7 +300,7 @@ async fn test_auth_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ GET /auth/users/{{username}}/permissions: FAILED - Request error: {}",
+                "GET /auth/users/{{username}}/permissions: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -318,11 +318,11 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ DELETE /auth/users/{{username}}/permissions/{{permission}}: PASSED");
+                println!("DELETE /auth/users/{{username}}/permissions/{{permission}}: PASSED");
                 passed += 1;
             } else {
                 println!(
-                    "✗ DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Status: {}",
+                    "DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -330,7 +330,7 @@ async fn test_auth_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Request error: {}",
+                "DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -345,11 +345,11 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ DELETE /auth/users/{{username}}: PASSED");
+                println!("DELETE /auth/users/{{username}}: PASSED");
                 passed += 1;
             } else {
                 println!(
-                    "✗ DELETE /auth/users/{{username}}: FAILED - Status: {}",
+                    "DELETE /auth/users/{{username}}: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
@@ -357,7 +357,7 @@ async fn test_auth_s2s() {
         }
         Err(e) => {
             println!(
-                "✗ DELETE /auth/users/{{username}}: FAILED - Request error: {}",
+                "DELETE /auth/users/{{username}}: FAILED - Request error: {}",
                 e
             );
             failed += 1;
@@ -394,11 +394,11 @@ async fn test_auth_s2s() {
         {
             Ok(response) => {
                 if response.status() == 401 {
-                    println!("✓ Protected endpoint returns 401 without auth: PASSED");
+                    println!("Protected endpoint returns 401 without auth: PASSED");
                     passed += 1;
                 } else {
                     println!(
-                        "✗ Protected endpoint without auth: FAILED - Expected 401, got {}",
+                        "Protected endpoint without auth: FAILED - Expected 401, got {}",
                         response.status()
                     );
                     failed += 1;
@@ -406,7 +406,7 @@ async fn test_auth_s2s() {
             }
             Err(e) => {
                 println!(
-                    "✗ Protected endpoint without auth: FAILED - Request error: {}",
+                    "Protected endpoint without auth: FAILED - Request error: {}",
                     e
                 );
                 failed += 1;
@@ -425,11 +425,11 @@ async fn test_auth_s2s() {
         {
             Ok(response) => {
                 if response.status() == 401 {
-                    println!("✓ Protected endpoint returns 401 with invalid key: PASSED");
+                    println!("Protected endpoint returns 401 with invalid key: PASSED");
                     passed += 1;
                 } else {
                     println!(
-                        "✗ Protected endpoint with invalid key: FAILED - Expected 401, got {}",
+                        "Protected endpoint with invalid key: FAILED - Expected 401, got {}",
                         response.status()
                     );
                     failed += 1;
@@ -437,14 +437,14 @@ async fn test_auth_s2s() {
             }
             Err(e) => {
                 println!(
-                    "✗ Protected endpoint with invalid key: FAILED - Request error: {}",
+                    "Protected endpoint with invalid key: FAILED - Request error: {}",
                     e
                 );
                 failed += 1;
             }
         }
     } else {
-        println!("⚠ Authentication is disabled - skipping endpoint protection tests");
+        println!("WARNING: Authentication is disabled - skipping endpoint protection tests");
         println!("  (To test endpoint protection, enable auth with NEXUS_AUTH_ENABLED=true)");
     }
 
@@ -468,10 +468,10 @@ async fn test_auth_s2s() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

@@ -7,11 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - Aggregation Virtual Row Support ✅
+
+- **Aggregation without MATCH**: Fixed virtual row creation for aggregations without MATCH clause
+  - `RETURN count(*)` without MATCH now returns `1` (not `Null` or `0`)
+  - `RETURN sum(1)` without MATCH now returns `1` (not `Null`)
+  - `RETURN avg(10)` without MATCH now returns `10.0` (not `Null`)
+  - Planner now correctly creates Aggregate operator for queries without MATCH
+  - Aggregate operator creates and processes virtual row when no input rows exist
+  - Multiple fallback checks ensure correct values are returned
+  - Type preservation for integer vs float values in aggregations
+  - Comprehensive tests (3 tests: count(\*), sum(1), avg(10))
+  - **Neo4j Compatibility**: Matches Neo4j behavior for aggregations without MATCH
+
 ### Added - Complete Neo4j Cypher Support (All 14 Phases) ✅
 
 **Status**: ✅ **100% Complete** - All 14 phases implemented, tested, and documented
 
 #### Phase 12: UDF & Procedures ✅ COMPLETE
+
 - **CREATE FUNCTION**: Create function signatures via Cypher
   - Syntax: `CREATE FUNCTION name(params) RETURNS type [AS description]`
   - Support for `IF NOT EXISTS` clause
@@ -37,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Integration**: All UDF management commands work via REST API at `/cypher` endpoint
 
 ### Fixed - Comprehensive Test Failures (Phase 15)
+
 - **Procedure Call Syntax**: Fixed all procedure call variations
   - `CALL procedure() YIELD col RETURN col` - Full syntax with YIELD and RETURN
   - `CALL procedure() RETURN col` - Direct RETURN without YIELD
@@ -100,6 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Quality**: 1000+ tests passing, comprehensive coverage, no regressions
 
 ### Added - Advanced DB Features (Phase 10)
+
 - **USE DATABASE Command**: Multi-database support
   - `USE DATABASE dbname` command for database context switching
   - Database existence validation
@@ -131,6 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Quality**: 48+ tests covering all features, 95%+ coverage, no clippy warnings
 
 ### Added - Query Analysis (Phase 9)
+
 - **EXPLAIN Command**: Query plan analysis
   - `EXPLAIN query` command for execution plan generation
   - Plan returned as JSON/text format
@@ -152,9 +169,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Quality**: 12+ tests covering all features, 95%+ coverage, no clippy warnings
 
 ### Added - Graph Algorithms (Phase 13)
+
 - **Pathfinding Algorithms**:
   - Bellman-Ford algorithm for shortest paths with negative cycle detection
-  - Dijkstra and A* already implemented
+  - Dijkstra and A\* already implemented
 - **Centrality Algorithms**:
   - PageRank algorithm with configurable damping factor and convergence tolerance
   - Betweenness Centrality calculation
@@ -179,6 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Engine Integration**: Added `Graph::from_engine()` helper function to convert Engine storage data to algorithm Graph structure, enabling direct use of algorithms on database data
 
 ### Added - Geospatial Support (Phase 14)
+
 - **Point Data Type**: Complete geospatial point support
   - 2D and 3D point coordinates
   - Cartesian and WGS84 coordinate systems
@@ -225,6 +244,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Procedures available via CALL statements
 
 ### Added - Graph Correlation Analysis Export Formats (Phase 12)
+
 - **Export Format Support**: Complete export functionality for graph visualizations
   - `ExportFormat` enum with SVG, PNG, and PDF formats
   - `render_graph_to_format()` function for format-agnostic rendering
@@ -237,6 +257,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Ready for format-specific optimizations
 
 ### Added - Graph Correlation Analysis MCP Tools (Phase 12)
+
 - **MCP Tool Integration**: Complete MCP protocol support for graph correlation analysis
   - `graph_correlation_generate`: Generate correlation graphs from source code (Call, Dependency, DataFlow, Component)
   - `graph_correlation_analyze`: Analyze graphs for patterns and statistics
@@ -258,6 +279,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Usage examples for all MCP tools
 
 ### Added - Performance Monitoring (Phase 11)
+
 - **Query Statistics**: Comprehensive query execution tracking
   - Query execution time tracking with min/max/average
   - Query pattern statistics (normalized queries)
@@ -298,6 +320,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.11.0] - 2025-11-12
 
 ### Added
+
 - **Data Import/Export - Phase 9**: Complete implementation of bulk import and export functionality
   - **Bulk Import API**: Enhanced `/ingest` endpoint with transaction batching and progress reporting
     - Transaction batching: Process data in batches with automatic transaction management
@@ -391,6 +414,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - Actor information extraction from authentication context
 
 ### Testing
+
 - **Comprehensive Unit Tests**: Complete test coverage for Phase 1 features
   - Unit tests for user CRUD operations (create, read, update, delete, list)
   - Unit tests for permission management (grant, revoke, check permissions)
@@ -400,6 +424,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All tests passing with high coverage
 
 ### Improved
+
 - **Code Quality**: All code passes clippy with `-D warnings` (no warnings allowed)
 - **Storage**: LMDB persistence for API keys provides durable storage
 - **Security**: Root user auto-disable enhances security after initial setup
@@ -408,6 +433,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.4] - 2025-11-12
 
 ### Fixed
+
 - **Code Quality**: Fixed all clippy warnings
   - Replaced `args.len() >= 1` with `!args.is_empty()` for better readability
   - Fixed `contains_key` + `insert` pattern to use `Entry` API
@@ -416,6 +442,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All code now passes `cargo clippy --workspace -- -D warnings`
 
 ### Improved
+
 - **Test Coverage**: Comprehensive test suite verification
   - 974 tests passing (100% success rate)
     - nexus-core: 761 tests passing
@@ -424,6 +451,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All critical functionality verified and working
 
 ### Testing
+
 - **Full Test Suite**: Complete verification of all implemented features
   - Variable-length paths: All quantifier types tested
   - Shortest path functions: BFS and DFS algorithms verified
@@ -434,7 +462,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.3] - 2025-11-12
 
 ### Added
+
 - **Variable-Length Paths**: Complete implementation of variable-length path quantifiers
+
   - **Fixed-length paths**: `-[*5]->` - Match exactly 5 relationships
   - **Range paths**: `-[*1..3]->` - Match 1 to 3 relationships
   - **Unbounded paths**: `-[*]->` - Match zero or more relationships
@@ -458,6 +488,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Path serialization**: Converts paths to JSON format for API responses
 
 ### Improved
+
 - **Parser Enhancement**: Enhanced relationship pattern parsing
   - Correctly distinguishes between property maps `{key: value}` and quantifiers `{n}` or `{n..m}`
   - Improved `peek_char_at` logic for accurate pattern detection
@@ -468,6 +499,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Cost estimation for variable-length path operations
 
 ### Testing
+
 - **Comprehensive Test Suite**: Added tests for variable-length paths and shortest path functions
   - Unit tests for parser quantifier parsing (all types covered)
   - Unit tests for planner VariableLengthPath generation
@@ -476,6 +508,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All tests passing (100% success rate)
 
 ### Technical Details
+
 - **BFS Algorithm**: Breadth-first search for efficient shortest path finding
 - **DFS Algorithm**: Depth-first search for finding all paths of given length
 - **Cycle Detection**: Prevents infinite loops by tracking visited nodes in current path
@@ -485,6 +518,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.2] - 2025-11-11
 
 ### Added
+
 - **Advanced Cypher Features**: Complete implementation of advanced Cypher query language features
   - **CASE Expressions**: Conditional logic in queries
     - Simple CASE: `CASE WHEN condition THEN result ELSE default END`
@@ -519,6 +553,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Relationship property filtering
 
 ### Fixed
+
 - **EXISTS WHERE Clause Parsing**: Fixed parsing of EXISTS patterns with WHERE clauses
   - Parser now correctly delimits pattern boundaries
   - Added `parse_pattern_until_where_or_brace()` helper function
@@ -529,6 +564,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Improved evaluation of nested expressions
 
 ### Improved
+
 - **Parser Architecture**: Enhanced pattern parsing for advanced features
   - Better boundary detection for EXISTS and Pattern Comprehensions
   - Improved WHERE clause integration in pattern expressions
@@ -539,6 +575,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enhanced pattern matching in EXISTS subqueries
 
 ### Testing
+
 - **Comprehensive Test Suite**: 75 integration tests for advanced features
   - 28 complex scenario tests covering edge cases
   - 36 extended tests with real-world patterns
@@ -553,6 +590,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.1] - 2025-11-11
 
 ### Added
+
 - **Cypher Write Operations**: Complete implementation of write operations for data modification
   - **MERGE Clause**: Full match-or-create semantics with property matching
     - `MERGE (n:Person {email: 'alice@example.com'})` - Creates node if not exists, matches if exists
@@ -580,6 +618,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Maintains index consistency during label changes
 
 ### Fixed
+
 - **MERGE Parser Bug**: Fixed parsing of `ON CREATE SET` and `ON MATCH SET` clauses
   - Parser now correctly consumes `SET` keyword before parsing set operations
   - Resolved "expected property assignment or label" error in MERGE queries
@@ -590,6 +629,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Moved `NodeWriteState` struct before test module to fix items-after-test-module warning
 
 ### Improved
+
 - **OpenAPI Documentation**: Updated API specification with write operations
   - Added comprehensive examples for MERGE, SET, REMOVE, DELETE operations
   - Documented all supported write operation patterns
@@ -601,6 +641,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Better validation of node state during updates
 
 ### Testing
+
 - **Integration Tests**: Comprehensive test suite for write operations
   - 390 tests passing (100% pass rate)
   - Tests cover MERGE create/match scenarios
@@ -613,6 +654,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Edge cases validated (empty properties, multiple labels, etc.)
 
 ### Changed
+
 - **Parser Structure**: Enhanced parser to handle complex MERGE clauses
   - Explicit SET keyword parsing in ON CREATE/ON MATCH blocks
   - Better clause boundary detection for write operations
@@ -624,7 +666,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.0] - 2025-11-01
 
 ### Added
+
 - **Multiple Database Support**: Full multi-database isolation and management
+
   - **DatabaseManager**: Manage multiple isolated graph databases in single instance
   - **Database API**:
     - `POST /management/databases` - Create new database
@@ -637,6 +681,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Tests**: 12 tests for DatabaseManager (100% passing)
 
 - **Property Keys API**: Introspection and statistics for property keys
+
   - **Property Keys Endpoint**:
     - `GET /management/property-keys` - List all property keys
     - `GET /management/property-keys/stats` - Get usage statistics
@@ -683,6 +728,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `length(path)`: Get path length (number of relationships)
 
 ### Improved
+
 - **Query Support**: RETURN can now evaluate literal expressions without MATCH/UNWIND
   - `RETURN 1+1 AS result` now works correctly
   - `RETURN toLower('HELLO') AS lower` evaluates functions in isolation
@@ -693,6 +739,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Proper NULL handling in all mathematical functions
 
 ### Testing
+
 - Added comprehensive test suite for built-in functions (61 tests, 100% passing)
 - Added database management tests (12 tests, 100% passing)
 - Added property keys API tests (2 tests, 100% passing)
@@ -706,6 +753,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added path function tests (nodes, relationships, length extraction)
 
 ### Fixed
+
 - **RETURN without MATCH**: Fixed literal expression evaluation in standalone RETURN
 - **Range Function**: Fixed step parameter handling for negative steps
 - **NULL Handling**: All math functions now return NULL for NULL inputs
@@ -713,6 +761,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.10] - 2025-10-31
 
 ### Fixed
+
 - **100% Neo4j Compatibility**: Final four critical issues resolved
   - **IS NULL / IS NOT NULL**: Implemented NULL checking syntax in WHERE clauses
     - Added `IsNull` expression variant to parser AST
@@ -730,6 +779,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Fixed `prev_node_var` tracking for proper chain expansion
 
 ### Improved
+
 - **Neo4j Compatibility**: Achieved **100% compatibility** (35/35 extended validation tests passing)
   - All core Cypher operations fully functional
   - WHERE clause logic matches Neo4j behavior exactly
@@ -737,12 +787,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All critical bugs resolved
 
 ### Testing
+
 - Extended cross-compatibility validation: **35/35 tests passing (100%)**
 - Verified against extended-compatibility-suite.ps1 test suite
 - All core functionality validated against Neo4j behavior
 - Total: 1279+ tests across all suites (100% pass rate)
 
 ### Changed
+
 - Cleaned up temporary test files and debug scripts
 - Updated OpenSpec documentation to reflect 100% completion
 - Removed all test files from version control (added to .gitignore)
@@ -750,6 +802,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.9] - 2025-10-31
 
 ### Fixed
+
 - **DELETE Parser Bug (CRITICAL)**: Fixed DETACH DELETE not being recognized as clause boundary
   - `MATCH (n) DETACH DELETE n` was incorrectly parsed as single Match clause
   - Added `DETACH` to `is_clause_boundary()` in parser
@@ -758,6 +811,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All DELETE operations now work correctly
 
 ### Improved
+
 - **Neo4j Compatibility**: **88.57% compatibility** (31/35 extended validation tests passing)
   - DELETE operations now fully functional
   - CREATE operations creating exact node counts (no duplication)
@@ -765,19 +819,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 4 remaining critical bugs identified for 100% compatibility
 
 ### Testing
+
 - Extended cross-compatibility validation: **31/35 tests passing (88.57%)**
 - Tested across multiple executions for consistency
 - All core functionality validated against Neo4j behavior
 - Total: 1279+ tests across all suites
 
 ### Changed
+
 - Removed temporary debug logging after successful validation
 - Cleaned up test scripts and validation tools
 
 ## [0.9.7] - 2025-10-31
 
 ### Added
+
 - **Multiple Label Support**: Full support for MATCH queries with multiple labels (label intersection)
+
   - Queries like `MATCH (n:Person:Employee)` now work correctly
   - Planner generates NodeByLabel scan + Filter operators for additional labels
   - Filter implements variable:Label pattern checking via label_bits bitmap
@@ -785,6 +843,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added comprehensive test suite in `tests/neo4j_compatibility_test.rs`
 
 - **UNION Query Support**: Fully implemented UNION operator in planner and executor
+
   - Planner splits queries at UNION clause, plans left/right recursively
   - Operator::Union now holds Vec<Operator> pipelines for each side
   - Executor runs both pipelines sequentially and combines results
@@ -794,27 +853,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Column alignment and type consistency validated across queries
 
 - **id() Function**: Neo4j-compatible ID function
-  - Returns _nexus_id from nodes and relationships
+
+  - Returns \_nexus_id from nodes and relationships
   - Used in queries like `MATCH (n) RETURN id(n)`
   - Enables ID-based operations and testing
 
 - **Bidirectional Relationships**: Enhanced relationship traversal
+
   - Undirected relationship patterns work correctly (e.g., `MATCH (a)-[r]-(b)`)
   - Efficiently scans relationships in both directions
   - Maintains proper node identification for source and target
 
 - **Relationship Property Access**: Full support for relationship properties
+
   - Read relationship properties in WHERE clauses
   - Filter by relationship properties
   - Return full relationship objects with properties
 
 - **keys() Function**: Implemented property introspection function
+
   - Returns sorted array of property names for nodes and relationships
   - Filters out internal fields (e.g., `_nexus_id`)
   - Enables property mapping validation in import scripts
   - Example: `MATCH (n:Person) RETURN keys(n)` returns `["age", "city", "name"]`
 
 - **CREATE Clause**: Full implementation of CREATE operations in Cypher
+
   - CREATE now properly persists nodes and relationships
   - Supports multiple labels: `CREATE (n:Person:Employee {name: "Alice"})`
   - Supports properties on nodes and relationships
@@ -831,7 +895,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Throughput and duration metrics
 
 ### Fixed
+
 - **Engine Test Suite**: Fixed critical bug in `Engine::new()` causing 11 tests to fail
+
   - `Engine::new()` now properly keeps temporary directory alive for Engine lifetime
   - Added `_temp_dir: Option<TempDir>` field to Engine struct to store directory guard
   - All 11 previously failing tests now pass (test_update_node, test_delete_node, test_clear_all_data, and 8 others)
@@ -845,12 +911,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Location: `nexus/scripts/validate-import.ps1`
 
 ### Fixed
+
 - Fixed PowerShell validation script variable interpolation issue
   - Removed incorrect backticks that were preventing proper Cypher query generation
   - Queries now correctly substitute node and relationship types
 
 ### Validated
+
 - **Node Type Import**: Verified all expected node types created successfully
+
   - Document: 3,852 nodes
   - Module: 301 nodes
   - Class: 696 nodes
@@ -861,6 +930,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All 8 expected types (MENTIONS, IMPORTS, HAS, CONTAINS, EXTENDS, IMPLEMENTS, CALLS, REFERENCES): 3,639 each
 
 ### Testing
+
 - **Neo4j Compatibility**: 29/33 tests passing (88% pass rate, 95% feature complete)
   - Expanded from 7 to 33 tests (371% increase in coverage)
   - ✅ test_multiple_labels_match
@@ -877,6 +947,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made refresh_executor() public for state synchronization after API operations
 
 ### Known Issues
+
 - **Multi-label + Relationship Duplication**: MATCH queries combining multiple labels with relationship traversal may return duplicate results
   - Example: `MATCH (n:Person:Employee)-[r:WORKS_AT]->(c)` returns 2 identical rows instead of 1
   - Only affects this specific pattern combination
@@ -886,21 +957,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.6] - 2025-10-30
 
 ### Fixed
+
 - **DISTINCT Clause Support**: Fixed `DISTINCT` operator not being applied correctly in queries
+
   - Planner now correctly generates `Distinct` operator when `RETURN DISTINCT` is used
   - `execute_distinct` now properly deduplicates rows based on column values
   - Queries like `MATCH (n) RETURN DISTINCT labels(n)` now return unique values correctly
 
 - **labels() Function**: Fixed `labels()` function not returning node labels correctly
+
   - Function now reads node record and extracts labels from bitmap using catalog
   - Returns array of label names matching Neo4j's behavior
 
 - **type() Function**: Fixed `type()` function not returning relationship type correctly
+
   - Function now reads relationship record and extracts type_id
   - Looks up type name from catalog to return correct relationship type string
   - Added `_nexus_id` to relationship objects for internal ID extraction
 
 - **Queries Without Explicit Nodes**: Fixed queries like `MATCH ()-[r]->() RETURN count(r)` returning 0 results
+
   - `execute_expand` now scans all relationships directly when source_var is empty
   - Supports queries without explicit node labels in MATCH patterns
 
@@ -909,17 +985,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Builds bitmap of all nodes from storage for label-less queries
 
 ### Added
+
 - Support for `DISTINCT` modifier in `RETURN` and `WITH` clauses
 - Enhanced relationship object serialization with `_nexus_id` for internal use
 - Support for relationship-only queries without explicit node patterns
 
 ### Testing
+
 - Comprehensive test suite now passing 15/20 tests (75% pass rate)
 - All critical functionality tests passing (counts, relationships, labels, types, DISTINCT)
 
 ## [0.9.5] - 2025-10-30
 
 ### Fixed
+
 - **Property Persistence**: Fixed critical issue where properties were not being persisted to disk or loaded after server restart
   - Enhanced `PropertyStore::flush()` to call `sync_all()` for OS-level file synchronization
   - Added `refresh_executor()` method to update executor after `create_node()` and `create_relationship()` operations
@@ -929,7 +1008,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.4] - 2025-10-30
 
 ### Fixed
+
 - **Node Property Loading** ✅ **CRITICAL FIX**
+
   - Fixed `PropertyStore::load_properties` to correctly load properties from persistent storage
   - Fixed `PropertyStore::rebuild_index` to properly reconstruct property index on server restart
   - Properties are now correctly persisted and retrieved for all nodes and relationships
@@ -943,11 +1024,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Improved test pass rate from 11/20 to 13/20 in comprehensive Neo4j comparison suite
 
 ### Changed
+
 - **Result Set Row Management** ✅
   - `execute_expand` now uses `result_set.rows` instead of variables when available
   - Maintains row context from previous operators for better data flow
 
 ### Testing
+
 - Comprehensive test suite comparing Nexus vs Neo4j results (20 test queries)
 - 13/20 tests passing (queries with labels work perfectly)
 - Remaining failures relate to general expansion patterns and property ordering
@@ -955,6 +1038,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.3] - 2025-10-30
 
 ### Fixed
+
 - **Relationship Expansion Parity with Neo4j** ✅
   - `execute_expand` now respects the target variable's label-filtered bindings, preventing unrelated nodes from surfacing in MATCH clauses
   - `extract_entity_id` resolves `_nexus_id`, `_element_id`, and string-based IDs so relationship traversals hydrate the intended entities
@@ -963,35 +1047,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed duplicate data import issue (removed double import causing 2x node/rel counts)
 
 ### Changed
+
 - **Query Result Format Alignment** ✅
   - Nodes and relationships now return properties as flat objects matching Neo4j format
   - Only `_nexus_id` included for internal ID tracking (not exposed in user-facing results)
   - Property ordering may differ from Neo4j (does not affect functionality)
 
 ### Planning
+
 - **Future Enhancements** 📋
   - Added task for Multiple Database Support (isolated data directories per database)
   - Added task for Property Keys API (expose Catalog's property key mappings through REST)
 
 ### Tooling
+
 - **Import Helper Compatibility** ✅
   - Added `// @ts-nocheck` to `scripts/import-classify-to-neo4j.ts` and `scripts/import-classify-to-nexus.ts`
   - Import scripts work correctly with single database instance
 
 ### Testing
+
 - `cargo test -p nexus-core` (736 tests passed)
 - `npx tsx scripts/compare-nexus-neo4j.ts` (all queries match Neo4j results)
 
 ## [0.9.2] - 2025-10-27
 
 ### Added
+
 - **Cypher Write Operations Parser Support** ✅
+
   - Added SET clause parsing for property updates and label additions
   - Added DELETE clause parsing (including DETACH DELETE support)
   - Added REMOVE clause parsing for property and label removal
   - All write operation parsers now complete and functional
 
 - **MERGE Clause Complete Implementation** ✅
+
   - Implemented full match-or-create semantics with property matching
   - MERGE searches existing nodes by label and properties
   - Creates new node only if no matching node found
@@ -999,6 +1090,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added comprehensive MERGE tests
 
 - **Variable Context Infrastructure** ✅
+
   - Added `variable_context` HashMap to store node_id bindings between clauses
   - CREATE and MERGE operations now store node_id in variable context
   - SET/DELETE/REMOVE clause handlers added with detection
@@ -1012,6 +1104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Properties loaded, modified, and saved atomically
 
 ### Published
+
 - **Progress**: Cypher Write Operations now 87% complete (20/23 tasks) ✅
 - **Parsers**: 100% complete (CREATE, MERGE, SET, DELETE, REMOVE) ✅
 - **Execution**: 100% complete (all write operations working) ✅
@@ -1021,6 +1114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.1] - 2025-10-27
 
 ### Fixed
+
 - **Data Source Unification** ✅
   - Fixed MATCH queries returning empty results by ensuring label_index is updated when creating nodes
   - Engine::create_node now automatically updates label_index after node creation
@@ -1029,6 +1123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - /data/nodes endpoint refactored to use shared Engine instance
 
 ### Added
+
 - **Engine-Executor Integration** (2025-10-27) ✅
   - MATCH queries now use engine.execute_cypher() to access shared storage
   - /data/nodes endpoint now uses ENGINE.get() shared instance
@@ -1036,6 +1131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CREATE and MATCH operations share the same catalog, storage, and label_index
 
 ### Testing
+
 - **Full Integration Testing** (2025-10-27) ✅
   - Tested CREATE via Cypher: Nodes persist correctly ✅
   - Tested MATCH via Cypher: Returns nodes correctly ✅
@@ -1044,6 +1140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tested ORDER BY in MATCH: Query executed successfully ✅
 
 **Test Results** (2025-10-27):
+
 ```
 ✅ CREATE (p:Person {name: "Alice", age: 30}) → Success
 ✅ MATCH (p:Person) RETURN p → Returns 2 nodes
@@ -1058,12 +1155,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Critical Persistence Bugs** ✅
+
   - Fixed CREATE queries not persisting nodes to storage
   - Fixed stats endpoint always showing node_count: 0
   - Fixed create_node MCP tool failing to extract node_id
   - Fixed graph_correlation_analyze requiring complete graph structures
 
 - **Cypher Parser Improvements** ✅
+
   - Added missing `skip_whitespace()` calls in parser
   - Fixed `is_clause_boundary()` to recognize CREATE and MERGE keywords
   - Fixed property map parsing with proper whitespace handling
@@ -1078,6 +1177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **License Simplification** ✅
+
   - Changed from dual-license (MIT OR Apache-2.0) to MIT only
   - Removed Apache-2.0 license text from LICENSE file
   - Updated Cargo.toml workspace license field
@@ -1105,9 +1205,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tested graph_correlation_analyze: Accepts partial graphs
 
 **Test Results**:
+
 ```
 ✅ CREATE (n:TestNode {value: 999}) → Success
-✅ CREATE (p:Person {age: 30, name: 'Alice'}) → Success  
+✅ CREATE (p:Person {age: 30, name: 'Alice'}) → Success
 ✅ GET /stats → {"node_count": 2, "label_count": 2} ✅
 ✅ create_node MCP → {"node_id": 2, "status": "created"} ✅
 ✅ graph_correlation_analyze → Accepts partial graphs ✅
@@ -1118,6 +1219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Critical Bug Fixes** ✅
+
   - Fixed infinite recursion in RecordStore persistence logic
   - Corrected `REL_RECORD_SIZE` from 40 to 52 bytes (actual struct size)
   - Fixed packed field unaligned reference errors in integration tests
@@ -1139,6 +1241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **OpenSpec Documentation** ✅
+
   - Created comprehensive `OPENSPEC_SUMMARY.md` showing MVP at 89.8% complete
   - Added `STATUS.md` to graph-correlation-analysis with phase breakdown
   - Archived 4 MVP changes to `archive/2025-10-25-*` (198 tasks complete)
@@ -1146,6 +1249,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated all tasks.md with implementation status
 
 - **Modular OpenSpec Structure for Complete Neo4j Cypher Implementation** ✅
+
   - Created master tracker `implement-cypher-complete-clauses/` (MASTER PLAN)
   - Split massive 554-task proposal into **14 manageable phases**
   - Each phase has dedicated `proposal.md` + `tasks.md` files
@@ -1197,6 +1301,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Rate Limiting System** ✅
+
   - Configurable rate limiting in auth middleware
   - Window-based rate limiting with sliding window support
   - Per-client rate limit tracking with automatic cleanup
@@ -1204,6 +1309,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Comprehensive rate limiting tests and validation
 
 - **Async Monitoring System** ✅
+
   - Proper async monitoring with Send trait compliance
   - System resource monitoring with background tasks
   - Memory usage monitoring with continuous tracking
@@ -1212,6 +1318,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Graceful shutdown of monitoring tasks
 
 - **Property Chain Traversal** ✅
+
   - Full property chain traversal system in graph.rs
   - PropertyStore for managing property storage and retrieval
   - PropertyRecord structure for property chain management
@@ -1220,6 +1327,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Comprehensive property chain tests
 
 - **Bulk Data Loading** ✅
+
   - Complete loader module implementation
   - Support for JSON, CSV, and in-memory data sources
   - Progress reporting and statistics tracking
@@ -1239,6 +1347,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Error Handling** ✅
+
   - Updated error types to use `Box<dyn std::error::Error + Send + Sync>`
   - Consistent error handling across async boundaries
   - Improved error propagation in spawned tasks
@@ -1253,6 +1362,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Test Coverage** ✅
+
   - Fixed failing test_clear_cache with proper node creation
   - Updated async test patterns for proper synchronization
   - Added comprehensive test coverage for new features
@@ -1269,6 +1379,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Node Clustering and Grouping** (Task 2.3) ✅
+
   - Comprehensive clustering algorithms implementation
   - K-means clustering with k-means++ initialization
   - Hierarchical clustering with multiple linkage types
@@ -1280,6 +1391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Quality metrics calculation (silhouette score, WCSS, BCSS, Calinski-Harabasz, Davies-Bouldin)
 
 - **Clustering API Endpoints**
+
   - GET /clustering/algorithms - List available algorithms and parameters
   - POST /clustering/cluster - Perform clustering with configurable parameters
   - POST /clustering/group-by-label - Group nodes by their labels
@@ -1288,23 +1400,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Error handling and validation for all clustering operations
 
 - **Core Engine Implementation**
+
   - Implemented `Engine::new()` method with full component initialization
   - Added storage, catalog, page cache, WAL, and transaction manager integration
   - Added `Engine::new_default()` convenience method
 
 - **Protocol Client Implementations**
+
   - Implemented REST client with POST, GET, and streaming methods
   - Implemented MCP client with JSON-RPC 2.0 support
   - Implemented UMICP client for universal model communication
   - Added proper error handling and HTTP status code checking
 
 - **Performance Optimizations**
+
   - Added query cache with configurable TTL and capacity
   - Implemented exponential backoff retry mechanism
   - Added jitter to prevent thundering herd problems
   - Added cache statistics and management
 
 - **Error Handling and Recovery**
+
   - Added comprehensive retry mechanisms for transient failures
   - Implemented retryable error detection for I/O and database errors
   - Added retry statistics and context tracking
@@ -1319,6 +1435,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **API Endpoints**
+
   - Updated health check endpoint to use new health module
   - Added `/metrics` endpoint for detailed system metrics
   - Enhanced error responses with more detailed information
@@ -1352,27 +1469,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Complete MVP Integration & Testing** (Phase 1.6) ✅
+
   - Comprehensive end-to-end testing framework
   - Performance benchmarking suite
   - Complete documentation ecosystem
 
 - **Sample Datasets** (`examples/datasets/`)
+
   - Social network dataset with users, posts, comments, and relationships
   - Knowledge graph dataset with entities, concepts, and semantic relationships
   - Dataset loader utility for easy data ingestion
 
 - **Cypher Test Suite** (`examples/cypher_tests/`)
+
   - Comprehensive test suite with 7 categories of tests
   - Basic queries, aggregation, relationships, knowledge graph queries
   - KNN vector queries, performance tests, error handling
   - Test runner with performance benchmarking capabilities
 
 - **KNN + Traversal Hybrid Queries**
+
   - Vector similarity search combined with graph traversal
   - Hybrid queries for recommendation systems
   - Semantic similarity with relationship analysis
 
 - **Crash Recovery Testing** (`examples/crash_recovery_tests/`)
+
   - WAL recovery during write transactions
   - Catalog recovery after corruption
   - Index recovery after crash scenarios
@@ -1381,6 +1503,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Performance testing for recovery scenarios
 
 - **Performance Benchmarks** (`examples/benchmarks/`)
+
   - Point reads benchmarking (100K+ ops/sec target)
   - KNN queries benchmarking (10K+ ops/sec target)
   - Pattern traversal benchmarking (1K-10K ops/sec target)
@@ -1412,11 +1535,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Complete MVP HTTP API** (Phase 1.5) ✅
+
   - REST endpoints with comprehensive test coverage (79.13%)
   - Server-Sent Events (SSE) streaming support
   - End-to-end integration tests (282 tests passing)
 
 - **REST API Endpoints** (`nexus-server/src/api/`)
+
   - POST /cypher: Execute Cypher queries with parameter support
   - POST /knn_traverse: KNN-seeded graph traversal
   - POST /ingest: Bulk data ingestion with throughput metrics
@@ -1432,6 +1557,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - DELETE /data/nodes: Delete nodes
 
 - **Streaming Support** (`nexus-server/src/api/streaming.rs`)
+
   - Server-Sent Events (SSE) for large result sets
   - GET /sse/cypher: Stream Cypher query results
   - GET /sse/stats: Stream database statistics updates
@@ -1440,6 +1566,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable streaming timeouts
 
 - **Comprehensive Testing**
+
   - Unit tests for all API endpoints (84 tests)
   - Integration tests for end-to-end validation (10 tests)
   - Test coverage: 79.13% lines, 77.92% regions
@@ -1486,6 +1613,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.8] - 2025-10-31
 
 ### Added
+
 - **COUNT(DISTINCT ...)**: Full support for distinct counting in aggregations
   - Parser detects `DISTINCT` keyword in `count()` function calls
   - HashSet-based deduplication for unique value counting
@@ -1500,17 +1628,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Support for `avg(n.property)`, `min(n.property)`, `max(n.property)`, `sum(n.property)`
 
 ### Fixed
+
 - UNION operator now deduplicates results correctly (was returning all rows like UNION ALL)
 - Aggregation functions now correctly handle `avg(n.property)` syntax
 - Required columns tracking now skips `__DISTINCT__` marker in aggregation args
 - PropertyAccess expressions now correctly registered in required columns
 
 ### Improved
+
 - Neo4j cross-compatibility increased to **88.24%** (15/17 validation tests passing)
 - UNION deduplication matches Neo4j behavior exactly
 - Better property access handling in query planner
 
 ### Testing
+
 - Cross-compatibility validation: **15/17 tests passing (88.24%)**
 - COUNT(DISTINCT) test: ✅ 4 unique values
 - UNION deduplication test: ✅ 5 rows (was 50)
@@ -1522,6 +1653,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Complete MVP Storage Layer** (Phase 1.1-1.2) ✅
+
   - LMDB catalog with bidirectional mappings (98.64% coverage)
   - Memory-mapped record stores (96.96% coverage)
   - Page cache with Clock eviction (96.15% coverage)
@@ -1529,6 +1661,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - MVCC transaction manager (99.02% coverage)
 
 - **Catalog Module** (`nexus-core/src/catalog/`)
+
   - LMDB integration via heed (10GB max size, 8 databases)
   - Bidirectional mappings: label_name ↔ label_id, type_name ↔ type_id, key_name ↔ key_id
   - Metadata storage (version, epoch, page_size)
@@ -1537,6 +1670,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 21 unit tests covering all functionality
 
 - **Record Stores** (`nexus-core/src/storage/`)
+
   - NodeRecord (32 bytes fixed-size): label_bits, first_rel_ptr, prop_ptr, flags
   - RelationshipRecord (48 bytes fixed-size): src, dst, type, next_src, next_dst, prop_ptr
   - Memory-mapped files with automatic growth (1MB → 2x exponential)
@@ -1545,6 +1679,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 18 unit tests including file growth and linked list traversal
 
 - **Page Cache** (`nexus-core/src/page_cache/`)
+
   - Clock (second-chance) eviction algorithm
   - Pin/unpin semantics with atomic reference counting
   - Dirty page tracking with HashSet
@@ -1553,6 +1688,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 21 unit tests covering eviction, pinning, checksums, concurrency
 
 - **Write-Ahead Log** (`nexus-core/src/wal/`)
+
   - 10 entry types (BeginTx, CommitTx, CreateNode, CreateRel, SetProperty, etc)
   - Binary format: [type:1][length:4][payload:N][crc32:4]
   - CRC32 validation for data integrity
@@ -1562,6 +1698,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 16 unit tests including corruption detection and large payloads
 
 - **Transaction Manager** (`nexus-core/src/transaction/`)
+
   - Epoch-based MVCC for snapshot isolation
   - Single-writer model (queue-based, prevents deadlocks)
   - Read transactions pin current epoch
@@ -1612,11 +1749,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Project Initialization**
+
   - Cargo workspace setup (edition 2024, nightly)
   - Module structure (nexus-core, nexus-server, nexus-protocol)
   - Comprehensive architecture documentation
 
 - **Documentation**
+
   - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Complete system design
   - [ROADMAP.md](docs/ROADMAP.md) - Implementation phases and timeline
   - [DAG.md](docs/DAG.md) - Component dependency graph
@@ -1630,6 +1769,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CHANGELOG.md - This file
 
 - **Core Module Scaffolding** (nexus-core)
+
   - `error` - Error types and Result aliases
   - `catalog` - Label/Type/Key ID mappings (LMDB)
   - `storage` - Record stores (nodes, rels, props, strings)
@@ -1640,6 +1780,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `transaction` - MVCC and locking
 
 - **Server Scaffolding** (nexus-server)
+
   - Axum HTTP server setup
   - REST API endpoints (stubs):
     - `GET /health` - Health check
@@ -1649,6 +1790,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configuration management
 
 - **Protocol Layer** (nexus-protocol)
+
   - REST client for external integrations
   - MCP client stub
   - UMICP client stub
@@ -1789,4 +1931,3 @@ Maintained across versions:
 - **Documentation**: https://docs.nexus-db.io
 - **Releases**: https://github.com/hivellm/nexus/releases
 - **Issues**: https://github.com/hivellm/nexus/issues
-

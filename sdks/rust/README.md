@@ -86,9 +86,13 @@ println!("Types: {:?}", types.types);
 - ✅ Database statistics
 - ✅ Health check
 - ✅ Node CRUD operations (Create, Read, Update, Delete)
-- ✅ Relationship CRUD operations (Create)
+- ✅ Relationship CRUD operations (Create, Update, Delete)
+- ✅ Batch operations (sequential implementation)
 - ✅ Schema management (Labels, Relationship Types)
 - ✅ Performance monitoring (Query statistics, slow queries, plan cache)
+- ✅ Transaction support (BEGIN, COMMIT, ROLLBACK)
+- ✅ Query builder for type-safe query construction
+- ✅ Retry logic with exponential backoff (basic implementation)
 - ✅ API key authentication
 - ✅ Username/password authentication
 - ✅ Proper error handling
@@ -116,6 +120,8 @@ See the `examples/` directory for complete examples:
 - `basic_usage.rs` - Basic operations with nodes, relationships, and schema
 - `with_auth.rs` - Authentication examples
 - `performance_monitoring.rs` - Performance monitoring and statistics
+- `transactions.rs` - Transaction management examples
+- `query_builder.rs` - Query builder usage examples
 
 Run examples with:
 
@@ -123,6 +129,8 @@ Run examples with:
 cargo run --example basic_usage
 cargo run --example with_auth
 cargo run --example performance_monitoring
+cargo run --example transactions
+cargo run --example query_builder
 ```
 
 ## Testing
@@ -130,21 +138,42 @@ cargo run --example performance_monitoring
 Run tests with:
 
 ```bash
+# Run unit tests
 cargo test
 
 # Run integration tests (requires running Nexus server)
 NEXUS_TEST_SERVER=http://localhost:15474 cargo test -- --ignored
+
+# Run specific test suites
+cargo test --test integration_test
+cargo test --test transaction_test
+cargo test --test query_builder_test
+cargo test --test relationship_test
 ```
+
+### Test Coverage
+
+The SDK includes comprehensive tests for:
+
+- ✅ Client initialization and configuration
+- ✅ Cypher query execution
+- ✅ Node CRUD operations
+- ✅ Relationship CRUD operations (Create, Update, Delete)
+- ✅ Schema management (Labels, Relationship Types)
+- ✅ Transaction support (Begin, Commit, Rollback)
+- ✅ Query builder functionality
+- ✅ Performance monitoring
+- ✅ Batch operations
 
 ## Roadmap
 
 - [x] Node CRUD operations
-- [x] Relationship CRUD operations (Create)
+- [x] Relationship CRUD operations (Create, Update, Delete)
 - [x] Schema management
 - [x] Integration tests
 - [x] Examples
-- [ ] Transaction support
-- [ ] Query builder
-- [ ] Retry logic with exponential backoff
+- [x] Transaction support
+- [x] Query builder
+- [x] Retry logic with exponential backoff (basic implementation)
+- [x] Neo4j compatibility comparison tests
 - [ ] Connection pooling
-- [ ] Relationship update/delete operations

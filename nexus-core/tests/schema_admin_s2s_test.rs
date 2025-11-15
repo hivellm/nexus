@@ -75,15 +75,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("✓ {}: PASSED", test_name);
+                println!("{}: PASSED", test_name);
                 true
             } else {
-                println!("✗ {}: FAILED - Error: {:?}", test_name, response.error);
+                println!("{}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("✗ {}: FAILED - Request error: {}", test_name, e);
+            println!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -101,22 +101,22 @@ async fn test_query_error(
         Ok(response) => {
             if let Some(error) = response.error {
                 if error.contains(expected_pattern) {
-                    println!("✓ {}: PASSED (expected error)", test_name);
+                    println!("{}: PASSED (expected error)", test_name);
                     true
                 } else {
                     println!(
-                        "✗ {}: FAILED - Expected error pattern '{}', got: {}",
+                        "{}: FAILED - Expected error pattern '{}', got: {}",
                         test_name, expected_pattern, error
                     );
                     false
                 }
             } else {
-                println!("✗ {}: FAILED - Expected error but got success", test_name);
+                println!("{}: FAILED - Expected error but got success", test_name);
                 false
             }
         }
         Err(e) => {
-            println!("✗ {}: FAILED - Request error: {}", test_name, e);
+            println!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -128,11 +128,11 @@ async fn test_schema_admin_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test schema_admin_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -559,10 +559,10 @@ async fn test_schema_admin_s2s() {
         println!("All tests passed!");
     } else {
         println!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        println!("⚠️  Note: Some features may not be fully implemented yet.");
+        println!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

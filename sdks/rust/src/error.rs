@@ -41,6 +41,10 @@ pub enum NexusError {
     #[error("Connection error: {0}")]
     Connection(String),
 
+    /// Network error
+    #[error("Network error: {0}")]
+    Network(String),
+
     /// Timeout error
     #[error("Request timeout")]
     Timeout,
@@ -48,4 +52,8 @@ pub enum NexusError {
     /// Invalid response format
     #[error("Invalid response format: {0}")]
     InvalidResponse(String),
+
+    /// Validation error
+    #[error("Validation error: {0}")]
+    Validation(String),
 }

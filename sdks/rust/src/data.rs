@@ -71,7 +71,7 @@ pub struct DeleteNodeResponse {
 
 /// Create relationship request
 #[derive(Debug, Clone, Serialize)]
-pub struct CreateRelationshipRequest {
+pub struct CreateRelRequest {
     /// Source node ID
     pub source_id: u64,
     /// Target node ID
@@ -85,9 +85,38 @@ pub struct CreateRelationshipRequest {
 
 /// Create relationship response
 #[derive(Debug, Clone, Deserialize)]
-pub struct CreateRelationshipResponse {
-    /// Created relationship ID
+pub struct CreateRelResponse {
+    /// Relationship ID
     pub rel_id: u64,
+    /// Success message
+    pub message: String,
+    /// Error message if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Update relationship request
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateRelRequest {
+    /// Relationship ID
+    pub rel_id: u64,
+    /// New properties (will replace existing)
+    pub properties: HashMap<String, Value>,
+}
+
+/// Update relationship response
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateRelResponse {
+    /// Success message
+    pub message: String,
+    /// Error message if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Delete relationship response
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteRelResponse {
     /// Success message
     pub message: String,
     /// Error message if any
@@ -106,13 +135,13 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk_rust::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut properties = HashMap::new();
-    /// properties.insert("name".to_string(), nexus_sdk_rust::Value::String("Alice".to_string()));
+    /// properties.insert("name".to_string(), Value::String("Alice".to_string()));
     /// let response = client.create_node(vec!["Person".to_string()], properties).await?;
     /// println!("Created node with ID: {}", response.node_id);
     /// # Ok(())
@@ -152,7 +181,7 @@ impl NexusClient {
     ///
     /// # Arguments
     ///
-    /// * `node_id` - Node ID to retrieve
+    /// * `node_id` - ID of the node to retrieve
     ///
     /// # Example
     ///
@@ -161,9 +190,9 @@ impl NexusClient {
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let response = client.get_node(1).await?;
+    /// let response = client.get_node(0).await?; // Replace 0 with an actual node ID
     /// if let Some(node) = response.node {
-    ///     println!("Node ID: {}, Labels: {:?}", node.id, node.labels);
+    ///     println!("Retrieved node: {:?}", node);
     /// }
     /// # Ok(())
     /// # }
@@ -194,25 +223,25 @@ impl NexusClient {
         }
     }
 
-    /// Update a node
+    /// Update an existing node
     ///
     /// # Arguments
     ///
-    /// * `node_id` - Node ID to update
-    /// * `properties` - New properties (will replace existing)
+    /// * `node_id` - ID of the node to update
+    /// * `properties` - New properties for the node
     ///
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk_rust::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut properties = HashMap::new();
-    /// properties.insert("age".to_string(), nexus_sdk_rust::Value::Int(30));
-    /// let response = client.update_node(1, properties).await?;
-    /// println!("Update result: {}", response.message);
+    /// properties.insert("name".to_string(), Value::String("Bob".to_string()));
+    /// let response = client.update_node(0, properties).await?; // Replace 0 with an actual node ID
+    /// println!("Update node result: {}", response.message);
     /// # Ok(())
     /// # }
     /// ```
@@ -249,11 +278,11 @@ impl NexusClient {
         }
     }
 
-    /// Delete a node
+    /// Delete a node by ID
     ///
     /// # Arguments
     ///
-    /// * `node_id` - Node ID to delete
+    /// * `node_id` - ID of the node to delete
     ///
     /// # Example
     ///
@@ -262,7 +291,7 @@ impl NexusClient {
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let response = client.delete_node(1).await?;
+    /// let response = client.delete_node(0).await?; // Replace 0 with an actual node ID
     /// println!("Delete result: {}", response.message);
     /// # Ok(())
     /// # }
@@ -297,20 +326,21 @@ impl NexusClient {
     ///
     /// # Arguments
     ///
-    /// * `source_id` - Source node ID
-    /// * `target_id` - Target node ID
-    /// * `rel_type` - Relationship type
-    /// * `properties` - Relationship properties
+    /// * `source_id` - ID of the source node
+    /// * `target_id` - ID of the target node
+    /// * `rel_type` - Type of the relationship
+    /// * `properties` - Optional relationship properties
     ///
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk_rust::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let properties = HashMap::new();
+    /// let mut properties = HashMap::new();
+    /// properties.insert("weight".to_string(), Value::Float(1.5));
     /// let response = client.create_relationship(1, 2, "KNOWS".to_string(), properties).await?;
     /// println!("Created relationship with ID: {}", response.rel_id);
     /// # Ok(())
@@ -322,8 +352,8 @@ impl NexusClient {
         target_id: u64,
         rel_type: String,
         properties: HashMap<String, Value>,
-    ) -> Result<CreateRelationshipResponse> {
-        let request = CreateRelationshipRequest {
+    ) -> Result<CreateRelResponse> {
+        let request = CreateRelRequest {
             source_id,
             target_id,
             rel_type,
@@ -339,7 +369,7 @@ impl NexusClient {
         let status = response.status();
 
         if status.is_success() {
-            let result: CreateRelationshipResponse = response.json().await?;
+            let result: CreateRelResponse = response.json().await?;
             Ok(result)
         } else {
             let error_text = response
@@ -351,5 +381,87 @@ impl NexusClient {
                 status: status.as_u16(),
             })
         }
+    }
+
+    /// Update an existing relationship using Cypher
+    ///
+    /// # Arguments
+    ///
+    /// * `rel_id` - ID of the relationship to update
+    /// * `properties` - New properties for the relationship
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk_rust::{NexusClient, Value};
+    /// # use std::collections::HashMap;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let mut properties = HashMap::new();
+    /// properties.insert("weight".to_string(), Value::Float(2.0));
+    /// let response = client.update_relationship(1, properties).await?;
+    /// println!("Update relationship result: {}", response.message);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update_relationship(
+        &self,
+        rel_id: u64,
+        properties: HashMap<String, Value>,
+    ) -> Result<UpdateRelResponse> {
+        // Use Cypher SET to update relationship properties
+        let mut props_str = Vec::new();
+        let mut params = HashMap::new();
+
+        for (key, value) in properties {
+            let param_name = format!("prop_{}", key.replace('-', "_"));
+            props_str.push(format!("r.{} = ${}", key, param_name));
+            params.insert(param_name, value);
+        }
+
+        let query = format!(
+            "MATCH ()-[r]->() WHERE id(r) = $rel_id SET {} RETURN r",
+            props_str.join(", ")
+        );
+        params.insert("rel_id".to_string(), Value::Int(rel_id as i64));
+
+        let _result = self.execute_cypher(&query, Some(params)).await?;
+
+        Ok(UpdateRelResponse {
+            message: "Relationship updated successfully".to_string(),
+            error: None,
+        })
+    }
+
+    /// Delete a relationship using Cypher
+    ///
+    /// # Arguments
+    ///
+    /// * `rel_id` - ID of the relationship to delete
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk_rust::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let response = client.delete_relationship(1).await?;
+    /// println!("Delete relationship result: {}", response.message);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn delete_relationship(&self, rel_id: u64) -> Result<DeleteRelResponse> {
+        let mut params = HashMap::new();
+        params.insert("rel_id".to_string(), Value::Int(rel_id as i64));
+
+        let query = "MATCH ()-[r]->() WHERE id(r) = $rel_id DELETE r RETURN count(r) as deleted";
+        let _result = self.execute_cypher(query, Some(params)).await?;
+
+        Ok(DeleteRelResponse {
+            message: "Relationship deleted successfully".to_string(),
+            error: None,
+        })
     }
 }

@@ -212,25 +212,165 @@ impl<'a> QueryPlanner<'a> {
                 &mut operators,
             )?;
         } else if !return_items.is_empty() || !unwind_operators.is_empty() {
-            // No patterns but have RETURN or UNWIND - add projection for literal expressions
-            // This handles cases like: RETURN 1+1 AS result, toLower('HELLO') AS lower
+            // No patterns but have RETURN or UNWIND - check for aggregations first
+            // This handles cases like: RETURN count(*), RETURN sum(1), etc.
             operators.extend(unwind_operators);
 
             if !return_items.is_empty() {
-                let projection_items: Vec<ProjectionItem> = return_items
-                    .iter()
-                    .map(|item| ProjectionItem {
-                        alias: item.alias.clone().unwrap_or_else(|| {
-                            self.expression_to_string(&item.expression)
-                                .unwrap_or_default()
-                        }),
-                        expression: item.expression.clone(),
-                    })
-                    .collect();
+                // Check if any return items contain aggregate functions
+                let mut has_aggregation = false;
+                let mut aggregations = Vec::new();
+                let group_by_columns = Vec::new();
+                let mut projection_items: Vec<ProjectionItem> = Vec::new();
 
-                operators.push(Operator::Project {
-                    items: projection_items,
-                });
+                for item in &return_items {
+                    match &item.expression {
+                        Expression::FunctionCall { name, args } => {
+                            let func_name = name.to_lowercase();
+                            match func_name.as_str() {
+                                "count" => {
+                                    has_aggregation = true;
+                                    let mut distinct = false;
+                                    let mut real_args = args.clone();
+                                    if let Some(Expression::Variable(var)) = args.first() {
+                                        if var == "__DISTINCT__" {
+                                            distinct = true;
+                                            real_args = args[1..].to_vec();
+                                        }
+                                    }
+                                    let column = if real_args.is_empty() {
+                                        None // COUNT(*)
+                                    } else if let Some(Expression::Variable(var)) =
+                                        real_args.first()
+                                    {
+                                        Some(var.clone())
+                                    } else if let Some(Expression::PropertyAccess {
+                                        variable,
+                                        property,
+                                    }) = real_args.first()
+                                    {
+                                        Some(format!("{}.{}", variable, property))
+                                    } else {
+                                        None
+                                    };
+                                    aggregations.push(Aggregation::Count {
+                                        column,
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "count".to_string()),
+                                        distinct,
+                                    });
+                                }
+                                "sum" => {
+                                    has_aggregation = true;
+                                    if let Some(arg) = args.first() {
+                                        let column = match arg {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            Expression::Literal(_) => {
+                                                let alias =
+                                                    format!("__sum_arg_{}", aggregations.len());
+                                                projection_items.push(ProjectionItem {
+                                                    alias: alias.clone(),
+                                                    expression: arg.clone(),
+                                                });
+                                                alias
+                                            }
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::Sum {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "sum".to_string()),
+                                        });
+                                    }
+                                }
+                                "avg" => {
+                                    has_aggregation = true;
+                                    if let Some(arg) = args.first() {
+                                        let column = match arg {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            Expression::Literal(_) => {
+                                                let alias =
+                                                    format!("__avg_arg_{}", aggregations.len());
+                                                projection_items.push(ProjectionItem {
+                                                    alias: alias.clone(),
+                                                    expression: arg.clone(),
+                                                });
+                                                alias
+                                            }
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::Avg {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "avg".to_string()),
+                                        });
+                                    }
+                                }
+                                _ => {
+                                    // Not an aggregate function, treat as regular projection
+                                    projection_items.push(ProjectionItem {
+                                        alias: item.alias.clone().unwrap_or_else(|| {
+                                            self.expression_to_string(&item.expression)
+                                                .unwrap_or_default()
+                                        }),
+                                        expression: item.expression.clone(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            // Non-aggregate expression
+                            projection_items.push(ProjectionItem {
+                                alias: item.alias.clone().unwrap_or_else(|| {
+                                    self.expression_to_string(&item.expression)
+                                        .unwrap_or_default()
+                                }),
+                                expression: item.expression.clone(),
+                            });
+                        }
+                    }
+                }
+
+                if has_aggregation {
+                    // Add Project operator if needed (for literals in aggregations)
+                    if !projection_items.is_empty() {
+                        operators.push(Operator::Project {
+                            items: projection_items,
+                        });
+                    }
+                    // Add Aggregate operator
+                    operators.push(Operator::Aggregate {
+                        group_by: group_by_columns,
+                        aggregations,
+                    });
+                } else {
+                    // Regular projection (no aggregations)
+                    let projection_items: Vec<ProjectionItem> = return_items
+                        .iter()
+                        .map(|item| ProjectionItem {
+                            alias: item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            }),
+                            expression: item.expression.clone(),
+                        })
+                        .collect();
+                    operators.push(Operator::Project {
+                        items: projection_items,
+                    });
+                }
             }
 
             if let Some(limit) = limit_count {
@@ -486,6 +626,8 @@ impl<'a> QueryPlanner<'a> {
             let mut group_by_columns = Vec::new();
 
             let mut non_aggregate_aliases: Vec<String> = Vec::new();
+            // Initialize projection_items early so we can add literal projections for aggregations
+            let mut projection_items: Vec<ProjectionItem> = Vec::new();
 
             for item in return_items {
                 match &item.expression {
@@ -531,10 +673,20 @@ impl<'a> QueryPlanner<'a> {
                             "sum" => {
                                 has_aggregation = true;
                                 if let Some(arg) = args.first() {
+                                    // Handle literals by projecting them first
                                     let column = match arg {
                                         Expression::Variable(var) => var.clone(),
                                         Expression::PropertyAccess { variable, property } => {
                                             format!("{}.{}", variable, property)
+                                        }
+                                        Expression::Literal(_) => {
+                                            // For literals, create a projection item first
+                                            let alias = format!("__sum_arg_{}", aggregations.len());
+                                            projection_items.push(ProjectionItem {
+                                                alias: alias.clone(),
+                                                expression: arg.clone(),
+                                            });
+                                            alias
                                         }
                                         _ => continue,
                                     };
@@ -550,10 +702,20 @@ impl<'a> QueryPlanner<'a> {
                             "avg" => {
                                 has_aggregation = true;
                                 if let Some(arg) = args.first() {
+                                    // Handle literals by projecting them first
                                     let column = match arg {
                                         Expression::Variable(var) => var.clone(),
                                         Expression::PropertyAccess { variable, property } => {
                                             format!("{}.{}", variable, property)
+                                        }
+                                        Expression::Literal(_) => {
+                                            // For literals, create a projection item first
+                                            let alias = format!("__avg_arg_{}", aggregations.len());
+                                            projection_items.push(ProjectionItem {
+                                                alias: alias.clone(),
+                                                expression: arg.clone(),
+                                            });
+                                            alias
                                         }
                                         _ => continue,
                                     };
@@ -569,10 +731,20 @@ impl<'a> QueryPlanner<'a> {
                             "min" => {
                                 has_aggregation = true;
                                 if let Some(arg) = args.first() {
+                                    // Handle literals by projecting them first
                                     let column = match arg {
                                         Expression::Variable(var) => var.clone(),
                                         Expression::PropertyAccess { variable, property } => {
                                             format!("{}.{}", variable, property)
+                                        }
+                                        Expression::Literal(_) => {
+                                            // For literals, create a projection item first
+                                            let alias = format!("__min_arg_{}", aggregations.len());
+                                            projection_items.push(ProjectionItem {
+                                                alias: alias.clone(),
+                                                expression: arg.clone(),
+                                            });
+                                            alias
                                         }
                                         _ => continue,
                                     };
@@ -588,10 +760,20 @@ impl<'a> QueryPlanner<'a> {
                             "max" => {
                                 has_aggregation = true;
                                 if let Some(arg) = args.first() {
+                                    // Handle literals by projecting them first
                                     let column = match arg {
                                         Expression::Variable(var) => var.clone(),
                                         Expression::PropertyAccess { variable, property } => {
                                             format!("{}.{}", variable, property)
+                                        }
+                                        Expression::Literal(_) => {
+                                            // For literals, create a projection item first
+                                            let alias = format!("__max_arg_{}", aggregations.len());
+                                            projection_items.push(ProjectionItem {
+                                                alias: alias.clone(),
+                                                expression: arg.clone(),
+                                            });
+                                            alias
                                         }
                                         _ => continue,
                                     };
@@ -624,10 +806,21 @@ impl<'a> QueryPlanner<'a> {
                                 };
 
                                 if let Some(arg) = actual_arg {
+                                    // Handle literals by projecting them first
                                     let column = match arg {
                                         Expression::Variable(var) => var.clone(),
                                         Expression::PropertyAccess { variable, property } => {
                                             format!("{}.{}", variable, property)
+                                        }
+                                        Expression::Literal(_) => {
+                                            // For literals, create a projection item first
+                                            let alias =
+                                                format!("__collect_arg_{}", aggregations.len());
+                                            projection_items.push(ProjectionItem {
+                                                alias: alias.clone(),
+                                                expression: arg.clone(),
+                                            });
+                                            alias
                                         }
                                         _ => continue,
                                     };
@@ -663,6 +856,8 @@ impl<'a> QueryPlanner<'a> {
             }
 
             if has_aggregation {
+                let mut required_columns: HashSet<String> = HashSet::new();
+
                 if group_by_columns.is_empty() {
                     group_by_columns = non_aggregate_aliases.clone();
                 } else {
@@ -672,9 +867,6 @@ impl<'a> QueryPlanner<'a> {
                         }
                     }
                 }
-
-                let mut projection_items: Vec<ProjectionItem> = Vec::new();
-                let mut required_columns: HashSet<String> = HashSet::new();
 
                 for item in return_items {
                     match &item.expression {

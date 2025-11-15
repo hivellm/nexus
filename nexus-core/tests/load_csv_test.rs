@@ -174,7 +174,7 @@ fn test_load_csv_nonexistent_file() {
     } else if let Ok(result_set) = result {
         // If it doesn't error, it should return empty result or handle gracefully
         eprintln!(
-            "⚠️  Warning: LOAD CSV for non-existent file did not error - returned {} rows",
+            "WARNING: LOAD CSV for non-existent file did not error - returned {} rows",
             result_set.rows.len()
         );
         // Accept empty result as valid behavior

@@ -8,22 +8,40 @@ use std::collections::HashMap;
 pub struct QueryResult {
     /// Column names
     pub columns: Vec<String>,
-    /// Result rows
-    pub rows: Vec<Row>,
+    /// Result rows (each row is an array of values)
+    pub rows: Vec<serde_json::Value>,
     /// Execution time in milliseconds
     #[serde(rename = "execution_time_ms")]
     pub execution_time_ms: Option<u64>,
+    /// Error message if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
-/// A single row in a query result
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A single row in a query result (helper for accessing row values)
+#[derive(Debug, Clone)]
 pub struct Row {
     /// Row values
     pub values: Vec<Value>,
 }
 
+impl Row {
+    /// Convert from serde_json::Value (array) to Row
+    pub fn from_json_value(value: &serde_json::Value) -> Option<Self> {
+        if let serde_json::Value::Array(arr) = value {
+            let values: Result<Vec<Value>, _> = arr
+                .iter()
+                .map(|v| serde_json::from_value(v.clone()))
+                .collect();
+            values.ok().map(|values| Row { values })
+        } else {
+            None
+        }
+    }
+}
+
 /// Value types in query results
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Value {
     /// Null value
@@ -40,6 +58,54 @@ pub enum Value {
     Array(Vec<Value>),
     /// Object value
     Object(HashMap<String, Value>),
+}
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::String(s.to_string())
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::String(s)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Value::Bool(b)
+    }
+}
+
+impl From<i64> for Value {
+    fn from(i: i64) -> Self {
+        Value::Int(i)
+    }
+}
+
+impl From<i32> for Value {
+    fn from(i: i32) -> Self {
+        Value::Int(i as i64)
+    }
+}
+
+impl From<usize> for Value {
+    fn from(u: usize) -> Self {
+        Value::Int(u as i64)
+    }
+}
+
+impl From<f64> for Value {
+    fn from(f: f64) -> Self {
+        Value::Float(f)
+    }
+}
+
+impl From<f32> for Value {
+    fn from(f: f32) -> Self {
+        Value::Float(f as f64)
+    }
 }
 
 /// Node representation

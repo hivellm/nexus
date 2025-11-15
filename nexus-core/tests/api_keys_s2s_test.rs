@@ -117,15 +117,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("✓ {}: PASSED", test_name);
+                println!("{}: PASSED", test_name);
                 true
             } else {
-                println!("✗ {}: FAILED - Error: {:?}", test_name, response.error);
+                println!("{}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("✗ {}: FAILED - Request error: {}", test_name, e);
+            println!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -137,11 +137,11 @@ async fn test_api_keys_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        eprintln!("⚠️  Server not available at {}", server_url);
-        eprintln!("⚠️  Skipping S2S test. To run this test:");
+        eprintln!("WARNING: Server not available at {}", server_url);
+        eprintln!("WARNING: Skipping S2S test. To run this test:");
         eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
         eprintln!("   2. Run: cargo test --features s2s --test api_keys_s2s_test");
-        eprintln!("⚠️  This test is ignored when server is not available.");
+        eprintln!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -267,11 +267,11 @@ async fn test_api_keys_s2s() {
             if response.status().is_success() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(api_key) => {
-                        println!("✓ POST /auth/keys: PASSED");
+                        println!("POST /auth/keys: PASSED");
                         if api_key.key.starts_with("nx_") && api_key.name == "testkey_rest_s2s" {
                             // Valid API key
                         } else {
-                            println!("✗ API key validation failed");
+                            println!("API key validation failed");
                             failed += 1;
                         }
                         passed += 1;
@@ -286,20 +286,20 @@ async fn test_api_keys_s2s() {
                                 if get_response.status().is_success() {
                                     match get_response.json::<ApiKeyResponse>().await {
                                         Ok(key_info) => {
-                                            println!("✓ GET /auth/keys/{{key_id}}: PASSED");
+                                            println!("GET /auth/keys/{{key_id}}: PASSED");
                                             if key_info.id == api_key.id
                                                 && key_info.name == api_key.name
                                             {
                                                 // Key info matches
                                             } else {
-                                                println!("✗ API key info mismatch");
+                                                println!("API key info mismatch");
                                                 failed += 1;
                                             }
                                             passed += 1;
                                         }
                                         Err(e) => {
                                             println!(
-                                                "✗ GET /auth/keys/{{key_id}}: FAILED - Parse error: {}",
+                                                "GET /auth/keys/{{key_id}}: FAILED - Parse error: {}",
                                                 e
                                             );
                                             failed += 1;
@@ -307,7 +307,7 @@ async fn test_api_keys_s2s() {
                                     }
                                 } else {
                                     println!(
-                                        "✗ GET /auth/keys/{{key_id}}: FAILED - Status: {}",
+                                        "GET /auth/keys/{{key_id}}: FAILED - Status: {}",
                                         get_response.status()
                                     );
                                     failed += 1;
@@ -315,7 +315,7 @@ async fn test_api_keys_s2s() {
                             }
                             Err(e) => {
                                 println!(
-                                    "✗ GET /auth/keys/{{key_id}}: FAILED - Request error: {}",
+                                    "GET /auth/keys/{{key_id}}: FAILED - Request error: {}",
                                     e
                                 );
                                 failed += 1;
@@ -335,11 +335,11 @@ async fn test_api_keys_s2s() {
                         {
                             Ok(revoke_response) => {
                                 if revoke_response.status().is_success() {
-                                    println!("✓ POST /auth/keys/{{key_id}}/revoke: PASSED");
+                                    println!("POST /auth/keys/{{key_id}}/revoke: PASSED");
                                     passed += 1;
                                 } else {
                                     println!(
-                                        "✗ POST /auth/keys/{{key_id}}/revoke: FAILED - Status: {}",
+                                        "POST /auth/keys/{{key_id}}/revoke: FAILED - Status: {}",
                                         revoke_response.status()
                                     );
                                     failed += 1;
@@ -347,7 +347,7 @@ async fn test_api_keys_s2s() {
                             }
                             Err(e) => {
                                 println!(
-                                    "✗ POST /auth/keys/{{key_id}}/revoke: FAILED - Request error: {}",
+                                    "POST /auth/keys/{{key_id}}/revoke: FAILED - Request error: {}",
                                     e
                                 );
                                 failed += 1;
@@ -362,11 +362,11 @@ async fn test_api_keys_s2s() {
                         {
                             Ok(delete_response) => {
                                 if delete_response.status().is_success() {
-                                    println!("✓ DELETE /auth/keys/{{key_id}}: PASSED");
+                                    println!("DELETE /auth/keys/{{key_id}}: PASSED");
                                     passed += 1;
                                 } else {
                                     println!(
-                                        "✗ DELETE /auth/keys/{{key_id}}: FAILED - Status: {}",
+                                        "DELETE /auth/keys/{{key_id}}: FAILED - Status: {}",
                                         delete_response.status()
                                     );
                                     failed += 1;
@@ -374,7 +374,7 @@ async fn test_api_keys_s2s() {
                             }
                             Err(e) => {
                                 println!(
-                                    "✗ DELETE /auth/keys/{{key_id}}: FAILED - Request error: {}",
+                                    "DELETE /auth/keys/{{key_id}}: FAILED - Request error: {}",
                                     e
                                 );
                                 failed += 1;
@@ -382,17 +382,17 @@ async fn test_api_keys_s2s() {
                         }
                     }
                     Err(e) => {
-                        println!("✗ POST /auth/keys: FAILED - Parse error: {}", e);
+                        println!("POST /auth/keys: FAILED - Parse error: {}", e);
                         failed += 1;
                     }
                 }
             } else {
-                println!("✗ POST /auth/keys: FAILED - Status: {}", response.status());
+                println!("POST /auth/keys: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ POST /auth/keys: FAILED - Request error: {}", e);
+            println!("POST /auth/keys: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -403,25 +403,25 @@ async fn test_api_keys_s2s() {
             if response.status().is_success() {
                 match response.json::<ApiKeysResponse>().await {
                     Ok(keys_response) => {
-                        println!("✓ GET /auth/keys: PASSED");
+                        println!("GET /auth/keys: PASSED");
                         if keys_response.keys.is_empty() {
-                            println!("✗ No API keys returned");
+                            println!("No API keys returned");
                             failed += 1;
                         }
                         passed += 1;
                     }
                     Err(e) => {
-                        println!("✗ GET /auth/keys: FAILED - Parse error: {}", e);
+                        println!("GET /auth/keys: FAILED - Parse error: {}", e);
                         failed += 1;
                     }
                 }
             } else {
-                println!("✗ GET /auth/keys: FAILED - Status: {}", response.status());
+                println!("GET /auth/keys: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ GET /auth/keys: FAILED - Request error: {}", e);
+            println!("GET /auth/keys: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -439,27 +439,24 @@ async fn test_api_keys_s2s() {
             if response.status().is_success() {
                 match response.json::<ApiKeysResponse>().await {
                     Ok(_keys_response) => {
-                        println!("✓ GET /auth/keys?username=...: PASSED");
+                        println!("GET /auth/keys?username=...: PASSED");
                         passed += 1;
                     }
                     Err(e) => {
-                        println!("✗ GET /auth/keys?username=...: FAILED - Parse error: {}", e);
+                        println!("GET /auth/keys?username=...: FAILED - Parse error: {}", e);
                         failed += 1;
                     }
                 }
             } else {
                 println!(
-                    "✗ GET /auth/keys?username=...: FAILED - Status: {}",
+                    "GET /auth/keys?username=...: FAILED - Status: {}",
                     response.status()
                 );
                 failed += 1;
             }
         }
         Err(e) => {
-            println!(
-                "✗ GET /auth/keys?username=...: FAILED - Request error: {}",
-                e
-            );
+            println!("GET /auth/keys?username=...: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -476,10 +473,10 @@ async fn test_api_keys_s2s() {
 
     if failed > 0 {
         eprintln!(
-            "⚠️  Some tests failed ({} passed, {} failed)",
+            "WARNING: Some tests failed ({} passed, {} failed)",
             passed, failed
         );
-        eprintln!("⚠️  Note: Some features may not be fully implemented yet.");
+        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

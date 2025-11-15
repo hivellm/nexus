@@ -3383,6 +3383,19 @@ impl CypherParser {
             });
         }
 
+        // Check for IN operator
+        self.skip_whitespace();
+        if self.peek_keyword("IN") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            let right = self.parse_additive_expression()?;
+            return Ok(Expression::BinaryOp {
+                left: Box::new(left),
+                op: BinaryOperator::In,
+                right: Box::new(right),
+            });
+        }
+
         // Check for regex operator (=~)
         self.skip_whitespace();
         if self.peek_char() == Some('=') && self.peek_char_at(1) == Some('~') {

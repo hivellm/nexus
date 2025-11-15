@@ -84,15 +84,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("✅ {}: PASSED ({} rows)", test_name, response.rows.len());
+                println!("{}: PASSED ({} rows)", test_name, response.rows.len());
                 true
             } else {
-                println!("❌ {}: FAILED - Error: {:?}", test_name, response.error);
+                println!("{}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("❌ {}: FAILED - Request error: {}", test_name, e);
+            println!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -108,15 +108,15 @@ async fn test_query_error(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_some() && !response.error.as_ref().unwrap().is_empty() {
-                println!("✅ {}: PASSED (expected error)", test_name);
+                println!("{}: PASSED (expected error)", test_name);
                 true
             } else {
-                println!("❌ {}: FAILED - Expected error but got success", test_name);
+                println!("{}: FAILED - Expected error but got success", test_name);
                 false
             }
         }
         Err(_) => {
-            println!("✅ {}: PASSED (expected error)", test_name);
+            println!("{}: PASSED (expected error)", test_name);
             true
         }
     }
@@ -295,7 +295,7 @@ async fn test_variable_length_paths_no_path_found() {
     
     // Should return empty result, not error
     assert!(response.error.is_none() || response.error.as_ref().unwrap().is_empty());
-    println!("✅ No path found: PASSED ({} rows)", response.rows.len());
+    println!("No path found: PASSED ({} rows)", response.rows.len());
 }
 
 #[tokio::test]

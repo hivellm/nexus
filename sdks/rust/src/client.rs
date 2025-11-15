@@ -246,9 +246,55 @@ impl NexusClient {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<Response> {
-        // For now, execute without retry
-        // TODO: Implement proper retry logic with request rebuilding
-        builder.send().await.map_err(NexusError::Http)
+        let max_retries = self.max_retries;
+        let mut last_error = None;
+
+        for attempt in 0..=max_retries {
+            match builder.try_clone() {
+                Some(cloned_builder) => {
+                    match cloned_builder.send().await {
+                        Ok(response) => {
+                            // Check if status is retryable (5xx errors)
+                            let status = response.status();
+                            if status.is_server_error() && attempt < max_retries {
+                                // Calculate exponential backoff delay
+                                let delay_ms = 100u64 * (1u64 << attempt.min(5)); // Cap at 3.2s
+                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
+                                    .await;
+                                continue;
+                            }
+                            return Ok(response);
+                        }
+                        Err(e) => {
+                            // Check if error is retryable (network errors, timeouts) before moving
+                            let is_retryable = e.is_timeout() || e.is_connect() || e.is_request();
+                            last_error = Some(e);
+                            if is_retryable && attempt < max_retries {
+                                // Calculate exponential backoff delay
+                                let delay_ms = 100u64 * (1u64 << attempt.min(5)); // Cap at 3.2s
+                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
+                                    .await;
+                                continue;
+                            }
+                            // Non-retryable error or max retries reached
+                            break;
+                        }
+                    }
+                }
+                None => {
+                    // Cannot clone builder, execute directly
+                    return builder.send().await.map_err(NexusError::Http);
+                }
+            }
+        }
+
+        // Return last error or create a generic error
+        match last_error {
+            Some(e) => Err(NexusError::Http(e)),
+            None => Err(NexusError::Network(
+                "Request failed after retries".to_string(),
+            )),
+        }
     }
 
     /// Handle HTTP response and convert to result

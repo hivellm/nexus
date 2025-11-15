@@ -68,6 +68,15 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ✅ **Path Functions (3)** - `nodes()`, `relationships()`, `length()`
 - ✅ **Literal RETURN** - Standalone RETURN queries without MATCH: `RETURN 1+1 AS result`
 
+**Latest Fix**: **Aggregation Virtual Row Support**!
+
+- ✅ **Aggregation without MATCH** - Fixed virtual row creation for aggregations
+  - `RETURN count(*)` without MATCH returns `1` (Neo4j-compatible)
+  - `RETURN sum(1)` without MATCH returns `1` (not `Null`)
+  - `RETURN avg(10)` without MATCH returns `10.0` (not `Null`)
+  - Planner correctly creates Aggregate operator for queries without MATCH
+  - Comprehensive tests (3 tests passing)
+
 **Previous (v0.9.10)**: **100% Neo4j compatibility achieved (35/35 extended tests)**!
 
 - ✅ **IS NULL / IS NOT NULL** - Full WHERE clause NULL checking support
@@ -93,6 +102,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ✅ **Authentication** - API keys, RBAC, rate limiting, JWT tokens (100% - COMPLETE)
 
 **Statistics**:
+
 - 📊 **1200+ tests** passing (100% success rate)
 - 🎉 **100% Neo4j compatibility** (35/35 extended validation tests)
 - 🔧 **24 built-in functions** (string, math, type conversion, list, aggregation)
@@ -104,6 +114,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 ## 🌟 **Key Features**
 
 ### **Graph Database**
+
 - 🏗️ **Property Graph Model**: Nodes with labels, relationships with types, both with properties
 - 🔍 **Cypher Subset**: Familiar query language covering 80% of common use cases
 - ⚡ **Neo4j-Inspired Storage**: Fixed-size record stores (32B nodes, 48B relationships)
@@ -116,6 +127,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 📐 **Multiple Metrics**: Cosine similarity, Euclidean distance
 
 ### **Graph Construction & Visualization**
+
 - 🎨 **Layout Algorithms**: Force-directed, hierarchical, circular, and grid layouts
 - 🔧 **Force-Directed Layout**: Spring-based positioning with configurable parameters
 - 📊 **Hierarchical Layout**: Tree-like positioning for DAGs and organizational structures
@@ -124,6 +136,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 🎯 **K-Means Clustering**: Partition nodes into k clusters for grouping analysis
 
 ### **Node Clustering & Grouping**
+
 - 🔍 **Multiple Algorithms**: K-means, hierarchical, DBSCAN, and community detection
 - 🏷️ **Label-based Grouping**: Group nodes by their labels automatically
 - 📊 **Property-based Grouping**: Cluster nodes by specific property values
@@ -135,6 +148,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ⚙️ **Graph Operations**: Centering, scaling, neighbor finding, and density calculationCosine similarity, Euclidean distance
 
 ### **Performance & Scalability**
+
 - 🚀 **100K+ point reads/sec** - Direct offset access via record IDs
 - ⚡ **10K+ KNN queries/sec** - Logarithmic HNSW search
 - 📈 **1K-10K pattern traversals/sec** - Efficient expand operations
@@ -142,6 +156,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 🔄 **Append-Only Architecture**: Predictable write performance
 
 ### **Integration & Protocols**
+
 - 🌐 **StreamableHTTP**: Default protocol with SSE streaming (Vectorizer-style)
 - 🔌 **MCP Protocol**: 19+ focused tools for AI integrations
 - 🔗 **UMICP v0.2.1**: Tool discovery endpoint + native JSON
@@ -149,12 +164,14 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - 📊 **Graph Correlation Analysis**: Automatic code relationship visualization for LLM assistance
 
 ### **Production Features (V1)**
+
 - 🔐 **API Key Auth**: Disabled by default, required for 0.0.0.0 binding
 - 🔄 **Master-Replica Replication**: Redis-style async/sync replication
 - ⚡ **Automatic Failover**: Health monitoring with replica promotion
 - 📊 **Rate Limiting**: 1000/min, 10000/hour per API key
 
 ### **Graph Correlation Analysis** 🔥
+
 - 📊 **Automatic Graph Generation**: Create call graphs, dependency graphs, and data flow graphs from Vectorizer data
 - 🔍 **Pattern Recognition**: Identify pipeline patterns, event-driven architecture, and design patterns
 - 🧠 **LLM Assistance**: Provide structured relationship data to enhance LLM understanding of codebases
@@ -210,6 +227,7 @@ curl -X POST http://localhost:15474/cypher \
 ```
 
 **Response:**
+
 ```json
 {
   "columns": ["n.name", "n.age"],
@@ -229,18 +247,19 @@ curl -X POST http://localhost:15474/knn_traverse \
   -H "Content-Type: application/json" \
   -d '{
     "label": "Person",
-    "vector": [0.1, 0.2, 0.3, ...],  
+    "vector": [0.1, 0.2, 0.3, ...],
     "k": 10
   }'
 ```
 
 **Response:**
+
 ```json
 {
   "nodes": [
     {
       "id": 42,
-      "properties": {"name": "Alice", "age": 30},
+      "properties": { "name": "Alice", "age": 30 },
       "score": 0.95
     }
   ],
@@ -390,33 +409,33 @@ LIMIT 5
 
 ### **Core Components**
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Catalog** | LMDB (heed) | Label/Type/Key → ID bidirectional mappings |
-| **Record Stores** | memmap2 | Fixed-size node (32B) & relationship (48B) records |
-| **Page Cache** | Custom | 8KB pages with Clock/2Q/TinyLFU eviction |
-| **WAL** | Append-only log | Write-ahead log for crash recovery |
-| **MVCC** | Epoch-based | Snapshot isolation without locking readers |
-| **Label Index** | RoaringBitmap | Compressed bitmap per label |
-| **KNN Index** | hnsw_rs | HNSW vector search per label |
-| **Full-Text** | Tantivy (V1) | BM25 text search |
-| **Executor** | Custom | Cypher parser, planner, operators |
+| Component         | Technology      | Purpose                                            |
+| ----------------- | --------------- | -------------------------------------------------- |
+| **Catalog**       | LMDB (heed)     | Label/Type/Key → ID bidirectional mappings         |
+| **Record Stores** | memmap2         | Fixed-size node (32B) & relationship (48B) records |
+| **Page Cache**    | Custom          | 8KB pages with Clock/2Q/TinyLFU eviction           |
+| **WAL**           | Append-only log | Write-ahead log for crash recovery                 |
+| **MVCC**          | Epoch-based     | Snapshot isolation without locking readers         |
+| **Label Index**   | RoaringBitmap   | Compressed bitmap per label                        |
+| **KNN Index**     | hnsw_rs         | HNSW vector search per label                       |
+| **Full-Text**     | Tantivy (V1)    | BM25 text search                                   |
+| **Executor**      | Custom          | Cypher parser, planner, operators                  |
 
 ## 📊 **Performance Benchmarks**
 
 ### **MVP Targets (Single Node)**
 
-| Operation | Throughput | Latency (p95) | Notes |
-|-----------|-----------|---------------|-------|
-| 🎯 Point reads | 100K+ ops/sec | < 1 ms | Direct offset access |
-| 🔍 KNN queries (k=10) | 10K+ ops/sec | < 2 ms | HNSW logarithmic search |
-| 🔗 Pattern traversal | 1K-10K ops/sec | 5-50 ms | Depth-dependent |
-| 📥 Bulk ingest | 100K+ nodes/sec | N/A | Append-only WAL |
+| Operation             | Throughput      | Latency (p95) | Notes                   |
+| --------------------- | --------------- | ------------- | ----------------------- |
+| 🎯 Point reads        | 100K+ ops/sec   | < 1 ms        | Direct offset access    |
+| 🔍 KNN queries (k=10) | 10K+ ops/sec    | < 2 ms        | HNSW logarithmic search |
+| 🔗 Pattern traversal  | 1K-10K ops/sec  | 5-50 ms       | Depth-dependent         |
+| 📥 Bulk ingest        | 100K+ nodes/sec | N/A           | Append-only WAL         |
 
 ### **Scaling Characteristics**
 
 - **Nodes**: 1M - 100M per instance
-- **Relationships**: 2M - 200M per instance  
+- **Relationships**: 2M - 200M per instance
 - **KNN Vectors**: 1M - 10M per label
 - **Memory**: 8GB - 64GB recommended
 - **Storage**: SSD recommended, NVMe ideal
@@ -453,6 +472,7 @@ LIMIT 5
 - [x] **Integration Tests** (95%+ coverage)
 
 **Status**: ✅ Complete (Q4 2024)age cache, WAL)
+
 - [ ] **Basic Indexes** (label bitmap, KNN/HNSW)
 - [ ] **Cypher Executor** (MATCH, WHERE, RETURN, ORDER BY, LIMIT)
 - [ ] **HTTP API** (complete endpoints)
@@ -496,19 +516,20 @@ See [**ROADMAP.md**](docs/ROADMAP.md) for detailed timeline and milestones.
 
 ## ⚡ **Why Nexus?**
 
-| Feature | Neo4j | Other Graph DBs | **Nexus** |
-|---------|-------|-----------------|-----------|
-| **Storage** | Record stores + page cache | Varies | ✅ Same Neo4j approach |
-| **Query Language** | Full Cypher | GraphQL, Gremlin | ✅ Cypher subset (20% = 80% cases) |
-| **Transactions** | Full ACID, MVCC | Varies | ✅ Simplified MVCC (epochs) |
-| **Indexes** | B-tree, full-text | Varies | ✅ Same + **native KNN** |
-| **Vector Search** | Plugin (GDS) | Separate service | ✅ **Native first-class** |
-| **Target Workload** | General graph | Varies | ✅ **Read-heavy + RAG** |
-| **Performance** | Excellent | Good | ✅ **Optimized for reads** |
+| Feature             | Neo4j                      | Other Graph DBs  | **Nexus**                          |
+| ------------------- | -------------------------- | ---------------- | ---------------------------------- |
+| **Storage**         | Record stores + page cache | Varies           | ✅ Same Neo4j approach             |
+| **Query Language**  | Full Cypher                | GraphQL, Gremlin | ✅ Cypher subset (20% = 80% cases) |
+| **Transactions**    | Full ACID, MVCC            | Varies           | ✅ Simplified MVCC (epochs)        |
+| **Indexes**         | B-tree, full-text          | Varies           | ✅ Same + **native KNN**           |
+| **Vector Search**   | Plugin (GDS)               | Separate service | ✅ **Native first-class**          |
+| **Target Workload** | General graph              | Varies           | ✅ **Read-heavy + RAG**            |
+| **Performance**     | Excellent                  | Good             | ✅ **Optimized for reads**         |
 
 ### **When to Use Nexus**
 
 ✅ **Perfect for:**
+
 - RAG applications needing semantic + graph traversal
 - Recommendation systems with hybrid search
 - Knowledge graphs with vector embeddings
@@ -517,6 +538,7 @@ See [**ROADMAP.md**](docs/ROADMAP.md) for detailed timeline and milestones.
 - **Code analysis and LLM assistance** (call graphs, dependency analysis, pattern recognition)
 
 ❌ **Not ideal for:**
+
 - Write-heavy OLTP workloads (use traditional RDBMS)
 - Simple key-value storage (use Redis/Synap)
 - Document-only search (use Elasticsearch/Vectorizer)
@@ -700,18 +722,21 @@ npm run build:linux  # Linux AppImage/DEB
 ### **Screenshots**
 
 **Graph Visualization**
+
 - Interactive node/relationship exploration
 - Filter by labels and types
 - Property inspector panel
 - Zoom, pan, node selection
 
 **Query Editor**
+
 - Monaco/CodeMirror with Cypher syntax
 - Query history and saved queries
 - Result view: Table or Graph
 - Export results (JSON, CSV)
 
 **Monitoring Dashboard**
+
 - Query throughput metrics
 - Page cache hit rate
 - WAL and storage size
@@ -752,17 +777,17 @@ Combine Nexus graph traversal + Vectorizer semantic search:
 async fn hybrid_search(query: &str, k: usize) -> Result<Vec<ScoredNode>> {
     // 1. Nexus KNN search
     let nexus_results = nexus.knn_search("Document", query_embedding, k).await?;
-    
-    // 2. Vectorizer semantic search  
+
+    // 2. Vectorizer semantic search
     let vectorizer_results = vectorizer.search("docs", query, k).await?;
-    
+
     // 3. Combine with RRF
     let combined = reciprocal_rank_fusion(
         &nexus_results,
         &vectorizer_results,
         k: 60  // RRF constant
     );
-    
+
     Ok(combined)
 }
 
@@ -852,13 +877,13 @@ curl -X POST http://replica:15475/replication/promote \
 
 ### **Replication API**
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/replication/status` | GET | Get replication status and lag |
-| `/replication/promote` | POST | Promote replica to master |
-| `/replication/pause` | POST | Pause replication |
-| `/replication/resume` | POST | Resume replication |
-| `/replication/lag` | GET | Get current replication lag |
+| Endpoint               | Method | Description                    |
+| ---------------------- | ------ | ------------------------------ |
+| `/replication/status`  | GET    | Get replication status and lag |
+| `/replication/promote` | POST   | Promote replica to master      |
+| `/replication/pause`   | POST   | Pause replication              |
+| `/replication/resume`  | POST   | Resume replication             |
+| `/replication/lag`     | GET    | Get current replication lag    |
 
 ## 🧪 **Testing**
 
@@ -1013,6 +1038,7 @@ cat tasks.md
 ```
 
 **Current Active Tasks:**
+
 - 🎯 **Complete Neo4j Cypher** - Master plan with 14 modular phases (32-46 weeks)
 - 🔴 **Phase 1 Ready**: Write Operations (MERGE, SET, DELETE, REMOVE)
 - 🔍 **Graph Correlation Analysis** - Call graphs, dependency analysis (100% complete)
@@ -1046,7 +1072,7 @@ See [LICENSE](LICENSE) for details.
 
 **Built with ❤️ in Rust** 🦀
 
-*Combining the best of graph databases and vector search for the AI era*
+_Combining the best of graph databases and vector search for the AI era_
 
 [⭐ Star us on GitHub](https://github.com/hivellm/nexus) • [📖 Read the Docs](docs/) • [🚀 Get Started](#-quick-start)
 
