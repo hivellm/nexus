@@ -1,5 +1,11 @@
 # Nexus Rust SDK
 
+[![Crates.io](https://img.shields.io/crates/v/nexus-sdk-rust?style=flat-square)](https://crates.io/crates/nexus-sdk-rust)
+[![docs.rs](https://img.shields.io/docsrs/nexus-sdk-rust?style=flat-square)](https://docs.rs/nexus-sdk-rust)
+[![License](https://img.shields.io/crates/l/nexus-sdk-rust?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange?style=flat-square)](https://www.rust-lang.org/)
+[![CI](https://img.shields.io/github/actions/workflow/status/hivellm/nexus/ci.yml?style=flat-square)](https://github.com/hivellm/nexus/actions)
+
 Official Rust SDK for Nexus graph database.
 
 ## Installation
@@ -110,6 +116,7 @@ See the `examples/` directory for complete examples:
 - `with_auth.rs` - Authentication examples
 
 Run examples with:
+
 ```bash
 cargo run --example basic_usage
 cargo run --example with_auth
@@ -118,6 +125,7 @@ cargo run --example with_auth
 ## Testing
 
 Run tests with:
+
 ```bash
 cargo test
 
