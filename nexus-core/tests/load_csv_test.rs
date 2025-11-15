@@ -178,7 +178,5 @@ fn test_load_csv_nonexistent_file() {
             result_set.rows.len()
         );
         // Accept empty result as valid behavior
-        // Accept empty result as valid behavior (len >= 0 is always true, so just check is_empty)
-        assert!(result_set.rows.is_empty() || !result_set.rows.is_empty());
     }
 }
