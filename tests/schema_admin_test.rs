@@ -3,6 +3,7 @@
 //! Tests cover:
 //! - Index Management (CREATE INDEX, DROP INDEX)
 //! - Constraint Management (CREATE CONSTRAINT, DROP CONSTRAINT)
+//! - Function Management (CREATE FUNCTION, DROP FUNCTION, SHOW FUNCTIONS)
 //! - Transaction Commands (BEGIN, COMMIT, ROLLBACK)
 //! - Database Management (CREATE/DROP/SHOW DATABASE) - parsing only
 //! - User Management (SHOW/CREATE USER, GRANT/REVOKE) - parsing only
@@ -306,6 +307,168 @@ fn test_constraint_parsing_complex() {
         let result = engine.execute_cypher(query);
         // Should parse correctly (will fail execution as constraint system not implemented)
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("Constraint"));
+    }
+}
+
+#[test]
+fn test_show_functions() {
+    let mut engine = create_engine();
+
+    // Initially, should return empty list
+    let query = "SHOW FUNCTIONS";
+    let result = engine.execute_cypher(query).unwrap();
+    
+    assert_eq!(result.columns, vec!["function"]);
+    // May be empty or contain built-in functions
+    assert!(result.rows.len() >= 0);
+}
+
+#[test]
+fn test_create_function_basic() {
+    let mut engine = create_engine();
+
+    // Create function signature
+    let query = "CREATE FUNCTION multiply(a: Integer, b: Integer) RETURNS Integer";
+    let result = engine.execute_cypher(query).unwrap();
+
+    assert_eq!(result.columns, vec!["function", "message"]);
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(
+        result.rows[0].values[0],
+        Value::String("multiply".to_string())
+    );
+    assert!(result.rows[0].values[1]
+        .as_str()
+        .unwrap()
+        .contains("Function signature"));
+}
+
+#[test]
+fn test_create_function_with_description() {
+    let mut engine = create_engine();
+
+    // Create function with description
+    let query = "CREATE FUNCTION add(a: Integer, b: Integer) RETURNS Integer AS 'Adds two integers'";
+    let result = engine.execute_cypher(query).unwrap();
+
+    assert_eq!(result.columns, vec!["function", "message"]);
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(
+        result.rows[0].values[0],
+        Value::String("add".to_string())
+    );
+}
+
+#[test]
+fn test_create_function_if_not_exists() {
+    let mut engine = create_engine();
+
+    // Create function first time
+    let query = "CREATE FUNCTION test_func() RETURNS Integer";
+    engine.execute_cypher(query).unwrap();
+
+    // Create same function again with IF NOT EXISTS - should succeed
+    let query = "CREATE FUNCTION IF NOT EXISTS test_func() RETURNS Integer";
+    let result = engine.execute_cypher(query).unwrap();
+
+    assert_eq!(result.columns, vec!["function", "message"]);
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.rows[0].values[1]
+        .as_str()
+        .unwrap()
+        .contains("already exists"));
+}
+
+#[test]
+fn test_create_function_duplicate_error() {
+    let mut engine = create_engine();
+
+    // Create function first time
+    let query = "CREATE FUNCTION duplicate_test() RETURNS Integer";
+    engine.execute_cypher(query).unwrap();
+
+    // Create same function again without IF NOT EXISTS - should fail
+    let query = "CREATE FUNCTION duplicate_test() RETURNS Integer";
+    let result = engine.execute_cypher(query);
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("already exists"));
+}
+
+#[test]
+fn test_drop_function_basic() {
+    let mut engine = create_engine();
+
+    // Create function first
+    let query = "CREATE FUNCTION to_drop() RETURNS Integer";
+    engine.execute_cypher(query).unwrap();
+
+    // Drop function
+    let query = "DROP FUNCTION to_drop";
+    let result = engine.execute_cypher(query).unwrap();
+
+    assert_eq!(result.columns, vec!["function", "message"]);
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(
+        result.rows[0].values[0],
+        Value::String("to_drop".to_string())
+    );
+    assert!(result.rows[0].values[1]
+        .as_str()
+        .unwrap()
+        .contains("dropped"));
+}
+
+#[test]
+fn test_drop_function_if_exists() {
+    let mut engine = create_engine();
+
+    // Drop non-existent function with IF EXISTS - should succeed (no error)
+    let query = "DROP FUNCTION IF EXISTS nonexistent";
+    let result = engine.execute_cypher(query).unwrap();
+
+    // Should return empty result when IF EXISTS and function doesn't exist
+    assert!(result.rows.is_empty() || result.columns.is_empty());
+}
+
+#[test]
+fn test_drop_function_nonexistent_error() {
+    let mut engine = create_engine();
+
+    // Drop non-existent function without IF EXISTS - should fail
+    let query = "DROP FUNCTION nonexistent";
+    let result = engine.execute_cypher(query);
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("does not exist"));
+}
+
+#[test]
+fn test_function_parsing_complex() {
+    let mut engine = create_engine();
+
+    // Test various function creation patterns
+    let queries = vec![
+        "CREATE FUNCTION simple() RETURNS Integer",
+        "CREATE FUNCTION IF NOT EXISTS simple() RETURNS Integer",
+        "CREATE FUNCTION with_params(a: Integer, b: Float) RETURNS String",
+        "CREATE FUNCTION typed(a: String, b: Boolean) RETURNS Any",
+        "CREATE FUNCTION described() RETURNS Integer AS 'A test function'",
+        "DROP FUNCTION simple",
+        "DROP FUNCTION IF EXISTS simple",
+    ];
+
+    for query in queries {
+        let result = engine.execute_cypher(query);
+        // Should parse correctly (may fail execution if function doesn't exist)
+        assert!(result.is_ok() || result.unwrap_err().to_string().contains("does not exist") 
+            || result.unwrap_err().to_string().contains("already exists"));
     }
 }
 

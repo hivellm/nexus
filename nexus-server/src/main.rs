@@ -74,6 +74,14 @@ async fn main() -> anyhow::Result<()> {
     // Initialize performance monitoring
     api::performance::init_performance_monitoring(1000, 1000, 100, 10)?; // 1000ms threshold, 1000 max slow queries, 100 plan cache size, 10MB memory
 
+    // Initialize MCP tool performance monitoring
+    api::mcp_performance::init_mcp_performance_monitoring(
+        500,  // 500ms threshold for slow tools
+        1000, // Max 1000 slow tool records
+        3600, // 1 hour cache TTL
+        100,  // Max 100 cache entries
+    )?;
+
     // Initialize DatabaseManager for multi-database support
     let database_manager = nexus_core::database::DatabaseManager::new(data_dir.clone().into())?;
     let database_manager_arc = Arc::new(RwLock::new(database_manager));
@@ -224,6 +232,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(api::health::health_check))
         .route("/metrics", get(api::health::metrics))
         .route("/cypher", post(api::cypher::execute_cypher))
+        // Always insert None auth context for endpoints when auth is disabled
+        .layer({
+            let auth_enabled = config.auth.enabled;
+            axum::middleware::from_fn(move |mut request: axum::extract::Request, next: axum::middleware::Next| async move {
+                if !auth_enabled {
+                    request.extensions_mut().insert(axum::extract::Extension(None::<nexus_core::auth::middleware::AuthContext>));
+                }
+                next.run(request).await
+            })
+        })
         // Authentication endpoints
         .route("/auth/users", post(api::auth::create_user))
         .route(
@@ -317,12 +335,37 @@ async fn main() -> anyhow::Result<()> {
             get(api::performance::get_slow_queries),
         )
         .route(
+            "/performance/slow-queries/analysis",
+            get(api::performance::analyze_slow_queries),
+        )
+        .route(
             "/performance/plan-cache",
             get(api::performance::get_plan_cache_statistics),
         )
         .route(
             "/performance/plan-cache/clear",
             post(api::performance::clear_plan_cache),
+        )
+        // MCP tool performance monitoring endpoints
+        .route(
+            "/mcp/performance/statistics",
+            get(api::mcp_performance::get_mcp_tool_statistics),
+        )
+        .route(
+            "/mcp/performance/tools/{tool_name}",
+            get(api::mcp_performance::get_tool_statistics),
+        )
+        .route(
+            "/mcp/performance/slow-tools",
+            get(api::mcp_performance::get_slow_tool_calls),
+        )
+        .route(
+            "/mcp/performance/cache",
+            get(api::mcp_performance::get_cache_statistics),
+        )
+        .route(
+            "/mcp/performance/cache/clear",
+            post(api::mcp_performance::clear_cache),
         )
         // Graph comparison endpoints
         .route("/comparison/compare", post(api::comparison::compare_graphs))
@@ -378,6 +421,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/graph-correlation/auto-generate",
             get(api::auto_generate::auto_generate_graphs),
+        )
+        // UMICP endpoint for graph correlation
+        .route(
+            "/umicp/graph",
+            post(api::graph_correlation_umicp::handle_umicp_request),
         )
         .route(
             "/openapi.json",

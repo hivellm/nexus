@@ -11,20 +11,27 @@
 pub mod benchmarking;
 pub mod cache;
 pub mod config;
+pub mod connection_tracking;
 pub mod dbms_procedures;
+pub mod mcp_tool_cache;
+pub mod mcp_tool_stats;
 pub mod memory;
+pub mod memory_tracking;
 pub mod metrics;
 pub mod monitoring;
 pub mod plan_cache;
 pub mod profiler;
 pub mod query_stats;
 pub mod recommendations;
+pub mod slow_query_analysis;
 pub mod testing;
 pub mod visualization;
 
 pub use benchmarking::PerformanceBenchmark;
 pub use cache::CacheOptimizer;
 pub use config::PerformanceConfig;
+pub use mcp_tool_cache::{CacheStatistics, McpToolCache};
+pub use mcp_tool_stats::{McpToolStatistics, McpToolStatisticsSummary, ToolStats};
 pub use memory::MemoryOptimizer;
 pub use metrics::PerformanceMetrics;
 pub use monitoring::SystemMonitor;

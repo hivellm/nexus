@@ -7,9 +7,11 @@
 //! - dbms.killQuery()
 //! - dbms.clearQueryCaches()
 
+use super::connection_tracking::ConnectionTracker;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// DBMS procedure result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +28,8 @@ pub struct DbmsProcedures {
     current_user: Option<String>,
     /// Configuration map
     config: HashMap<String, serde_json::Value>,
+    /// Connection tracker
+    connection_tracker: Arc<ConnectionTracker>,
 }
 
 impl DbmsProcedures {
@@ -51,6 +55,7 @@ impl DbmsProcedures {
         Self {
             current_user: None,
             config,
+            connection_tracker: Arc::new(ConnectionTracker::new()),
         }
     }
 
@@ -93,7 +98,18 @@ impl DbmsProcedures {
 
     /// Execute dbms.listConnections()
     pub fn list_connections(&self) -> DbmsProcedureResult {
-        // For now, return empty list (would need connection tracking)
+        let connections = self.connection_tracker.get_connections();
+        let mut rows = Vec::new();
+
+        for conn in connections {
+            rows.push(vec![
+                serde_json::Value::String(conn.connection_id),
+                serde_json::Value::String(conn.username.unwrap_or_else(|| "anonymous".to_string())),
+                serde_json::Value::String(conn.connected_at.to_string()),
+                serde_json::Value::String(conn.client_address),
+            ]);
+        }
+
         DbmsProcedureResult {
             columns: vec![
                 "connectionId".to_string(),
@@ -101,20 +117,29 @@ impl DbmsProcedures {
                 "connectedAt".to_string(),
                 "clientAddress".to_string(),
             ],
-            rows: vec![],
+            rows,
         }
     }
 
+    /// Get connection tracker (for external use)
+    pub fn get_connection_tracker(&self) -> Arc<ConnectionTracker> {
+        self.connection_tracker.clone()
+    }
+
     /// Execute dbms.killQuery(queryId)
-    /// Note: Query tracking would need to be implemented
-    pub fn kill_query(&self, _query_id: &str) -> Result<DbmsProcedureResult> {
-        // For now, just return success
-        // In a full implementation, this would cancel the running query
+    pub fn kill_query(&self, query_id: &str) -> Result<DbmsProcedureResult> {
+        let cancelled = self.connection_tracker.cancel_query(query_id);
+        let status = if cancelled {
+            "killed".to_string()
+        } else {
+            "not_found_or_already_completed".to_string()
+        };
+
         Ok(DbmsProcedureResult {
             columns: vec!["queryId".to_string(), "status".to_string()],
             rows: vec![vec![
-                serde_json::Value::String(_query_id.to_string()),
-                serde_json::Value::String("killed".to_string()),
+                serde_json::Value::String(query_id.to_string()),
+                serde_json::Value::String(status),
             ]],
         })
     }
@@ -219,17 +244,33 @@ mod tests {
     #[test]
     fn test_kill_query() {
         let procedures = DbmsProcedures::new();
-        let result = procedures.kill_query("query123").unwrap();
+        let tracker = procedures.get_connection_tracker();
+
+        // First register a connection and query
+        let conn_id = tracker
+            .register_connection(Some("testuser".to_string()), "127.0.0.1:12345".to_string());
+        let query_id = tracker.register_query(conn_id, "MATCH (n) RETURN n".to_string());
+
+        // Now kill the query
+        let result = procedures.kill_query(&query_id).unwrap();
 
         assert_eq!(result.columns.len(), 2);
         assert_eq!(result.rows.len(), 1);
         assert_eq!(
             result.rows[0][0],
-            serde_json::Value::String("query123".to_string())
+            serde_json::Value::String(query_id.clone())
         );
         assert_eq!(
             result.rows[0][1],
             serde_json::Value::String("killed".to_string())
+        );
+
+        // Test killing non-existent query
+        let result2 = procedures.kill_query("nonexistent").unwrap();
+        assert_eq!(result2.rows.len(), 1);
+        assert_eq!(
+            result2.rows[0][1],
+            serde_json::Value::String("not_found_or_already_completed".to_string())
         );
     }
 

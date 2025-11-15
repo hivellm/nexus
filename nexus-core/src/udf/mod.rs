@@ -9,7 +9,8 @@
 use crate::{Error, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+#[allow(unused_imports)] // Map is used in tests
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -232,5 +233,144 @@ mod tests {
             .execute(&[Value::Number(10.into()), Value::Number(20.into())])
             .unwrap();
         assert_eq!(result, Value::Number(30.into()));
+    }
+
+    #[test]
+    fn test_udf_unregister_nonexistent() {
+        let registry = UdfRegistry::new();
+        let result = registry.unregister("nonexistent");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_udf_get_nonexistent() {
+        let registry = UdfRegistry::new();
+        assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_udf_duplicate_registration() {
+        let registry = UdfRegistry::new();
+        let signature = UdfSignature {
+            name: "duplicate".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::Integer,
+            description: None,
+        };
+
+        let udf1 = BuiltinUdf::new(signature.clone(), |_args| Ok(Value::Number(1.into())));
+        registry.register(Arc::new(udf1)).unwrap();
+
+        let udf2 = BuiltinUdf::new(signature, |_args| Ok(Value::Number(2.into())));
+        let result = registry.register(Arc::new(udf2));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("already registered")
+        );
+    }
+
+    #[test]
+    fn test_udf_return_types() {
+        let registry = UdfRegistry::new();
+
+        // Test Float return type
+        let float_sig = UdfSignature {
+            name: "get_float".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::Float,
+            description: None,
+        };
+        let float_udf = BuiltinUdf::new(float_sig, |_args| {
+            Ok(Value::Number(serde_json::Number::from_f64(3.14).unwrap()))
+        });
+        registry.register(Arc::new(float_udf)).unwrap();
+        let result = registry.get("get_float").unwrap().execute(&[]).unwrap();
+        assert!(result.is_number());
+
+        // Test String return type
+        let string_sig = UdfSignature {
+            name: "get_string".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::String,
+            description: None,
+        };
+        let string_udf =
+            BuiltinUdf::new(string_sig, |_args| Ok(Value::String("hello".to_string())));
+        registry.register(Arc::new(string_udf)).unwrap();
+        let result = registry.get("get_string").unwrap().execute(&[]).unwrap();
+        assert_eq!(result, Value::String("hello".to_string()));
+
+        // Test Boolean return type
+        let bool_sig = UdfSignature {
+            name: "get_bool".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::Boolean,
+            description: None,
+        };
+        let bool_udf = BuiltinUdf::new(bool_sig, |_args| Ok(Value::Bool(true)));
+        registry.register(Arc::new(bool_udf)).unwrap();
+        let result = registry.get("get_bool").unwrap().execute(&[]).unwrap();
+        assert_eq!(result, Value::Bool(true));
+
+        // Test List return type
+        let list_sig = UdfSignature {
+            name: "get_list".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::List(Box::new(UdfReturnType::Integer)),
+            description: None,
+        };
+        let list_udf = BuiltinUdf::new(list_sig, |_args| {
+            Ok(Value::Array(vec![
+                Value::Number(1.into()),
+                Value::Number(2.into()),
+                Value::Number(3.into()),
+            ]))
+        });
+        registry.register(Arc::new(list_udf)).unwrap();
+        let result = registry.get("get_list").unwrap().execute(&[]).unwrap();
+        assert!(result.is_array());
+        assert_eq!(result.as_array().unwrap().len(), 3);
+
+        // Test Map return type
+        let map_sig = UdfSignature {
+            name: "get_map".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::Map,
+            description: None,
+        };
+        let map_udf = BuiltinUdf::new(map_sig, |_args| {
+            let mut map = Map::new();
+            map.insert("key".to_string(), Value::String("value".to_string()));
+            Ok(Value::Object(map))
+        });
+        registry.register(Arc::new(map_udf)).unwrap();
+        let result = registry.get("get_map").unwrap().execute(&[]).unwrap();
+        assert!(result.is_object());
+    }
+
+    #[test]
+    fn test_udf_list_empty() {
+        let registry = UdfRegistry::new();
+        assert_eq!(registry.list().len(), 0);
+    }
+
+    #[test]
+    fn test_udf_contains() {
+        let registry = UdfRegistry::new();
+        assert!(!registry.contains("nonexistent"));
+
+        let signature = UdfSignature {
+            name: "test".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::Integer,
+            description: None,
+        };
+        let udf = BuiltinUdf::new(signature, |_args| Ok(Value::Number(42.into())));
+        registry.register(Arc::new(udf)).unwrap();
+        assert!(registry.contains("test"));
     }
 }

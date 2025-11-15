@@ -351,18 +351,178 @@ impl GraphMcpTools {
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `graph_generate` | Generate graph from Vectorizer data | `graph_type`, `scope`, `filters`, `options` |
-| `graph_get` | Retrieve existing graph | `graph_id` |
-| `graph_analyze` | Analyze graph for patterns | `graph_id`, `analysis_type`, `parameters` |
-| `graph_search` | Search graphs by criteria | `query`, `filters`, `limit` |
-| `graph_visualize` | Get visualization data | `graph_id`, `format`, `layout` |
-| `graph_patterns` | Get detected patterns | `graph_id`, `pattern_types` |
-| `graph_statistics` | Get graph statistics | `graph_id` |
-| `graph_export` | Export graph data | `graph_id`, `format`, `options` |
+| `graph_correlation_generate` | Generate graph from source code | `graph_type`, `files`, `functions` (optional), `imports` (optional), `name` (optional) |
+| `graph_correlation_analyze` | Analyze graph for patterns and statistics | `graph`, `analysis_type` |
+| `graph_correlation_export` | Export graph in various formats | `graph`, `format` |
+| `graph_correlation_types` | List available graph types | None |
+
+#### MCP Tool Examples
+
+**1. Generate Call Graph**:
+```json
+{
+  "name": "graph_correlation_generate",
+  "arguments": {
+    "graph_type": "Call",
+    "files": {
+      "main.rs": "fn main() { helper(); }\nfn helper() {}",
+      "utils.rs": "pub fn util() {}"
+    },
+    "functions": {
+      "main.rs": ["main", "helper"],
+      "utils.rs": ["util"]
+    },
+    "name": "Project Call Graph"
+  }
+}
+```
+
+**2. Analyze Graph Statistics**:
+```json
+{
+  "name": "graph_correlation_analyze",
+  "arguments": {
+    "graph": {
+      "name": "Test Graph",
+      "graph_type": "Call",
+      "nodes": [
+        {"id": "node1", "node_type": "Function", "label": "func1", "metadata": {}, "position": null, "size": null, "color": null}
+      ],
+      "edges": [],
+      "metadata": {}
+    },
+    "analysis_type": "statistics"
+  }
+}
+```
+
+**3. Export Graph as GraphML**:
+```json
+{
+  "name": "graph_correlation_export",
+  "arguments": {
+    "graph": {
+      "name": "Export Test",
+      "graph_type": "Call",
+      "nodes": [{"id": "n1", "node_type": "Function", "label": "func", "metadata": {}, "position": null, "size": null, "color": null}],
+      "edges": [],
+      "metadata": {}
+    },
+    "format": "GraphML"
+  }
+}
+```
+
+**4. List Graph Types**:
+```json
+{
+  "name": "graph_correlation_types",
+  "arguments": {}
+}
+```
 
 ### UMICP (Universal Model Interoperability Protocol) Integration
 
-UMICP provides standardized access to graph correlation analysis:
+UMICP provides standardized access to graph correlation analysis through a unified protocol interface.
+
+#### Endpoint
+
+```
+POST /umicp/graph
+```
+
+#### Request Format
+
+```json
+{
+  "method": "graph.generate",
+  "params": {
+    "graph_type": "Call",
+    "files": {
+      "file.rs": "fn main() { helper(); }"
+    },
+    "functions": {},
+    "imports": {}
+  },
+  "context": {
+    "trace_id": "abc-123",
+    "caller": "llm-agent"
+  }
+}
+```
+
+#### Response Format
+
+```json
+{
+  "result": {
+    "graph_id": "graph_uuid",
+    "graph": { ... },
+    "node_count": 5,
+    "edge_count": 3
+  },
+  "error": null,
+  "context": null
+}
+```
+
+#### Available Methods
+
+**graph.generate** - Generate correlation graph from source code
+**graph.get** - Retrieve a stored graph by ID
+**graph.analyze** - Analyze graph patterns and statistics
+**graph.search** - Semantic search across graphs (placeholder)
+**graph.visualize** - Generate SVG visualization
+**graph.patterns** - Detect patterns in graphs
+**graph.export** - Export graph to various formats
+
+#### Error Handling
+
+Errors follow UMICP standard format:
+
+```json
+{
+  "result": null,
+  "error": {
+    "code": "GRAPH_NOT_FOUND",
+    "message": "Graph abc123 not found",
+    "data": null
+  }
+}
+```
+
+#### Example Usage
+
+```rust
+// Generate a call graph
+let request = json!({
+    "method": "graph.generate",
+    "params": {
+        "graph_type": "Call",
+        "files": {
+            "main.rs": "fn main() { helper(); } fn helper() {}"
+        }
+    }
+});
+
+let response = umicp_client.request(request).await?;
+let graph_id = response["result"]["graph_id"].as_str().unwrap();
+
+// Analyze the graph
+let analyze_request = json!({
+    "method": "graph.analyze",
+    "params": {
+        "graph_id": graph_id,
+        "analysis_type": "all"
+    }
+});
+
+let analysis = umicp_client.request(analyze_request).await?;
+```
+
+#### Implementation Details
+
+The UMICP handler (`GraphUmicpHandler`) provides:
 
 ```rust
 pub struct GraphUmicpHandler {

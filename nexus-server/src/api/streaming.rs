@@ -22,6 +22,7 @@ use serde_json::json;
 
 use crate::NexusServer;
 use nexus_core::executor::Query as CypherQuery;
+use std::time::Instant;
 
 /// StreamableHTTP service implementation for Nexus
 #[derive(Clone)]
@@ -385,23 +386,126 @@ pub fn get_nexus_mcp_tools() -> Vec<rmcp::model::Tool> {
     ]
 }
 
-/// Handle MCP tool calls for Nexus
+/// Handle MCP tool calls for Nexus with performance monitoring and caching
 pub async fn handle_nexus_mcp_tool(
     request: CallToolRequestParam,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
-    match request.name.as_ref() {
-        "create_node" => handle_create_node(request, server).await,
-        "create_relationship" => handle_create_relationship(request, server).await,
-        "execute_cypher" => handle_execute_cypher(request, server).await,
-        "knn_search" => handle_knn_search(request, server).await,
-        "get_stats" => handle_get_stats(request, server).await,
-        "graph_correlation_generate" => handle_graph_correlation_generate(request, server).await,
-        "graph_correlation_analyze" => handle_graph_correlation_analyze(request, server).await,
-        "graph_correlation_export" => handle_graph_correlation_export(request, server).await,
-        "graph_correlation_types" => handle_graph_correlation_types(request, server).await,
-        _ => Err(ErrorData::invalid_params("Unknown tool", None)),
+    let tool_name = request.name.clone();
+    let start_time = Instant::now();
+
+    // Check cache for idempotent tools
+    let cacheable_tools = [
+        "graph_correlation_generate",
+        "graph_correlation_analyze",
+        "graph_correlation_export",
+        "graph_correlation_types",
+    ];
+
+    let is_cacheable = cacheable_tools.iter().any(|&t| t == tool_name);
+    let mut cache_hit = false;
+
+    if is_cacheable {
+        if let Some(cache) = crate::api::mcp_performance::get_mcp_tool_cache() {
+            if let Some(args) = &request.arguments {
+                let args_value = serde_json::Value::Object(args.clone());
+                if let Some(cached_result) = cache.get(&tool_name, &args_value) {
+                    // Return cached result
+                    cache_hit = true;
+                    let execution_time = start_time.elapsed();
+
+                    // Record statistics
+                    if let Some(stats) = crate::api::mcp_performance::get_mcp_tool_stats() {
+                        let input_size = serde_json::to_string(args).ok().map(|s| s.len() as u64);
+                        let output_size = serde_json::to_string(&cached_result)
+                            .ok()
+                            .map(|s| s.len() as u64);
+                        stats.record_tool_call(
+                            &tool_name,
+                            execution_time,
+                            true,
+                            None,
+                            input_size,
+                            output_size,
+                            Some(true),
+                        );
+                    }
+
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        cached_result.to_string(),
+                    )]));
+                }
+            }
+        }
     }
+
+    // Execute tool handler
+    let result = match tool_name.as_ref() {
+        "create_node" => handle_create_node(request.clone(), server.clone()).await,
+        "create_relationship" => handle_create_relationship(request.clone(), server.clone()).await,
+        "execute_cypher" => handle_execute_cypher(request.clone(), server.clone()).await,
+        "knn_search" => handle_knn_search(request.clone(), server.clone()).await,
+        "get_stats" => handle_get_stats(request.clone(), server.clone()).await,
+        "graph_correlation_generate" => {
+            handle_graph_correlation_generate(request.clone(), server.clone()).await
+        }
+        "graph_correlation_analyze" => {
+            handle_graph_correlation_analyze(request.clone(), server.clone()).await
+        }
+        "graph_correlation_export" => {
+            handle_graph_correlation_export(request.clone(), server.clone()).await
+        }
+        "graph_correlation_types" => {
+            handle_graph_correlation_types(request.clone(), server.clone()).await
+        }
+        _ => Err(ErrorData::invalid_params("Unknown tool", None)),
+    };
+
+    let execution_time = start_time.elapsed();
+    let success = result.is_ok();
+    let error = result.as_ref().err().map(|e| format!("{:?}", e));
+
+    // Calculate sizes
+    let input_size = request
+        .arguments
+        .as_ref()
+        .and_then(|args| serde_json::to_string(args).ok())
+        .map(|s| s.len() as u64);
+    let output_size = result
+        .as_ref()
+        .ok()
+        .and_then(|r| serde_json::to_string(r).ok())
+        .map(|s| s.len() as u64);
+
+    // Record statistics
+    if let Some(stats) = crate::api::mcp_performance::get_mcp_tool_stats() {
+        stats.record_tool_call(
+            &tool_name,
+            execution_time,
+            success,
+            error,
+            input_size,
+            output_size,
+            if is_cacheable { Some(cache_hit) } else { None },
+        );
+    }
+
+    // Cache successful results for cacheable tools
+    if is_cacheable && success {
+        if let Some(cache) = crate::api::mcp_performance::get_mcp_tool_cache() {
+            if let Some(args) = &request.arguments {
+                let args_value = serde_json::Value::Object(args.clone());
+                if let Ok(result_value) = &result {
+                    // Serialize result to JSON for caching
+                    if let Ok(result_json) = serde_json::to_value(result_value) {
+                        cache.put(&tool_name, &args_value, result_json, None);
+                    }
+                }
+            }
+        }
+    }
+
+    result
 }
 
 /// Handle create node tool
@@ -593,6 +697,9 @@ async fn handle_execute_cypher(
                                             }
                                             nexus_core::executor::parser::Literal::Null => {
                                                 serde_json::Value::Null
+                                            }
+                                            nexus_core::executor::parser::Literal::Point(p) => {
+                                                p.to_json_value()
                                             }
                                         }
                                     }

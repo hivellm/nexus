@@ -28,8 +28,12 @@ MATCH (n:Person)-[r:KNOWS]->(m:Person)
 -- Undirected relationship
 MATCH (n:Person)-[r:KNOWS]-(m:Person)
 
--- Variable-length path (future V1)
--- MATCH (n:Person)-[:KNOWS*1..3]->(m:Person)
+-- Variable-length path ✅ IMPLEMENTED
+MATCH (n:Person)-[:KNOWS*1..3]->(m:Person)
+MATCH (n:Person)-[:KNOWS*5]->(m:Person)  -- Fixed length
+MATCH (n:Person)-[:KNOWS*]->(m:Person)   -- Unbounded
+MATCH (n:Person)-[:KNOWS+]->(m:Person)   -- One or more
+MATCH (n:Person)-[:KNOWS?]->(m:Person)   -- Zero or one
 
 -- Multiple patterns
 MATCH (a:Person)-[:KNOWS]->(b:Person)-[:WORKS_AT]->(c:Company)
@@ -78,13 +82,13 @@ WHERE n.age IN [18, 21, 65]
 WHERE n.email IS NOT NULL
 WHERE n.deleted_at IS NULL
 
--- String operations (V1)
--- WHERE n.name STARTS WITH 'Al'
--- WHERE n.email ENDS WITH '@example.com'
--- WHERE n.bio CONTAINS 'engineer'
+-- String operations ✅ IMPLEMENTED
+WHERE n.name STARTS WITH 'Al'
+WHERE n.email ENDS WITH '@example.com'
+WHERE n.bio CONTAINS 'engineer'
 
--- Pattern matching (V1)
--- WHERE n.email =~ '.*@example\.com'
+-- Pattern matching (regex) ✅ IMPLEMENTED
+WHERE n.email =~ '.*@example\.com'
 ```
 
 **Expression Syntax**:
@@ -129,9 +133,10 @@ RETURN DISTINCT n.city
 -- All properties
 RETURN n.*
 
--- Expressions (V1)
--- RETURN n.age + 1 AS next_age
--- RETURN n.price * 1.1 AS price_with_tax
+-- Expressions ✅ IMPLEMENTED
+RETURN n.age + 1 AS next_age
+RETURN n.price * 1.1 AS price_with_tax
+RETURN 1 + 1 AS result  -- Literal expressions
 ```
 
 **Return Syntax**:
@@ -206,8 +211,9 @@ RETURN AVG(n.age)
 -- Min/Max
 RETURN MIN(n.age), MAX(n.age)
 
--- Collect (V1)
--- RETURN COLLECT(n.name) AS names
+-- Collect ✅ IMPLEMENTED
+RETURN COLLECT(n.name) AS names
+RETURN COLLECT(DISTINCT n.city) AS cities
 
 -- Group by
 MATCH (p:Person)-[:LIKES]->(prod:Product)
@@ -286,7 +292,7 @@ text.search(
 )
 ```
 
-## Write Operations (V1)
+## Write Operations ✅ IMPLEMENTED
 
 ### CREATE
 
@@ -334,9 +340,9 @@ MATCH (a:Person)-[r:KNOWS]->(b:Person)
 WHERE a.name = 'Alice'
 DELETE r
 
--- Delete with DETACH (deletes relationships automatically, V1)
--- MATCH (n:Person {name: 'Alice'})
--- DETACH DELETE n
+-- Delete with DETACH (deletes relationships automatically) ✅ IMPLEMENTED
+MATCH (n:Person {name: 'Alice'})
+DETACH DELETE n
 ```
 
 ### REMOVE
@@ -398,39 +404,486 @@ ORDER BY purchases DESC
 LIMIT 10
 ```
 
-## Unsupported Features (Out of Scope)
+## Advanced Query Features ✅ IMPLEMENTED
 
-### Not in MVP or V1
+### MERGE Clause
 
 ```cypher
--- Subqueries (future V2)
--- MATCH (n:Person)
--- WHERE EXISTS {
---   MATCH (n)-[:KNOWS]->(:Person {city: 'NYC'})
+-- Match or create
+MERGE (n:Person {email: 'alice@example.com'})
+ON CREATE SET n.created = true
+ON MATCH SET n.last_seen = datetime()
+RETURN n
+```
+
+### WITH Clause
+
+```cypher
+-- Query piping
+MATCH (p:Person)
+WITH p, COUNT(*) AS connection_count
+WHERE connection_count > 10
+RETURN p
+
+-- Pre-aggregation
+MATCH (n:Person)
+WITH n.city AS city, COUNT(*) AS count
+WHERE count > 5
+RETURN city, count
+```
+
+### OPTIONAL MATCH
+
+```cypher
+-- Left outer join
+MATCH (n:Person)
+OPTIONAL MATCH (n)-[:KNOWS]->(friend)
+RETURN n, friend
+```
+
+### UNWIND Clause
+
+```cypher
+-- List expansion
+UNWIND [1, 2, 3] AS num
+RETURN num * 2 AS doubled
+
+-- With WHERE filtering
+UNWIND $names AS name
+WHERE name STARTS WITH 'A'
+RETURN name
+```
+
+### UNION / UNION ALL
+
+```cypher
+-- Union (distinct)
+MATCH (n:Person) RETURN n
+UNION
+MATCH (n:Company) RETURN n
+
+-- Union all (keep duplicates)
+MATCH (n:Person) RETURN n
+UNION ALL
+MATCH (n:Company) RETURN n
+```
+
+### FOREACH Clause
+
+```cypher
+-- Iterate and update
+MATCH (n:Person)
+FOREACH (x IN [1, 2, 3] |
+  CREATE (n)-[:TAG {value: x}]->(:Tag)
+)
+```
+
+### EXISTS Subqueries
+
+```cypher
+-- Existential pattern check
+MATCH (n:Person)
+WHERE EXISTS {
+  MATCH (n)-[:KNOWS]->(:Person {city: 'NYC'})
+}
+RETURN n
+```
+
+### CASE Expressions
+
+```cypher
+-- Simple CASE
+RETURN CASE n.status
+  WHEN 'active' THEN 'Online'
+  WHEN 'inactive' THEN 'Offline'
+  ELSE 'Unknown'
+END AS status_text
+
+-- Generic CASE
+RETURN CASE
+  WHEN n.age < 18 THEN 'Minor'
+  WHEN n.age < 65 THEN 'Adult'
+  ELSE 'Senior'
+END AS age_group
+```
+
+### Comprehensions
+
+```cypher
+-- List comprehension
+RETURN [x IN range(1,10) WHERE x % 2 = 0 | x * 2] AS evens
+
+-- Pattern comprehension
+RETURN [(n)-[:KNOWS]->(f) | f.name] AS friends
+
+-- Map projection
+RETURN n {.name, .age, friends: [(n)-[:KNOWS]->(f) | f.name]}
+```
+
+## Schema Management ✅ IMPLEMENTED
+
+### Index Management
+
+```cypher
+-- Create index
+CREATE INDEX ON :Person(email)
+
+-- Create index if not exists
+CREATE INDEX IF NOT EXISTS ON :Person(name)
+
+-- Create or replace index
+CREATE OR REPLACE INDEX ON :Person(age)
+
+-- Create spatial index
+CREATE SPATIAL INDEX ON :Location(coords)
+
+-- Drop index
+DROP INDEX ON :Person(email)
+
+-- Drop index if exists
+DROP INDEX IF EXISTS ON :Person(name)
+```
+
+### Constraint Management
+
+```cypher
+-- Unique constraint
+CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE
+
+-- Exists constraint
+CREATE CONSTRAINT ON (n:Person) ASSERT EXISTS(n.email)
+
+-- Drop constraint
+DROP CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE
+
+-- Drop constraint if exists
+DROP CONSTRAINT IF EXISTS ON (n:Person) ASSERT EXISTS(n.email)
+```
+
+### Database Management
+
+```cypher
+-- Show databases
+SHOW DATABASES
+
+-- Create database
+CREATE DATABASE mydb
+
+-- Create database if not exists
+CREATE DATABASE IF NOT EXISTS mydb
+
+-- Use database
+USE DATABASE mydb
+
+-- Drop database
+DROP DATABASE mydb
+
+-- Drop database if exists
+DROP DATABASE IF EXISTS mydb
+```
+
+### Function Management
+
+```cypher
+-- Create function signature
+CREATE FUNCTION multiply(a: Integer, b: Integer) RETURNS Integer AS 'Multiply two integers'
+
+-- Create function if not exists
+CREATE FUNCTION IF NOT EXISTS add(a: Integer, b: Integer) RETURNS Integer
+
+-- Show functions
+SHOW FUNCTIONS
+
+-- Drop function
+DROP FUNCTION multiply
+
+-- Drop function if exists
+DROP FUNCTION IF EXISTS multiply
+```
+
+## Transaction Commands ✅ IMPLEMENTED
+
+```cypher
+-- Begin transaction
+BEGIN
+
+-- Commit transaction
+COMMIT
+
+-- Rollback transaction
+ROLLBACK
+```
+
+## Query Analysis ✅ IMPLEMENTED
+
+### EXPLAIN
+
+```cypher
+-- Query plan analysis
+EXPLAIN MATCH (n:Person) RETURN n
+```
+
+### PROFILE
+
+```cypher
+-- Execution profiling
+PROFILE MATCH (n:Person) RETURN n
+```
+
+### Query Hints
+
+```cypher
+-- Force index usage
+MATCH (n:Person)
+USING INDEX n:Person(email)
+WHERE n.email = 'alice@example.com'
+RETURN n
+
+-- Force label scan
+MATCH (n:Person)
+USING SCAN n:Person
+WHERE n.age > 25
+RETURN n
+
+-- Force join strategy
+MATCH (a)-[r]->(b)
+USING JOIN ON r
+RETURN a, b
+```
+
+## Data Import/Export ✅ IMPLEMENTED
+
+### LOAD CSV
+
+```cypher
+-- Load CSV file
+LOAD CSV FROM 'file:///path/to/data.csv' AS row
+CREATE (n:Person {name: row[0], age: toInteger(row[1])})
+
+-- With headers
+LOAD CSV FROM 'file:///path/to/data.csv' WITH HEADERS AS row
+CREATE (n:Person {name: row.name, age: toInteger(row.age)})
+```
+
+## Advanced Features ✅ IMPLEMENTED
+
+### Subqueries
+
+```cypher
+-- CALL subquery
+CALL {
+  MATCH (n:Person) RETURN n
+}
+
+-- CALL subquery in transactions
+CALL {
+  MATCH (n:Person) DELETE n
+} IN TRANSACTIONS OF 1000 ROWS
+```
+
+### Named Paths
+
+```cypher
+-- Path variable assignment
+MATCH p = (a:Person)-[*]-(b:Person)
+RETURN p, nodes(p), relationships(p), length(p)
+```
+
+### Shortest Path Functions
+
+```cypher
+-- Shortest path
+RETURN shortestPath((a:Person {name: 'Alice'})-[*]-(b:Person {name: 'Bob'}))
+
+-- All shortest paths
+RETURN allShortestPaths((a:Person)-[*]-(b:Person))
+```
+
+## Built-in Functions ✅ IMPLEMENTED
+
+### String Functions
+
+```cypher
+-- Basic string operations
+RETURN toLower('HELLO') AS lower
+RETURN toUpper('hello') AS upper
+RETURN substring('Hello World', 0, 5) AS substr
+RETURN trim('  hello  ') AS trimmed
+RETURN ltrim('  hello') AS left_trimmed
+RETURN rtrim('hello  ') AS right_trimmed
+RETURN replace('hello world', 'world', 'nexus') AS replaced
+RETURN split('a,b,c', ',') AS parts
+RETURN length('hello') AS len
+```
+
+### Math Functions
+
+```cypher
+-- Basic math
+RETURN abs(-5) AS absolute
+RETURN ceil(4.3) AS ceiling
+RETURN floor(4.7) AS floor
+RETURN round(4.5) AS rounded
+RETURN sqrt(16) AS square_root
+RETURN pow(2, 3) AS power
+
+-- Trigonometric
+RETURN sin(0) AS sine
+RETURN cos(0) AS cosine
+RETURN tan(0) AS tangent
+```
+
+### Type Conversion
+
+```cypher
+-- Type conversions
+RETURN toInteger('123') AS int_val
+RETURN toFloat('3.14') AS float_val
+RETURN toString(123) AS str_val
+RETURN toBoolean('true') AS bool_val
+RETURN toDate('2024-01-01') AS date_val
+```
+
+### Temporal Functions
+
+```cypher
+-- Date/time functions
+RETURN date() AS today
+RETURN datetime() AS now
+RETURN time() AS current_time
+RETURN timestamp() AS unix_timestamp
+RETURN duration({days: 7}) AS week
+```
+
+### List Functions
+
+```cypher
+-- List operations
+RETURN size([1, 2, 3]) AS list_size
+RETURN head([1, 2, 3]) AS first
+RETURN tail([1, 2, 3]) AS rest
+RETURN last([1, 2, 3]) AS last_item
+RETURN range(1, 10) AS numbers
+RETURN reverse([1, 2, 3]) AS reversed
+RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS sum
+RETURN [x IN [1, 2, 3] | x * 2] AS doubled
+```
+
+### Path Functions
+
+```cypher
+-- Path operations
+MATCH p = (a)-[*]-(b)
+RETURN nodes(p) AS path_nodes
+RETURN relationships(p) AS path_rels
+RETURN length(p) AS path_length
+```
+
+### Predicate Functions
+
+```cypher
+-- Predicates
+RETURN all(x IN [1, 2, 3] WHERE x > 0) AS all_positive
+RETURN any(x IN [1, 2, 3] WHERE x > 2) AS any_greater
+RETURN none(x IN [1, 2, 3] WHERE x < 0) AS none_negative
+RETURN single(x IN [1, 2, 3] WHERE x = 2) AS single_match
+```
+
+### Additional Aggregations
+
+```cypher
+-- Advanced aggregations
+RETURN percentileDisc(n.age, 0.5) AS median
+RETURN percentileCont(n.age, 0.5) AS median_cont
+RETURN stDev(n.age) AS std_dev
+RETURN stDevP(n.age) AS std_dev_pop
+```
+
+## Geospatial Features ✅ IMPLEMENTED
+
+### Point Data Type
+
+```cypher
+-- Create point
+RETURN point({x: 1, y: 2}) AS p
+
+-- 3D point
+RETURN point({x: 1, y: 2, z: 3}) AS p3d
+
+-- WGS84 point
+RETURN point({x: -122.4194, y: 37.7749, crs: 'wgs-84'}) AS location
+```
+
+### Distance Functions
+
+```cypher
+-- Calculate distance
+MATCH (l:Location)
+RETURN distance(l.coords, point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})) AS dist
+ORDER BY dist LIMIT 5
+```
+
+### Geospatial Procedures
+
+```cypher
+-- Within bounding box
+CALL spatial.withinBBox('Location', 'coords', point({x: -122.5, y: 37.7}), point({x: -122.3, y: 37.8}))
+YIELD node
+RETURN node
+
+-- Within distance
+CALL spatial.withinDistance('Location', 'coords', point({x: -122.4194, y: 37.7749, crs: 'wgs-84'}), 1000.0)
+YIELD node
+RETURN node
+```
+
+## Graph Algorithms ✅ IMPLEMENTED
+
+### Pathfinding
+
+```cypher
+-- Shortest path
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+RETURN shortestPath((a)-[*]-(b)) AS path
+
+-- All shortest paths
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+RETURN allShortestPaths((a)-[*]-(b)) AS paths
+```
+
+### Centrality
+
+```cypher
+-- PageRank
+CALL algorithms.pageRank('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+ORDER BY score DESC LIMIT 10
+```
+
+### Community Detection
+
+```cypher
+-- Label propagation
+CALL algorithms.labelPropagation('Person', 'KNOWS')
+YIELD node, community
+RETURN community, collect(node.name) AS members
+```
+
+## Unsupported Features (Out of Scope)
+
+### Not Currently Implemented
+
+```cypher
+-- Complex subqueries with multiple statements (future)
+-- CALL {
+--   MATCH (n:Person) RETURN n
+--   UNION
+--   MATCH (n:Company) RETURN n
 -- }
--- RETURN n
 
--- WITH clause (future V1+)
--- MATCH (p:Person)
--- WITH p, COUNT(*) AS connection_count
--- WHERE connection_count > 10
--- RETURN p
-
--- UNION (future V2)
--- MATCH (n:Person) RETURN n
--- UNION
--- MATCH (n:Company) RETURN n
-
--- Optional MATCH (future V1+)
--- MATCH (n:Person)
--- OPTIONAL MATCH (n)-[:KNOWS]->(friend)
--- RETURN n, friend
-
--- Map projections (future V1+)
--- RETURN n {.name, .age, friends: [(n)-[:KNOWS]->(f) | f.name]}
-
--- List comprehensions (future V2)
--- RETURN [x IN range(1,10) WHERE x % 2 = 0 | x * 2]
+-- Full-text search syntax (use procedures instead)
+-- MATCH (n:Person) WHERE n.bio CONTAINS TEXT 'engineer'
 ```
 
 ## Query Optimization Hints

@@ -97,7 +97,7 @@ impl DatabaseManager {
     }
 
     /// Drop a database (delete all data)
-    pub fn drop_database(&self, name: &str) -> Result<()> {
+    pub fn drop_database(&self, name: &str, if_exists: bool) -> Result<()> {
         // Cannot drop default database
         if name == self.default_db {
             return Err(Error::InvalidInput(
@@ -109,10 +109,15 @@ impl DatabaseManager {
 
         // Check if database exists
         if !dbs.contains_key(name) {
-            return Err(Error::InvalidInput(format!(
-                "Database '{}' does not exist",
-                name
-            )));
+            if if_exists {
+                // Database doesn't exist and IF EXISTS was specified, succeed silently
+                return Ok(());
+            } else {
+                return Err(Error::InvalidInput(format!(
+                    "Database '{}' does not exist",
+                    name
+                )));
+            }
         }
 
         // Remove from map and drop the Arc to release all locks
@@ -309,7 +314,7 @@ mod tests {
         assert!(manager.exists("test_db"));
 
         // Drop database (may leave directory on Windows due to file locks)
-        manager.drop_database("test_db").unwrap();
+        manager.drop_database("test_db", false).unwrap();
 
         // Verify database removed from manager
         assert!(!manager.exists("test_db"));
@@ -324,7 +329,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
 
-        let result = manager.drop_database("neo4j");
+        let result = manager.drop_database("neo4j", false);
         assert!(result.is_err());
     }
 
@@ -475,7 +480,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
 
-        let result = manager.drop_database("nonexistent");
+        let result = manager.drop_database("nonexistent", false);
         assert!(result.is_err());
     }
 

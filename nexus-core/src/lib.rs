@@ -46,6 +46,7 @@ pub mod concurrent_access;
 pub mod database;
 pub mod error;
 pub mod executor;
+pub mod geospatial;
 pub mod graph; // Unified graph module with submodules
 pub mod index;
 pub mod loader;
@@ -224,7 +225,8 @@ impl Engine {
     }
 
     /// Execute MATCH ... DELETE query
-    fn execute_match_delete_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
+    /// Returns the number of nodes deleted
+    fn execute_match_delete_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<u64> {
         // First, execute the MATCH part to get the matching nodes
         let mut match_query_clauses = Vec::new();
         let mut delete_clause_opt = None;
@@ -331,6 +333,9 @@ impl Engine {
 
         let match_results = self.executor.execute(&query_obj)?;
 
+        // Count deleted nodes
+        let mut deleted_count = 0u64;
+
         // For each row in MATCH result, delete the nodes
         if let Some(delete_clause) = delete_clause_opt {
             let detach = delete_clause.detach;
@@ -357,6 +362,7 @@ impl Engine {
                                         }
                                         self.delete_node(node_id)?;
                                     }
+                                    deleted_count += 1;
                                 }
                             }
                         }
@@ -365,7 +371,7 @@ impl Engine {
             }
         }
 
-        Ok(())
+        Ok(deleted_count)
     }
 
     /// Execute MATCH ... CREATE query
@@ -861,6 +867,7 @@ impl Engine {
                 }
                 executor::parser::Literal::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
                 executor::parser::Literal::Null => Ok(serde_json::Value::Null),
+                executor::parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
             _ => Err(Error::CypherExecution(
                 "Complex expressions not supported in CREATE properties".to_string(),
@@ -928,7 +935,7 @@ impl Engine {
         }
 
         // Check for administrative commands that need special handling
-        // These commands (CREATE/DROP DATABASE, SHOW DATABASES) should be handled at server level
+        // These commands (CREATE/DROP DATABASE, SHOW DATABASES, USE DATABASE) should be handled at server level
         // as Engine doesn't have access to DatabaseManager
         let has_admin_db_cmd = ast.clauses.iter().any(|c| {
             matches!(
@@ -936,12 +943,13 @@ impl Engine {
                 executor::parser::Clause::CreateDatabase(_)
                     | executor::parser::Clause::DropDatabase(_)
                     | executor::parser::Clause::ShowDatabases
+                    | executor::parser::Clause::UseDatabase(_)
             )
         });
 
         if has_admin_db_cmd {
             return Err(Error::CypherExecution(
-                "Database management commands (CREATE/DROP DATABASE, SHOW DATABASES) must be executed at server level".to_string(),
+                "Database management commands (CREATE/DROP DATABASE, SHOW DATABASES, USE DATABASE) must be executed at server level".to_string(),
             ));
         }
 
@@ -989,6 +997,24 @@ impl Engine {
 
         if has_create_constraint || has_drop_constraint {
             return self.execute_constraint_commands(&ast);
+        }
+
+        // Check for function management commands
+        let has_show_functions = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::ShowFunctions));
+        let has_create_function = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CreateFunction(_)));
+        let has_drop_function = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::DropFunction(_)));
+
+        if has_show_functions || has_create_function || has_drop_function {
+            return self.execute_function_commands(&ast);
         }
 
         // Check for user management commands (should be handled at server level)
@@ -1040,9 +1066,9 @@ impl Engine {
 
         // Handle DELETE (with or without MATCH)
         if has_delete {
-            if has_match {
+            let deleted_count = if has_match {
                 // MATCH ... DELETE: execute MATCH first, then DELETE with results
-                self.execute_match_delete_query(&ast)?;
+                self.execute_match_delete_query(&ast)?
             } else {
                 // Standalone DELETE won't work without MATCH
                 // This would be: DELETE n (without MATCH)
@@ -1050,14 +1076,62 @@ impl Engine {
                 return Err(Error::CypherSyntax(
                     "DELETE requires MATCH clause".to_string(),
                 ));
-            }
+            };
             self.refresh_executor()?;
 
-            // Return empty result for DELETE queries
-            return Ok(executor::ResultSet {
-                columns: vec![],
-                rows: vec![],
+            // Check if there's a RETURN clause after DELETE
+            let return_clause_opt = ast.clauses.iter().find_map(|c| {
+                if let executor::parser::Clause::Return(rc) = c {
+                    Some(rc)
+                } else {
+                    None
+                }
             });
+
+            if let Some(return_clause) = return_clause_opt {
+                // Check if RETURN contains count aggregation
+                let mut is_count_only = false;
+                let mut count_alias = "count".to_string();
+
+                if return_clause.items.len() == 1 {
+                    let executor::parser::ReturnItem { expression, alias } =
+                        &return_clause.items[0];
+                    if let executor::parser::Expression::FunctionCall { name, args: _ } = expression
+                    {
+                        if name.to_lowercase() == "count" {
+                            is_count_only = true;
+                            count_alias = alias.clone().unwrap_or_else(|| "count".to_string());
+                        }
+                    }
+                }
+
+                if is_count_only {
+                    // Return count of deleted nodes
+                    return Ok(executor::ResultSet {
+                        columns: vec![count_alias],
+                        rows: vec![executor::Row {
+                            values: vec![serde_json::Value::Number(deleted_count.into())],
+                        }],
+                    });
+                } else {
+                    // If there's a RETURN clause with other expressions, let the executor handle it
+                    // The executor will process the RETURN, but since nodes are deleted,
+                    // it will likely return empty results or handle it appropriately
+                    let query_obj = executor::Query {
+                        cypher: self.query_to_string(&ast),
+                        params: ast.params.clone(),
+                    };
+                    return self.executor.execute(&query_obj);
+                }
+            } else {
+                // No RETURN clause - return count of deleted nodes
+                return Ok(executor::ResultSet {
+                    columns: vec!["count".to_string()],
+                    rows: vec![executor::Row {
+                        values: vec![serde_json::Value::Number(deleted_count.into())],
+                    }],
+                });
+            }
         }
 
         // Handle MERGE / SET / REMOVE / FOREACH write queries before falling back to read executor
@@ -1555,6 +1629,9 @@ impl Engine {
         &mut self,
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
+        let mut result_rows = Vec::new();
+        let columns = vec!["index".to_string(), "message".to_string()];
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::CreateIndex(create_index) => {
@@ -1579,6 +1656,17 @@ impl Engine {
                     // Handle IF NOT EXISTS
                     if !create_index.or_replace && create_index.if_not_exists && index_exists {
                         // Index already exists and IF NOT EXISTS was specified, skip
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(format!(
+                                    ":{}({})",
+                                    create_index.label, create_index.property
+                                )),
+                                serde_json::Value::String(
+                                    "Index already exists, skipped".to_string(),
+                                ),
+                            ],
+                        });
                         continue;
                     }
 
@@ -1590,13 +1678,61 @@ impl Engine {
                         )));
                     }
 
-                    // Create the index structure
-                    self.indexes
-                        .property_index
-                        .create_index(label_id, property_key_id)?;
+                    // Check if this is a spatial index
+                    let is_spatial = create_index.index_type.as_deref() == Some("spatial");
 
-                    // Populate index with existing nodes that have this label and property
-                    self.populate_index(label_id, property_key_id)?;
+                    if is_spatial {
+                        // Spatial indexes are handled by the executor
+                        // Create the spatial index through executor
+                        self.executor.execute_create_index(
+                            &create_index.label,
+                            &create_index.property,
+                            Some("spatial"),
+                            create_index.if_not_exists,
+                            create_index.or_replace,
+                        )?;
+
+                        // Return success message
+                        let index_name =
+                            format!(":{}({})", create_index.label, create_index.property);
+
+                        // Check if index was replaced (we need to check executor's spatial_indexes)
+                        // For now, assume it was created unless or_replace was used
+                        let message = if create_index.or_replace {
+                            format!("Spatial index {} replaced", index_name)
+                        } else {
+                            format!("Spatial index {} created", index_name)
+                        };
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(index_name),
+                                serde_json::Value::String(message),
+                            ],
+                        });
+                    } else {
+                        // Create the property index structure
+                        self.indexes
+                            .property_index
+                            .create_index(label_id, property_key_id)?;
+
+                        // Populate index with existing nodes that have this label and property
+                        self.populate_index(label_id, property_key_id)?;
+
+                        // Return success message
+                        let index_name =
+                            format!(":{}({})", create_index.label, create_index.property);
+                        let message = if create_index.or_replace && index_exists {
+                            format!("Index {} replaced", index_name)
+                        } else {
+                            format!("Index {} created", index_name)
+                        };
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(index_name),
+                                serde_json::Value::String(message),
+                            ],
+                        });
+                    }
                 }
                 executor::parser::Clause::DropIndex(drop_index) => {
                     // Get label and property IDs
@@ -1639,16 +1775,35 @@ impl Engine {
                     self.indexes
                         .property_index
                         .drop_index(label_id, property_key_id)?;
+
+                    // Return success message
+                    let index_name = format!(":{}({})", drop_index.label, drop_index.property);
+                    let index_name_clone = index_name.clone();
+                    result_rows.push(executor::Row {
+                        values: vec![
+                            serde_json::Value::String(index_name),
+                            serde_json::Value::String(format!(
+                                "Index {} dropped",
+                                index_name_clone
+                            )),
+                        ],
+                    });
                 }
                 _ => {}
             }
         }
 
+        // If no rows were added (all commands were skipped), return empty result
+        if result_rows.is_empty() {
+            return Ok(executor::ResultSet {
+                columns: vec![],
+                rows: vec![],
+            });
+        }
+
         Ok(executor::ResultSet {
-            columns: vec!["status".to_string()],
-            rows: vec![executor::Row {
-                values: vec![serde_json::Value::String("ok".to_string())],
-            }],
+            columns,
+            rows: result_rows,
         })
     }
 
@@ -1715,6 +1870,8 @@ impl Engine {
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
         let mut constraint_manager = self.catalog.constraint_manager().write();
+        let mut result_rows = Vec::new();
+        let columns = vec!["constraint".to_string(), "message".to_string()];
 
         for clause in &ast.clauses {
             match clause {
@@ -1737,6 +1894,34 @@ impl Engine {
                         }
                     };
 
+                    // Check if constraint already exists
+                    let constraint_exists = constraint_manager
+                        .has_constraint(constraint_type, label_id, property_key_id)
+                        .unwrap_or(false);
+
+                    // Handle IF NOT EXISTS
+                    if create_constraint.if_not_exists && constraint_exists {
+                        // Constraint already exists and IF NOT EXISTS was specified, skip
+                        let constraint_name = format!(
+                            ":{}({}) IS {}",
+                            create_constraint.label,
+                            create_constraint.property,
+                            match constraint_type {
+                                catalog::constraints::ConstraintType::Unique => "UNIQUE",
+                                catalog::constraints::ConstraintType::Exists => "EXISTS",
+                            }
+                        );
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(constraint_name.clone()),
+                                serde_json::Value::String(
+                                    "Constraint already exists, skipped".to_string(),
+                                ),
+                            ],
+                        });
+                        continue;
+                    }
+
                     // Create constraint
                     match constraint_manager.create_constraint(
                         constraint_type,
@@ -1745,6 +1930,24 @@ impl Engine {
                     ) {
                         Ok(_) => {
                             // Constraint created successfully
+                            let constraint_name = format!(
+                                ":{}({}) IS {}",
+                                create_constraint.label,
+                                create_constraint.property,
+                                match constraint_type {
+                                    catalog::constraints::ConstraintType::Unique => "UNIQUE",
+                                    catalog::constraints::ConstraintType::Exists => "EXISTS",
+                                }
+                            );
+                            result_rows.push(executor::Row {
+                                values: vec![
+                                    serde_json::Value::String(constraint_name.clone()),
+                                    serde_json::Value::String(format!(
+                                        "Constraint {} created",
+                                        constraint_name
+                                    )),
+                                ],
+                            });
                         }
                         Err(Error::CypherExecution(_)) if create_constraint.if_not_exists => {
                             // Constraint already exists and IF NOT EXISTS was specified, skip
@@ -1792,6 +1995,24 @@ impl Engine {
                     ) {
                         Ok(true) => {
                             // Constraint dropped successfully
+                            let constraint_name = format!(
+                                ":{}({}) IS {}",
+                                drop_constraint.label,
+                                drop_constraint.property,
+                                match constraint_type {
+                                    catalog::constraints::ConstraintType::Unique => "UNIQUE",
+                                    catalog::constraints::ConstraintType::Exists => "EXISTS",
+                                }
+                            );
+                            result_rows.push(executor::Row {
+                                values: vec![
+                                    serde_json::Value::String(constraint_name.clone()),
+                                    serde_json::Value::String(format!(
+                                        "Constraint {} dropped",
+                                        constraint_name
+                                    )),
+                                ],
+                            });
                         }
                         Ok(false) if drop_constraint.if_exists => {
                             // Constraint doesn't exist and IF EXISTS was specified, skip
@@ -1810,11 +2031,195 @@ impl Engine {
             }
         }
 
+        // If no rows were added (all commands were skipped), return empty result
+        if result_rows.is_empty() {
+            return Ok(executor::ResultSet {
+                columns: vec![],
+                rows: vec![],
+            });
+        }
+
         Ok(executor::ResultSet {
-            columns: vec!["status".to_string()],
-            rows: vec![executor::Row {
-                values: vec![serde_json::Value::String("ok".to_string())],
-            }],
+            columns,
+            rows: result_rows,
+        })
+    }
+
+    /// Execute function management commands (SHOW FUNCTIONS, CREATE FUNCTION, DROP FUNCTION)
+    fn execute_function_commands(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
+        let mut result_rows = Vec::new();
+        let columns = vec!["function".to_string(), "message".to_string()];
+
+        for clause in &ast.clauses {
+            match clause {
+                executor::parser::Clause::ShowFunctions => {
+                    // List all registered UDFs
+                    let udf_names = self.executor.udf_registry().list();
+
+                    // Also get UDFs from catalog (signatures only)
+                    let catalog_udfs = self.catalog.list_udfs().unwrap_or_default();
+
+                    // Combine and deduplicate
+                    let mut all_functions: std::collections::HashSet<String> =
+                        udf_names.into_iter().collect();
+                    for name in catalog_udfs {
+                        all_functions.insert(name);
+                    }
+
+                    // Sort for consistent output
+                    let mut sorted_functions: Vec<String> = all_functions.into_iter().collect();
+                    sorted_functions.sort();
+
+                    for func_name in sorted_functions {
+                        // Try to get signature from catalog
+                        let description = if let Ok(Some(sig)) = self.catalog.get_udf(&func_name) {
+                            sig.description
+                                .unwrap_or_else(|| format!("Function {} registered", func_name))
+                        } else {
+                            format!("Function {} registered", func_name)
+                        };
+
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(func_name),
+                                serde_json::Value::String(description),
+                            ],
+                        });
+                    }
+
+                    // If no functions, return empty result
+                    if result_rows.is_empty() {
+                        return Ok(executor::ResultSet {
+                            columns: vec!["function".to_string()],
+                            rows: vec![],
+                        });
+                    }
+                }
+                executor::parser::Clause::CreateFunction(create_function) => {
+                    // Check if function already exists
+                    let function_exists =
+                        self.executor.udf_registry().contains(&create_function.name)
+                            || self
+                                .catalog
+                                .get_udf(&create_function.name)
+                                .unwrap_or(None)
+                                .is_some();
+
+                    if function_exists {
+                        if create_function.if_not_exists {
+                            // Function already exists and IF NOT EXISTS was specified, skip
+                            result_rows.push(executor::Row {
+                                values: vec![
+                                    serde_json::Value::String(create_function.name.clone()),
+                                    serde_json::Value::String(
+                                        "Function already exists, skipped".to_string(),
+                                    ),
+                                ],
+                            });
+                            continue;
+                        } else {
+                            return Err(Error::CypherExecution(format!(
+                                "Function '{}' already exists",
+                                create_function.name
+                            )));
+                        }
+                    }
+
+                    // Convert parser UdfParameter to udf::UdfParameter
+                    let udf_parameters: Vec<crate::udf::UdfParameter> = create_function
+                        .parameters
+                        .iter()
+                        .map(|p| crate::udf::UdfParameter {
+                            name: p.name.clone(),
+                            param_type: p.param_type.clone(),
+                            required: p.required,
+                            default: p.default.clone(),
+                        })
+                        .collect();
+
+                    // Create UDF signature
+                    let signature = crate::udf::UdfSignature {
+                        name: create_function.name.clone(),
+                        parameters: udf_parameters,
+                        return_type: create_function.return_type.clone(),
+                        description: create_function.description.clone(),
+                    };
+
+                    // Store signature in catalog
+                    self.catalog.store_udf(&signature)?;
+
+                    // Note: The actual function implementation must be registered via API/plugin system
+                    // CREATE FUNCTION only stores the signature
+                    result_rows.push(executor::Row {
+                        values: vec![
+                            serde_json::Value::String(create_function.name.clone()),
+                            serde_json::Value::String(format!(
+                                "Function signature '{}' stored. Implementation must be registered via API/plugin system.",
+                                create_function.name
+                            )),
+                        ],
+                    });
+                }
+                executor::parser::Clause::DropFunction(drop_function) => {
+                    // Check if function exists
+                    let function_exists =
+                        self.executor.udf_registry().contains(&drop_function.name)
+                            || self
+                                .catalog
+                                .get_udf(&drop_function.name)
+                                .unwrap_or(None)
+                                .is_some();
+
+                    if !function_exists {
+                        if drop_function.if_exists {
+                            // Function doesn't exist and IF EXISTS was specified, skip
+                            continue;
+                        } else {
+                            return Err(Error::CypherExecution(format!(
+                                "Function '{}' does not exist",
+                                drop_function.name
+                            )));
+                        }
+                    }
+
+                    // Remove from UDF registry if registered
+                    if self.executor.udf_registry().contains(&drop_function.name) {
+                        self.executor
+                            .udf_registry_mut()
+                            .unregister(&drop_function.name)?;
+                    }
+
+                    // Remove from catalog
+                    self.catalog.remove_udf(&drop_function.name)?;
+
+                    result_rows.push(executor::Row {
+                        values: vec![
+                            serde_json::Value::String(drop_function.name.clone()),
+                            serde_json::Value::String(format!(
+                                "Function '{}' dropped",
+                                drop_function.name
+                            )),
+                        ],
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        // If no rows were added (all commands were skipped), return empty result
+        if result_rows.is_empty() {
+            return Ok(executor::ResultSet {
+                columns: vec![],
+                rows: vec![],
+            });
+        }
+
+        Ok(executor::ResultSet {
+            columns,
+            rows: result_rows,
         })
     }
 
@@ -2176,12 +2581,13 @@ impl Engine {
                 executor::parser::Clause::CreateDatabase(_)
                     | executor::parser::Clause::DropDatabase(_)
                     | executor::parser::Clause::ShowDatabases
+                    | executor::parser::Clause::UseDatabase(_)
             )
         });
 
         if has_admin_db_cmd {
             return Err(Error::CypherExecution(
-                "Database management commands (CREATE/DROP DATABASE, SHOW DATABASES) must be executed at server level".to_string(),
+                "Database management commands (CREATE/DROP DATABASE, SHOW DATABASES, USE DATABASE) must be executed at server level".to_string(),
             ));
         }
 
@@ -2229,6 +2635,24 @@ impl Engine {
 
         if has_create_constraint || has_drop_constraint {
             return self.execute_constraint_commands(ast);
+        }
+
+        // Check for function management commands
+        let has_show_functions = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::ShowFunctions));
+        let has_create_function = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::CreateFunction(_)));
+        let has_drop_function = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::DropFunction(_)));
+
+        if has_show_functions || has_create_function || has_drop_function {
+            return self.execute_function_commands(ast);
         }
 
         // Check for LOAD CSV commands
@@ -2300,22 +2724,70 @@ impl Engine {
 
         // Handle DELETE (with or without MATCH)
         if has_delete {
-            if has_match {
+            let deleted_count = if has_match {
                 // MATCH ... DELETE: execute MATCH first, then DELETE with results
-                self.execute_match_delete_query(ast)?;
+                self.execute_match_delete_query(ast)?
             } else {
                 // Standalone DELETE won't work without MATCH
                 return Err(Error::CypherSyntax(
                     "DELETE requires MATCH clause".to_string(),
                 ));
-            }
+            };
             self.refresh_executor()?;
 
-            // Return empty result for DELETE queries
-            return Ok(executor::ResultSet {
-                columns: vec![],
-                rows: vec![],
+            // Check if there's a RETURN clause after DELETE
+            let return_clause_opt = ast.clauses.iter().find_map(|c| {
+                if let executor::parser::Clause::Return(rc) = c {
+                    Some(rc)
+                } else {
+                    None
+                }
             });
+
+            if let Some(return_clause) = return_clause_opt {
+                // Check if RETURN contains count aggregation
+                let mut is_count_only = false;
+                let mut count_alias = "count".to_string();
+
+                if return_clause.items.len() == 1 {
+                    let executor::parser::ReturnItem { expression, alias } =
+                        &return_clause.items[0];
+                    if let executor::parser::Expression::FunctionCall { name, args: _ } = expression
+                    {
+                        if name.to_lowercase() == "count" {
+                            is_count_only = true;
+                            count_alias = alias.clone().unwrap_or_else(|| "count".to_string());
+                        }
+                    }
+                }
+
+                if is_count_only {
+                    // Return count of deleted nodes
+                    return Ok(executor::ResultSet {
+                        columns: vec![count_alias],
+                        rows: vec![executor::Row {
+                            values: vec![serde_json::Value::Number(deleted_count.into())],
+                        }],
+                    });
+                } else {
+                    // If there's a RETURN clause with other expressions, let the executor handle it
+                    // The executor will process the RETURN, but since nodes are deleted,
+                    // it will likely return empty results or handle it appropriately
+                    let query_obj = executor::Query {
+                        cypher: self.query_to_string(ast),
+                        params: ast.params.clone(),
+                    };
+                    return self.executor.execute(&query_obj);
+                }
+            } else {
+                // No RETURN clause - return count of deleted nodes
+                return Ok(executor::ResultSet {
+                    columns: vec!["count".to_string()],
+                    rows: vec![executor::Row {
+                        values: vec![serde_json::Value::Number(deleted_count.into())],
+                    }],
+                });
+            }
         }
 
         // Handle MERGE / SET / REMOVE / FOREACH write queries before falling back to read executor

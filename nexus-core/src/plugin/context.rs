@@ -1,9 +1,9 @@
 //! Plugin context for registering extensions
 
+use crate::Error;
 use crate::catalog::Catalog;
 use crate::graph::procedures::{CustomProcedure, ProcedureRegistry};
 use crate::udf::{UdfFunction, UdfRegistry};
-use crate::{Error, Result};
 use std::sync::Arc;
 
 /// Result type for plugin operations

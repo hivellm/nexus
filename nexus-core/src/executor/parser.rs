@@ -102,6 +102,12 @@ pub enum Clause {
     CallProcedure(CallProcedureClause),
     /// LOAD CSV clause for importing CSV data
     LoadCsv(LoadCsvClause),
+    /// SHOW FUNCTIONS command
+    ShowFunctions,
+    /// CREATE FUNCTION command
+    CreateFunction(CreateFunctionClause),
+    /// DROP FUNCTION command
+    DropFunction(DropFunctionClause),
 }
 
 /// MATCH clause with pattern matching
@@ -460,6 +466,8 @@ pub struct CreateIndexClause {
     pub if_not_exists: bool,
     /// Optional OR REPLACE flag
     pub or_replace: bool,
+    /// Index type (None = property index, Some("spatial") = spatial index)
+    pub index_type: Option<String>,
 }
 
 /// DROP INDEX clause
@@ -587,6 +595,45 @@ pub struct RevokeApiKeyClause {
 pub struct DeleteApiKeyClause {
     /// Key ID
     pub key_id: String,
+}
+
+/// CREATE FUNCTION clause
+/// Syntax: CREATE FUNCTION name(param1: Type1, param2: Type2) [IF NOT EXISTS] AS expression
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFunctionClause {
+    /// Function name
+    pub name: String,
+    /// Function parameters
+    pub parameters: Vec<UdfParameter>,
+    /// Return type
+    pub return_type: crate::udf::UdfReturnType,
+    /// Optional IF NOT EXISTS flag
+    pub if_not_exists: bool,
+    /// Function description (optional)
+    pub description: Option<String>,
+}
+
+/// DROP FUNCTION clause
+/// Syntax: DROP FUNCTION name [IF EXISTS]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropFunctionClause {
+    /// Function name
+    pub name: String,
+    /// Optional IF EXISTS flag
+    pub if_exists: bool,
+}
+
+/// UDF parameter (re-exported from udf module for parser)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdfParameter {
+    /// Parameter name
+    pub name: String,
+    /// Parameter type
+    pub param_type: crate::udf::UdfReturnType,
+    /// Whether parameter is required
+    pub required: bool,
+    /// Default value (if optional)
+    pub default: Option<serde_json::Value>,
 }
 
 /// EXPLAIN clause for query plan analysis
@@ -782,6 +829,8 @@ pub enum Literal {
     Boolean(bool),
     /// Null literal
     Null,
+    /// Point literal (geospatial)
+    Point(crate::geospatial::Point),
 }
 
 /// Binary operators
@@ -954,7 +1003,11 @@ impl CypherParser {
                 if self.peek_keyword("DATABASE") {
                     let create_db_clause = self.parse_create_database_clause()?;
                     Ok(Clause::CreateDatabase(create_db_clause))
-                } else if self.peek_keyword("INDEX") {
+                } else if self.peek_keyword("INDEX")
+                    || self.peek_keyword("SPATIAL")
+                    || self.peek_keyword("OR")
+                {
+                    // Check for CREATE INDEX (including CREATE SPATIAL INDEX and CREATE OR REPLACE INDEX)
                     let create_index_clause = self.parse_create_index_clause()?;
                     Ok(Clause::CreateIndex(create_index_clause))
                 } else if self.peek_keyword("CONSTRAINT") {
@@ -963,6 +1016,9 @@ impl CypherParser {
                 } else if self.peek_keyword("USER") {
                     let create_user_clause = self.parse_create_user_clause()?;
                     Ok(Clause::CreateUser(create_user_clause))
+                } else if self.peek_keyword("FUNCTION") {
+                    let create_function_clause = self.parse_create_function_clause()?;
+                    Ok(Clause::CreateFunction(create_function_clause))
                 } else if self.peek_keyword("API") {
                     self.parse_keyword()?; // consume "API"
                     self.expect_keyword("KEY")?;
@@ -1047,13 +1103,18 @@ impl CypherParser {
                 } else if self.peek_keyword("USER") {
                     let show_user_clause = self.parse_show_user_clause()?;
                     Ok(Clause::ShowUser(show_user_clause))
+                } else if self.peek_keyword("FUNCTIONS") {
+                    self.parse_keyword()?; // consume "FUNCTIONS"
+                    Ok(Clause::ShowFunctions)
                 } else if self.peek_keyword("API") {
                     self.parse_keyword()?; // consume "API"
                     self.expect_keyword("KEYS")?;
                     let show_api_keys_clause = self.parse_show_api_keys_clause()?;
                     Ok(Clause::ShowApiKeys(show_api_keys_clause))
                 } else {
-                    Err(self.error("SHOW must be followed by DATABASES, USERS, USER, or API KEYS"))
+                    Err(self.error(
+                        "SHOW must be followed by DATABASES, USERS, USER, FUNCTIONS, or API KEYS",
+                    ))
                 }
             }
             "USE" => {
@@ -1121,8 +1182,13 @@ impl CypherParser {
                 } else if self.peek_keyword("CONSTRAINT") {
                     let drop_constraint_clause = self.parse_drop_constraint_clause()?;
                     Ok(Clause::DropConstraint(drop_constraint_clause))
+                } else if self.peek_keyword("FUNCTION") {
+                    let drop_function_clause = self.parse_drop_function_clause()?;
+                    Ok(Clause::DropFunction(drop_function_clause))
                 } else {
-                    Err(self.error("DROP must be followed by DATABASE, USER, INDEX, or CONSTRAINT"))
+                    Err(self.error(
+                        "DROP must be followed by DATABASE, USER, INDEX, CONSTRAINT, or FUNCTION",
+                    ))
                 }
             }
             "GRANT" => {
@@ -1696,7 +1762,16 @@ impl CypherParser {
         match self.peek_char() {
             Some('*') => {
                 self.consume_char();
-                Ok(Some(RelationshipQuantifier::ZeroOrMore))
+                // Check if there's a number after * (e.g., *1..3 or *5)
+                // Skip whitespace first
+                self.skip_whitespace();
+                if self.is_digit() {
+                    // Parse range quantifier without braces: *1..3 or *5
+                    self.parse_range_quantifier_without_braces()
+                } else {
+                    // Just * means zero or more
+                    Ok(Some(RelationshipQuantifier::ZeroOrMore))
+                }
             }
             Some('+') => {
                 self.consume_char();
@@ -1708,6 +1783,49 @@ impl CypherParser {
             }
             Some('{') => self.parse_range_quantifier(),
             _ => Ok(None),
+        }
+    }
+
+    /// Parse range quantifier without braces: *1..3 or *5
+    fn parse_range_quantifier_without_braces(&mut self) -> Result<Option<RelationshipQuantifier>> {
+        let start = if self.is_digit() {
+            Some(self.parse_number()?)
+        } else {
+            None
+        };
+
+        // Check for range separator: ',' or '..'
+        if self.peek_char() == Some(',')
+            || (self.peek_char() == Some('.') && self.peek_char_at(1) == Some('.'))
+        {
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+            } else {
+                // Consume '..'
+                self.consume_char();
+                self.consume_char();
+            }
+            let end = if self.is_digit() {
+                Some(self.parse_number()?)
+            } else {
+                None
+            };
+
+            match (start, end) {
+                (Some(n), Some(m)) => {
+                    Ok(Some(RelationshipQuantifier::Range(n as usize, m as usize)))
+                }
+                (Some(n), None) => Ok(Some(RelationshipQuantifier::Range(n as usize, usize::MAX))),
+                (None, Some(m)) => Ok(Some(RelationshipQuantifier::Range(0, m as usize))),
+                (None, None) => Ok(Some(RelationshipQuantifier::ZeroOrMore)),
+            }
+        } else {
+            // No range separator, just a number means exact count
+            if let Some(n) = start {
+                Ok(Some(RelationshipQuantifier::Exact(n as usize)))
+            } else {
+                Ok(Some(RelationshipQuantifier::ZeroOrMore))
+            }
         }
     }
 
@@ -2259,7 +2377,7 @@ impl CypherParser {
                 }
                 procedure_name.push_str(&self.input[part_start..self.pos]);
             } else if self.peek_char() == Some('(')
-                || self.peek_char().map_or(false, |c| c.is_whitespace())
+                || matches!(self.peek_char(), Some(c) if c.is_whitespace())
             {
                 break;
             } else {
@@ -2335,7 +2453,7 @@ impl CypherParser {
     }
 
     /// Parse CREATE INDEX clause
-    /// Syntax: CREATE [OR REPLACE] INDEX [IF NOT EXISTS] ON :Label(property)
+    /// Syntax: CREATE [OR REPLACE] [SPATIAL] INDEX [IF NOT EXISTS] ON :Label(property)
     fn parse_create_index_clause(&mut self) -> Result<CreateIndexClause> {
         // Check for OR REPLACE before INDEX
         let or_replace = if self.peek_keyword("OR") {
@@ -2345,6 +2463,15 @@ impl CypherParser {
             true
         } else {
             false
+        };
+
+        // Check for SPATIAL keyword
+        let index_type = if self.peek_keyword("SPATIAL") {
+            self.parse_keyword()?; // consume "SPATIAL"
+            self.skip_whitespace();
+            Some("spatial".to_string())
+        } else {
+            None
         };
 
         self.expect_keyword("INDEX")?;
@@ -2375,6 +2502,7 @@ impl CypherParser {
             property,
             if_not_exists,
             or_replace,
+            index_type,
         })
     }
 
@@ -2611,6 +2739,142 @@ impl CypherParser {
         self.skip_whitespace();
         let username = self.parse_identifier()?;
         Ok(ShowUserClause { username })
+    }
+
+    /// Parse CREATE FUNCTION clause
+    /// Syntax: CREATE FUNCTION name(param1: Type1, param2: Type2) [IF NOT EXISTS] RETURNS Type [AS expression]
+    /// Note: For MVP, we'll use a simplified syntax that stores the signature only
+    /// The actual function implementation must be registered via API/plugin system
+    fn parse_create_function_clause(&mut self) -> Result<CreateFunctionClause> {
+        self.expect_keyword("FUNCTION")?;
+        self.skip_whitespace();
+
+        // Check for IF NOT EXISTS
+        let mut if_not_exists = false;
+        if self.peek_keyword("IF") {
+            self.parse_keyword()?;
+            self.expect_keyword("NOT")?;
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            if_not_exists = true;
+        }
+
+        // Parse function name
+        let name = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // Parse parameters: (param1: Type1, param2: Type2)
+        let mut parameters = Vec::new();
+        self.expect_char('(')?;
+        self.skip_whitespace();
+
+        if self.peek_char() != Some(')') {
+            loop {
+                let param_name = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_char(':')?;
+                self.skip_whitespace();
+
+                // Parse parameter type
+                let type_str = self.parse_identifier()?;
+                let param_type = match type_str.to_lowercase().as_str() {
+                    "integer" | "int" => crate::udf::UdfReturnType::Integer,
+                    "float" | "double" => crate::udf::UdfReturnType::Float,
+                    "string" | "str" => crate::udf::UdfReturnType::String,
+                    "boolean" | "bool" => crate::udf::UdfReturnType::Boolean,
+                    "any" => crate::udf::UdfReturnType::Any,
+                    _ => {
+                        return Err(self.error(&format!("Unknown parameter type: {}", type_str)));
+                    }
+                };
+
+                parameters.push(UdfParameter {
+                    name: param_name,
+                    param_type: param_type.clone(),
+                    required: true, // For MVP, all parameters are required
+                    default: None,
+                });
+
+                self.skip_whitespace();
+                if self.peek_char() == Some(',') {
+                    self.consume_char();
+                    self.skip_whitespace();
+                } else if self.peek_char() == Some(')') {
+                    break;
+                } else {
+                    return Err(self.error("Expected ',' or ')' in function parameters"));
+                }
+            }
+        }
+
+        self.expect_char(')')?;
+        self.skip_whitespace();
+
+        // Parse RETURNS type
+        self.expect_keyword("RETURNS")?;
+        self.skip_whitespace();
+        let return_type_str = self.parse_identifier()?;
+        let return_type = match return_type_str.to_lowercase().as_str() {
+            "integer" | "int" => crate::udf::UdfReturnType::Integer,
+            "float" | "double" => crate::udf::UdfReturnType::Float,
+            "string" | "str" => crate::udf::UdfReturnType::String,
+            "boolean" | "bool" => crate::udf::UdfReturnType::Boolean,
+            "any" => crate::udf::UdfReturnType::Any,
+            _ => {
+                return Err(self.error(&format!("Unknown return type: {}", return_type_str)));
+            }
+        };
+
+        self.skip_whitespace();
+
+        // Parse optional description (AS 'description')
+        let mut description = None;
+        if self.peek_keyword("AS") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            if self.peek_char() == Some('\'') || self.peek_char() == Some('"') {
+                let desc_str = self.parse_string_literal()?;
+                if let Expression::Literal(crate::executor::parser::Literal::String(s)) = desc_str {
+                    description = Some(s);
+                }
+            }
+        }
+
+        Ok(CreateFunctionClause {
+            name,
+            parameters,
+            return_type,
+            if_not_exists,
+            description,
+        })
+    }
+
+    /// Parse DROP FUNCTION clause
+    /// Syntax: DROP FUNCTION name [IF EXISTS]
+    fn parse_drop_function_clause(&mut self) -> Result<DropFunctionClause> {
+        self.expect_keyword("FUNCTION")?;
+        self.skip_whitespace();
+
+        // Check for IF EXISTS
+        let mut if_exists = false;
+        if self.peek_keyword("IF") {
+            self.parse_keyword()?;
+            self.expect_keyword("EXISTS")?;
+            self.skip_whitespace();
+            if_exists = true;
+        }
+
+        let name = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // Check for IF EXISTS after function name
+        if !if_exists && self.peek_keyword("IF") {
+            self.parse_keyword()?;
+            self.expect_keyword("EXISTS")?;
+            if_exists = true;
+        }
+
+        Ok(DropFunctionClause { name, if_exists })
     }
 
     /// Parse CREATE API KEY clause
@@ -3446,6 +3710,11 @@ impl CypherParser {
 
         // Check for function call
         if self.peek_char() == Some('(') {
+            // Special case: point() function creates a Point literal
+            if identifier.to_lowercase() == "point" {
+                return self.parse_point_literal();
+            }
+
             self.consume_char(); // consume '('
             let mut args = Vec::new();
 
@@ -3473,7 +3742,39 @@ impl CypherParser {
 
                 // Parse arguments
                 while self.peek_char() != Some(')') {
-                    let arg = self.parse_expression()?;
+                    // Special handling for shortestPath() and allShortestPaths() - they accept patterns directly
+                    let arg = if (identifier.to_lowercase() == "shortestpath"
+                        || identifier.to_lowercase() == "allshortestpaths")
+                        && self.peek_char() == Some('(')
+                    {
+                        // Try to parse as pattern - if it fails, fall back to expression
+                        let saved_pos = self.pos;
+                        let saved_line = self.line;
+                        let saved_column = self.column;
+
+                        // Try parsing as pattern
+                        match self.parse_pattern() {
+                            Ok(pattern) => {
+                                // Successfully parsed as pattern - create PatternComprehension
+                                Expression::PatternComprehension {
+                                    pattern,
+                                    where_clause: None,
+                                    transform_expression: None,
+                                }
+                            }
+                            Err(_) => {
+                                // Failed to parse as pattern - restore position and parse as expression
+                                self.pos = saved_pos;
+                                self.line = saved_line;
+                                self.column = saved_column;
+                                self.parse_expression()?
+                            }
+                        }
+                    } else {
+                        // Normal argument parsing
+                        self.parse_expression()?
+                    };
+
                     args.push(arg);
 
                     if self.peek_char() == Some(',') {
@@ -3647,6 +3948,97 @@ impl CypherParser {
 
         self.expect_char(']')?;
         Ok(Expression::List(elements))
+    }
+
+    /// Parse point literal
+    /// Syntax: point({x: 1, y: 2}) or point({x: 1, y: 2, z: 3}) or point({longitude: -122, latitude: 37, crs: 'wgs-84'})
+    fn parse_point_literal(&mut self) -> Result<Expression> {
+        self.expect_char('(')?;
+        self.skip_whitespace();
+        self.expect_char('{')?;
+        self.skip_whitespace();
+
+        let mut x: Option<f64> = None;
+        let mut y: Option<f64> = None;
+        let mut z: Option<f64> = None;
+        let mut coordinate_system = crate::geospatial::CoordinateSystem::Cartesian;
+
+        // Parse key-value pairs
+        while self.peek_char() != Some('}') {
+            let key = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_char(':')?;
+            self.skip_whitespace();
+
+            match key.to_lowercase().as_str() {
+                "x" | "longitude" => {
+                    let expr = self.parse_expression()?;
+                    x = Some(self.extract_number_from_expression(&expr)?);
+                }
+                "y" | "latitude" => {
+                    let expr = self.parse_expression()?;
+                    y = Some(self.extract_number_from_expression(&expr)?);
+                }
+                "z" | "height" => {
+                    let expr = self.parse_expression()?;
+                    z = Some(self.extract_number_from_expression(&expr)?);
+                }
+                "crs" => {
+                    let expr = self.parse_string_literal()?;
+                    let crs_str = if let Expression::Literal(Literal::String(s)) = expr {
+                        s.to_lowercase()
+                    } else {
+                        return Err(self.error("CRS must be a string literal"));
+                    };
+                    coordinate_system = match crs_str.as_str() {
+                        "cartesian" | "cartesian-3d" => {
+                            crate::geospatial::CoordinateSystem::Cartesian
+                        }
+                        "wgs-84" | "wgs-84-3d" => crate::geospatial::CoordinateSystem::WGS84,
+                        _ => {
+                            return Err(
+                                self.error(&format!("Unknown coordinate system: {}", crs_str))
+                            );
+                        }
+                    };
+                }
+                _ => {
+                    return Err(self.error(&format!("Unknown point property: {}", key)));
+                }
+            }
+
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                self.skip_whitespace();
+            }
+        }
+
+        self.expect_char('}')?;
+        self.skip_whitespace();
+        self.expect_char(')')?;
+
+        let x = x.ok_or_else(|| self.error("Point must have x or longitude"))?;
+        let y = y.ok_or_else(|| self.error("Point must have y or latitude"))?;
+
+        let point = if let Some(z_val) = z {
+            crate::geospatial::Point::new_3d(x, y, z_val, coordinate_system)
+        } else {
+            crate::geospatial::Point::new_2d(x, y, coordinate_system)
+        };
+
+        Ok(Expression::Literal(Literal::Point(point)))
+    }
+
+    /// Extract number from expression (helper for point parsing)
+    fn extract_number_from_expression(&self, expr: &Expression) -> Result<f64> {
+        match expr {
+            Expression::Literal(Literal::Integer(i)) => Ok(*i as f64),
+            Expression::Literal(Literal::Float(f)) => Ok(*f),
+            _ => Err(Error::CypherSyntax(
+                "Point coordinates must be numbers".to_string(),
+            )),
+        }
     }
 
     /// Parse map expression
@@ -3995,6 +4387,10 @@ impl CypherParser {
             || self.peek_keyword("ROLLBACK")  // For ROLLBACK TRANSACTION
             || self.peek_keyword("GRANT")  // For GRANT permissions
             || self.peek_keyword("REVOKE") // For REVOKE permissions
+            || self.peek_keyword("CALL")  // For CALL procedures and subqueries
+            || self.peek_keyword("USE")  // For USE DATABASE
+            || self.peek_keyword("LOAD")  // For LOAD CSV
+            || self.peek_keyword("FOREACH") // For FOREACH clause
     }
 
     /// Check if character is identifier start

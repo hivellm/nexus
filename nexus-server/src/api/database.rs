@@ -91,7 +91,7 @@ pub async fn drop_database(
 ) -> Response {
     let manager = state.manager.read().await;
 
-    match manager.drop_database(&name) {
+    match manager.drop_database(&name, false) {
         Ok(_) => Json(DatabaseResponse {
             success: true,
             message: format!("Database '{}' dropped successfully", name),

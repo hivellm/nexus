@@ -28,10 +28,26 @@ impl<'a> QueryPlanner<'a> {
     /// Plan a Cypher query into optimized operators
     pub fn plan_query(&self, query: &CypherQuery) -> Result<Vec<Operator>> {
         // Validate that query has at least one clause
+        // Exceptions: CALL procedures and USE DATABASE can be standalone
         if query.clauses.is_empty() {
             return Err(Error::CypherSyntax(
                 "Query must contain at least one clause".to_string(),
             ));
+        }
+
+        // Check if query is just a CALL procedure or USE DATABASE (can be standalone)
+        if query.clauses.len() == 1 {
+            match &query.clauses[0] {
+                Clause::CallProcedure(_) => {
+                    // CALL procedures can be standalone - they produce their own columns/rows
+                    // No need for RETURN clause
+                }
+                Clause::UseDatabase(_) => {
+                    // USE DATABASE should be handled at server level, not by planner
+                    // But if it reaches here, we'll allow it to pass through
+                }
+                _ => {}
+            }
         }
 
         // Check if query contains UNION - if so, split and plan separately
@@ -166,6 +182,16 @@ impl<'a> QueryPlanner<'a> {
                         yield_columns: call_procedure_clause.yield_columns.clone(),
                     });
                 }
+                Clause::CreateIndex(create_index_clause) => {
+                    // Add CreateIndex operator
+                    operators.push(Operator::CreateIndex {
+                        label: create_index_clause.label.clone(),
+                        property: create_index_clause.property.clone(),
+                        index_type: create_index_clause.index_type.clone(),
+                        if_not_exists: create_index_clause.if_not_exists,
+                        or_replace: create_index_clause.or_replace,
+                    });
+                }
                 _ => {
                     // Other clauses not implemented in MVP
                 }
@@ -205,6 +231,28 @@ impl<'a> QueryPlanner<'a> {
                 operators.push(Operator::Project {
                     items: projection_items,
                 });
+            }
+
+            if let Some(limit) = limit_count {
+                operators.push(Operator::Limit { count: limit });
+            }
+        } else if operators
+            .iter()
+            .any(|op| matches!(op, Operator::CallProcedure { .. }))
+        {
+            // CALL procedure standalone - it will produce its own columns/rows
+            // If there's a RETURN after CALL, we need to project the YIELD columns
+            // But if CALL is standalone with YIELD, the executor handles it
+            // Just ensure we have operators (CALL procedure should already be added)
+            if operators.is_empty() {
+                return Err(Error::CypherSyntax(
+                    "CALL procedure query must have at least one operator".to_string(),
+                ));
+            }
+
+            // Apply LIMIT if specified
+            if let Some(limit) = limit_count {
+                operators.push(Operator::Limit { count: limit });
             }
         }
 
@@ -343,6 +391,7 @@ impl<'a> QueryPlanner<'a> {
                                     Literal::Float(f) => f.to_string(),
                                     Literal::Boolean(b) => b.to_string(),
                                     Literal::Null => "null".to_string(),
+                                    Literal::Point(p) => p.to_string(),
                                 },
                                 _ => self.expression_to_string(prop_value_expr)?,
                             };
@@ -403,6 +452,7 @@ impl<'a> QueryPlanner<'a> {
                                         Literal::Float(f) => f.to_string(),
                                         Literal::Boolean(b) => b.to_string(),
                                         Literal::Null => "null".to_string(),
+                                        Literal::Point(p) => p.to_string(),
                                     },
                                     _ => self.expression_to_string(prop_value_expr)?,
                                 };
@@ -889,6 +939,7 @@ impl<'a> QueryPlanner<'a> {
                 Literal::Float(f) => Ok(f.to_string()),
                 Literal::Boolean(b) => Ok(b.to_string()),
                 Literal::Null => Ok("NULL".to_string()),
+                Literal::Point(p) => Ok(p.to_string()),
             },
             Expression::BinaryOp { left, op, right } => {
                 let left_str = self.expression_to_string(left)?;
@@ -1030,6 +1081,10 @@ impl<'a> QueryPlanner<'a> {
                 Operator::CallProcedure { .. } => {
                     // Procedure calls are moderately expensive (depends on procedure)
                     total_cost += 200.0;
+                }
+                Operator::CreateIndex { .. } => {
+                    // Index creation is cheap (metadata operation)
+                    total_cost += 1.0;
                 }
             }
         }

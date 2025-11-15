@@ -12,8 +12,8 @@
 //! - Interactive visualization data generation
 //! - Visualization caching for performance
 
+use crate::Result;
 use crate::graph::correlation::{CorrelationGraph, GraphEdge, GraphNode};
-use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -107,6 +107,8 @@ pub enum LayoutAlgorithm {
     Circular,
     /// Grid layout
     Grid,
+    /// Flow-based layout (for data flow graphs - left to right)
+    FlowBased,
 }
 
 /// Node styling configuration
@@ -302,10 +304,29 @@ fn normalize_positions(
     let width = bounds.max_x - bounds.min_x;
     let height = bounds.max_y - bounds.min_y;
 
+    // Handle case where all nodes have same position (single node or collapsed nodes)
     if width == 0.0 || height == 0.0 {
-        return Err(Error::GraphCorrelation(
-            "Invalid graph bounds for normalization".to_string(),
-        ));
+        let mut normalized = HashMap::new();
+        let center_x = config.width / 2.0;
+        let center_y = config.height / 2.0;
+        let node_spacing = 50.0;
+
+        for (i, node) in graph.nodes.iter().enumerate() {
+            if let Some((_x, _y)) = node.position {
+                // If all nodes have same position, spread them in a circle
+                if width == 0.0 && height == 0.0 && graph.nodes.len() > 1 {
+                    let angle = 2.0 * std::f32::consts::PI * i as f32 / graph.nodes.len() as f32;
+                    let offset_x = node_spacing * angle.cos();
+                    let offset_y = node_spacing * angle.sin();
+                    normalized.insert(node.id.clone(), (center_x + offset_x, center_y + offset_y));
+                } else {
+                    // Single node or all at same position - center it
+                    normalized.insert(node.id.clone(), (center_x, center_y));
+                }
+            }
+        }
+
+        return Ok((bounds, normalized));
     }
 
     let scale_x = (config.width - 2.0 * config.padding) / width;
@@ -552,11 +573,88 @@ pub fn render_graph_to_svg(
     renderer.render(graph, config)
 }
 
+/// Export format for graph visualization
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportFormat {
+    /// SVG format (vector graphics)
+    Svg,
+    /// PNG format (raster image)
+    Png,
+    /// PDF format (document)
+    Pdf,
+}
+
+/// Render a graph to the specified format
+pub fn render_graph_to_format(
+    graph: &CorrelationGraph,
+    config: &VisualizationConfig,
+    format: ExportFormat,
+) -> Result<Vec<u8>> {
+    match format {
+        ExportFormat::Svg => {
+            let svg = render_graph_to_svg(graph, config)?;
+            Ok(svg.into_bytes())
+        }
+        ExportFormat::Png => {
+            // Convert SVG to PNG
+            // For now, return SVG as bytes - full implementation would use resvg/usvg
+            // TODO: Add resvg dependency for SVG to PNG conversion
+            let svg = render_graph_to_svg(graph, config)?;
+            // In a full implementation, we would:
+            // 1. Parse SVG using usvg
+            // 2. Render to PNG using resvg
+            // 3. Return PNG bytes
+            // For now, return SVG bytes as placeholder
+            Ok(svg.into_bytes())
+        }
+        ExportFormat::Pdf => {
+            // Convert SVG to PDF
+            // For now, return SVG as bytes - full implementation would use printpdf or similar
+            // TODO: Add PDF generation library
+            let svg = render_graph_to_svg(graph, config)?;
+            // In a full implementation, we would:
+            // 1. Parse SVG
+            // 2. Create PDF document
+            // 3. Embed SVG or render as PDF graphics
+            // 4. Return PDF bytes
+            // For now, return SVG bytes as placeholder
+            Ok(svg.into_bytes())
+        }
+    }
+}
+
+/// Render a graph to PNG (raster image)
+///
+/// This function converts the SVG representation to PNG format.
+/// Currently returns SVG bytes as placeholder - full implementation requires resvg/usvg.
+pub fn render_graph_to_png(
+    graph: &CorrelationGraph,
+    config: &VisualizationConfig,
+) -> Result<Vec<u8>> {
+    render_graph_to_format(graph, config, ExportFormat::Png)
+}
+
+/// Render a graph to PDF (document format)
+///
+/// This function converts the SVG representation to PDF format.
+/// Currently returns SVG bytes as placeholder - full implementation requires PDF library.
+pub fn render_graph_to_pdf(
+    graph: &CorrelationGraph,
+    config: &VisualizationConfig,
+) -> Result<Vec<u8>> {
+    render_graph_to_format(graph, config, ExportFormat::Pdf)
+}
+
 /// Apply layout algorithm to graph positions
 pub fn apply_layout(graph: &mut CorrelationGraph, config: &VisualizationConfig) -> Result<()> {
     match config.layout_algorithm {
         LayoutAlgorithm::Grid => apply_grid_layout(graph, config),
         LayoutAlgorithm::Circular => apply_circular_layout(graph, config),
+        LayoutAlgorithm::FlowBased => {
+            // Use flow-based layout for data flow graphs
+            use crate::graph::correlation::data_flow::apply_flow_layout;
+            apply_flow_layout(graph, config)
+        }
         LayoutAlgorithm::ForceDirected | LayoutAlgorithm::Hierarchical => {
             // Complex layouts require external library - for now, use grid as fallback
             apply_grid_layout(graph, config)
@@ -961,6 +1059,45 @@ mod tests {
         let data = result.unwrap();
         assert_eq!(data.nodes.len(), 2);
         assert_eq!(data.edges.len(), 1);
+    }
+
+    #[test]
+    fn test_render_graph_to_svg_format() {
+        let graph = create_test_graph();
+        let config = VisualizationConfig::default();
+
+        let result = render_graph_to_format(&graph, &config, ExportFormat::Svg);
+        assert!(result.is_ok());
+        let svg_bytes = result.unwrap();
+        let svg_str = String::from_utf8(svg_bytes).unwrap();
+        assert!(svg_str.contains("<svg"));
+    }
+
+    #[test]
+    fn test_render_graph_to_png_format() {
+        let graph = create_test_graph();
+        let config = VisualizationConfig::default();
+
+        // PNG export currently returns SVG bytes as placeholder
+        let result = render_graph_to_format(&graph, &config, ExportFormat::Png);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_render_graph_to_pdf_format() {
+        let graph = create_test_graph();
+        let config = VisualizationConfig::default();
+
+        // PDF export currently returns SVG bytes as placeholder
+        let result = render_graph_to_format(&graph, &config, ExportFormat::Pdf);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_export_format_enum() {
+        assert_eq!(ExportFormat::Svg, ExportFormat::Svg);
+        assert_eq!(ExportFormat::Png, ExportFormat::Png);
+        assert_eq!(ExportFormat::Pdf, ExportFormat::Pdf);
     }
 
     #[test]

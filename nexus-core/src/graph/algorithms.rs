@@ -1464,7 +1464,7 @@ mod tests {
 
         // Verify weight property is used if present
         for node_id in &nodes {
-            for (neighbor, weight) in graph.get_neighbors(*node_id) {
+            for (_neighbor, weight) in graph.get_neighbors(*node_id) {
                 if *weight == 1.5 {
                     // Found the edge with weight property
                     return;

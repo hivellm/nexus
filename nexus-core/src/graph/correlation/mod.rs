@@ -21,6 +21,18 @@
 
 use crate::vectorizer_cache::{QueryMetadata, VectorizerCache};
 use crate::{Error, Result};
+pub use component::{
+    ClassInfo, ComponentAnalyzer, ComponentCouplingAnalyzer, ComponentCouplingMetrics,
+    ComponentRelationship, ComponentRelationshipInfo, ComponentStatistics,
+    ComponentVisualizationConfig, FieldInfo, InterfaceInfo, MethodInfo, OOHierarchyLayout,
+    ParameterInfo, PropertyInfo, apply_component_visualization, apply_oop_hierarchy_layout,
+};
+pub use data_flow::{
+    DataFlowAnalyzer, DataFlowEdge, DataFlowVisualizationConfig, DataTransformation,
+    FlowBasedLayout, FlowType, TransformationType, TypePropagator, UsageType, VariableTracker,
+    VariableUsage, VariableUsageSite, apply_data_flow_visualization, apply_flow_layout,
+    visualize_data_flow,
+};
 pub use dependency_filter::{
     DependencyFilter, calculate_node_depths, filter_dependency_graph, get_direct_dependencies,
     get_transitive_dependencies, identify_leaf_and_root_nodes,
@@ -35,9 +47,11 @@ pub use impact_analysis::{
     analyze_change_impact, analyze_impact, calculate_propagation_distance, identify_critical_nodes,
 };
 pub use pattern_recognition::{
-    ArchitecturalPatternDetector, DetectedPattern, EventDrivenPatternDetector,
-    PatternDetectionResult, PatternDetector, PatternStatistics, PatternType,
-    PipelinePatternDetector,
+    ArchitecturalPatternDetector, DesignPatternDetector, DetectedPattern,
+    EventDrivenPatternDetector, PatternDetectionResult, PatternDetector, PatternDifficulty,
+    PatternMaturity, PatternOverlayConfig, PatternQualityMetrics, PatternRecommendation,
+    PatternRecommendationEngine, PatternStatistics, PatternType, PipelinePatternDetector,
+    apply_pattern_overlays, calculate_pattern_quality_metrics,
 };
 pub use performance::{
     GraphCache, PerformanceMetrics, PerformanceProfiler, PerformanceSummary, calculate_complexity,
@@ -92,6 +106,12 @@ pub mod vectorizer_cache;
 
 /// Version constraint analysis for dependencies
 pub mod version_constraints;
+
+/// Data flow analysis and tracking
+pub mod data_flow;
+
+/// Component analysis for object-oriented code
+pub mod component;
 
 /// Graph types supported by the correlation analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1448,8 +1468,15 @@ impl DefaultGraphBuilder {
             format!("{} - Data Flow Graph", self.name),
         );
 
-        // For now, create a basic data flow graph based on file relationships
-        // This will be enhanced in future tasks
+        // Use DataFlowAnalyzer for enhanced variable tracking (Task 11.2)
+        let mut analyzer = DataFlowAnalyzer::new();
+
+        // Analyze source code for variable usage
+        if let Err(e) = analyzer.analyze_source_code(&source_data.files) {
+            tracing::warn!("Data flow analysis had issues: {}", e);
+        }
+
+        // Build base graph with file nodes
         for file_path in source_data.files.keys() {
             if let Some(max_nodes) = self.config.max_nodes {
                 if graph.nodes.len() >= max_nodes {
@@ -1468,6 +1495,13 @@ impl DefaultGraphBuilder {
                     "node_type".to_string(),
                     serde_json::Value::String("data_source".to_string()),
                 );
+
+                // Add variable count from analyzer
+                let var_count = analyzer.tracker().get_file_variables(file_path).len();
+                metadata.insert(
+                    "variable_count".to_string(),
+                    serde_json::Value::Number(var_count.into()),
+                );
             }
 
             let node = GraphNode {
@@ -1485,6 +1519,9 @@ impl DefaultGraphBuilder {
             };
             graph.add_node(node)?;
         }
+
+        // Enhance graph with variable tracking data
+        graph = analyzer.build_enhanced_data_flow_graph(&graph)?;
 
         Ok(graph)
     }

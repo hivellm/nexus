@@ -1,11 +1,10 @@
 {
-  "version": "1.0.0",
-  "installedAt": "2025-10-31T03:39:18.472Z",
-  "updatedAt": "2025-11-12T02:03:23.746Z",
+  "version": "0.18.0",
+  "installedAt": "2025-11-12T02:03:25.867Z",
+  "updatedAt": "2025-11-14T03:50:25.242Z",
   "projectId": "nexus",
   "mode": "full",
   "features": {
-    "openspec": true,
     "watcher": false,
     "agent": false,
     "logging": true,
@@ -30,16 +29,5 @@
     "taskExecution": 3600000,
     "cliResponse": 180000,
     "testRun": 600000
-  },
-  "languages": [
-    "rust",
-    "python"
-  ],
-  "frameworks": [],
-  "modules": [
-    "openspec",
-    "context7"
-  ],
-  "modular": true,
-  "rulebookDir": "rulebook"
+  }
 }

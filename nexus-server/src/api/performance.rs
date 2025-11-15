@@ -278,6 +278,63 @@ pub async fn clear_plan_cache()
     })))
 }
 
+/// Slow query analysis response
+#[derive(Debug, Serialize)]
+pub struct SlowQueryAnalysisResponse {
+    /// Analysis results
+    pub analyses: Vec<SlowQueryAnalysisItem>,
+    /// Total patterns analyzed
+    pub total_patterns: usize,
+}
+
+/// Slow query analysis item
+#[derive(Debug, Serialize)]
+pub struct SlowQueryAnalysisItem {
+    /// Query pattern
+    pub pattern: String,
+    /// Number of occurrences
+    pub occurrences: usize,
+    /// Average execution time in milliseconds
+    pub avg_execution_time_ms: f64,
+    /// Total execution time in milliseconds
+    pub total_execution_time_ms: u64,
+    /// Recommendations
+    pub recommendations: Vec<String>,
+}
+
+/// Analyze slow queries
+/// GET /performance/slow-queries/analysis
+pub async fn analyze_slow_queries()
+-> Result<Json<SlowQueryAnalysisResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let stats = get_query_stats().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Performance monitoring not initialized"
+            })),
+        )
+    })?;
+
+    let analyzer = nexus_core::performance::slow_query_analysis::SlowQueryAnalyzer::new();
+    let analyses = analyzer.analyze(&stats);
+
+    let items: Vec<SlowQueryAnalysisItem> = analyses
+        .into_iter()
+        .map(|a| SlowQueryAnalysisItem {
+            pattern: a.pattern,
+            occurrences: a.occurrences,
+            avg_execution_time_ms: a.avg_execution_time_ms,
+            total_execution_time_ms: a.total_execution_time_ms,
+            recommendations: a.recommendations,
+        })
+        .collect();
+
+    Ok(Json(SlowQueryAnalysisResponse {
+        total_patterns: items.len(),
+        analyses: items,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,5 +517,56 @@ mod tests {
         // Should have at least 2 more than initial (may have more from other tests)
         assert!(response.cached_plans >= initial_count + 2);
         assert_eq!(response.max_size, 100);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_slow_queries() {
+        // Initialize if not already initialized
+        let _ = init_performance_monitoring(100, 1000, 100, 10);
+
+        // Clear existing stats first
+        if let Some(stats) = get_query_stats() {
+            stats.clear();
+        }
+
+        // Record some slow queries
+        if let Some(stats) = get_query_stats() {
+            stats.record_query(
+                "MATCH (n) RETURN n",
+                Duration::from_millis(150),
+                true,
+                None,
+                100,
+            );
+            stats.record_query(
+                "MATCH (n) RETURN n",
+                Duration::from_millis(200),
+                true,
+                None,
+                200,
+            );
+            stats.record_query(
+                "CREATE (n:Person)",
+                Duration::from_millis(120),
+                true,
+                None,
+                1,
+            );
+        }
+
+        let result = analyze_slow_queries().await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap().0;
+        // Should have at least one pattern analyzed
+        assert!(response.total_patterns > 0);
+        assert!(!response.analyses.is_empty());
+
+        // Check that analyses have recommendations
+        for analysis in &response.analyses {
+            assert!(!analysis.recommendations.is_empty());
+            assert!(analysis.occurrences >= 1);
+            assert!(analysis.avg_execution_time_ms > 0.0);
+        }
     }
 }

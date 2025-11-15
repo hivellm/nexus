@@ -86,9 +86,15 @@ paths:
         - WHERE clauses with property filtering
         - RETURN clauses with expressions
         - LIMIT and ORDER BY
-        - Aggregation functions (COUNT, AVG, MAX, MIN, SUM)
-        - Variable length paths with `*` syntax
+        - Aggregation functions (COUNT, AVG, MAX, MIN, SUM, COLLECT)
+        - Variable length paths with `*` syntax (e.g., `[*1..3]`, `[*5]`, `[*1..]`)
         - Vector similarity search with `<->` operator
+        - Procedure calls with `CALL` syntax (e.g., `CALL db.labels() YIELD label RETURN label`)
+        - Geospatial Point types with serialization to JSON (x, y, z, crs fields)
+        - Spatial indexes with `CREATE SPATIAL INDEX ON :Label(property)` syntax
+        - Distance functions: `distance(point1, point2)` for calculating distances between points
+        - Geospatial procedures: `spatial.withinBBox()` and `spatial.withinDistance()` for spatial queries
+        - Function management: `CREATE FUNCTION`, `DROP FUNCTION`, `SHOW FUNCTIONS` for managing UDF signatures
         
         ### Write Operations
         - CREATE nodes and relationships
@@ -177,6 +183,70 @@ paths:
                 summary: REMOVE properties and labels
                 value:
                   query: "MATCH (n:Person {email: 'alice@example.com'}) REMOVE n.age, n:Employee RETURN n"
+              procedure_call:
+                summary: Procedure call with CALL
+                value:
+                  query: "CALL db.labels() YIELD label RETURN label"
+                  params: {}
+              point_serialization:
+                summary: Geospatial Point serialization
+                value:
+                  query: "RETURN point({x: 1, y: 2, crs: 'cartesian'}) AS p"
+                  params: {}
+              variable_length_path:
+                summary: Variable length path query
+                value:
+                  query: "MATCH (a:Person {name: 'Alice'})-[*1..3]->(b) RETURN a, b LIMIT 10"
+                  params: {}
+              create_without_return:
+                summary: CREATE without RETURN (returns created nodes automatically)
+                value:
+                  query: "CREATE (n:Person {name: 'Alice', age: 30})"
+                  params: {}
+              delete_with_count:
+                summary: DELETE with RETURN count
+                value:
+                  query: "MATCH (n:Person) DELETE n RETURN count(*) AS deleted"
+                  params: {}
+              create_spatial_index:
+                summary: CREATE SPATIAL INDEX
+                value:
+                  query: "CREATE SPATIAL INDEX ON :Location(coords)"
+                  params: {}
+              geospatial_distance:
+                summary: Geospatial distance calculation
+                value:
+                  query: "MATCH (l:Location) RETURN l.name, distance(l.coords, point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})) AS dist ORDER BY dist LIMIT 5"
+                  params: {}
+              geospatial_procedure:
+                summary: Geospatial procedure - withinDistance
+                value:
+                  query: "CALL spatial.withinDistance('Location', 'coords', point({x: -122.4194, y: 37.7749, crs: 'wgs-84'}), 1000.0) YIELD node RETURN node"
+                  params: {}
+              show_functions:
+                summary: SHOW FUNCTIONS - List all registered functions
+                value:
+                  query: "SHOW FUNCTIONS"
+                  params: {}
+              create_function:
+                summary: CREATE FUNCTION - Create function signature
+                value:
+                  query: "CREATE FUNCTION multiply(a: Integer, b: Integer) RETURNS Integer AS 'Multiply two integers'"
+                  params: {}
+              create_function_if_not_exists:
+                summary: CREATE FUNCTION IF NOT EXISTS
+                value:
+                  query: "CREATE FUNCTION IF NOT EXISTS add(a: Integer, b: Integer) RETURNS Integer"
+                  params: {}
+              drop_function:
+                summary: DROP FUNCTION - Remove function signature
+                value:
+                  query: "DROP FUNCTION multiply"
+                  params: {}
+              drop_function_if_exists:
+                summary: DROP FUNCTION IF EXISTS
+                value:
+                  query: "DROP FUNCTION IF EXISTS multiply"
                   params: {}
               delete_query:
                 summary: DELETE node

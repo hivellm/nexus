@@ -9,6 +9,7 @@
 use crate::executor::Operator;
 use crate::executor::parser::CypherQuery;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -41,6 +42,10 @@ pub struct QueryPlanCache {
     max_memory_bytes: usize,
     /// Current memory usage estimate
     current_memory_bytes: Arc<RwLock<usize>>,
+    /// Total cache hits
+    hits: Arc<AtomicU64>,
+    /// Total cache misses
+    misses: Arc<AtomicU64>,
 }
 
 impl QueryPlanCache {
@@ -52,6 +57,8 @@ impl QueryPlanCache {
             max_size,
             max_memory_bytes: max_memory_mb * 1024 * 1024,
             current_memory_bytes: Arc::new(RwLock::new(0)),
+            hits: Arc::new(AtomicU64::new(0)),
+            misses: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -71,9 +78,34 @@ impl QueryPlanCache {
             }
             access_order.push_back(query_pattern.to_string());
 
+            // Record cache hit
+            self.hits.fetch_add(1, Ordering::SeqCst);
+
             Some(plan.clone())
         } else {
+            // Record cache miss
+            self.misses.fetch_add(1, Ordering::SeqCst);
             None
+        }
+    }
+
+    /// Check if a query pattern exists in cache (without updating access)
+    /// Returns (exists, was_hit) - useful for tracking per-query cache status
+    pub fn check_cache_status(&self, query_pattern: &str) -> (bool, bool) {
+        let plans = self.plans.read().unwrap();
+        let exists = plans.contains_key(query_pattern);
+        (exists, exists)
+    }
+
+    /// Get cache metrics for a specific query pattern
+    /// Returns (hits, misses) for tracking per-query metrics
+    pub fn get_query_cache_metrics(&self, query_pattern: &str) -> (u64, u64) {
+        let plans = self.plans.read().unwrap();
+        if let Some(plan) = plans.get(query_pattern) {
+            // Return access count as hits (simplified - in reality we'd track separately)
+            (plan.access_count, 0)
+        } else {
+            (0, 1) // Query not in cache = miss
         }
     }
 
@@ -125,6 +157,7 @@ impl QueryPlanCache {
         self.plans.write().unwrap().clear();
         self.access_order.write().unwrap().clear();
         *self.current_memory_bytes.write().unwrap() = 0;
+        // Note: We don't reset hits/misses here as they represent historical statistics
     }
 
     /// Invalidate plans matching a pattern (e.g., when schema changes)
@@ -153,13 +186,40 @@ impl QueryPlanCache {
         let _access_order = self.access_order.read().unwrap();
         let current_memory = self.current_memory_bytes.read().unwrap();
 
+        let hits = self.hits.load(Ordering::SeqCst);
+        let misses = self.misses.load(Ordering::SeqCst);
+        let total = hits + misses;
+        let hit_rate = if total > 0 {
+            hits as f64 / total as f64
+        } else {
+            0.0
+        };
+
         PlanCacheStatistics {
             cached_plans: plans.len(),
             max_size: self.max_size,
             current_memory_bytes: *current_memory,
             max_memory_bytes: self.max_memory_bytes,
-            hit_rate: 0.0, // Would need to track hits/misses separately
+            hit_rate,
+            hits,
+            misses,
         }
+    }
+
+    /// Get current cache hits count
+    pub fn get_hits(&self) -> u64 {
+        self.hits.load(Ordering::SeqCst)
+    }
+
+    /// Get current cache misses count
+    pub fn get_misses(&self) -> u64 {
+        self.misses.load(Ordering::SeqCst)
+    }
+
+    /// Reset cache statistics
+    pub fn reset_stats(&self) {
+        self.hits.store(0, Ordering::SeqCst);
+        self.misses.store(0, Ordering::SeqCst);
     }
 
     /// Clear old entries based on age
@@ -197,6 +257,10 @@ pub struct PlanCacheStatistics {
     pub max_memory_bytes: usize,
     /// Cache hit rate (0.0 to 1.0)
     pub hit_rate: f64,
+    /// Total cache hits
+    pub hits: u64,
+    /// Total cache misses
+    pub misses: u64,
 }
 
 #[cfg(test)]

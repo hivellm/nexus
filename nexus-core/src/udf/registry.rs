@@ -272,4 +272,78 @@ mod tests {
                 .contains("already registered")
         );
     }
+
+    #[test]
+    fn test_unregister_nonexistent_udf() {
+        let (catalog, _dir) = create_test_catalog();
+        let registry = PersistentUdfRegistry::new(catalog.clone());
+
+        let result = registry.unregister("nonexistent");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_get_nonexistent_udf() {
+        let (catalog, _dir) = create_test_catalog();
+        let registry = PersistentUdfRegistry::new(catalog.clone());
+        assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_list_empty_registry() {
+        let (catalog, _dir) = create_test_catalog();
+        let registry = PersistentUdfRegistry::new(catalog.clone());
+        assert_eq!(registry.list().len(), 0);
+    }
+
+    #[test]
+    fn test_multiple_udfs() {
+        let (catalog, _dir) = create_test_catalog();
+        let registry = PersistentUdfRegistry::new(catalog.clone());
+
+        // Register multiple UDFs
+        for i in 0..5 {
+            let signature = UdfSignature {
+                name: format!("udf_{}", i),
+                parameters: vec![],
+                return_type: UdfReturnType::Integer,
+                description: None,
+            };
+            let udf = BuiltinUdf::new(signature, move |_args| Ok(Value::Number(i.into())));
+            registry.register(Arc::new(udf)).unwrap();
+        }
+
+        assert_eq!(registry.list().len(), 5);
+        assert!(registry.contains("udf_0"));
+        assert!(registry.contains("udf_4"));
+        assert!(!registry.contains("udf_5"));
+    }
+
+    #[test]
+    fn test_udf_persistence_across_registry_instances() {
+        let (catalog, _dir) = create_test_catalog();
+
+        // Register UDF in first registry instance
+        let registry1 = PersistentUdfRegistry::new(catalog.clone());
+        let signature = UdfSignature {
+            name: "persistent_udf".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::String,
+            description: Some("Persistent UDF".to_string()),
+        };
+        let udf = BuiltinUdf::new(signature.clone(), |_args| {
+            Ok(Value::String("persisted".to_string()))
+        });
+        registry1.register(Arc::new(udf)).unwrap();
+
+        // Verify it's in catalog
+        let catalog_sig = catalog.get_udf("persistent_udf").unwrap();
+        assert!(catalog_sig.is_some());
+
+        // Create new registry instance and verify signature can be loaded
+        let registry2 = PersistentUdfRegistry::new(catalog.clone());
+        let signatures = registry2.load_signatures_from_catalog().unwrap();
+        assert!(signatures.iter().any(|s| s.name == "persistent_udf"));
+    }
 }

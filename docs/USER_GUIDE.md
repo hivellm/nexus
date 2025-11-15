@@ -277,6 +277,29 @@ UDFs support multiple return types:
 
 UDF signatures are automatically persisted to the catalog when registered. When the server restarts, UDF signatures are loaded from the catalog, but function implementations need to be re-registered.
 
+#### Managing UDFs via Cypher
+
+You can also manage UDF signatures using Cypher commands:
+
+**Create Function Signature:**
+```cypher
+CREATE FUNCTION multiply(a: Integer, b: Integer) RETURNS Integer AS 'Multiply two integers'
+CREATE FUNCTION IF NOT EXISTS add(a: Integer, b: Integer) RETURNS Integer
+```
+
+**Show Functions:**
+```cypher
+SHOW FUNCTIONS
+```
+
+**Drop Function:**
+```cypher
+DROP FUNCTION multiply
+DROP FUNCTION IF EXISTS multiply
+```
+
+**Note:** `CREATE FUNCTION` only stores the function signature. The actual function implementation must be registered via the API or plugin system using `register_udf()`.
+
 ### Custom Procedures
 
 Procedures extend Cypher with custom algorithms and operations. They can be called using the `CALL` statement.
@@ -789,6 +812,72 @@ Returns database statistics including node counts, relationship counts, and inde
 2. **Batch Operations**: Use bulk ingest for large datasets
 3. **Connection Pooling**: Reuse HTTP connections when possible
 
+## Geospatial Support
+
+Nexus provides comprehensive geospatial support for location-based queries and spatial analytics.
+
+### Point Data Type
+
+Points represent locations in 2D or 3D space with support for multiple coordinate systems:
+
+```cypher
+// Create a node with a Point property (2D Cartesian)
+CREATE (l:Location {name: 'San Francisco', coords: point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})})
+
+// Create a 3D point
+CREATE (l:Location {name: 'Building', coords: point({x: 1.0, y: 2.0, z: 3.0, crs: 'cartesian'})})
+```
+
+**Supported Coordinate Systems:**
+- `cartesian` - Cartesian coordinates (x, y, z)
+- `wgs-84` - WGS84 geographic coordinates (longitude, latitude, height)
+
+### Spatial Indexes
+
+Create spatial indexes on Point properties for efficient spatial queries:
+
+```cypher
+// Create spatial index
+CREATE SPATIAL INDEX ON :Location(coords)
+
+// Create spatial index with IF NOT EXISTS
+CREATE SPATIAL INDEX IF NOT EXISTS ON :Location(coords)
+
+// Create or replace spatial index
+CREATE OR REPLACE SPATIAL INDEX ON :Location(coords)
+```
+
+### Distance Functions
+
+Calculate distances between points:
+
+```cypher
+// Calculate distance between two points
+RETURN distance(point({x: 0, y: 0, crs: 'cartesian'}), point({x: 3, y: 4, crs: 'cartesian'})) AS dist
+
+// Find locations within distance
+MATCH (l:Location)
+WHERE distance(l.coords, point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})) < 1000.0
+RETURN l.name, distance(l.coords, point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})) AS dist
+ORDER BY dist
+```
+
+### Geospatial Procedures
+
+Use built-in procedures for spatial queries:
+
+```cypher
+// Find points within bounding box
+CALL spatial.withinBBox('Location', 'coords', -123.0, 37.0, -122.0, 38.0)
+YIELD node
+RETURN node
+
+// Find points within distance
+CALL spatial.withinDistance('Location', 'coords', point({x: -122.4194, y: 37.7749, crs: 'wgs-84'}), 1000.0)
+YIELD node
+RETURN node
+```
+
 ## Examples
 
 ### Social Network Analysis
@@ -916,6 +1005,214 @@ POST /mcp/call_tool
   }
 }
 ```
+
+## Graph Correlation Analysis
+
+### Overview
+
+Graph Correlation Analysis enables automatic generation of code relationship graphs from source code, providing visual understanding of code flow, dependencies, and processing patterns. This feature is particularly useful for:
+
+- Understanding code structure and relationships
+- Identifying architectural patterns
+- Analyzing data flow and transformations
+- Detecting design patterns
+- Visualizing component hierarchies
+
+### Graph Types
+
+Nexus supports four types of correlation graphs:
+
+1. **Call Graph**: Function call relationships and execution flow
+2. **Dependency Graph**: Module/library dependencies and imports
+3. **Data Flow Graph**: Data transformation and variable usage
+4. **Component Graph**: High-level architectural components (classes, interfaces)
+
+### Using MCP Tools
+
+The easiest way to use Graph Correlation Analysis is through MCP (Model Context Protocol) tools:
+
+#### Generate a Call Graph
+
+```json
+{
+  "name": "graph_correlation_generate",
+  "arguments": {
+    "graph_type": "Call",
+    "files": {
+      "main.rs": "fn main() { helper(); }\nfn helper() {}",
+      "utils.rs": "pub fn util() {}"
+    },
+    "functions": {
+      "main.rs": ["main", "helper"],
+      "utils.rs": ["util"]
+    },
+    "name": "My Call Graph"
+  }
+}
+```
+
+#### Analyze Graph Patterns
+
+```json
+{
+  "name": "graph_correlation_analyze",
+  "arguments": {
+    "graph": { /* graph object */ },
+    "analysis_type": "patterns"
+  }
+}
+```
+
+#### Export Graph
+
+```json
+{
+  "name": "graph_correlation_export",
+  "arguments": {
+    "graph": { /* graph object */ },
+    "format": "GraphML"
+  }
+}
+```
+
+### Using REST API
+
+#### Generate Graph
+
+```bash
+POST /api/v1/graphs/generate
+Content-Type: application/json
+
+{
+  "graph_type": "Call",
+  "files": {
+    "main.rs": "fn main() { helper(); }"
+  },
+  "name": "My Graph"
+}
+```
+
+#### Get Graph
+
+```bash
+GET /api/v1/graphs/{graph_id}
+```
+
+#### Analyze Graph
+
+```bash
+POST /api/v1/graphs/{graph_id}/analyze
+Content-Type: application/json
+
+{
+  "analysis_type": "statistics"
+}
+```
+
+### Using UMICP Protocol
+
+UMICP provides a standardized protocol interface for graph correlation analysis.
+
+#### Endpoint
+
+```
+POST /umicp/graph
+```
+
+#### Generate Graph
+
+```json
+{
+  "method": "graph.generate",
+  "params": {
+    "graph_type": "Call",
+    "files": {
+      "main.rs": "fn main() { helper(); }"
+    }
+  }
+}
+```
+
+#### Get Graph
+
+```json
+{
+  "method": "graph.get",
+  "params": {
+    "graph_id": "graph_550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+#### Analyze Graph
+
+```json
+{
+  "method": "graph.analyze",
+  "params": {
+    "graph_id": "graph_550e8400-e29b-41d4-a716-446655440000",
+    "analysis_type": "patterns"
+  }
+}
+```
+
+#### Visualize Graph
+
+```json
+{
+  "method": "graph.visualize",
+  "params": {
+    "graph_id": "graph_550e8400-e29b-41d4-a716-446655440000",
+    "width": 800,
+    "height": 600
+  }
+}
+```
+
+#### Export Graph
+
+```json
+{
+  "method": "graph.export",
+  "params": {
+    "graph_id": "graph_550e8400-e29b-41d4-a716-446655440000",
+    "format": "GraphML"
+  }
+}
+```
+
+**Available UMICP Methods:**
+- `graph.generate` - Generate correlation graph from source code
+- `graph.get` - Retrieve a stored graph by ID
+- `graph.analyze` - Analyze graph patterns and statistics
+- `graph.visualize` - Generate SVG visualization
+- `graph.patterns` - Detect patterns in graphs
+- `graph.export` - Export graph to various formats (JSON, GraphML, GEXF, DOT)
+- `graph.search` - Semantic search across graphs (placeholder)
+
+For complete UMICP examples, see `examples/umicp_graph_correlation_examples.md`.
+
+### Pattern Recognition
+
+Graph Correlation Analysis can detect various patterns:
+
+- **Pipeline Patterns**: Sequential data processing chains
+- **Event-Driven Patterns**: Publisher-subscriber relationships
+- **Architectural Patterns**: Layered architecture, microservices
+- **Design Patterns**: Observer, Factory, Singleton, Strategy
+
+### Visualization
+
+Graphs can be visualized as SVG, PNG, or PDF, and exported in multiple formats:
+
+- **JSON**: Structured graph data
+- **GraphML**: Standard graph format
+- **GEXF**: Gephi exchange format
+- **DOT**: Graphviz format
+
+For more details, see the [Graph Correlation Analysis Specification](specs/graph-correlation-analysis.md).
+
+---
 
 This completes the user guide. For more detailed information, refer to the API documentation and example code in the repository.
 

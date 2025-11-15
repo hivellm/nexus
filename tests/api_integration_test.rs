@@ -276,6 +276,212 @@ async fn test_cypher_endpoint_missing_query() {
 }
 
 // ============================================================================
+// Geospatial Point Serialization Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_point_serialization_in_return_via_http() {
+    let (app, _server) = create_test_server().await;
+    
+    let query_body = json!({
+        "query": "RETURN point({x: 1.0, y: 2.0, crs: 'cartesian'}) AS p",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+        .unwrap();
+    
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: Value = serde_json::from_slice(&body).unwrap();
+    
+    assert_eq!(result["status"], "success");
+    assert!(result["columns"].is_array());
+    assert_eq!(result["columns"][0], "p");
+    assert!(result["rows"].is_array());
+    assert_eq!(result["rows"].as_array().unwrap().len(), 1);
+    
+    // Verify Point serialization structure
+    let point_value = &result["rows"][0][0];
+    assert!(point_value.is_object());
+    
+    let point_obj = point_value.as_object().unwrap();
+    assert!(point_obj.contains_key("x"));
+    assert!(point_obj.contains_key("y"));
+    assert!(point_obj.contains_key("crs"));
+    
+    assert_eq!(point_obj["x"].as_f64().unwrap(), 1.0);
+    assert_eq!(point_obj["y"].as_f64().unwrap(), 2.0);
+    assert_eq!(point_obj["crs"].as_str().unwrap(), "cartesian");
+}
+
+#[tokio::test]
+async fn test_point_serialization_3d_in_return_via_http() {
+    let (app, _server) = create_test_server().await;
+    
+    let query_body = json!({
+        "query": "RETURN point({x: 1.0, y: 2.0, z: 3.0, crs: 'cartesian-3d'}) AS p",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+        .unwrap();
+    
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: Value = serde_json::from_slice(&body).unwrap();
+    
+    assert_eq!(result["status"], "success");
+    
+    // Verify 3D Point serialization
+    let point_value = &result["rows"][0][0];
+    let point_obj = point_value.as_object().unwrap();
+    
+    assert_eq!(point_obj["x"].as_f64().unwrap(), 1.0);
+    assert_eq!(point_obj["y"].as_f64().unwrap(), 2.0);
+    assert_eq!(point_obj["z"].as_f64().unwrap(), 3.0);
+    assert_eq!(point_obj["crs"].as_str().unwrap(), "cartesian-3d");
+}
+
+#[tokio::test]
+async fn test_point_serialization_in_node_properties_via_http() {
+    let (app, _server) = create_test_server().await;
+    
+    // Create a node with Point property
+    let create_query = json!({
+        "query": "CREATE (n:Location {pos: point({x: 10.0, y: 20.0, crs: 'cartesian'})}) RETURN n",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&create_query).unwrap()))
+        .unwrap();
+    
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: Value = serde_json::from_slice(&body).unwrap();
+    
+    assert_eq!(result["status"], "success");
+    
+    // Verify node has Point property correctly serialized
+    let node_value = &result["rows"][0][0];
+    assert!(node_value.is_object());
+    
+    let node_obj = node_value.as_object().unwrap();
+    assert!(node_obj.contains_key("pos"));
+    
+    let pos_value = &node_obj["pos"];
+    assert!(pos_value.is_object());
+    
+    let pos_obj = pos_value.as_object().unwrap();
+    assert_eq!(pos_obj["x"].as_f64().unwrap(), 10.0);
+    assert_eq!(pos_obj["y"].as_f64().unwrap(), 20.0);
+    assert_eq!(pos_obj["crs"].as_str().unwrap(), "cartesian");
+}
+
+#[tokio::test]
+async fn test_point_serialization_wgs84_via_http() {
+    let (app, _server) = create_test_server().await;
+    
+    let query_body = json!({
+        "query": "RETURN point({longitude: -122.4194, latitude: 37.7749, crs: 'wgs-84'}) AS p",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&query_body).unwrap()))
+        .unwrap();
+    
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: Value = serde_json::from_slice(&body).unwrap();
+    
+    assert_eq!(result["status"], "success");
+    
+    // Verify WGS84 Point serialization
+    let point_value = &result["rows"][0][0];
+    let point_obj = point_value.as_object().unwrap();
+    
+    // WGS84 should serialize with x/y (longitude/latitude) and crs
+    assert_eq!(point_obj["x"].as_f64().unwrap(), -122.4194);
+    assert_eq!(point_obj["y"].as_f64().unwrap(), 37.7749);
+    assert_eq!(point_obj["crs"].as_str().unwrap(), "wgs-84");
+}
+
+#[tokio::test]
+async fn test_point_serialization_in_match_query_via_http() {
+    let (app, _server) = create_test_server().await;
+    
+    // First create a node with Point property
+    let create_query = json!({
+        "query": "CREATE (n:Location {name: 'SF', pos: point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})}) RETURN n",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&create_query).unwrap()))
+        .unwrap();
+    
+    let _response = app.clone().oneshot(request).await.unwrap();
+    
+    // Now query it back
+    let match_query = json!({
+        "query": "MATCH (n:Location {name: 'SF'}) RETURN n.pos AS location",
+        "params": {}
+    });
+    
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/cypher")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&match_query).unwrap()))
+        .unwrap();
+    
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: Value = serde_json::from_slice(&body).unwrap();
+    
+    assert_eq!(result["status"], "success");
+    assert_eq!(result["rows"].as_array().unwrap().len(), 1);
+    
+    // Verify Point is correctly serialized in response
+    let location_value = &result["rows"][0][0];
+    assert!(location_value.is_object());
+    
+    let location_obj = location_value.as_object().unwrap();
+    assert_eq!(location_obj["x"].as_f64().unwrap(), -122.4194);
+    assert_eq!(location_obj["y"].as_f64().unwrap(), 37.7749);
+    assert_eq!(location_obj["crs"].as_str().unwrap(), "wgs-84");
+}
+
+// ============================================================================
 // KNN Traverse Tests
 // ============================================================================
 

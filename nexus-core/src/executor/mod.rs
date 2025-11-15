@@ -17,6 +17,7 @@ pub mod parser;
 pub mod planner;
 
 use crate::catalog::Catalog;
+use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
 use crate::graph::{algorithms::Graph, procedures::ProcedureRegistry};
 use crate::index::{KnnIndex, LabelIndex};
 use crate::storage::RecordStore;
@@ -26,6 +27,7 @@ use chrono::{Datelike, TimeZone};
 use planner::QueryPlanner;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Cypher query
 #[derive(Debug, Clone)]
@@ -198,6 +200,19 @@ pub enum Operator {
         /// YIELD columns (optional) - columns to return from procedure
         yield_columns: Option<Vec<String>>,
     },
+    /// Create an index
+    CreateIndex {
+        /// Label name
+        label: String,
+        /// Property name
+        property: String,
+        /// Index type (None = property index, Some("spatial") = spatial index)
+        index_type: Option<String>,
+        /// IF NOT EXISTS flag
+        if_not_exists: bool,
+        /// OR REPLACE flag
+        or_replace: bool,
+    },
 }
 
 /// Projection entry describing an expression and its alias
@@ -327,6 +342,8 @@ pub enum IndexType {
     Vector,
     /// Full-text index
     FullText,
+    /// Spatial index (R-tree)
+    Spatial,
 }
 
 /// Path structure for shortest path functions
@@ -347,6 +364,8 @@ pub struct Executor {
     knn_index: KnnIndex,
     /// UDF registry for user-defined functions
     udf_registry: UdfRegistry,
+    /// Spatial indexes (label.property -> RTreeIndex)
+    spatial_indexes: Arc<parking_lot::RwLock<HashMap<String, SpatialIndex>>>,
 }
 
 impl Executor {
@@ -363,6 +382,7 @@ impl Executor {
             label_index: label_index.clone(),
             knn_index: knn_index.clone(),
             udf_registry: UdfRegistry::new(),
+            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         })
     }
 
@@ -380,6 +400,7 @@ impl Executor {
             label_index: label_index.clone(),
             knn_index: knn_index.clone(),
             udf_registry,
+            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         })
     }
 
@@ -403,16 +424,108 @@ impl Executor {
         let mut results = Vec::new();
         let mut projection_columns: Vec<String> = Vec::new();
 
-        for operator in operators {
+        // Check if first operator is CREATE standalone (no MATCH before)
+        // If so, execute it directly and populate result_set
+        if let Some(Operator::Create { pattern }) = operators.first() {
+            let existing_rows = self.materialize_rows_from_variables(&context);
+            if existing_rows.is_empty() {
+                // CREATE standalone - create nodes and relationships directly
+                let (created_node_ids, created_rel_ids) =
+                    self.execute_create_pattern_with_variables(&pattern)?;
+
+                // Collect all created entities (nodes and relationships)
+                let mut columns: Vec<String> = created_node_ids.keys().cloned().collect();
+                let mut rel_columns: Vec<String> = created_rel_ids.keys().cloned().collect();
+                columns.append(&mut rel_columns);
+
+                // Create a single row with all created entities
+                if !columns.is_empty() {
+                    let mut row_values = Vec::new();
+                    for col in &columns {
+                        if let Some(node_id) = created_node_ids.get(col) {
+                            // It's a node
+                            if let Ok(node_value) = self.read_node_as_value(*node_id) {
+                                row_values.push(node_value.clone());
+                                // Store in context variable
+                                context.set_variable(col, node_value);
+                            } else {
+                                row_values.push(Value::Null);
+                            }
+                        } else if let Some(rel_info) = created_rel_ids.get(col) {
+                            // It's a relationship
+                            if let Ok(rel_value) = self.read_relationship_as_value(rel_info) {
+                                row_values.push(rel_value.clone());
+                                // Store in context variable
+                                context.set_variable(col, rel_value);
+                            } else {
+                                row_values.push(Value::Null);
+                            }
+                        } else {
+                            row_values.push(Value::Null);
+                        }
+                    }
+
+                    if !row_values.is_empty() {
+                        context.result_set.columns = columns;
+                        context.result_set.rows = vec![Row { values: row_values }];
+                    }
+                }
+
+                // Skip CREATE operator in loop since we already executed it
+                // Continue with remaining operators (if any)
+                for (_idx, operator) in operators.iter().enumerate().skip(1) {
+                    match operator {
+                        Operator::Project { items } => {
+                            projection_columns =
+                                items.iter().map(|item| item.alias.clone()).collect();
+                            results = self.execute_project(&mut context, items)?;
+                        }
+                        Operator::Limit { count } => {
+                            self.execute_limit(&mut context, *count)?;
+                        }
+                        Operator::Sort { columns, ascending } => {
+                            self.execute_sort(&mut context, columns, ascending)?;
+                        }
+                        _ => {
+                            // Other operators after CREATE standalone
+                        }
+                    }
+                }
+
+                // Return early with populated result_set
+                let final_columns = if !context.result_set.columns.is_empty() {
+                    context.result_set.columns.clone()
+                } else if !projection_columns.is_empty() {
+                    projection_columns
+                } else {
+                    vec![]
+                };
+
+                let final_rows = if !context.result_set.rows.is_empty() {
+                    context.result_set.rows.clone()
+                } else if !results.is_empty() {
+                    results
+                } else {
+                    vec![]
+                };
+
+                return Ok(ResultSet {
+                    columns: final_columns,
+                    rows: final_rows,
+                });
+            }
+        }
+
+        for (_idx, operator) in operators.iter().enumerate() {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
-                    let nodes = self.execute_node_by_label(label_id)?;
-                    context.set_variable(&variable, Value::Array(nodes));
+                    let nodes = self.execute_node_by_label(*label_id)?;
+                    context.set_variable(variable, Value::Array(nodes));
                     let rows = self.materialize_rows_from_variables(&context);
                     self.update_result_set_from_rows(&mut context, &rows);
                 }
                 Operator::Filter { predicate } => {
-                    self.execute_filter(&mut context, &predicate)?;
+                    self.execute_filter(&mut context, predicate)?;
                 }
                 Operator::Expand {
                     type_id,
@@ -423,44 +536,97 @@ impl Executor {
                 } => {
                     self.execute_expand(
                         &mut context,
-                        type_id,
-                        direction,
-                        &source_var,
-                        &target_var,
-                        &rel_var,
+                        *type_id,
+                        *direction,
+                        source_var,
+                        target_var,
+                        rel_var,
                     )?;
                 }
                 Operator::Project { items } => {
                     projection_columns = items.iter().map(|item| item.alias.clone()).collect();
-                    results = self.execute_project(&mut context, &items)?;
+                    results = self.execute_project(&mut context, items)?;
                 }
                 Operator::Limit { count } => {
-                    self.execute_limit(&mut context, count)?;
+                    self.execute_limit(&mut context, *count)?;
                 }
                 Operator::Sort { columns, ascending } => {
-                    self.execute_sort(&mut context, &columns, &ascending)?;
+                    self.execute_sort(&mut context, columns, ascending)?;
                 }
                 Operator::Aggregate {
                     group_by,
                     aggregations,
                 } => {
-                    self.execute_aggregate(&mut context, &group_by, &aggregations)?;
+                    self.execute_aggregate(&mut context, group_by, aggregations)?;
                 }
                 Operator::Union {
                     left,
                     right,
                     distinct,
                 } => {
-                    self.execute_union(&mut context, &left, &right, distinct)?;
+                    self.execute_union(&mut context, left, right, *distinct)?;
                 }
                 Operator::Create { pattern } => {
-                    self.execute_create_with_context(&mut context, &pattern)?;
+                    // Check if there are existing rows from MATCH
+                    let existing_rows = self.materialize_rows_from_variables(&context);
+
+                    if existing_rows.is_empty() {
+                        // CREATE standalone - create nodes and relationships directly
+                        let (created_node_ids, created_rel_ids) =
+                            self.execute_create_pattern_with_variables(&pattern)?;
+
+                        // Collect all created entities (nodes and relationships)
+                        let mut columns: Vec<String> = created_node_ids.keys().cloned().collect();
+                        let mut rel_columns: Vec<String> =
+                            created_rel_ids.keys().cloned().collect();
+                        columns.append(&mut rel_columns);
+
+                        // Create a single row with all created entities
+                        if !columns.is_empty() {
+                            let mut row_values = Vec::new();
+                            for col in &columns {
+                                if let Some(node_id) = created_node_ids.get(col) {
+                                    // It's a node
+                                    if let Ok(node_value) = self.read_node_as_value(*node_id) {
+                                        row_values.push(node_value.clone());
+                                        // Store in context variable
+                                        context.set_variable(col, node_value);
+                                    } else {
+                                        row_values.push(Value::Null);
+                                    }
+                                } else if let Some(rel_info) = created_rel_ids.get(col) {
+                                    // It's a relationship
+                                    if let Ok(rel_value) = self.read_relationship_as_value(rel_info)
+                                    {
+                                        row_values.push(rel_value.clone());
+                                        // Store in context variable
+                                        context.set_variable(col, rel_value);
+                                    } else {
+                                        row_values.push(Value::Null);
+                                    }
+                                } else {
+                                    row_values.push(Value::Null);
+                                }
+                            }
+
+                            if !row_values.is_empty() {
+                                context.result_set.columns = columns;
+                                context.result_set.rows = vec![Row { values: row_values }];
+                            }
+                        }
+                    } else {
+                        // CREATE with MATCH context - use existing implementation
+                        self.execute_create_with_context(&mut context, &pattern)?;
+                    }
+
+                    // If no RETURN clause follows, result_set is already populated above
+                    // If RETURN follows, Project operator will handle it
                 }
                 Operator::Delete { variables } => {
-                    self.execute_delete(&mut context, &variables, false)?;
+                    self.execute_delete(&mut context, variables, false)?;
                 }
                 Operator::DetachDelete { variables } => {
-                    self.execute_delete(&mut context, &variables, true)?;
+                    self.execute_delete(&mut context, variables, true)?;
                 }
                 Operator::Join {
                     left,
@@ -468,19 +634,13 @@ impl Executor {
                     join_type,
                     condition,
                 } => {
-                    self.execute_join(
-                        &mut context,
-                        &left,
-                        &right,
-                        join_type,
-                        condition.as_deref(),
-                    )?;
+                    self.execute_join(&mut context, left, right, *join_type, condition.as_deref())?;
                 }
                 Operator::IndexScan { index_name, label } => {
-                    self.execute_index_scan_new(&mut context, &index_name, &label)?;
+                    self.execute_index_scan_new(&mut context, index_name, label)?;
                 }
                 Operator::Distinct { columns } => {
-                    self.execute_distinct(&mut context, &columns)?;
+                    self.execute_distinct(&mut context, columns)?;
                 }
                 Operator::HashJoin {
                     left_key,
@@ -505,13 +665,13 @@ impl Executor {
                 } => {
                     self.execute_variable_length_path(
                         &mut context,
-                        type_id,
-                        direction,
-                        &source_var,
-                        &target_var,
-                        &rel_var,
-                        &path_var,
-                        &quantifier,
+                        *type_id,
+                        *direction,
+                        source_var,
+                        target_var,
+                        rel_var,
+                        path_var,
+                        quantifier,
                     )?;
                 }
                 Operator::CallProcedure {
@@ -521,24 +681,55 @@ impl Executor {
                 } => {
                     self.execute_call_procedure(
                         &mut context,
-                        &procedure_name,
-                        &arguments,
+                        procedure_name,
+                        arguments,
                         yield_columns.as_ref(),
                     )?;
+                }
+                Operator::CreateIndex {
+                    label,
+                    property,
+                    index_type,
+                    if_not_exists,
+                    or_replace,
+                } => {
+                    self.execute_create_index(
+                        label,
+                        property,
+                        index_type.as_deref(),
+                        *if_not_exists,
+                        *or_replace,
+                    )?;
+                    // Return empty result set for CREATE INDEX
+                    context.result_set = ResultSet {
+                        columns: vec!["index".to_string()],
+                        rows: vec![Row {
+                            values: vec![Value::String(format!(
+                                "{}.{}.{}",
+                                label,
+                                property,
+                                index_type.as_deref().unwrap_or("property")
+                            ))],
+                        }],
+                    };
                 }
             }
         }
 
         let final_columns = if !context.result_set.columns.is_empty() {
             context.result_set.columns.clone()
-        } else {
+        } else if !projection_columns.is_empty() {
             projection_columns
+        } else {
+            vec![]
         };
 
         let final_rows = if !context.result_set.rows.is_empty() {
             context.result_set.rows.clone()
-        } else {
+        } else if !results.is_empty() {
             results
+        } else {
+            vec![]
         };
 
         Ok(ResultSet {
@@ -595,7 +786,10 @@ impl Executor {
                 }
                 parser::Clause::Create(create_clause) => {
                     // CREATE: create nodes and relationships from pattern
-                    self.execute_create_pattern(&create_clause.pattern)?;
+                    // Add CREATE operator (don't execute directly)
+                    operators.push(Operator::Create {
+                        pattern: create_clause.pattern.clone(),
+                    });
                 }
                 parser::Clause::Merge(merge_clause) => {
                     // MERGE: match-or-create pattern
@@ -655,16 +849,43 @@ impl Executor {
     }
 
     /// Execute CREATE pattern to create nodes and relationships
-    fn execute_create_pattern(&mut self, pattern: &parser::Pattern) -> Result<()> {
+    /// Returns map of variable names to created node IDs
+    fn execute_create_pattern_with_variables(
+        &mut self,
+        pattern: &parser::Pattern,
+    ) -> Result<(
+        std::collections::HashMap<String, u64>,
+        std::collections::HashMap<String, RelationshipInfo>,
+    )> {
+        let mut created_nodes: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        let mut created_relationships: std::collections::HashMap<String, RelationshipInfo> =
+            std::collections::HashMap::new();
+
+        // Call the original implementation
+        self.execute_create_pattern_internal(
+            pattern,
+            &mut created_nodes,
+            &mut created_relationships,
+        )?;
+
+        Ok((created_nodes, created_relationships))
+    }
+
+    /// Internal implementation of CREATE pattern execution
+    fn execute_create_pattern_internal(
+        &mut self,
+        pattern: &parser::Pattern,
+        created_nodes: &mut std::collections::HashMap<String, u64>,
+        created_relationships: &mut std::collections::HashMap<String, RelationshipInfo>,
+    ) -> Result<()> {
         use crate::transaction::TransactionManager;
-        use std::collections::HashMap;
 
         // Create a transaction manager for this operation
         let mut tx_mgr = TransactionManager::new()?;
         let mut tx = tx_mgr.begin_write()?;
 
-        // Map of variable names to created node IDs
-        let mut created_nodes: HashMap<String, u64> = HashMap::new();
+        // Use the passed-in created_nodes HashMap (don't create a new one)
         let mut last_node_id: Option<u64> = None;
 
         // Process pattern elements in sequence
@@ -700,7 +921,7 @@ impl Executor {
 
                     // Store node ID if variable exists
                     if let Some(var) = &node.variable {
-                        created_nodes.entry(var.clone()).or_insert(node_id);
+                        created_nodes.insert(var.clone(), node_id);
                     }
 
                     // Track last node for relationship creation
@@ -753,7 +974,7 @@ impl Executor {
 
                             // Store target node ID if variable exists
                             if let Some(var) = &target_node.variable {
-                                created_nodes.entry(var.clone()).or_insert(tid);
+                                created_nodes.insert(var.clone(), tid);
                             }
 
                             last_node_id = Some(tid);
@@ -789,13 +1010,26 @@ impl Executor {
                     };
 
                     // Create the relationship
-                    self.store.create_relationship(
+                    let rel_id = self.store.create_relationship(
                         &mut tx,
                         source_id,
                         target_id,
                         type_id,
                         rel_properties,
                     )?;
+
+                    // Store relationship ID if variable exists
+                    if let Some(var) = &rel.variable {
+                        created_relationships.insert(
+                            var.clone(),
+                            RelationshipInfo {
+                                id: rel_id,
+                                source_id,
+                                target_id,
+                                type_id,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -840,6 +1074,7 @@ impl Executor {
                 }
                 parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
                 parser::Literal::Null => Ok(Value::Null),
+                parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
             parser::Expression::Variable(_) => Err(Error::CypherExecution(
                 "Variables not supported in CREATE properties".to_string(),
@@ -863,6 +1098,7 @@ impl Executor {
                 parser::Literal::Float(f) => Ok(f.to_string()),
                 parser::Literal::Boolean(b) => Ok(b.to_string()),
                 parser::Literal::Null => Ok("NULL".to_string()),
+                parser::Literal::Point(p) => Ok(p.to_string()),
             },
             parser::Expression::BinaryOp { left, op, right } => {
                 let left_str = self.expression_to_string(left)?;
@@ -1928,8 +2164,13 @@ impl Executor {
             } => {
                 self.execute_union(context, left, right, *distinct)?;
             }
-            Operator::Create { pattern } => {
-                self.execute_create_with_context(context, pattern)?;
+            Operator::Create { pattern: _ } => {
+                // Note: execute_create_with_context requires &mut self
+                // This method is only used internally, so we'll handle it differently
+                // For now, this path shouldn't be reached as CREATE is handled in execute()
+                return Err(Error::CypherExecution(
+                    "CREATE operator should be handled in execute() method".to_string(),
+                ));
             }
             Operator::Delete { variables } => {
                 self.execute_delete(context, variables, false)?;
@@ -1988,6 +2229,33 @@ impl Executor {
                     arguments,
                     yield_columns.as_ref(),
                 )?;
+            }
+            Operator::CreateIndex {
+                label,
+                property,
+                index_type,
+                if_not_exists,
+                or_replace,
+            } => {
+                self.execute_create_index(
+                    label,
+                    property,
+                    index_type.as_deref(),
+                    *if_not_exists,
+                    *or_replace,
+                )?;
+                // Return empty result set for CREATE INDEX
+                context.result_set = ResultSet {
+                    columns: vec!["index".to_string()],
+                    rows: vec![Row {
+                        values: vec![Value::String(format!(
+                            "{}.{}.{}",
+                            label,
+                            property,
+                            index_type.as_deref().unwrap_or("property")
+                        ))],
+                    }],
+                };
             }
         }
         Ok(())
@@ -2210,6 +2478,15 @@ impl Executor {
                 // In a full implementation, this would use the KNN index
                 results = Vec::new();
             }
+            IndexType::Spatial => {
+                // Scan spatial index for points within distance or bounding box
+                // For now, return empty results - spatial index queries require specific implementation
+                // In a full implementation, this would use the spatial index (R-tree)
+                // to find points within a given distance or bounding box
+                // The planner should detect distance() or withinDistance() calls in WHERE clauses
+                // and use this index type for optimization
+                results = Vec::new();
+            }
             IndexType::FullText => {
                 // Scan full-text index for text matches
                 // For now, implement a simple text search in properties
@@ -2420,6 +2697,7 @@ impl Executor {
                 )),
                 parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
                 parser::Literal::Null => Ok(Value::Null),
+                parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
             parser::Expression::Parameter(name) => {
                 if let Some(value) = context.params.get(name) {
@@ -3249,6 +3527,23 @@ impl Executor {
         arguments: &[parser::Expression],
         yield_columns: Option<&Vec<String>>,
     ) -> Result<()> {
+        // Handle built-in db.* procedures that don't need Graph
+        match procedure_name {
+            "db.labels" => {
+                return self.execute_db_labels_procedure(context, yield_columns);
+            }
+            "db.propertyKeys" => {
+                return self.execute_db_property_keys_procedure(context, yield_columns);
+            }
+            "db.relationshipTypes" => {
+                return self.execute_db_relationship_types_procedure(context, yield_columns);
+            }
+            "db.schema" => {
+                return self.execute_db_schema_procedure(context, yield_columns);
+            }
+            _ => {}
+        }
+
         // Get procedure registry (for now, create a new one - in full implementation would be shared)
         let registry = ProcedureRegistry::new();
 
@@ -3361,6 +3656,222 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute db.labels() procedure
+    fn execute_db_labels_procedure(
+        &self,
+        context: &mut ExecutionContext,
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        // Get all labels from catalog - iterate through all label IDs
+        // We'll scan from 0 to a reasonable max (or use stats)
+        let mut labels = Vec::new();
+
+        // Try to get labels by iterating through possible IDs
+        // This is a workaround - ideally Catalog would have list_all_labels()
+        for label_id in 0..10000u32 {
+            if let Ok(Some(label_name)) = self.catalog.get_label_name(label_id) {
+                labels.push(label_name);
+            }
+        }
+
+        // Convert to rows
+        let mut rows = Vec::new();
+        for label in labels {
+            rows.push(Row {
+                values: vec![serde_json::Value::String(label)],
+            });
+        }
+
+        // Set columns based on YIELD clause
+        let columns = if let Some(yield_cols) = yield_columns {
+            // Use YIELD columns if specified
+            yield_cols.clone()
+        } else {
+            // Default column name
+            vec!["label".to_string()]
+        };
+
+        context.set_columns_and_rows(columns, rows);
+        Ok(())
+    }
+
+    /// Execute db.propertyKeys() procedure
+    fn execute_db_property_keys_procedure(
+        &self,
+        context: &mut ExecutionContext,
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        // Get all property keys from catalog using public method
+        let property_keys: Vec<String> = self
+            .catalog
+            .list_all_keys()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+
+        // Convert to rows
+        let mut rows = Vec::new();
+        for key in property_keys {
+            rows.push(Row {
+                values: vec![serde_json::Value::String(key)],
+            });
+        }
+
+        // Set columns based on YIELD clause
+        let columns = if let Some(yield_cols) = yield_columns {
+            yield_cols.clone()
+        } else {
+            vec!["propertyKey".to_string()]
+        };
+
+        context.set_columns_and_rows(columns, rows);
+        Ok(())
+    }
+
+    /// Execute db.relationshipTypes() procedure
+    fn execute_db_relationship_types_procedure(
+        &self,
+        context: &mut ExecutionContext,
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        // Get all relationship types from catalog - iterate through possible IDs
+        let mut rel_types = Vec::new();
+
+        // Try to get types by iterating through possible IDs
+        for type_id in 0..10000u32 {
+            if let Ok(Some(type_name)) = self.catalog.get_type_name(type_id) {
+                rel_types.push(type_name);
+            }
+        }
+
+        // Convert to rows
+        let mut rows = Vec::new();
+        for rel_type in rel_types {
+            rows.push(Row {
+                values: vec![serde_json::Value::String(rel_type)],
+            });
+        }
+
+        // Set columns based on YIELD clause
+        let columns = if let Some(yield_cols) = yield_columns {
+            yield_cols.clone()
+        } else {
+            vec!["relationshipType".to_string()]
+        };
+
+        context.set_columns_and_rows(columns, rows);
+        Ok(())
+    }
+
+    /// Execute db.schema() procedure
+    fn execute_db_schema_procedure(
+        &self,
+        context: &mut ExecutionContext,
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        // Get all labels and relationship types from catalog
+        let mut labels = Vec::new();
+        for label_id in 0..10000u32 {
+            if let Ok(Some(label_name)) = self.catalog.get_label_name(label_id) {
+                labels.push(label_name);
+            }
+        }
+
+        let mut rel_types = Vec::new();
+        for type_id in 0..10000u32 {
+            if let Ok(Some(type_name)) = self.catalog.get_type_name(type_id) {
+                rel_types.push(type_name);
+            }
+        }
+
+        // Convert to JSON arrays
+        let nodes_array: Vec<serde_json::Value> = labels
+            .into_iter()
+            .map(|l| serde_json::json!({"name": l}))
+            .collect();
+        let relationships_array: Vec<serde_json::Value> = rel_types
+            .into_iter()
+            .map(|t| serde_json::json!({"name": t}))
+            .collect();
+
+        // Create result row
+        let rows = vec![Row {
+            values: vec![
+                serde_json::Value::Array(nodes_array),
+                serde_json::Value::Array(relationships_array),
+            ],
+        }];
+
+        // Set columns based on YIELD clause
+        let columns = if let Some(yield_cols) = yield_columns {
+            yield_cols.clone()
+        } else {
+            vec!["nodes".to_string(), "relationships".to_string()]
+        };
+
+        context.set_columns_and_rows(columns, rows);
+        Ok(())
+    }
+
+    /// Execute CREATE INDEX command
+    pub fn execute_create_index(
+        &self,
+        label: &str,
+        property: &str,
+        index_type: Option<&str>,
+        if_not_exists: bool,
+        or_replace: bool,
+    ) -> Result<()> {
+        let index_key = format!("{}.{}", label, property);
+
+        // Check if index already exists
+        let indexes = self.spatial_indexes.read();
+        let exists = indexes.contains_key(&index_key);
+        drop(indexes);
+
+        if exists {
+            if if_not_exists {
+                // Index exists and IF NOT EXISTS was specified - do nothing
+                return Ok(());
+            } else if !or_replace {
+                return Err(Error::CypherExecution(format!(
+                    "Index on :{}({}) already exists",
+                    label, property
+                )));
+            }
+            // OR REPLACE - will be handled by creating new index below
+        }
+
+        // Create the appropriate index type
+        match index_type {
+            Some("spatial") => {
+                // Create spatial index (R-tree)
+                let mut indexes = self.spatial_indexes.write();
+                if or_replace && exists {
+                    // Replace existing index
+                    indexes.remove(&index_key);
+                }
+                indexes.insert(index_key, SpatialIndex::new());
+            }
+            None | Some("property") => {
+                // Property index - for now, just register in catalog
+                // In a full implementation, this would create a B-tree index
+                // For MVP, we'll just track that the index exists
+                let _label_id = self.catalog.get_or_create_label(label)?;
+                let _key_id = self.catalog.get_or_create_key(property)?;
+                // Index is registered - actual indexing would happen during inserts
+            }
+            _ => {
+                return Err(Error::CypherExecution(format!(
+                    "Unknown index type: {}",
+                    index_type.unwrap_or("unknown")
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Evaluate an expression in the current context
     fn evaluate_expression_in_context(
         &self,
@@ -3378,6 +3889,7 @@ impl Executor {
             )),
             parser::Expression::Literal(parser::Literal::Boolean(b)) => Ok(Value::Bool(*b)),
             parser::Expression::Literal(parser::Literal::Null) => Ok(Value::Null),
+            parser::Expression::Literal(parser::Literal::Point(p)) => Ok(p.to_json_value()),
             parser::Expression::Variable(var) => context
                 .get_variable(var)
                 .cloned()
@@ -3462,10 +3974,25 @@ impl Executor {
     ) -> Result<Value> {
         match expr {
             parser::Expression::Variable(name) => Ok(row.get(name).cloned().unwrap_or(Value::Null)),
-            parser::Expression::PropertyAccess { variable, property } => Ok(row
-                .get(variable)
-                .map(|entity| Self::extract_property(entity, property))
-                .unwrap_or(Value::Null)),
+            parser::Expression::PropertyAccess { variable, property } => {
+                // Check if this is a point method call (e.g., point.distance())
+                if property == "distance" {
+                    // Get the point from the variable
+                    if let Some(Value::Object(_)) = row.get(variable) {
+                        // This is a point object, but we need another point to calculate distance
+                        // For now, return a function that can be called with another point
+                        // In Cypher, this would be: point1.distance(point2)
+                        // We'll handle this as a special case - the syntax would be different
+                        // For now, return null and document that distance() function should be used
+                        return Ok(Value::Null);
+                    }
+                }
+
+                Ok(row
+                    .get(variable)
+                    .map(|entity| Self::extract_property(entity, property))
+                    .unwrap_or(Value::Null))
+            }
             parser::Expression::Literal(literal) => match literal {
                 parser::Literal::String(s) => Ok(Value::String(s.clone())),
                 parser::Literal::Integer(i) => Ok(Value::Number((*i).into())),
@@ -3474,6 +4001,7 @@ impl Executor {
                     .unwrap_or(Value::Null)),
                 parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
                 parser::Literal::Null => Ok(Value::Null),
+                parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
             parser::Expression::Parameter(name) => {
                 Ok(context.params.get(name).cloned().unwrap_or(Value::Null))
@@ -3487,7 +4015,7 @@ impl Executor {
                     let mut evaluated_args = Vec::new();
                     for arg_expr in args {
                         let arg_value =
-                            self.evaluate_projection_expression(row, context, &arg_expr)?;
+                            self.evaluate_projection_expression(row, context, arg_expr)?;
                         evaluated_args.push(arg_value);
                     }
 
@@ -3856,6 +4384,45 @@ impl Executor {
                             }
                             let num = self.value_to_number(&value)?;
                             return serde_json::Number::from_f64(num.tan())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Geospatial functions
+                    "distance" => {
+                        // distance(point1, point2) - calculate distance between two points
+                        if args.len() >= 2 {
+                            let p1_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let p2_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            // Try to parse points from JSON values
+                            // Points can be:
+                            // 1. Point literals (already converted to JSON objects via to_json_value)
+                            // 2. JSON objects with x/y/z/crs fields
+                            let p1 = if let Value::Object(_) = &p1_val {
+                                crate::geospatial::Point::from_json_value(&p1_val).map_err(
+                                    |_| Error::CypherSyntax("Invalid point 1".to_string()),
+                                )?
+                            } else {
+                                return Ok(Value::Null);
+                            };
+
+                            let p2 = if let Value::Object(_) = &p2_val {
+                                crate::geospatial::Point::from_json_value(&p2_val).map_err(
+                                    |_| Error::CypherSyntax("Invalid point 2".to_string()),
+                                )?
+                            } else {
+                                return Ok(Value::Null);
+                            };
+
+                            let distance = p1.distance_to(&p2);
+                            return serde_json::Number::from_f64(distance)
                                 .map(Value::Number)
                                 .ok_or_else(|| Error::TypeMismatch {
                                     expected: "number".to_string(),
@@ -4848,6 +5415,18 @@ impl Executor {
                         }
                         Ok(Value::Bool(false))
                     }
+                    "coalesce" => {
+                        // coalesce(expr1, expr2, ...) - returns first non-null value
+                        // Evaluates arguments in order and returns the first non-null value
+                        for arg in args {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if !value.is_null() {
+                                return Ok(value);
+                            }
+                        }
+                        // All arguments were null
+                        Ok(Value::Null)
+                    }
                     _ => Ok(Value::Null),
                 }
             }
@@ -5521,6 +6100,10 @@ impl Default for Executor {
             .expect("Failed to create default executor")
     }
 }
+
+#[cfg(test)]
+#[path = "geospatial_tests.rs"]
+mod geospatial_tests;
 
 #[cfg(test)]
 mod tests {

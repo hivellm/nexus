@@ -29,6 +29,10 @@ pub struct QueryRecord {
     pub rows_returned: usize,
     /// Memory usage in bytes (if available)
     pub memory_usage: Option<u64>,
+    /// Cache hits during query execution
+    pub cache_hits: Option<u64>,
+    /// Cache misses during query execution
+    pub cache_misses: Option<u64>,
 }
 
 /// Slow query log entry
@@ -149,6 +153,30 @@ impl QueryStatistics {
         error: Option<String>,
         rows_returned: usize,
     ) {
+        self.record_query_with_metrics(
+            query,
+            execution_time,
+            success,
+            error,
+            rows_returned,
+            None,
+            None,
+            None,
+        );
+    }
+
+    /// Record a query execution with additional metrics
+    pub fn record_query_with_metrics(
+        &self,
+        query: &str,
+        execution_time: Duration,
+        success: bool,
+        error: Option<String>,
+        rows_returned: usize,
+        memory_usage: Option<u64>,
+        cache_hits: Option<u64>,
+        cache_misses: Option<u64>,
+    ) {
         let time_ms = execution_time.as_millis() as u64;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -211,7 +239,9 @@ impl QueryStatistics {
             success,
             error: error.clone(),
             rows_returned,
-            memory_usage: None,
+            memory_usage,
+            cache_hits,
+            cache_misses,
         };
 
         self.slow_query_log.write().unwrap().add_query(record);
@@ -383,6 +413,8 @@ mod tests {
             error: None,
             rows_returned: 10,
             memory_usage: None,
+            cache_hits: None,
+            cache_misses: None,
         });
 
         assert_eq!(log.count(), 0); // Below threshold
@@ -395,6 +427,8 @@ mod tests {
             error: None,
             rows_returned: 10,
             memory_usage: None,
+            cache_hits: None,
+            cache_misses: None,
         });
 
         assert_eq!(log.count(), 1); // Above threshold
@@ -521,6 +555,8 @@ mod tests {
                 error: None,
                 rows_returned: 10,
                 memory_usage: None,
+                cache_hits: None,
+                cache_misses: None,
             });
         }
 
@@ -545,6 +581,8 @@ mod tests {
             error: None,
             rows_returned: 10,
             memory_usage: None,
+            cache_hits: None,
+            cache_misses: None,
         });
 
         assert_eq!(log.count(), 1);

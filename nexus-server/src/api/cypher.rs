@@ -5,6 +5,7 @@ use axum::extract::{Extension, Json, State};
 use nexus_core::auth::{Permission, middleware::AuthContext};
 use nexus_core::executor::parser::PropertyMap;
 use nexus_core::executor::{Executor, Query};
+use nexus_core::geospatial::Point;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -75,6 +76,7 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
                 .unwrap_or(serde_json::Value::Null),
             nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
             nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
+            nexus_core::executor::parser::Literal::Point(p) => p.to_json_value(),
         },
         nexus_core::executor::parser::Expression::PropertyAccess {
             variable: _,
@@ -242,19 +244,132 @@ fn record_query_execution(
     error: Option<String>,
     rows_returned: usize,
 ) {
+    record_query_execution_with_metrics(
+        query,
+        execution_time,
+        success,
+        error,
+        rows_returned,
+        None,
+        None,
+        None,
+    );
+}
+
+/// Helper function to record query execution with additional metrics
+fn record_query_execution_with_metrics(
+    query: &str,
+    execution_time: Duration,
+    success: bool,
+    error: Option<String>,
+    rows_returned: usize,
+    memory_usage: Option<u64>,
+    cache_hits: Option<u64>,
+    cache_misses: Option<u64>,
+) {
     if let Some(stats) = crate::api::performance::get_query_stats() {
-        stats.record_query(query, execution_time, success, error, rows_returned);
+        stats.record_query_with_metrics(
+            query,
+            execution_time,
+            success,
+            error,
+            rows_returned,
+            memory_usage,
+            cache_hits,
+            cache_misses,
+        );
+    }
+}
+
+/// Register connection and query for tracking (with SocketAddr)
+fn register_connection_and_query(
+    query: &str,
+    addr: &std::net::SocketAddr,
+    auth_context: &Option<AuthContext>,
+) -> String {
+    register_connection_and_query_fallback(query, &addr.to_string(), auth_context)
+}
+
+/// Register connection and query for tracking (fallback version)
+fn register_connection_and_query_fallback(
+    query: &str,
+    client_address: &str,
+    auth_context: &Option<AuthContext>,
+) -> String {
+    if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
+        let tracker = dbms_procedures.get_connection_tracker();
+        let username = auth_context
+            .as_ref()
+            .and_then(|ctx| ctx.api_key.user_id.clone());
+
+        // Register connection (or get existing)
+        let connection_id = tracker.register_connection(username, client_address.to_string());
+
+        // Register query
+        let _query_id = tracker.register_query(connection_id.clone(), query.to_string());
+
+        connection_id
+    } else {
+        // Fallback if DBMS procedures not initialized
+        format!(
+            "conn-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+}
+
+/// Check cache status for a query
+fn check_query_cache_status(query: &str) -> (u64, u64) {
+    if let Some(cache) = crate::api::performance::get_plan_cache() {
+        // Normalize query to match cache pattern (simple approach)
+        // In a real implementation, we'd use the same normalization as the optimizer
+        let query_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            query.hash(&mut hasher);
+            hasher.finish().to_string()
+        };
+
+        let (exists, _) = cache.check_cache_status(&query_hash);
+        if exists {
+            let (hits, misses) = cache.get_query_cache_metrics(&query_hash);
+            (hits.max(1), misses) // At least 1 hit if exists
+        } else {
+            (0, 1) // Miss
+        }
+    } else {
+        (0, 0) // Cache not available
+    }
+}
+
+/// Mark query as completed in tracker
+fn mark_query_completed(query_id: &str) {
+    if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
+        let tracker = dbms_procedures.get_connection_tracker();
+        tracker.complete_query(query_id);
     }
 }
 
 /// Execute Cypher query
 pub async fn execute_cypher(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CypherRequest>,
 ) -> Json<CypherResponse> {
+    let auth_context = auth_context.map(|e| e.0).flatten();
     let start_time = std::time::Instant::now();
     let query_for_tracking = request.query.clone();
+
+    // Register connection and query for tracking
+    // Note: ConnectInfo requires special router setup, using fallback for now
+    let client_address = "unknown".to_string(); // Will be improved when ConnectInfo is enabled
+    let connection_id =
+        register_connection_and_query_fallback(&query_for_tracking, &client_address, &auth_context);
+    let query_id = connection_id.clone(); // Use connection_id as query_id for simplicity
 
     tracing::info!("Executing Cypher query: {}", request.query);
 
@@ -539,6 +654,9 @@ pub async fn execute_cypher(
                                                 ) => serde_json::Value::Bool(*b),
                                                 nexus_core::executor::parser::Literal::Null => {
                                                     serde_json::Value::Null
+                                                }
+                                                nexus_core::executor::parser::Literal::Point(p) => {
+                                                    p.to_json_value()
                                                 }
                                             }
                                         }
@@ -1231,22 +1349,55 @@ pub async fn execute_cypher(
         params: request.params,
     };
 
+    // Check cache status before execution
+    let (cache_hits, cache_misses) = check_query_cache_status(&request.query);
+
+    // Track memory usage during query execution
+    let initial_memory =
+        nexus_core::performance::memory_tracking::QueryMemoryTracker::get_current_memory_usage()
+            .ok();
+
     // Execute query
     let mut executor = executor_guard.write().await;
-    match executor.execute(&query) {
+    let execution_result = executor.execute(&query);
+
+    // Get memory delta after execution
+    let memory_usage = initial_memory.and_then(|initial| {
+        nexus_core::performance::memory_tracking::QueryMemoryTracker::get_current_memory_usage()
+            .ok()
+            .map(|final_memory| final_memory.saturating_sub(initial))
+            .filter(|&delta| delta > 1024) // Only include if > 1KB
+    });
+
+    match execution_result {
         Ok(result_set) => {
             let execution_time = start_time.elapsed();
             let execution_time_ms = execution_time.as_millis() as u64;
             let rows_count = result_set.rows.len();
 
             tracing::info!(
-                "Query executed successfully in {}ms, {} rows returned",
+                "Query executed successfully in {}ms, {} rows returned{}",
                 execution_time_ms,
-                rows_count
+                rows_count,
+                memory_usage
+                    .map(|m| format!(", {} bytes memory", m))
+                    .unwrap_or_default()
             );
 
-            // Record successful query execution
-            record_query_execution(&query_for_tracking, execution_time, true, None, rows_count);
+            // Record successful query execution with cache and memory metrics
+            record_query_execution_with_metrics(
+                &query_for_tracking,
+                execution_time,
+                true,
+                None,
+                rows_count,
+                memory_usage,
+                Some(cache_hits),
+                Some(cache_misses),
+            );
+
+            // Mark query as completed
+            mark_query_completed(&query_id);
 
             Json(CypherResponse {
                 columns: result_set.columns,
@@ -1266,14 +1417,22 @@ pub async fn execute_cypher(
 
             tracing::error!("Query execution failed: {}", error_msg);
 
-            // Record failed query execution
-            record_query_execution(
+            // Get memory delta even for failed queries (already calculated above)
+
+            // Record failed query execution with cache and memory metrics
+            record_query_execution_with_metrics(
                 &query_for_tracking,
                 execution_time,
                 false,
                 Some(error_msg.clone()),
                 0,
+                memory_usage,
+                Some(cache_hits),
+                Some(cache_misses),
             );
+
+            // Mark query as completed
+            mark_query_completed(&query_id);
 
             Json(CypherResponse {
                 columns: vec![],
@@ -1359,7 +1518,7 @@ pub(crate) async fn execute_database_commands(
                 columns = vec!["message".to_string()];
                 let manager = server.database_manager.write().await;
 
-                match manager.drop_database(&drop_db.name) {
+                match manager.drop_database(&drop_db.name, drop_db.if_exists) {
                     Ok(_) => {
                         rows.push(serde_json::json!([format!(
                             "Database '{}' dropped successfully",

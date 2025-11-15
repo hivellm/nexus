@@ -233,4 +233,145 @@ mod plugin_tests {
                 .contains("UDF registry not available")
         );
     }
+
+    #[test]
+    fn test_plugin_context_with_udf_registry_only() {
+        let udf_registry = Arc::new(UdfRegistry::new());
+        let mut ctx = PluginContext::new(Some(udf_registry.clone()), None, None);
+
+        let signature = UdfSignature {
+            name: "context_udf".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::Integer,
+            description: None,
+        };
+        let udf = BuiltinUdf::new(signature, |_args| Ok(Value::Number(42.into())));
+
+        ctx.register_udf(Arc::new(udf)).unwrap();
+        assert!(udf_registry.contains("context_udf"));
+    }
+
+    #[test]
+    fn test_plugin_context_with_procedure_registry_only() {
+        let procedure_registry = Arc::new(crate::graph::procedures::ProcedureRegistry::new());
+        let mut ctx = PluginContext::new(None, Some(procedure_registry.clone()), None);
+
+        use crate::graph::procedures::CustomProcedure;
+        let procedure =
+            CustomProcedure::new("context.procedure".to_string(), vec![], |_graph, _args| {
+                Ok(crate::graph::procedures::ProcedureResult {
+                    columns: vec!["result".to_string()],
+                    rows: vec![vec![Value::String("test".to_string())]],
+                })
+            });
+
+        ctx.register_procedure(procedure).unwrap();
+        assert!(procedure_registry.contains("context.procedure"));
+    }
+
+    #[test]
+    fn test_plugin_context_with_all_registries() {
+        let udf_registry = Arc::new(UdfRegistry::new());
+        let procedure_registry = Arc::new(crate::graph::procedures::ProcedureRegistry::new());
+        let catalog = Arc::new(
+            crate::catalog::Catalog::new(tempfile::TempDir::new().unwrap().path()).unwrap(),
+        );
+        let mut ctx = PluginContext::new(
+            Some(udf_registry.clone()),
+            Some(procedure_registry.clone()),
+            Some(catalog.clone()),
+        );
+
+        // Register UDF
+        let udf_sig = UdfSignature {
+            name: "all_registries_udf".to_string(),
+            parameters: vec![],
+            return_type: UdfReturnType::String,
+            description: None,
+        };
+        let udf = BuiltinUdf::new(udf_sig, |_args| Ok(Value::String("udf_result".to_string())));
+        ctx.register_udf(Arc::new(udf)).unwrap();
+
+        // Register procedure
+        use crate::graph::procedures::CustomProcedure;
+        let procedure = CustomProcedure::new(
+            "all_registries.procedure".to_string(),
+            vec![],
+            |_graph, _args| {
+                Ok(crate::graph::procedures::ProcedureResult {
+                    columns: vec!["result".to_string()],
+                    rows: vec![vec![Value::String("proc_result".to_string())]],
+                })
+            },
+        );
+        ctx.register_procedure(procedure).unwrap();
+
+        // Verify both are registered
+        assert!(udf_registry.contains("all_registries_udf"));
+        assert!(procedure_registry.contains("all_registries.procedure"));
+    }
+
+    #[test]
+    fn test_plugin_context_procedure_registry_not_available() {
+        let mut ctx = PluginContext::new(None, None, None);
+
+        use crate::graph::procedures::CustomProcedure;
+        let procedure =
+            CustomProcedure::new("test.procedure".to_string(), vec![], |_graph, _args| {
+                Ok(crate::graph::procedures::ProcedureResult {
+                    columns: vec!["result".to_string()],
+                    rows: vec![vec![Value::String("test".to_string())]],
+                })
+            });
+
+        let result = ctx.register_procedure(procedure);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Procedure registry not available")
+        );
+    }
+
+    #[test]
+    fn test_plugin_manager_list_plugins() {
+        let manager = PluginManager::new();
+        assert_eq!(manager.list_plugins().len(), 0);
+
+        let udf_registry = Arc::new(UdfRegistry::new());
+        let manager = PluginManager::with_registries(Some(udf_registry), None, None);
+        let plugin = Arc::new(TestUdfPlugin);
+        manager.load_plugin(plugin).unwrap();
+
+        let plugins = manager.list_plugins();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0], "test_udf_plugin");
+    }
+
+    #[test]
+    fn test_plugin_manager_get_nonexistent_plugin() {
+        let manager = PluginManager::new();
+        assert!(manager.get_plugin("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_plugin_manager_get_metadata_nonexistent() {
+        let manager = PluginManager::new();
+        assert!(manager.get_metadata("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_plugin_shutdown_individual() {
+        let udf_registry = Arc::new(UdfRegistry::new());
+        let manager = PluginManager::with_registries(Some(udf_registry), None, None);
+        let plugin = Arc::new(TestUdfPlugin);
+
+        manager.load_plugin(plugin).unwrap();
+        assert_eq!(manager.list_plugins().len(), 1);
+
+        // Shutdown should call plugin.shutdown()
+        manager.shutdown_all().unwrap();
+        assert_eq!(manager.list_plugins().len(), 0);
+    }
 }

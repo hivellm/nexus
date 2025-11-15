@@ -471,6 +471,196 @@ Vector search via MCP:
 }
 ```
 
+**3. graph_correlation_generate**
+
+Generate correlation graphs from source code:
+
+```json
+{
+  "name": "graph_correlation_generate",
+  "description": "Generate a correlation graph from source code (Call, Dependency, DataFlow, or Component graph)",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "graph_type": {
+        "type": "string",
+        "enum": ["Call", "Dependency", "DataFlow", "Component"],
+        "description": "Type of graph to generate"
+      },
+      "files": {
+        "type": "object",
+        "description": "Map of file paths to content"
+      },
+      "functions": {
+        "type": "object",
+        "description": "Map of files to function lists (optional)"
+      },
+      "imports": {
+        "type": "object",
+        "description": "Map of files to import lists (optional)"
+      },
+      "name": {
+        "type": "string",
+        "description": "Graph name (optional)"
+      }
+    },
+    "required": ["graph_type", "files"]
+  }
+}
+```
+
+**Example Call**:
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "graph_correlation_generate",
+    "arguments": {
+      "graph_type": "Call",
+      "files": {
+        "main.rs": "fn main() { helper(); }\nfn helper() {}"
+      },
+      "name": "My Call Graph"
+    }
+  }
+}
+```
+
+**4. graph_correlation_analyze**
+
+Analyze a correlation graph to extract patterns and statistics:
+
+```json
+{
+  "name": "graph_correlation_analyze",
+  "description": "Analyze a correlation graph to extract patterns and statistics",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "graph": {
+        "type": "object",
+        "description": "Graph to analyze"
+      },
+      "analysis_type": {
+        "type": "string",
+        "enum": ["statistics", "patterns", "all"],
+        "description": "Type of analysis to perform"
+      }
+    },
+    "required": ["graph", "analysis_type"]
+  }
+}
+```
+
+**Example Call**:
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "graph_correlation_analyze",
+    "arguments": {
+      "graph": {
+        "name": "Test Graph",
+        "graph_type": "Call",
+        "nodes": [
+          {"id": "node1", "node_type": "Function", "label": "func1", "metadata": {}, "position": null, "size": null, "color": null}
+        ],
+        "edges": [],
+        "metadata": {}
+      },
+      "analysis_type": "statistics"
+    }
+  }
+}
+```
+
+**5. graph_correlation_export**
+
+Export a correlation graph in various formats:
+
+```json
+{
+  "name": "graph_correlation_export",
+  "description": "Export a correlation graph in JSON, GraphML, GEXF, or DOT format",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "graph": {
+        "type": "object",
+        "description": "Graph to export"
+      },
+      "format": {
+        "type": "string",
+        "enum": ["JSON", "GraphML", "GEXF", "DOT"],
+        "description": "Export format"
+      }
+    },
+    "required": ["graph", "format"]
+  }
+}
+```
+
+**Example Call**:
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "graph_correlation_export",
+    "arguments": {
+      "graph": {
+        "name": "Export Test",
+        "graph_type": "Call",
+        "nodes": [{"id": "n1", "node_type": "Function", "label": "func", "metadata": {}, "position": null, "size": null, "color": null}],
+        "edges": [],
+        "metadata": {}
+      },
+      "format": "JSON"
+    }
+  }
+}
+```
+
+**6. graph_correlation_types**
+
+List available graph correlation types:
+
+```json
+{
+  "name": "graph_correlation_types",
+  "description": "List available graph correlation types",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}
+```
+
+**Example Call**:
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "graph_correlation_types",
+    "arguments": {}
+  }
+}
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "types": ["Call", "Dependency", "DataFlow", "Component"],
+  "descriptions": {
+    "Call": "Function call relationships and execution flow",
+    "Dependency": "Module and package dependency relationships",
+    "DataFlow": "Data flow and transformation pipelines",
+    "Component": "High-level component and module relationships"
+  }
+}
+```
+
 #### MCP Resources
 
 Expose graph schema as MCP resource:

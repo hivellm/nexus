@@ -787,6 +787,15 @@ impl ProcedureRegistry {
         registry.register_builtin(Arc::new(JaccardSimilarityProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(CosineSimilarityProcedure) as Arc<dyn GraphProcedure>);
 
+        // Register geospatial procedures
+        registry
+            .register_builtin(Arc::new(crate::geospatial::procedures::WithinBBoxProcedure)
+                as Arc<dyn GraphProcedure>);
+        registry.register_builtin(
+            Arc::new(crate::geospatial::procedures::WithinDistanceProcedure)
+                as Arc<dyn GraphProcedure>,
+        );
+
         registry
     }
 
@@ -817,6 +826,15 @@ impl ProcedureRegistry {
         );
         registry.register_builtin(Arc::new(JaccardSimilarityProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(CosineSimilarityProcedure) as Arc<dyn GraphProcedure>);
+
+        // Register geospatial procedures
+        registry
+            .register_builtin(Arc::new(crate::geospatial::procedures::WithinBBoxProcedure)
+                as Arc<dyn GraphProcedure>);
+        registry.register_builtin(
+            Arc::new(crate::geospatial::procedures::WithinDistanceProcedure)
+                as Arc<dyn GraphProcedure>,
+        );
 
         // Load custom procedures from catalog
         if let Ok(_procedure_names) = catalog.list_procedures() {
@@ -961,7 +979,7 @@ mod tests {
 
         registry.register_custom(procedure).unwrap();
         assert!(registry.contains("custom.test"));
-        assert_eq!(registry.list().len(), 14); // 13 built-in + 1 custom
+        assert_eq!(registry.list().len(), 16); // 15 built-in + 1 custom
 
         // Test execution
         let proc = registry.get("custom.test").unwrap();
@@ -1047,5 +1065,220 @@ mod tests {
         let result = procedure.execute(&graph, &args).unwrap();
         assert_eq!(result.columns.len(), 2);
         assert!(!result.rows.is_empty());
+    }
+
+    #[test]
+    fn test_procedure_with_catalog() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let catalog = Arc::new(crate::catalog::Catalog::new(dir.path()).unwrap());
+        let registry = ProcedureRegistry::with_catalog(catalog.clone());
+
+        // Register a custom procedure
+        let procedure = CustomProcedure::new(
+            "custom.catalog_test".to_string(),
+            vec![],
+            |_graph, _args| {
+                Ok(ProcedureResult {
+                    columns: vec!["result".to_string()],
+                    rows: vec![vec![Value::String("test".to_string())]],
+                })
+            },
+        );
+
+        registry.register_custom(procedure).unwrap();
+
+        // Verify it's persisted in catalog
+        let catalog_proc = catalog.get_procedure("custom.catalog_test").unwrap();
+        assert!(catalog_proc.is_some());
+        assert_eq!(catalog_proc.unwrap().name, "custom.catalog_test");
+
+        // Verify it's in registry
+        assert!(registry.contains("custom.catalog_test"));
+
+        // Unregister and verify removal from catalog
+        registry.unregister("custom.catalog_test").unwrap();
+        let catalog_proc_after = catalog.get_procedure("custom.catalog_test").unwrap();
+        assert!(catalog_proc_after.is_none());
+    }
+
+    #[test]
+    fn test_procedure_unregister_nonexistent() {
+        let registry = ProcedureRegistry::new();
+        let result = registry.unregister("nonexistent");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_procedure_get_nonexistent() {
+        let registry = ProcedureRegistry::new();
+        assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_procedure_list() {
+        let registry = ProcedureRegistry::new();
+        let procedures = registry.list();
+        assert!(procedures.len() >= 13); // At least 13 built-in procedures
+        assert!(procedures.contains(&"gds.shortestPath.dijkstra".to_string()));
+    }
+
+    #[test]
+    fn test_procedure_duplicate_registration() {
+        let registry = ProcedureRegistry::new();
+
+        let procedure1 =
+            CustomProcedure::new("custom.duplicate".to_string(), vec![], |_graph, _args| {
+                Ok(ProcedureResult {
+                    columns: vec!["result".to_string()],
+                    rows: vec![vec![Value::String("test1".to_string())]],
+                })
+            });
+        registry.register_custom(procedure1).unwrap();
+
+        let procedure2 =
+            CustomProcedure::new("custom.duplicate".to_string(), vec![], |_graph, _args| {
+                Ok(ProcedureResult {
+                    columns: vec!["result".to_string()],
+                    rows: vec![vec![Value::String("test2".to_string())]],
+                })
+            });
+        let result = registry.register_custom(procedure2);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("already registered")
+        );
+    }
+
+    #[test]
+    fn test_procedure_streaming_support() {
+        // Create a custom procedure that supports streaming
+        struct StreamingProcedure;
+
+        impl GraphProcedure for StreamingProcedure {
+            fn name(&self) -> &str {
+                "custom.streaming"
+            }
+
+            fn signature(&self) -> Vec<ProcedureParameter> {
+                vec![]
+            }
+
+            fn execute(
+                &self,
+                _graph: &Graph,
+                _args: &HashMap<String, Value>,
+            ) -> Result<ProcedureResult> {
+                Ok(ProcedureResult {
+                    columns: vec!["value".to_string()],
+                    rows: vec![vec![Value::Number(1.into())]],
+                })
+            }
+
+            fn supports_streaming(&self) -> bool {
+                true
+            }
+
+            fn execute_streaming(
+                &self,
+                _graph: &Graph,
+                _args: &HashMap<String, Value>,
+                mut callback: Box<dyn FnMut(&[String], &[Value]) -> Result<()> + Send>,
+            ) -> Result<()> {
+                // Stream multiple rows
+                callback(&["value".to_string()], &[Value::Number(1.into())])?;
+                callback(&["value".to_string()], &[Value::Number(2.into())])?;
+                callback(&["value".to_string()], &[Value::Number(3.into())])?;
+                Ok(())
+            }
+        }
+
+        let procedure = StreamingProcedure;
+        assert!(procedure.supports_streaming());
+
+        use std::sync::{Arc, Mutex};
+        let collected_rows = Arc::new(Mutex::new(Vec::new()));
+        let collected_columns = Arc::new(Mutex::new(None::<Vec<String>>));
+
+        let rows_clone = collected_rows.clone();
+        let cols_clone = collected_columns.clone();
+
+        procedure
+            .execute_streaming(
+                &Graph::new(),
+                &HashMap::new(),
+                Box::new(move |cols, row| {
+                    {
+                        let mut cols_ref = cols_clone.lock().unwrap();
+                        if cols_ref.is_none() {
+                            *cols_ref = Some(cols.to_vec());
+                        }
+                    }
+                    rows_clone.lock().unwrap().push(row.to_vec());
+                    Ok(())
+                }),
+            )
+            .unwrap();
+
+        let collected_rows = collected_rows.lock().unwrap();
+        let collected_columns = collected_columns.lock().unwrap();
+        assert_eq!(collected_rows.len(), 3);
+        assert_eq!(
+            collected_columns.as_ref().unwrap(),
+            &vec!["value".to_string()]
+        );
+        assert_eq!(collected_rows[0][0], Value::Number(1.into()));
+        assert_eq!(collected_rows[1][0], Value::Number(2.into()));
+        assert_eq!(collected_rows[2][0], Value::Number(3.into()));
+    }
+
+    #[test]
+    fn test_procedure_default_streaming_implementation() {
+        // Test that default streaming implementation works
+        let procedure = DijkstraProcedure;
+        assert!(!procedure.supports_streaming());
+
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_edge(1, 2, 1.0, vec![]);
+
+        let mut args = HashMap::new();
+        args.insert("sourceNode".to_string(), Value::Number(1.into()));
+        args.insert("targetNode".to_string(), Value::Number(2.into()));
+
+        use std::sync::{Arc, Mutex};
+        let collected_rows = Arc::new(Mutex::new(Vec::new()));
+        let collected_columns = Arc::new(Mutex::new(None::<Vec<String>>));
+
+        let rows_clone = collected_rows.clone();
+        let cols_clone = collected_columns.clone();
+
+        // Default implementation should collect all results and stream them
+        procedure
+            .execute_streaming(
+                &graph,
+                &args,
+                Box::new(move |cols, row| {
+                    {
+                        let mut cols_ref = cols_clone.lock().unwrap();
+                        if cols_ref.is_none() {
+                            *cols_ref = Some(cols.to_vec());
+                        }
+                    }
+                    rows_clone.lock().unwrap().push(row.to_vec());
+                    Ok(())
+                }),
+            )
+            .unwrap();
+
+        let collected_rows = collected_rows.lock().unwrap();
+        let collected_columns = collected_columns.lock().unwrap();
+        assert!(!collected_rows.is_empty());
+        assert!(collected_columns.is_some());
     }
 }

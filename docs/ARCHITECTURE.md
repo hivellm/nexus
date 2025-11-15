@@ -924,6 +924,261 @@ Distributed Queries:
 - **Streaming Ingestion**: Kafka/Pulsar integration
 - **Advanced Analytics**: Integration with Apache Arrow for OLAP
 
+## Graph Correlation Analysis Architecture
+
+### Overview
+
+The Graph Correlation Analysis module provides automatic generation of code relationship graphs from source code, enabling visualization of code flow, dependencies, and processing patterns. It integrates with Vectorizer for semantic code analysis and provides multiple protocol interfaces (REST, MCP, UMICP).
+
+### System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    API Layer (REST/MCP/UMICP)                        │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
+│  │ REST API     │  │ MCP Tools   │  │ UMICP Handler│              │
+│  │ /api/v1/     │  │ graph_*     │  │ graph.*      │              │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘              │
+└─────────┼──────────────────┼──────────────────┼────────────────────┘
+          │                  │                  │
+┌─────────┴──────────────────┴──────────────────┴────────────────────┐
+│              Graph Correlation Manager                               │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  GraphCorrelationManager                                      │  │
+│  │  - Builder Registry (Call, Dependency, DataFlow, Component)  │  │
+│  │  - Graph Storage & Retrieval                                  │  │
+│  │  - Request Routing                                            │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└─────────┬──────────────────────────────────────────────────────────┘
+          │
+┌─────────┴──────────────────────────────────────────────────────────┐
+│                    Graph Builder Layer                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │
+│  │ Call Graph   │  │ Dependency   │  │ Data Flow    │            │
+│  │ Builder      │  │ Graph Builder│  │ Graph Builder│            │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘            │
+│         │                  │                  │                    │
+│  ┌──────┴──────────────────┴──────────────────┴──────┐          │
+│  │ Component Graph Builder                              │          │
+│  └──────────────────────────────────────────────────────┘          │
+└─────────┬──────────────────────────────────────────────────────────┘
+          │
+┌─────────┴──────────────────────────────────────────────────────────┐
+│                    Analysis Layer                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │
+│  │ Pattern      │  │ Statistics   │  │ Impact       │            │
+│  │ Recognition  │  │ Calculator   │  │ Analysis     │            │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘            │
+│         │                  │                  │                    │
+│  ┌──────┴──────────────────┴──────────────────┴──────┐          │
+│  │  Pattern Detectors:                                │          │
+│  │  - PipelinePatternDetector                         │          │
+│  │  - EventDrivenPatternDetector                      │          │
+│  │  - ArchitecturalPatternDetector                    │          │
+│  │  - DesignPatternDetector (Observer, Factory, etc.) │          │
+│  └──────────────────────────────────────────────────────┘          │
+└─────────┬──────────────────────────────────────────────────────────┘
+          │
+┌─────────┴──────────────────────────────────────────────────────────┐
+│                    Visualization Layer                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │
+│  │ SVG Renderer │  │ Layout      │  │ Export       │            │
+│  │              │  │ Algorithms  │  │ Formats      │            │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘            │
+│         │                  │                  │                    │
+│  ┌──────┴──────────────────┴──────────────────┴──────┐          │
+│  │  Layouts: Force-directed, Hierarchical, Flow-based │          │
+│  │  Formats: JSON, GraphML, GEXF, DOT, SVG, PNG, PDF │          │
+│  └──────────────────────────────────────────────────────┘          │
+└─────────┬──────────────────────────────────────────────────────────┘
+          │
+┌─────────┴──────────────────────────────────────────────────────────┐
+│                    Data Source Layer                                │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐            │
+│  │ Vectorizer   │  │ Source Code  │  │ AST Parser  │            │
+│  │ Integration  │  │ Files        │  │             │            │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘            │
+│         │                  │                  │                    │
+│  ┌──────┴──────────────────┴──────────────────┴──────┐          │
+│  │  GraphSourceData: files, functions, imports       │          │
+│  └──────────────────────────────────────────────────────┘          │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Component Architecture
+
+#### Graph Builder Pattern
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    GraphBuilder Trait                       │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  build(source_data) -> CorrelationGraph              │ │
+│  │  graph_type() -> GraphType                            │ │
+│  │  name() -> &str                                       │ │
+│  │  capabilities() -> GraphBuilderCapabilities          │ │
+│  └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                    ▲
+                    │ implements
+    ┌───────────────┼───────────────┬───────────────┐
+    │               │               │               │
+┌───┴────┐  ┌──────┴──────┐  ┌────┴──────┐  ┌────┴──────┐
+│ Call   │  │ Dependency  │  │ DataFlow  │  │ Component │
+│ Graph  │  │ Graph       │  │ Graph     │  │ Graph     │
+│ Builder│  │ Builder     │  │ Builder   │  │ Builder   │
+└────────┘  └─────────────┘  └───────────┘  └───────────┘
+```
+
+#### Pattern Detection Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 PatternDetector Trait                       │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  detect(graph) -> PatternDetectionResult              │ │
+│  │  name() -> &str                                       │ │
+│  │  supported_patterns() -> Vec<PatternType>            │ │
+│  └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                    ▲
+                    │ implements
+    ┌───────────────┼───────────────┬───────────────┐
+    │               │               │               │
+┌───┴────┐  ┌──────┴──────┐  ┌────┴──────┐  ┌────┴──────┐
+│Pipeline│  │Event-Driven │  │Architect. │  │Design     │
+│Pattern │  │Pattern      │  │Pattern    │  │Pattern    │
+│Detector│  │Detector     │  │Detector   │  │Detector   │
+└────────┘  └─────────────┘  └───────────┘  └───────────┘
+```
+
+### Data Flow Architecture
+
+```
+Source Code Files
+       │
+       ▼
+┌─────────────────┐
+│ GraphSourceData │
+│  - files        │
+│  - functions    │
+│  - imports      │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│   Graph Builder (by type)          │
+│  ┌───────────────────────────────┐ │
+│  │ 1. Extract relationships      │ │
+│  │ 2. Create nodes & edges       │ │
+│  │ 3. Add metadata               │ │
+│  │ 4. Calculate layout            │ │
+│  └───────────────────────────────┘ │
+└────────┬────────────────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ CorrelationGraph│
+│  - nodes        │
+│  - edges        │
+│  - metadata     │
+└────────┬────────┘
+         │
+         ├─────────────────┬─────────────────┬─────────────────┐
+         ▼                 ▼                 ▼                 ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Pattern      │  │ Statistics  │  │ Visualization│  │ Export      │
+│ Detection    │  │ Calculation │  │ Rendering   │  │ Formats     │
+└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
+```
+
+### Module Structure
+
+```
+nexus-core/src/graph/correlation/
+├── mod.rs                    # Core types, GraphBuilder trait, Manager
+├── call_graph.rs            # Call graph generation
+├── dependency.rs            # Dependency graph generation
+├── data_flow.rs             # Data flow analysis & graph generation
+├── component.rs             # Component (OOP) analysis & graph generation
+├── pattern_recognition.rs   # Pattern detection (Pipeline, Event, Arch, Design)
+├── visualization.rs         # SVG rendering, layouts, styling
+├── graph_export.rs          # Export to JSON, GraphML, GEXF, DOT
+├── graph_statistics.rs      # Statistics calculation
+├── graph_diff.rs            # Graph comparison & diff
+├── performance.rs            # Performance optimization
+├── dependency_filter.rs     # Dependency filtering utilities
+├── impact_analysis.rs       # Impact analysis for changes
+├── vectorizer_cache.rs      # Vectorizer query caching
+└── version_constraints.rs   # Version constraint analysis
+```
+
+### Integration Points
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    External Systems                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
+│  │ Vectorizer   │  │ LLM Agents   │  │ Visualization│    │
+│  │ MCP Server   │  │ (via MCP)    │  │ Tools        │    │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
+└─────────┼──────────────────┼──────────────────┼────────────┘
+          │                  │                  │
+          │ MCP Tools        │ REST API         │ Export Files
+          │                  │                  │
+┌─────────┴──────────────────┴──────────────────┴────────────┐
+│         Graph Correlation Analysis Module                   │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Protocol Handlers:                                  │  │
+│  │  - MCP: graph_correlation_* tools                   │  │
+│  │  - REST: /api/v1/graphs/* endpoints                 │  │
+│  │  - UMICP: graph.* methods                           │  │
+│  └──────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Pattern Recognition Flow
+
+```
+CorrelationGraph
+       │
+       ▼
+┌─────────────────────────────────────┐
+│   Pattern Detection Pipeline        │
+│  ┌───────────────────────────────┐  │
+│  │ 1. Pipeline Pattern Detector  │  │
+│  │ 2. Event-Driven Detector      │  │
+│  │ 3. Architectural Detector     │  │
+│  │ 4. Design Pattern Detector    │  │
+│  └───────────────────────────────┘  │
+└────────┬─────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│   Pattern Detection Result           │
+│  - DetectedPattern[]                 │
+│  - PatternStatistics                 │
+│  - Quality Score                     │
+└────────┬─────────────────────────────┘
+         │
+         ├─────────────────┬─────────────────┐
+         ▼                 ▼                 ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Quality      │  │ Visualization│  │ Recommendation│
+│ Metrics      │  │ Overlays     │  │ Engine       │
+└──────────────┘  └──────────────┘  └──────────────┘
+```
+
+### Key Design Decisions
+
+1. **Trait-Based Architecture**: Uses Rust traits (`GraphBuilder`, `PatternDetector`) for extensibility
+2. **Type-Safe Graph Types**: Enum-based graph types prevent invalid operations
+3. **Modular Analysis**: Separate modules for each analysis type (call, dependency, data flow, component)
+4. **Protocol Agnostic**: Core logic independent of API protocol (REST/MCP/UMICP)
+5. **Caching Support**: Vectorizer query caching for performance
+6. **Export Flexibility**: Multiple export formats for different use cases
+7. **Pattern Extensibility**: Easy to add new pattern detectors via trait implementation
+
 ## References
 
 - Neo4j Internals: https://neo4j.com/docs/operations-manual/current/
