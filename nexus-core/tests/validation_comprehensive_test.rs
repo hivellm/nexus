@@ -204,7 +204,7 @@ fn test_validate_graph_with_empty_rel_type() {
     let node2_id = graph.create_node(vec!["Person".to_string()]).unwrap();
 
     // Create edge with empty relationship type
-    let _edge_id = graph
+    let edge_id = graph
         .create_edge(node1_id, node2_id, "".to_string())
         .unwrap();
     let mut edge = graph.get_edge(edge_id).unwrap().unwrap();

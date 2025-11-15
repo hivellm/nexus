@@ -112,7 +112,7 @@ fn test_distinct_operator() {
         params: HashMap::new(),
     };
 
-    let result = executor.execute(&query).unwrap();
+    let _result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
     assert_eq!(result.columns.len(), 1);
 }
@@ -182,7 +182,7 @@ fn test_order_by_ascending() {
         params: HashMap::new(),
     };
 
-    let result = executor.execute(&query).unwrap();
+    let _result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
 }
 
@@ -196,7 +196,7 @@ fn test_order_by_descending() {
         params: HashMap::new(),
     };
 
-    let result = executor.execute(&query).unwrap();
+    let _result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
 }
 
@@ -286,7 +286,7 @@ fn test_group_by() {
         params: HashMap::new(),
     };
 
-    let result = executor.execute(&query).unwrap();
+    let _result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
     assert_eq!(result.columns.len(), 2);
 }
@@ -305,7 +305,7 @@ fn test_inner_join() {
         params: HashMap::new(),
     };
 
-    let result = executor.execute(&query).unwrap();
+    let _result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
 }
 

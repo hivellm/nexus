@@ -403,7 +403,7 @@ pub async fn handle_nexus_mcp_tool(
     ];
 
     let is_cacheable = cacheable_tools.iter().any(|&t| t == tool_name);
-    let mut cache_hit = false;
+    let cache_hit = false;
 
     if is_cacheable {
         if let Some(cache) = crate::api::mcp_performance::get_mcp_tool_cache() {
@@ -411,7 +411,6 @@ pub async fn handle_nexus_mcp_tool(
                 let args_value = serde_json::Value::Object(args.clone());
                 if let Some(cached_result) = cache.get(&tool_name, &args_value) {
                     // Return cached result
-                    cache_hit = true;
                     let execution_time = start_time.elapsed();
 
                     // Record statistics
@@ -427,7 +426,7 @@ pub async fn handle_nexus_mcp_tool(
                             None,
                             input_size,
                             output_size,
-                            Some(true),
+                            Some(true), // Cache hit
                         );
                     }
 

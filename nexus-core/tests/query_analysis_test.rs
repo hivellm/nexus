@@ -181,7 +181,7 @@ fn test_profile_create_query() {
     let check_result = engine
         .execute_cypher("MATCH (n:Person {name: 'ProfileTest'}) RETURN n")
         .unwrap();
-    assert!(check_result.rows!is_empty());
+    assert!(!check_result.rows.is_empty());
 }
 
 #[test]
