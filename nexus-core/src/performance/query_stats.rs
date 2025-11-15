@@ -166,6 +166,7 @@ impl QueryStatistics {
     }
 
     /// Record a query execution with additional metrics
+    #[allow(clippy::too_many_arguments)]
     pub fn record_query_with_metrics(
         &self,
         query: &str,

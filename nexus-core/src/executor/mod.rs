@@ -516,7 +516,7 @@ impl Executor {
             }
         }
 
-        for (_idx, operator) in operators.iter().enumerate() {
+        for operator in operators.iter() {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
                     let nodes = self.execute_node_by_label(*label_id)?;
@@ -573,7 +573,7 @@ impl Executor {
                     if existing_rows.is_empty() {
                         // CREATE standalone - create nodes and relationships directly
                         let (created_node_ids, created_rel_ids) =
-                            self.execute_create_pattern_with_variables(&pattern)?;
+                            self.execute_create_pattern_with_variables(pattern)?;
 
                         // Collect all created entities (nodes and relationships)
                         let mut columns: Vec<String> = created_node_ids.keys().cloned().collect();
@@ -616,7 +616,7 @@ impl Executor {
                         }
                     } else {
                         // CREATE with MATCH context - use existing implementation
-                        self.execute_create_with_context(&mut context, &pattern)?;
+                        self.execute_create_with_context(&mut context, pattern)?;
                     }
 
                     // If no RETURN clause follows, result_set is already populated above
@@ -646,13 +646,13 @@ impl Executor {
                     left_key,
                     right_key,
                 } => {
-                    self.execute_hash_join(&mut context, &left_key, &right_key)?;
+                    self.execute_hash_join(&mut context, left_key, right_key)?;
                 }
                 Operator::Unwind {
                     expression,
                     variable,
                 } => {
-                    self.execute_unwind(&mut context, &expression, &variable)?;
+                    self.execute_unwind(&mut context, expression, variable)?;
                 }
                 Operator::VariableLengthPath {
                     type_id,

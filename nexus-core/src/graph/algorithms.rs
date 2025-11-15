@@ -1414,7 +1414,7 @@ mod tests {
         graph.add_edge(2, 3, 1.0, vec![]);
 
         let similarity = graph.jaccard_similarity(1, 2);
-        assert!(similarity >= 0.0 && similarity <= 1.0);
+        assert!((0.0..=1.0).contains(&similarity));
     }
 
     #[test]
@@ -1428,7 +1428,7 @@ mod tests {
         graph.add_edge(2, 3, 1.0, vec![]);
 
         let similarity = graph.cosine_similarity(1, 2);
-        assert!(similarity >= -1.0 && similarity <= 1.0);
+        assert!((-1.0..=1.0).contains(&similarity));
     }
 
     #[test]

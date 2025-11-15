@@ -83,7 +83,7 @@ impl QueryMemoryTracker {
 
 impl Default for QueryMemoryTracker {
     fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self { initial_memory: 0 })
+        Self::new().unwrap_or(Self { initial_memory: 0 })
     }
 }
 

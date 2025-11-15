@@ -340,8 +340,10 @@ mod tests {
 
     #[test]
     fn test_expired_token() {
-        let mut config = JwtConfig::default();
-        config.expiration_seconds = 1; // 1 second expiration
+        let config = JwtConfig {
+            expiration_seconds: 1, // 1 second expiration
+            ..Default::default()
+        };
 
         let manager = JwtManager::new(config);
         let user = create_test_user();
@@ -369,8 +371,10 @@ mod tests {
     #[test]
     fn test_jwt_token_expiration_edge_cases() {
         // Test with very short expiration
-        let mut config = JwtConfig::default();
-        config.expiration_seconds = 0; // Immediate expiration
+        let config = JwtConfig {
+            expiration_seconds: 0, // Immediate expiration
+            ..Default::default()
+        };
 
         let manager = JwtManager::new(config);
         let user = create_test_user();
@@ -386,8 +390,10 @@ mod tests {
 
     #[test]
     fn test_jwt_refresh_token_expiration() {
-        let mut config = JwtConfig::default();
-        config.refresh_expiration_seconds = 1; // 1 second expiration
+        let config = JwtConfig {
+            refresh_expiration_seconds: 1, // 1 second expiration
+            ..Default::default()
+        };
 
         let manager = JwtManager::new(config);
         let user = create_test_user();
@@ -436,9 +442,11 @@ mod tests {
 
     #[test]
     fn test_jwt_token_pair_expiration_times() {
-        let mut config = JwtConfig::default();
-        config.expiration_seconds = 1800; // 30 minutes
-        config.refresh_expiration_seconds = 2592000; // 30 days
+        let config = JwtConfig {
+            expiration_seconds: 1800,            // 30 minutes
+            refresh_expiration_seconds: 2592000, // 30 days
+            ..Default::default()
+        };
 
         let manager = JwtManager::new(config);
         let user = create_test_user();

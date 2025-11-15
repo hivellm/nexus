@@ -57,6 +57,7 @@ pub trait GraphProcedure: Send + Sync {
         &self,
         graph: &Graph,
         args: &HashMap<String, Value>,
+        #[allow(clippy::type_complexity)]
         mut callback: Box<dyn FnMut(&[String], &[Value]) -> Result<()> + Send>,
     ) -> Result<()> {
         // Default implementation: collect all results and stream them

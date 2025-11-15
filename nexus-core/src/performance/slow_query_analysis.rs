@@ -44,10 +44,7 @@ impl SlowQueryAnalyzer {
         // Group queries by pattern
         for query in &slow_queries {
             let pattern = self.normalize_query(&query.query);
-            pattern_map
-                .entry(pattern)
-                .or_insert_with(Vec::new)
-                .push(query);
+            pattern_map.entry(pattern).or_default().push(query);
         }
 
         // Analyze each pattern

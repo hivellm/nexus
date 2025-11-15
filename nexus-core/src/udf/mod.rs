@@ -73,6 +73,7 @@ pub trait UdfFunction: Send + Sync {
 /// Built-in UDF function wrapper
 pub struct BuiltinUdf {
     signature: UdfSignature,
+    #[allow(clippy::type_complexity)]
     function: Box<dyn Fn(&[Value]) -> Result<Value> + Send + Sync>,
 }
 
@@ -285,7 +286,9 @@ mod tests {
             description: None,
         };
         let float_udf = BuiltinUdf::new(float_sig, |_args| {
-            Ok(Value::Number(serde_json::Number::from_f64(3.14).unwrap()))
+            Ok(Value::Number(
+                serde_json::Number::from_f64(std::f64::consts::PI).unwrap(),
+            ))
         });
         registry.register(Arc::new(float_udf)).unwrap();
         let result = registry.get("get_float").unwrap().execute(&[]).unwrap();

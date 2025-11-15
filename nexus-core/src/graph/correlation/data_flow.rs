@@ -248,7 +248,7 @@ impl TypePropagator {
         // Extract type hints from definition
         if let Some(colon_pos) = definition.find(':') {
             let after_colon = &definition[colon_pos + 1..];
-            if let Some(end) = after_colon.find(|c: char| c == ' ' || c == '=') {
+            if let Some(end) = after_colon.find([' ', '=']) {
                 let type_hint = after_colon[..end].trim();
                 if !type_hint.is_empty() {
                     self.type_map
@@ -858,14 +858,14 @@ impl DataFlowAnalyzer {
         // Very simple extraction - would need proper parsing in production
         if let Some(start) = line.find("let ") {
             let after_let = &line[start + 4..];
-            if let Some(end) = after_let.find(|c: char| c == ' ' || c == '=' || c == ':') {
+            if let Some(end) = after_let.find([' ', '=', ':']) {
                 Some(after_let[..end].trim().to_string())
             } else {
                 Some(after_let.trim().to_string())
             }
         } else if let Some(start) = line.find("const ") {
             let after_const = &line[start + 6..];
-            if let Some(end) = after_const.find(|c: char| c == ' ' || c == '=' || c == ':') {
+            if let Some(end) = after_const.find([' ', '=', ':']) {
                 Some(after_const[..end].trim().to_string())
             } else {
                 Some(after_const.trim().to_string())
@@ -879,7 +879,7 @@ impl DataFlowAnalyzer {
     fn extract_type_hint(&self, line: &str) -> Option<String> {
         if let Some(colon_pos) = line.find(':') {
             let after_colon = &line[colon_pos + 1..];
-            if let Some(end) = after_colon.find(|c: char| c == ' ' || c == '=') {
+            if let Some(end) = after_colon.find([' ', '=']) {
                 Some(after_colon[..end].trim().to_string())
             } else {
                 Some(after_colon.trim().to_string())
@@ -1853,7 +1853,7 @@ mod tests {
             .type_map
             .insert("x".to_string(), "i32".to_string());
 
-        let mut transformation = DataTransformation {
+        let transformation = DataTransformation {
             source: "x".to_string(),
             target: "y".to_string(),
             transformation_type: TransformationType::Assignment,

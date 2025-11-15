@@ -134,7 +134,7 @@ impl McpToolCache {
                 .collect();
             serde_json::Value::Object(normalized)
         } else if let Some(arr) = args.as_array() {
-            serde_json::Value::Array(arr.iter().map(|v| Self::normalize_arguments(v)).collect())
+            serde_json::Value::Array(arr.iter().map(Self::normalize_arguments).collect())
         } else {
             args.clone()
         }

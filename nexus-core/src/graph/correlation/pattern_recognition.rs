@@ -1340,7 +1340,7 @@ pub fn apply_pattern_overlays(
                         "color".to_string(),
                         serde_json::Value::String(color.to_string()),
                     );
-                    edge.weight = edge.weight + config.border_width;
+                    edge.weight += config.border_width;
 
                     if config.show_labels {
                         let pattern_name = format!("{:?}", p.pattern_type);

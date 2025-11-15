@@ -218,25 +218,19 @@ impl ComponentAnalyzer {
         if line.starts_with("class ") || line.starts_with("pub class ") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
-                let class_name = parts[1].trim_end_matches(|c: char| c == '{' || c == '(');
+                let class_name = parts[1].trim_end_matches(['{', '(']);
 
                 // Extract base class if present
                 let base_class = if line.contains("extends ") {
                     line.split("extends ")
                         .nth(1)
                         .and_then(|s| s.split_whitespace().next())
-                        .map(|s| {
-                            s.trim_end_matches(|c: char| c == '{' || c == '(')
-                                .to_string()
-                        })
+                        .map(|s| s.trim_end_matches(['{', '(']).to_string())
                 } else if line.contains(": ") {
                     line.split(": ")
                         .nth(1)
                         .and_then(|s| s.split_whitespace().next())
-                        .map(|s| {
-                            s.trim_end_matches(|c: char| c == '{' || c == '(')
-                                .to_string()
-                        })
+                        .map(|s| s.trim_end_matches(['{', '(']).to_string())
                 } else {
                     None
                 };
@@ -282,7 +276,7 @@ impl ComponentAnalyzer {
         {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
-                let interface_name = parts[1].trim_end_matches(|c: char| c == '{' || c == '(');
+                let interface_name = parts[1].trim_end_matches(['{', '(']);
 
                 // Extract parent interfaces if present
                 let parent_interfaces = if line.contains("extends ") {
@@ -290,11 +284,7 @@ impl ComponentAnalyzer {
                         .nth(1)
                         .map(|s| {
                             s.split(',')
-                                .map(|i| {
-                                    i.trim()
-                                        .trim_end_matches(|c: char| c == '{' || c == '(')
-                                        .to_string()
-                                })
+                                .map(|i| i.trim().trim_end_matches(['{', '(']).to_string())
                                 .collect()
                         })
                         .unwrap_or_default()
@@ -336,12 +326,8 @@ impl ComponentAnalyzer {
                 };
 
                 return Some(ComponentRelationshipInfo {
-                    source: child
-                        .trim_end_matches(|c: char| c == '{' || c == '(')
-                        .to_string(),
-                    target: parent
-                        .trim_end_matches(|c: char| c == '{' || c == '(')
-                        .to_string(),
+                    source: child.trim_end_matches(['{', '(']).to_string(),
+                    target: parent.trim_end_matches(['{', '(']).to_string(),
                     relationship_type: ComponentRelationship::Inheritance,
                     strength: 1.0,
                     metadata: HashMap::new(),
@@ -367,12 +353,8 @@ impl ComponentAnalyzer {
                     let interface_name = interface_part.split_whitespace().next()?;
 
                     return Some(ComponentRelationshipInfo {
-                        source: class_name
-                            .trim_end_matches(|c: char| c == '{' || c == '(')
-                            .to_string(),
-                        target: interface_name
-                            .trim_end_matches(|c: char| c == '{' || c == '(')
-                            .to_string(),
+                        source: class_name.trim_end_matches(['{', '(']).to_string(),
+                        target: interface_name.trim_end_matches(['{', '(']).to_string(),
                         relationship_type: ComponentRelationship::Implementation,
                         strength: 1.0,
                         metadata: HashMap::new(),
@@ -617,10 +599,8 @@ impl ComponentAnalyzer {
                 };
 
                 let edge_id = format!(
-                    "rel:{}:{}:{}",
-                    rel.source,
-                    rel.target,
-                    format!("{:?}", rel.relationship_type)
+                    "rel:{}:{}:{:?}",
+                    rel.source, rel.target, rel.relationship_type
                 );
 
                 let mut metadata = HashMap::new();
@@ -1384,7 +1364,7 @@ impl ComponentCouplingAnalyzer {
         }
 
         // Calculate metrics for each component
-        for (component_name, _) in analyzer.classes() {
+        for component_name in analyzer.classes().keys() {
             let afferent_count = afferent.get(component_name).map(|s| s.len()).unwrap_or(0);
             let efferent_count = efferent.get(component_name).map(|s| s.len()).unwrap_or(0);
             let total = afferent_count + efferent_count;

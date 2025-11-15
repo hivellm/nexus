@@ -214,6 +214,7 @@ impl McpToolStatistics {
     }
 
     /// Record a tool execution
+    #[allow(clippy::too_many_arguments)]
     pub fn record_tool_call(
         &self,
         tool_name: &str,
