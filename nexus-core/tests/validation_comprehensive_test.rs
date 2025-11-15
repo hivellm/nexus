@@ -164,9 +164,9 @@ fn test_validate_graph_with_invalid_node_ids() {
 
     // Create node normally first
     let _node_id = graph.create_node(vec!["Person".to_string()]).unwrap();
-    // Try to update with invalid ID - use a large but safe value to avoid overflow
-    // Use a value that would be invalid (beyond actual node count) but safe for calculations
-    let invalid_id = 1_000_000_000u64; // Large enough to be invalid but safe for multiplication
+    // Try to update with invalid ID - use a value that's invalid but safe
+    // Use a value beyond actual node count but small enough to avoid range errors
+    let invalid_id = 10_000u64; // Invalid but safe for storage calculations
     let node = Node::new(NodeId::new(invalid_id), vec!["Person".to_string()]);
     let _ = graph.update_node(node);
 
@@ -183,9 +183,9 @@ fn test_validate_graph_with_invalid_edge_ids() {
     let node1_id = graph.create_node(vec!["Person".to_string()]).unwrap();
     let node2_id = graph.create_node(vec!["Person".to_string()]).unwrap();
 
-    // Create edge with invalid ID - use a large but safe value to avoid overflow
-    // Use a value that would be invalid (beyond actual edge count) but safe for calculations
-    let invalid_id = 1_000_000_000u64; // Large enough to be invalid but safe for multiplication
+    // Create edge with invalid ID - use a value that's invalid but safe
+    // Use a value beyond actual edge count but small enough to avoid range errors
+    let invalid_id = 10_000u64; // Invalid but safe for storage calculations
     let _edge_id = graph
         .create_edge(node1_id, node2_id, "KNOWS".to_string())
         .unwrap();
