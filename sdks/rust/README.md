@@ -102,15 +102,38 @@ All dependencies are up-to-date:
 - `base64` 0.22 - Latest stable
 - `tracing` 0.1 - Latest stable
 
+## Examples
+
+See the `examples/` directory for complete examples:
+
+- `basic_usage.rs` - Basic operations with nodes, relationships, and schema
+- `with_auth.rs` - Authentication examples
+
+Run examples with:
+```bash
+cargo run --example basic_usage
+cargo run --example with_auth
+```
+
+## Testing
+
+Run tests with:
+```bash
+cargo test
+
+# Run integration tests (requires running Nexus server)
+NEXUS_TEST_SERVER=http://localhost:15474 cargo test -- --ignored
+```
+
 ## Roadmap
 
 - [x] Node CRUD operations
 - [x] Relationship CRUD operations (Create)
 - [x] Schema management
+- [x] Integration tests
+- [x] Examples
 - [ ] Transaction support
 - [ ] Query builder
 - [ ] Retry logic with exponential backoff
 - [ ] Connection pooling
-- [ ] Comprehensive tests
 - [ ] Relationship update/delete operations
-

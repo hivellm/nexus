@@ -38,7 +38,15 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
-mockito = "1.0"
+mockito = "1.4"
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"
+
+[[example]]
+name = "with_auth"
+path = "examples/with_auth.rs"
 
 [lib]
 name = "nexus_sdk_rust"
