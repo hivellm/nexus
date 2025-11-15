@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-PORT=${NEXUS_PORT:-3000}
+PORT=${NEXUS_PORT:-15474}
 BASE_URL="http://localhost:${PORT}"
 SERVER_LOG="scripts/nexus_server.log"
 TEST_LOG="scripts/route_tests.log"
