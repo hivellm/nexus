@@ -21,10 +21,14 @@
 //! ```
 
 pub mod client;
+pub mod data;
 pub mod error;
 pub mod models;
 pub mod query;
+pub mod schema;
 
 pub use client::NexusClient;
+pub use data::*;
 pub use error::{NexusError, Result};
 pub use models::*;
+pub use schema::*;

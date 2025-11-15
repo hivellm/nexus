@@ -27,6 +27,16 @@ pub struct NexusClient {
 }
 
 impl NexusClient {
+    /// Get the HTTP client
+    pub(crate) fn get_client(&self) -> &Client {
+        &self.client
+    }
+
+    /// Get the base URL
+    pub(crate) fn get_base_url(&self) -> &Url {
+        &self.base_url
+    }
+
     /// Create a new Nexus client with default configuration
     ///
     /// # Arguments
@@ -153,8 +163,8 @@ impl NexusClient {
             parameters,
         };
 
-        let url = self.base_url.join("/cypher")?;
-        let mut request_builder = self.client.post(url).json(&request);
+        let url = self.get_base_url().join("/cypher")?;
+        let mut request_builder = self.get_client().post(url).json(&request);
 
         // Add authentication headers
         request_builder = self.add_auth_headers(request_builder)?;
@@ -178,8 +188,8 @@ impl NexusClient {
     /// # }
     /// ```
     pub async fn get_stats(&self) -> Result<DatabaseStats> {
-        let url = self.base_url.join("/stats")?;
-        let mut request_builder = self.client.get(url);
+        let url = self.get_base_url().join("/stats")?;
+        let mut request_builder = self.get_client().get(url);
 
         // Add authentication headers
         request_builder = self.add_auth_headers(request_builder)?;
@@ -204,8 +214,8 @@ impl NexusClient {
     /// # }
     /// ```
     pub async fn health_check(&self) -> Result<bool> {
-        let url = self.base_url.join("/health")?;
-        let request_builder = self.client.get(url);
+        let url = self.get_base_url().join("/health")?;
+        let request_builder = self.get_client().get(url);
 
         match self.execute_with_retry(request_builder).await {
             Ok(response) => Ok(response.status().is_success()),
@@ -214,7 +224,7 @@ impl NexusClient {
     }
 
     /// Add authentication headers to request
-    fn add_auth_headers(
+    pub(crate) fn add_auth_headers(
         &self,
         mut builder: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder> {
@@ -232,7 +242,10 @@ impl NexusClient {
     }
 
     /// Execute request with retry logic
-    async fn execute_with_retry(&self, builder: reqwest::RequestBuilder) -> Result<Response> {
+    pub(crate) async fn execute_with_retry(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<Response> {
         // For now, execute without retry
         // TODO: Implement proper retry logic with request rebuilding
         builder.send().await.map_err(NexusError::Http)
