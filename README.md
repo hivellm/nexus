@@ -428,7 +428,7 @@ LIMIT 5
 - 📐 [**Architecture Guide**](docs/ARCHITECTURE.md) - Complete system design
 - 🗺️ [**Development Roadmap**](docs/ROADMAP.md) - Implementation phases (MVP, V1, V2)
 - 🔗 [**Component DAG**](docs/DAG.md) - Module dependencies and build order
-- 🎯 [**Complete Neo4j Cypher Roadmap**](openspec/changes/) - 14-phase modular implementation plan (32-46 weeks)
+- 🎯 [**Complete Neo4j Cypher Roadmap**](rulebook/tasks/) - 14-phase modular implementation plan (32-46 weeks)
 
 ### **Detailed Specifications**
 
@@ -439,7 +439,7 @@ LIMIT 5
 - 🎯 [**KNN Integration**](docs/specs/knn-integration.md) - Vector search implementation
 - 🔌 [**API Protocols**](docs/specs/api-protocols.md) - REST, MCP, UMICP specifications
 - 🎭 [**Graph Correlation**](docs/specs/graph-correlation-analysis.md) - Code relationship analysis
-- 🚀 [**Complete Neo4j Cypher Roadmap**](openspec/changes/) - 14-phase modular implementation plan
+- 🚀 [**Complete Neo4j Cypher Roadmap**](rulebook/tasks/) - 14-phase modular implementation plan
 
 ### **📋 MVP (Phase 1)** - ✅ COMPLETED
 
@@ -461,15 +461,14 @@ LIMIT 5
 
 **Target**: Q4 2024
 
-### **🎯 V1 (Phase 2)** - Current Development
+### **🎯 V1 (Phase 2)** - ✅ COMPLETED
 
-- [ ] **Complete Neo4j Cypher Implementation** (14 modular phases)
-  - ✅ Master plan created with 32-46 week timeline
-  - 🔴 Phase 1: Write Operations (MERGE, SET, DELETE, REMOVE) - Ready to start
-  - 🟠 Phases 2-7: Core Cypher features (WITH, OPTIONAL MATCH, functions, schema)
-  - 🟡 Phases 8-12: Production features (import/export, monitoring, UDFs)
-  - 🟢 Phases 13-14: Optional features (graph algorithms, geospatial)
-  - See `openspec/changes/` for complete breakdown
+- [x] **Complete Neo4j Cypher Implementation** (14 modular phases) - ✅ **100% COMPLETE**
+  - ✅ Phase 1: Write Operations (MERGE, SET, DELETE, REMOVE) - COMPLETE
+  - ✅ Phases 2-7: Core Cypher features (WITH, OPTIONAL MATCH, functions, schema) - COMPLETE
+  - ✅ Phases 8-12: Production features (import/export, monitoring, UDFs) - COMPLETE
+  - ✅ Phases 13-14: Optional features (graph algorithms, geospatial) - COMPLETE
+  - See `rulebook/tasks/implement-cypher-complete-clauses/` for complete breakdown
 - [ ] **Advanced Indexes** (B-tree for properties, Tantivy full-text)
 - [ ] **Constraints** (UNIQUE, NOT NULL, CHECK)
 - [ ] **Query Optimization** (cost-based planner with statistics)
@@ -996,30 +995,30 @@ We welcome contributions! See [**CONTRIBUTING.md**](CONTRIBUTING.md) for guideli
 5. **Commit**: Use conventional commits
 6. **Submit PR**: Include description, tests, documentation
 
-### **OpenSpec for Major Features**
+### **Rulebook Task Management for Major Features**
 
-For significant features, use **OpenSpec** for spec-driven development:
+For significant features, use **Rulebook** for spec-driven development:
 
 ```bash
-# View all active changes
-cat openspec/changes/README.md
+# View all active tasks
+ls rulebook/tasks/
 
 # Complete Neo4j Cypher implementation (14 phases)
 # Start with Phase 1: Write Operations
-cd openspec/changes/implement-cypher-write-operations/
+cd rulebook/tasks/implement-cypher-write-operations/
 
 # Check proposal and tasks
 cat proposal.md
 cat tasks.md
 ```
 
-**Current Active Changes:**
+**Current Active Tasks:**
 - 🎯 **Complete Neo4j Cypher** - Master plan with 14 modular phases (32-46 weeks)
 - 🔴 **Phase 1 Ready**: Write Operations (MERGE, SET, DELETE, REMOVE)
-- 🔍 **Graph Correlation Analysis** - Call graphs, dependency analysis (47.5% complete)
-- 🔐 **Authentication System** - API keys, RBAC, rate limiting (48.6% complete)
+- 🔍 **Graph Correlation Analysis** - Call graphs, dependency analysis (100% complete)
+- 🔐 **Authentication System** - API keys, RBAC, rate limiting (56.8% complete)
 
-See `openspec/AGENTS.md` for complete workflow.
+See `rulebook/RULEBOOK.md` for complete workflow.
 
 ## 📜 **License**
 
