@@ -316,10 +316,10 @@ fn test_validation_stats() {
     let result = validator.validate_graph(&graph).unwrap();
 
     // Check that stats are populated
-    // Stats are always non-negative (usize/u64 types)
-    assert!(result.stats.nodes_checked >= 0);
-    assert!(result.stats.edges_checked >= 0);
-    assert!(result.stats.validation_time_ms >= 0);
+    // Stats are always non-negative (usize/u64 types) - just verify they exist
+    let _ = result.stats.nodes_checked;
+    let _ = result.stats.edges_checked;
+    let _ = result.stats.validation_time_ms;
 }
 
 #[test]

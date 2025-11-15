@@ -3,7 +3,7 @@
 //! Tests for MCP authentication middleware and API key validation
 
 use nexus_core::auth::{AuthConfig, AuthManager, Permission, middleware::AuthMiddleware};
-use nexus_server::{NexusServer, config::RootUserConfig, middleware::mcp_auth_middleware_handler};
+use nexus_server::{NexusServer, config::RootUserConfig};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::RwLock;

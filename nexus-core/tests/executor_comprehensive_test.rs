@@ -112,7 +112,7 @@ fn test_distinct_operator() {
         params: HashMap::new(),
     };
 
-    let _result = executor.execute(&query).unwrap();
+    let result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
     assert_eq!(result.columns.len(), 1);
 }
@@ -159,7 +159,7 @@ fn test_limit_zero() {
         params: HashMap::new(),
     };
 
-    let result = executor.execute(&query).unwrap();
+    let _result = executor.execute(&query).unwrap();
     // LIMIT 0 should return no rows, but implementation may not fully support this edge case yet
     // The execute_limit function truncates if len > count, but doesn't handle count == 0 specially
     // Accept either behavior: 0 rows (correct) or all rows (LIMIT 0 not fully supported)
@@ -286,7 +286,7 @@ fn test_group_by() {
         params: HashMap::new(),
     };
 
-    let _result = executor.execute(&query).unwrap();
+    let result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
     assert_eq!(result.columns.len(), 2);
 }
@@ -326,7 +326,7 @@ fn test_left_outer_join() {
         params: HashMap::new(),
     };
 
-    let result = executor.execute(&query2).unwrap();
+    let _result = executor.execute(&query2).unwrap();
     // Result rows can be empty or have data - both are valid
 }
 
