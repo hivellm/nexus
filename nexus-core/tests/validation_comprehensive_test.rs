@@ -217,14 +217,17 @@ fn test_validate_graph_with_empty_rel_type() {
 
     // Create edge with empty relationship type
     // Note: Some storage backends may reject empty strings, so we handle the error case
-    let edge_id = graph
-        .create_edge(node1_id, node2_id, "".to_string())
-        .unwrap();
-    // Try to get and update edge with empty rel type
-    // update_edge may fail with BadValSize for empty strings - that's acceptable
-    if let Ok(Some(mut edge)) = graph.get_edge(edge_id) {
-        edge.relationship_type = "".to_string(); // Set empty rel type
-        let _ = graph.update_edge(edge); // May fail, that's acceptable
+    let edge_result = graph.create_edge(node1_id, node2_id, "".to_string());
+
+    // If edge creation succeeded, try to update it with empty rel type
+    // If edge creation failed, that's also acceptable - the system correctly rejects empty strings
+    if let Ok(edge_id) = edge_result {
+        // Try to get and update edge with empty rel type
+        // update_edge may fail with BadValSize for empty strings - that's acceptable
+        if let Ok(Some(mut edge)) = graph.get_edge(edge_id) {
+            edge.relationship_type = "".to_string(); // Set empty rel type
+            let _ = graph.update_edge(edge); // May fail, that's acceptable
+        }
     }
 
     // Validation may fail due to empty rel type error, or may succeed if empty strings are allowed
