@@ -71,6 +71,11 @@ pub enum Operator {
         /// Variable name
         variable: String,
     },
+    /// Scan all nodes (no label filter)
+    AllNodesScan {
+        /// Variable name
+        variable: String,
+    },
     /// Filter by property predicate
     Filter {
         /// Predicate expression
@@ -547,6 +552,12 @@ impl Executor {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
                     let nodes = self.execute_node_by_label(*label_id)?;
+                    context.set_variable(variable, Value::Array(nodes));
+                    let rows = self.materialize_rows_from_variables(&context);
+                    self.update_result_set_from_rows(&mut context, &rows);
+                }
+                Operator::AllNodesScan { variable } => {
+                    let nodes = self.execute_all_nodes_scan()?;
                     context.set_variable(variable, Value::Array(nodes));
                     let rows = self.materialize_rows_from_variables(&context);
                     self.update_result_set_from_rows(&mut context, &rows);
@@ -1204,6 +1215,32 @@ impl Executor {
             match self.read_node_as_value(node_id as u64)? {
                 Value::Null => continue,
                 value => results.push(value),
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Execute AllNodesScan operator (scan all nodes regardless of label)
+    fn execute_all_nodes_scan(&self) -> Result<Vec<Value>> {
+        let mut results = Vec::new();
+
+        // Get the total number of nodes from the store
+        let total_nodes = self.store.node_count();
+
+        // Scan all node IDs from 0 to total_nodes-1
+        for node_id in 0..total_nodes {
+            // Skip deleted nodes
+            if let Ok(node_record) = self.store.read_node(node_id) {
+                if node_record.is_deleted() {
+                    continue;
+                }
+
+                // Read the node as a value
+                match self.read_node_as_value(node_id)? {
+                    Value::Null => continue,
+                    value => results.push(value),
+                }
             }
         }
 
@@ -3074,6 +3111,10 @@ impl Executor {
         match operator {
             Operator::NodeByLabel { label_id, variable } => {
                 let nodes = self.execute_node_by_label(*label_id)?;
+                context.set_variable(variable, Value::Array(nodes));
+            }
+            Operator::AllNodesScan { variable } => {
+                let nodes = self.execute_all_nodes_scan()?;
                 context.set_variable(variable, Value::Array(nodes));
             }
             Operator::Filter { predicate } => {

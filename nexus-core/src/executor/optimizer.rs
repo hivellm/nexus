@@ -470,6 +470,12 @@ impl QueryOptimizer {
                     total_cost += scan_cost;
                     estimated_rows = stats.row_count as f64;
                 }
+                Operator::AllNodesScan { .. } => {
+                    // All nodes scan is typically more expensive than label scan
+                    // Estimate based on total node count (assume larger than single label)
+                    let scan_cost = cost_model.seq_scan_cost * estimated_rows * 2.0;
+                    total_cost += scan_cost;
+                }
                 Operator::IndexScan { index_name, .. } => {
                     let stats = self.stats.get_index_stats(index_name)?;
                     let scan_cost = cost_model.index_scan_cost * stats.cardinality as f64;

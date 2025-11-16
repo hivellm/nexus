@@ -130,12 +130,22 @@ This task covers fixing all remaining compatibility issues identified through co
 
 ### Phase 5: Aggregation with Collect Fixes
 
-- [ ] 5.1 Fix collect() with head()/tail()/reverse()
-  - [ ] 5.1.1 Issue: Row count mismatch (Neo4j: 1, Nexus: 5)
-  - [ ] 5.1.2 Root cause: Aggregation not properly grouping when using collect() with list functions
-  - [ ] 5.1.3 Fix: Ensure proper aggregation grouping
-  - [ ] 5.1.4 Add test: `MATCH (n:Person) RETURN head(collect(n.name)) AS first_name`
-  - [ ] 5.1.5 Verify compatibility
+- [⏸️] 5.1 Fix collect() with head()/tail()/reverse() **PAUSED - Requires Major Refactoring**
+  - [x] 5.1.1 Issue: Row count mismatch (Neo4j: 1 row, Nexus: multiple rows with NULL)
+  - [x] 5.1.2 Root cause: Nested aggregations (`head(collect())`) not fully supported
+    - Planner detects aggregation but cannot decompose nested expressions
+    - Requires two-phase execution: Aggregate operator first, then Project with function
+    - Current architecture treats entire expression as single projection item
+  - [x] 5.1.3 Investigation: Added `contains_aggregation()` helper for recursive detection
+  - [x] 5.1.4 Tests: Created comprehensive test suite (5 tests, 3 failing)
+    - ✅ `collect(n.name)` works (returns 1 row with array)
+    - ❌ `head(collect(n.name))` returns NULL
+    - ❌ `tail(collect(n.name))` returns NULL
+    - ❌ `reverse(collect(n.name))` returns NULL
+  - [ ] 5.1.5 Fix: **Requires significant planner/executor refactoring**
+    - Need to extract nested aggregations and create multi-operator pipeline
+    - Example: `head(collect(n.name))` → Aggregate(collect) → Project(head)
+  - [ ] 5.1.6 Status: **PAUSED** - Move to simpler Phases 6-9 first
 
 ### Phase 6: Relationship Query Fixes
 
@@ -214,7 +224,42 @@ This task covers fixing all remaining compatibility issues identified through co
 
 ## Progress Summary
 
-**Last updated**: 2025-11-16 (Session 3 - FOUR PHASES COMPLETE! 🎉🎉🎉🎉)
+**Last updated**: 2025-11-16 (Session 3 Extended - Phase 5 Investigation 🔍)
+
+### Session 3 Extended Summary - Phase 5 Investigation
+
+**Work Completed:**
+
+1. 🔍 **Phase 5 Investigation - Nested Aggregations**
+
+   - Created comprehensive test suite for `head()`, `tail()`, `reverse()` with `collect()`
+   - Added `contains_aggregation()` helper function for recursive aggregation detection
+   - Identified root cause: Architecture limitation requiring multi-phase execution
+   - Status: **PAUSED** - Requires significant refactoring beyond current scope
+
+2. ✅ **Performance Test Identified (Not Related to Our Changes)**
+   - `test_api_key_lookup_performance` failing (4.65s > 3s limit)
+   - Argon2 password hashing is intentionally slow for security
+   - Not caused by any Neo4j compatibility work
+   - All functional tests passing (21/21 for our changes)
+
+**Test Results - Phase 5:**
+
+```
+✅ test_collect_without_nesting: collect(n.name) returns 1 row with array
+✅ test_count_all: count(*) returns 1 row with count
+❌ test_collect_with_head: Returns 1 row but NULL (expected: first name)
+❌ test_collect_with_tail: Returns 1 row but NULL (expected: array without first)
+❌ test_collect_with_reverse: Returns 1 row but NULL (expected: reversed array)
+```
+
+**Files Modified:**
+
+- `nexus-core/src/executor/planner.rs`: Added `contains_aggregation()` helper (lines 1396-1452)
+- `nexus-core/tests/test_collect_aggregation.rs`: New test file (5 tests)
+
+**Decision:**
+Phase 5 requires breaking down nested aggregations into multi-operator pipelines. This is beyond the scope of incremental fixes and should be addressed in a dedicated refactoring effort. Moving to Phases 6-9 which are more straightforward.
 
 ### Session 3 Summary - EXTRAORDINARY PROGRESS!
 

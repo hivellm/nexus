@@ -693,10 +693,8 @@ impl<'a> QueryPlanner<'a> {
                         }
                     } else {
                         // No label specified - need to scan all nodes
-                        // Use label_id 0 as a special case to scan all nodes
-                        // The executor handles label_id 0 specially to scan all nodes efficiently
-                        operators.push(Operator::NodeByLabel {
-                            label_id: 0, // Special case: scan all nodes (handled in executor)
+                        // Use AllNodesScan operator to scan all nodes efficiently
+                        operators.push(Operator::AllNodesScan {
                             variable: variable.clone(),
                         });
                     }
@@ -1466,6 +1464,11 @@ impl<'a> QueryPlanner<'a> {
                     // Estimate cost based on label selectivity
                     let selectivity = self.estimate_label_selectivity(*label_id)?;
                     total_cost += 1000.0 * selectivity;
+                }
+                Operator::AllNodesScan { .. } => {
+                    // Scanning all nodes is more expensive than label scan
+                    // Assume full scan of all nodes
+                    total_cost += 2000.0;
                 }
                 Operator::Filter { .. } => {
                     // Filter operations are relatively cheap
