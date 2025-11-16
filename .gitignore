@@ -15,6 +15,7 @@ Cargo.lock
 # Node.js (for tools/scripts)
 node_modules/
 package-lock.json
+logs/
 *.log
 
 # Data files
