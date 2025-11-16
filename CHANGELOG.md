@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Installation Scripts ✅
+
+- **Automated Installation Scripts**: One-command installation for Linux, macOS, and Windows
+  - **Linux/macOS**: `curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.sh | bash`
+  - **Windows**: `powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.ps1 | iex"`
+  - Downloads latest release directly from GitHub (no custom domain required)
+  - Installs `nexus-server` binary to system PATH
+  - Creates system service (systemd on Linux, launchd on macOS, Windows Service on Windows)
+  - Configures auto-restart on system reboot
+  - Service management commands included
+  - Comprehensive documentation in `scripts/INSTALL.md`
+  - Similar to Bun installation pattern for easy adoption
+
+### Added - Python SDK ✅
+
+- **Official Python SDK**: Complete Python SDK for Nexus graph database
+  - Async/await support with `httpx`
+  - Type-safe models with Pydantic
+  - Full CRUD operations for nodes and relationships
+  - Cypher query execution
+  - Schema management (labels and relationship types)
+  - Transaction support (BEGIN, COMMIT, ROLLBACK)
+  - Authentication (API key and username/password)
+  - Retry logic with exponential backoff
+  - Health check and database statistics
+  - Comprehensive error handling
+  - Examples and documentation
+  - Apache 2.0 license
+  - Available at: `sdks/python/`
+
 ### Fixed - Aggregation Virtual Row Support ✅
 
 - **Aggregation without MATCH**: Fixed virtual row creation for aggregations without MATCH clause
