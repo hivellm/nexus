@@ -958,12 +958,19 @@ impl Executor {
 
         // Use the passed-in created_nodes HashMap (don't create a new one)
         let mut last_node_id: Option<u64> = None;
+        let mut skip_next_node = false; // Flag to skip node already created in relationship
 
         // Process pattern elements in sequence
         // Pattern alternates: Node -> Relationship -> Node -> Relationship ...
         for (i, element) in pattern.elements.iter().enumerate() {
             match element {
                 parser::PatternElement::Node(node) => {
+                    // Skip if this node was already created as part of the previous relationship
+                    if skip_next_node {
+                        skip_next_node = false;
+                        continue;
+                    }
+
                     // Build label bitmap
                     let mut label_bits = 0u64;
                     for label in &node.labels {
@@ -1049,6 +1056,10 @@ impl Executor {
                             }
 
                             last_node_id = Some(tid);
+
+                            // Set flag to skip this node in the next iteration
+                            skip_next_node = true;
+
                             tid
                         } else {
                             return Err(Error::CypherExecution(
