@@ -1,6 +1,6 @@
 use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement, QueryHint,
-    RelationshipDirection, ReturnItem, UnaryOperator,
+    RelationshipDirection, ReturnItem, SortDirection, UnaryOperator,
 };
 use super::{Aggregation, Direction, Operator, ProjectionItem};
 use crate::catalog::Catalog;
@@ -101,6 +101,7 @@ impl<'a> QueryPlanner<'a> {
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
         let mut match_hints = Vec::new(); // Collect hints from MATCH clauses
+        let mut order_by_clause: Option<(Vec<String>, Vec<bool>)> = None; // Collect ORDER BY to add after projection
 
         for clause in &query.clauses {
             match clause {
@@ -170,6 +171,26 @@ impl<'a> QueryPlanner<'a> {
                     if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
                         limit_count = Some(*count as usize);
                     }
+                }
+                Clause::OrderBy(order_by_clause_parsed) => {
+                    // Collect ORDER BY clause to add after projection
+                    // We'll resolve these to column aliases later
+                    let mut columns = Vec::new();
+                    let mut ascending = Vec::new();
+
+                    for item in &order_by_clause_parsed.items {
+                        // Convert expression to column name
+                        // This will be resolved to alias after we know the RETURN items
+                        let column = self.expression_to_string(&item.expression)?;
+                        columns.push(column);
+
+                        // Convert direction
+                        let is_asc = item.direction == SortDirection::Ascending;
+                        ascending.push(is_asc);
+                    }
+
+                    // Store for later addition and resolution
+                    order_by_clause = Some((columns, ascending));
                 }
                 Clause::Union(_) => {
                     // Should have been handled above
@@ -327,6 +348,108 @@ impl<'a> QueryPlanner<'a> {
                                         });
                                     }
                                 }
+                                "min" => {
+                                    has_aggregation = true;
+                                    if let Some(arg) = args.first() {
+                                        let column = match arg {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            Expression::Literal(_) => {
+                                                let alias =
+                                                    format!("__min_arg_{}", aggregations.len());
+                                                projection_items.push(ProjectionItem {
+                                                    alias: alias.clone(),
+                                                    expression: arg.clone(),
+                                                });
+                                                alias
+                                            }
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::Min {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "min".to_string()),
+                                        });
+                                    }
+                                }
+                                "max" => {
+                                    has_aggregation = true;
+                                    if let Some(arg) = args.first() {
+                                        let column = match arg {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            Expression::Literal(_) => {
+                                                let alias =
+                                                    format!("__max_arg_{}", aggregations.len());
+                                                projection_items.push(ProjectionItem {
+                                                    alias: alias.clone(),
+                                                    expression: arg.clone(),
+                                                });
+                                                alias
+                                            }
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::Max {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "max".to_string()),
+                                        });
+                                    }
+                                }
+                                "collect" => {
+                                    has_aggregation = true;
+                                    let distinct = args.first().is_some_and(|arg| {
+                                        if let Expression::Variable(v) = arg {
+                                            v == "__DISTINCT__"
+                                        } else {
+                                            false
+                                        }
+                                    });
+
+                                    // Get the actual argument (skip __DISTINCT__ if present)
+                                    let actual_arg = if distinct && args.len() > 1 {
+                                        Some(&args[1])
+                                    } else if !distinct && !args.is_empty() {
+                                        Some(&args[0])
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(arg) = actual_arg {
+                                        let column = match arg {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            Expression::Literal(_) => {
+                                                let alias =
+                                                    format!("__collect_arg_{}", aggregations.len());
+                                                projection_items.push(ProjectionItem {
+                                                    alias: alias.clone(),
+                                                    expression: arg.clone(),
+                                                });
+                                                alias
+                                            }
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::Collect {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "collect".to_string()),
+                                            distinct,
+                                        });
+                                    }
+                                }
                                 _ => {
                                     // Not an aggregate function, treat as regular projection
                                     projection_items.push(ProjectionItem {
@@ -356,13 +479,18 @@ impl<'a> QueryPlanner<'a> {
                     // Add Project operator if needed (for literals in aggregations)
                     if !projection_items.is_empty() {
                         operators.push(Operator::Project {
-                            items: projection_items,
+                            items: projection_items.clone(),
                         });
                     }
-                    // Add Aggregate operator
+                    // Add Aggregate operator with projection items
                     operators.push(Operator::Aggregate {
                         group_by: group_by_columns,
                         aggregations,
+                        projection_items: if projection_items.is_empty() {
+                            None
+                        } else {
+                            Some(projection_items)
+                        },
                     });
                 } else {
                     // Regular projection (no aggregations)
@@ -402,6 +530,50 @@ impl<'a> QueryPlanner<'a> {
             // Apply LIMIT if specified
             if let Some(limit) = limit_count {
                 operators.push(Operator::Limit { count: limit });
+            }
+        }
+
+        // Add ORDER BY operator (Sort) AFTER projection/aggregation but BEFORE limit
+        // Resolve column names to aliases from RETURN items
+        if let Some((columns, ascending)) = order_by_clause {
+            // Build a map of expression -> alias from return_items for resolution
+            let mut expression_to_alias = std::collections::HashMap::new();
+            for item in &return_items {
+                let expr_str = self
+                    .expression_to_string(&item.expression)
+                    .unwrap_or_default();
+                let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
+                expression_to_alias.insert(expr_str, alias);
+            }
+
+            // Resolve ORDER BY column names to aliases
+            let resolved_columns: Vec<String> = columns
+                .iter()
+                .map(|col| {
+                    // Try to resolve to alias, otherwise use as-is
+                    expression_to_alias
+                        .get(col)
+                        .cloned()
+                        .unwrap_or_else(|| col.clone())
+                })
+                .collect();
+
+            // Find where to insert Sort (before Limit if exists)
+            let limit_pos = operators
+                .iter()
+                .position(|op| matches!(op, Operator::Limit { .. }));
+
+            let sort_op = Operator::Sort {
+                columns: resolved_columns,
+                ascending,
+            };
+
+            if let Some(pos) = limit_pos {
+                // Insert before Limit
+                operators.insert(pos, sort_op);
+            } else {
+                // Add at the end
+                operators.push(sort_op);
             }
         }
 
@@ -958,7 +1130,7 @@ impl<'a> QueryPlanner<'a> {
 
                 if !projection_items.is_empty() {
                     operators.push(Operator::Project {
-                        items: projection_items,
+                        items: projection_items.clone(),
                     });
                 }
 
@@ -970,6 +1142,11 @@ impl<'a> QueryPlanner<'a> {
                 operators.push(Operator::Aggregate {
                     group_by: group_by_columns,
                     aggregations,
+                    projection_items: if projection_items.is_empty() {
+                        None
+                    } else {
+                        Some(projection_items)
+                    },
                 });
             } else {
                 // Insert UNWIND operators before final projection
@@ -1158,6 +1335,13 @@ impl<'a> QueryPlanner<'a> {
                     BinaryOperator::Subtract => "-",
                     BinaryOperator::Multiply => "*",
                     BinaryOperator::Divide => "/",
+                    BinaryOperator::In => "IN",
+                    BinaryOperator::Contains => "CONTAINS",
+                    BinaryOperator::StartsWith => "STARTS WITH",
+                    BinaryOperator::EndsWith => "ENDS WITH",
+                    BinaryOperator::RegexMatch => "=~",
+                    BinaryOperator::Power => "^",
+                    BinaryOperator::Modulo => "%",
                     _ => "?",
                 };
                 Ok(format!("{} {} {}", left_str, op_str, right_str))
@@ -1856,6 +2040,7 @@ mod tests {
             Operator::Aggregate {
                 group_by: vec!["n".to_string()],
                 aggregations: vec![],
+                projection_items: None,
             },
             Operator::Union {
                 left: vec![Operator::NodeByLabel {

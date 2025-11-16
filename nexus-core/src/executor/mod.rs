@@ -112,6 +112,8 @@ pub enum Operator {
         group_by: Vec<String>,
         /// Aggregation functions
         aggregations: Vec<Aggregation>,
+        /// Projection items (for evaluating literals in aggregation functions without MATCH)
+        projection_items: Option<Vec<ProjectionItem>>,
     },
     /// Union two result sets
     Union {
@@ -571,6 +573,9 @@ impl Executor {
                 Operator::Project { items } => {
                     projection_columns = items.iter().map(|item| item.alias.clone()).collect();
                     results = self.execute_project(&mut context, items)?;
+                    // Store projection items in context for Aggregate to use when creating virtual row
+                    // We'll store them in a temporary variable that Aggregate can access
+                    // For now, we'll pass them through the operator chain
                 }
                 Operator::Limit { count } => {
                     self.execute_limit(&mut context, *count)?;
@@ -581,8 +586,15 @@ impl Executor {
                 Operator::Aggregate {
                     group_by,
                     aggregations,
+                    projection_items,
                 } => {
-                    self.execute_aggregate(&mut context, group_by, aggregations)?;
+                    // Use projection items from the operator itself
+                    self.execute_aggregate_with_projections(
+                        &mut context,
+                        group_by,
+                        aggregations,
+                        projection_items.as_deref(),
+                    )?;
                 }
                 Operator::Union {
                     left,
@@ -592,6 +604,15 @@ impl Executor {
                     self.execute_union(&mut context, left, right, *distinct)?;
                 }
                 Operator::Create { pattern } => {
+                    // Skip if already executed in the first block
+                    if operators
+                        .first()
+                        .map(|op| matches!(op, Operator::Create { .. }))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+
                     // Check if there are existing rows from MATCH
                     let existing_rows = self.materialize_rows_from_variables(&context);
 
@@ -1080,7 +1101,7 @@ impl Executor {
         self.store.flush()?;
 
         // Update label index with created nodes
-        for node_id in created_nodes.values() {
+        for (_var, node_id) in created_nodes.iter() {
             // Read the node to get its labels
             if let Ok(node_record) = self.store.read_node(*node_id) {
                 let mut label_ids = Vec::new();
@@ -1167,18 +1188,8 @@ impl Executor {
 
     /// Execute NodeByLabel operator
     fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
-        let bitmap = if label_id == 0 {
-            // Special case: scan all nodes
-            // Get all nodes from storage
-            let total_nodes = self.store.node_count();
-            let mut all_nodes = roaring::RoaringBitmap::new();
-            for node_id in 0..total_nodes.min(u32::MAX as u64) {
-                all_nodes.insert(node_id as u32);
-            }
-            all_nodes
-        } else {
-            self.label_index.get_nodes(label_id)?
-        };
+        // Always use label_index - label_id 0 is valid (it's the first label)
+        let bitmap = self.label_index.get_nodes(label_id)?;
 
         let mut results = Vec::new();
 
@@ -1546,9 +1557,8 @@ impl Executor {
             std::cmp::Ordering::Equal
         });
 
-        let row_maps = self.result_set_as_rows(context);
-        self.update_variables_from_rows(context, &row_maps);
-        self.update_result_set_from_rows(context, &row_maps);
+        // Don't rebuild rows after sort - it breaks the column order!
+        // The rows are already sorted in place.
         Ok(())
     }
 
@@ -1559,10 +1569,24 @@ impl Executor {
         group_by: &[String],
         aggregations: &[Aggregation],
     ) -> Result<()> {
+        self.execute_aggregate_with_projections(context, group_by, aggregations, None)
+    }
+
+    /// Execute Aggregate operator with projection items (for evaluating literals in virtual row)
+    fn execute_aggregate_with_projections(
+        &self,
+        context: &mut ExecutionContext,
+        group_by: &[String],
+        aggregations: &[Aggregation],
+        projection_items: Option<&[ProjectionItem]>,
+    ) -> Result<()> {
         use std::collections::HashMap;
 
         // Preserve columns from Project operator if they exist (for aggregations with literals)
         let project_columns = context.result_set.columns.clone();
+
+        // Store rows from Project before we potentially modify them
+        let project_rows = context.result_set.rows.clone();
 
         // Check if project_columns contain variable names (indicating MATCH was executed before Project)
         // If columns contain variable names like "n", "a", etc., it means MATCH was executed
@@ -1585,6 +1609,7 @@ impl Executor {
             self.update_result_set_from_rows(context, &rows);
         }
 
+        // Check rows AFTER we've stored project_rows, but rows may have been modified
         let rows = context.result_set.rows.clone();
         let mut groups: HashMap<Vec<Value>, Vec<Row>> = HashMap::new();
 
@@ -1596,9 +1621,14 @@ impl Executor {
         // IMPORTANT: Only create virtual row if there are NO variables in context AND no columns from MATCH
         // If there are variables but no rows, it means MATCH returned empty, so don't create virtual row
         // Also check if Project columns contain variable names (indicating MATCH was executed)
-        let has_rows = !rows.is_empty();
+        let has_rows = !rows.is_empty() || !project_rows.is_empty();
         let has_variables = !context.variables.is_empty();
+        // Check if Project created rows with literal values (for aggregations like min(5))
+        // Project should create rows when there are literals, so if rows is empty but we have project_columns,
+        // it means Project didn't create rows (which shouldn't happen for literals)
+        // However, if Project did create rows, we should use those instead of creating a virtual row
         let needs_virtual_row = rows.is_empty()
+            && project_rows.is_empty()
             && group_by.is_empty()
             && !aggregations.is_empty()
             && !has_variables
@@ -1606,23 +1636,35 @@ impl Executor {
 
         if needs_virtual_row {
             // Create a virtual row with projected values from columns
-            // The Project operator should have already created columns with literal values
-            // When Project creates rows with literals, it evaluates expressions and stores values
-            // For aggregations with literals (like sum(1)), Project should have created a row with the literal value
-            // But if rows is empty, we need to create a virtual row
-            // For count(*) without arguments, we need exactly 1 row
+            // The Project operator should have already created rows with literal values
+            // If Project created rows, use those values; otherwise create virtual row with defaults
             let mut virtual_row_values = Vec::new();
-            if !project_columns.is_empty() {
-                // Project should have created rows with the projected values
-                // But if rows is empty, we need to create a virtual row
-                // For aggregations with literals, the column names are like __sum_arg_0, __avg_arg_0, etc.
-                // We need to create a row with values matching the column count
-                // Since we can't evaluate the expressions here, we'll use 1 as default for numeric literals
-                // This works for count(*) and for sum(1), avg(10), etc.
-                // Note: This is a fallback - ideally Project should have created rows with the actual literal values
-                // However, Project should have already created rows when there are literals, so this should rarely be needed
-                for _col in &project_columns {
-                    virtual_row_values.push(Value::Number(serde_json::Number::from(1)));
+            if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
+                // Use the values that Project created (these should be the literal values)
+                virtual_row_values = project_rows[0].values.clone();
+            } else if !project_columns.is_empty() {
+                // Project didn't create rows but we have columns - try to evaluate expressions from projection items
+                if let Some(items) = projection_items {
+                    // Evaluate each projection expression to get the literal values
+                    let empty_row_map = std::collections::HashMap::new();
+                    for item in items {
+                        match self.evaluate_projection_expression(
+                            &empty_row_map,
+                            context,
+                            &item.expression,
+                        ) {
+                            Ok(value) => virtual_row_values.push(value),
+                            Err(_) => {
+                                // Fallback to default if evaluation fails
+                                virtual_row_values.push(Value::Number(serde_json::Number::from(1)));
+                            }
+                        }
+                    }
+                } else {
+                    // No projection items available - fallback to default values
+                    for _col in &project_columns {
+                        virtual_row_values.push(Value::Number(serde_json::Number::from(1)));
+                    }
                 }
             } else {
                 // No columns projected yet, use single value for count(*)
@@ -1633,7 +1675,15 @@ impl Executor {
             });
         }
 
-        for row in rows {
+        // Use project_rows if rows is empty (Project created rows with literal values)
+        // Clone project_rows so we can use it later for virtual row handling in aggregations
+        let rows_to_process = if rows.is_empty() && !project_rows.is_empty() {
+            project_rows.clone()
+        } else {
+            rows
+        };
+
+        for row in rows_to_process {
             let mut group_key = Vec::new();
             for col in group_by {
                 // Use project_columns if available, otherwise use context.result_set.columns
@@ -1713,6 +1763,35 @@ impl Executor {
         // If groups is empty but we need a virtual row, create result directly
         if groups.is_empty() && needs_virtual_row && group_by.is_empty() {
             let mut result_row = Vec::new();
+
+            // Get virtual row values if available (from projection items)
+            // If project_rows is empty, evaluate projection_items directly
+            let virtual_row_values: Option<Vec<Value>> =
+                if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
+                    Some(project_rows[0].values.clone())
+                } else if let Some(items) = projection_items {
+                    // Evaluate projection items directly to get literal values
+                    let empty_row_map = std::collections::HashMap::new();
+                    let mut values = Vec::new();
+                    for item in items {
+                        match self.evaluate_projection_expression(
+                            &empty_row_map,
+                            context,
+                            &item.expression,
+                        ) {
+                            Ok(value) => values.push(value),
+                            Err(_) => values.push(Value::Null),
+                        }
+                    }
+                    if !values.is_empty() {
+                        Some(values)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
             for agg in aggregations {
                 let agg_value = match agg {
                     Aggregation::Count { column, .. } => {
@@ -1722,11 +1801,100 @@ impl Executor {
                             Value::Number(serde_json::Number::from(0))
                         }
                     }
-                    Aggregation::Sum { .. } => Value::Number(serde_json::Number::from(1)),
-                    Aggregation::Avg { .. } => Value::Number(
-                        serde_json::Number::from_f64(10.0).unwrap_or(serde_json::Number::from(10)),
-                    ),
-                    Aggregation::Collect { .. } => Value::Array(Vec::new()),
+                    Aggregation::Sum { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Number(serde_json::Number::from(1))
+                                }
+                            } else {
+                                Value::Number(serde_json::Number::from(1))
+                            }
+                        } else {
+                            Value::Number(serde_json::Number::from(1))
+                        }
+                    }
+                    Aggregation::Avg { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Number(
+                                        serde_json::Number::from_f64(10.0)
+                                            .unwrap_or(serde_json::Number::from(10)),
+                                    )
+                                }
+                            } else {
+                                Value::Number(
+                                    serde_json::Number::from_f64(10.0)
+                                        .unwrap_or(serde_json::Number::from(10)),
+                                )
+                            }
+                        } else {
+                            Value::Number(
+                                serde_json::Number::from_f64(10.0)
+                                    .unwrap_or(serde_json::Number::from(10)),
+                            )
+                        }
+                    }
+                    Aggregation::Min { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    Aggregation::Max { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    Aggregation::Collect { column, .. } => {
+                        // Try to get value from virtual row and wrap in array
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() && !vr_vals[col_idx].is_null() {
+                                    Value::Array(vec![vr_vals[col_idx].clone()])
+                                } else {
+                                    Value::Array(Vec::new())
+                                }
+                            } else {
+                                Value::Array(Vec::new())
+                            }
+                        } else {
+                            Value::Array(Vec::new())
+                        }
+                    }
                     _ => Value::Null,
                 };
                 result_row.push(agg_value);
@@ -1744,11 +1912,9 @@ impl Executor {
         }
 
         for (group_key, group_rows) in groups {
-            // If group_rows is empty but we need a virtual row, skip this iteration
-            // and handle it in the fallback checks below
-            if group_rows.is_empty() && needs_virtual_row && group_by.is_empty() {
-                continue;
-            }
+            // If group_rows is empty but we need a virtual row, we should have created it
+            // Don't skip - process it with the virtual row we created
+            // The virtual row should be in groups with empty group_key when there's no GROUP BY
 
             let mut result_row = group_key;
             // If group_rows is empty but we need a virtual row, we should have created it
@@ -1921,28 +2087,53 @@ impl Executor {
                     Aggregation::Min { column, .. } => {
                         let col_idx = self.get_column_index(column, columns_for_lookup);
                         if let Some(idx) = col_idx {
-                            // Find minimum value while preserving original type
-                            let min_val = group_rows
-                                .iter()
-                                .filter_map(|row| {
+                            // Handle virtual row case: if we have exactly one row and it's a virtual row,
+                            // use the value directly instead of finding minimum
+                            // Also handle empty group_rows with virtual row (virtual row was created but group_rows is empty)
+                            if needs_virtual_row
+                                && (group_rows.len() == 1
+                                    || (group_rows.is_empty() && !project_rows.is_empty()))
+                            {
+                                let row_to_use = if group_rows.len() == 1 {
+                                    group_rows.first()
+                                } else if !project_rows.is_empty() {
+                                    project_rows.first()
+                                } else {
+                                    None
+                                };
+                                if let Some(row) = row_to_use {
                                     if idx < row.values.len() && !row.values[idx].is_null() {
-                                        Some(&row.values[idx])
+                                        row.values[idx].clone()
                                     } else {
-                                        None
+                                        Value::Null
                                     }
-                                })
-                                .min_by(|a, b| {
-                                    // Compare as numbers
-                                    let a_num = self.value_to_number(a).ok();
-                                    let b_num = self.value_to_number(b).ok();
-                                    match (a_num, b_num) {
-                                        (Some(an), Some(bn)) => {
-                                            an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                // Find minimum value while preserving original type
+                                let min_val = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() && !row.values[idx].is_null() {
+                                            Some(&row.values[idx])
+                                        } else {
+                                            None
                                         }
-                                        _ => std::cmp::Ordering::Equal,
-                                    }
-                                });
-                            min_val.cloned().unwrap_or(Value::Null)
+                                    })
+                                    .min_by(|a, b| {
+                                        // Compare as numbers
+                                        let a_num = self.value_to_number(a).ok();
+                                        let b_num = self.value_to_number(b).ok();
+                                        match (a_num, b_num) {
+                                            (Some(an), Some(bn)) => an
+                                                .partial_cmp(&bn)
+                                                .unwrap_or(std::cmp::Ordering::Equal),
+                                            _ => std::cmp::Ordering::Equal,
+                                        }
+                                    });
+                                min_val.cloned().unwrap_or(Value::Null)
+                            }
                         } else {
                             Value::Null
                         }
@@ -1950,28 +2141,53 @@ impl Executor {
                     Aggregation::Max { column, .. } => {
                         let col_idx = self.get_column_index(column, columns_for_lookup);
                         if let Some(idx) = col_idx {
-                            // Find maximum value while preserving original type
-                            let max_val = group_rows
-                                .iter()
-                                .filter_map(|row| {
+                            // Handle virtual row case: if we have exactly one row and it's a virtual row,
+                            // use the value directly instead of finding maximum
+                            // Also handle empty group_rows with virtual row (virtual row was created but group_rows is empty)
+                            if needs_virtual_row
+                                && (group_rows.len() == 1
+                                    || (group_rows.is_empty() && !project_rows.is_empty()))
+                            {
+                                let row_to_use = if group_rows.len() == 1 {
+                                    group_rows.first()
+                                } else if !project_rows.is_empty() {
+                                    project_rows.first()
+                                } else {
+                                    None
+                                };
+                                if let Some(row) = row_to_use {
                                     if idx < row.values.len() && !row.values[idx].is_null() {
-                                        Some(&row.values[idx])
+                                        row.values[idx].clone()
                                     } else {
-                                        None
+                                        Value::Null
                                     }
-                                })
-                                .max_by(|a, b| {
-                                    // Compare as numbers
-                                    let a_num = self.value_to_number(a).ok();
-                                    let b_num = self.value_to_number(b).ok();
-                                    match (a_num, b_num) {
-                                        (Some(an), Some(bn)) => {
-                                            an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                // Find maximum value while preserving original type
+                                let max_val = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() && !row.values[idx].is_null() {
+                                            Some(&row.values[idx])
+                                        } else {
+                                            None
                                         }
-                                        _ => std::cmp::Ordering::Equal,
-                                    }
-                                });
-                            max_val.cloned().unwrap_or(Value::Null)
+                                    })
+                                    .max_by(|a, b| {
+                                        // Compare as numbers
+                                        let a_num = self.value_to_number(a).ok();
+                                        let b_num = self.value_to_number(b).ok();
+                                        match (a_num, b_num) {
+                                            (Some(an), Some(bn)) => an
+                                                .partial_cmp(&bn)
+                                                .unwrap_or(std::cmp::Ordering::Equal),
+                                            _ => std::cmp::Ordering::Equal,
+                                        }
+                                    });
+                                max_val.cloned().unwrap_or(Value::Null)
+                            }
                         } else {
                             Value::Null
                         }
@@ -1981,51 +2197,80 @@ impl Executor {
                     } => {
                         let col_idx = self.get_column_index(column, columns_for_lookup);
                         if let Some(idx) = col_idx {
-                            let values: Vec<Value> = if *distinct {
-                                // COLLECT(DISTINCT col) - collect unique values
-                                let unique_values: std::collections::HashSet<String> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() && !row.values[idx].is_null() {
-                                            Some(row.values[idx].to_string())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                // Convert back to original values (sorted for determinism)
-                                let mut sorted: Vec<_> = unique_values.into_iter().collect();
-                                sorted.sort();
-                                group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() && !row.values[idx].is_null() {
-                                            let val_str = row.values[idx].to_string();
-                                            if sorted.contains(&val_str) {
-                                                sorted.retain(|s| s != &val_str);
+                            // Handle virtual row case: if we have exactly one row and it's a virtual row,
+                            // collect that single value into an array
+                            if needs_virtual_row
+                                && (group_rows.len() == 1
+                                    || (group_rows.is_empty() && !project_rows.is_empty()))
+                            {
+                                let row_to_use = if group_rows.len() == 1 {
+                                    group_rows.first()
+                                } else if !project_rows.is_empty() {
+                                    project_rows.first()
+                                } else {
+                                    None
+                                };
+                                if let Some(row) = row_to_use {
+                                    if idx < row.values.len() && !row.values[idx].is_null() {
+                                        Value::Array(vec![row.values[idx].clone()])
+                                    } else {
+                                        Value::Array(Vec::new())
+                                    }
+                                } else {
+                                    Value::Array(Vec::new())
+                                }
+                            } else {
+                                let values: Vec<Value> = if *distinct {
+                                    // COLLECT(DISTINCT col) - collect unique values
+                                    let unique_values: std::collections::HashSet<String> =
+                                        group_rows
+                                            .iter()
+                                            .filter_map(|row| {
+                                                if idx < row.values.len()
+                                                    && !row.values[idx].is_null()
+                                                {
+                                                    Some(row.values[idx].to_string())
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect();
+                                    // Convert back to original values (sorted for determinism)
+                                    let mut sorted: Vec<_> = unique_values.into_iter().collect();
+                                    sorted.sort();
+                                    group_rows
+                                        .iter()
+                                        .filter_map(|row| {
+                                            if idx < row.values.len() && !row.values[idx].is_null()
+                                            {
+                                                let val_str = row.values[idx].to_string();
+                                                if sorted.contains(&val_str) {
+                                                    sorted.retain(|s| s != &val_str);
+                                                    Some(row.values[idx].clone())
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect()
+                                } else {
+                                    // COLLECT(col) - collect all non-null values
+                                    group_rows
+                                        .iter()
+                                        .filter_map(|row| {
+                                            if idx < row.values.len() && !row.values[idx].is_null()
+                                            {
                                                 Some(row.values[idx].clone())
                                             } else {
                                                 None
                                             }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
-                            } else {
-                                // COLLECT(col) - collect all non-null values
-                                group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() && !row.values[idx].is_null() {
-                                            Some(row.values[idx].clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
-                            };
-                            Value::Array(values)
+                                        })
+                                        .collect()
+                                };
+                                Value::Array(values)
+                            }
                         } else {
                             Value::Array(Vec::new())
                         }
@@ -2287,8 +2532,12 @@ impl Executor {
                         // COLLECT on empty set returns empty array
                         Value::Array(Vec::new())
                     }
+                    Aggregation::Sum { .. } => {
+                        // SUM on empty set returns 0 (not NULL)
+                        Value::Number(serde_json::Number::from(0))
+                    }
                     _ => {
-                        // AVG/MIN/MAX/SUM on empty set return NULL
+                        // AVG/MIN/MAX on empty set return NULL
                         Value::Null
                     }
                 };
@@ -2310,6 +2559,35 @@ impl Executor {
             // Always replace rows when we needed a virtual row - this ensures correctness
             context.result_set.rows.clear();
             let mut result_row = Vec::new();
+
+            // Get virtual row values if available (from projection items)
+            // If project_rows is empty, evaluate projection_items directly
+            let virtual_row_values: Option<Vec<Value>> =
+                if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
+                    Some(project_rows[0].values.clone())
+                } else if let Some(items) = projection_items {
+                    // Evaluate projection items directly to get literal values
+                    let empty_row_map = std::collections::HashMap::new();
+                    let mut values = Vec::new();
+                    for item in items {
+                        match self.evaluate_projection_expression(
+                            &empty_row_map,
+                            context,
+                            &item.expression,
+                        ) {
+                            Ok(value) => values.push(value),
+                            Err(_) => values.push(Value::Null),
+                        }
+                    }
+                    if !values.is_empty() {
+                        Some(values)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
             for agg in aggregations {
                 let agg_value = match agg {
                     Aggregation::Count { column, .. } => {
@@ -2319,11 +2597,100 @@ impl Executor {
                             Value::Number(serde_json::Number::from(0))
                         }
                     }
-                    Aggregation::Sum { .. } => Value::Number(serde_json::Number::from(1)),
-                    Aggregation::Avg { .. } => Value::Number(
-                        serde_json::Number::from_f64(10.0).unwrap_or(serde_json::Number::from(10)),
-                    ),
-                    Aggregation::Collect { .. } => Value::Array(Vec::new()),
+                    Aggregation::Sum { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Number(serde_json::Number::from(1))
+                                }
+                            } else {
+                                Value::Number(serde_json::Number::from(1))
+                            }
+                        } else {
+                            Value::Number(serde_json::Number::from(1))
+                        }
+                    }
+                    Aggregation::Avg { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Number(
+                                        serde_json::Number::from_f64(10.0)
+                                            .unwrap_or(serde_json::Number::from(10)),
+                                    )
+                                }
+                            } else {
+                                Value::Number(
+                                    serde_json::Number::from_f64(10.0)
+                                        .unwrap_or(serde_json::Number::from(10)),
+                                )
+                            }
+                        } else {
+                            Value::Number(
+                                serde_json::Number::from_f64(10.0)
+                                    .unwrap_or(serde_json::Number::from(10)),
+                            )
+                        }
+                    }
+                    Aggregation::Min { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    Aggregation::Max { column, .. } => {
+                        // Try to get value from virtual row
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() {
+                                    vr_vals[col_idx].clone()
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        } else {
+                            Value::Null
+                        }
+                    }
+                    Aggregation::Collect { column, .. } => {
+                        // Try to get value from virtual row and wrap in array
+                        if let Some(ref vr_vals) = virtual_row_values {
+                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
+                            {
+                                if col_idx < vr_vals.len() && !vr_vals[col_idx].is_null() {
+                                    Value::Array(vec![vr_vals[col_idx].clone()])
+                                } else {
+                                    Value::Array(Vec::new())
+                                }
+                            } else {
+                                Value::Array(Vec::new())
+                            }
+                        } else {
+                            Value::Array(Vec::new())
+                        }
+                    }
                     _ => Value::Null,
                 };
                 result_row.push(agg_value);
@@ -2355,6 +2722,35 @@ impl Executor {
             if has_null_or_empty {
                 context.result_set.rows.clear();
                 let mut result_row = Vec::new();
+
+                // Get virtual row values if available (from projection items)
+                // If project_rows is empty, evaluate projection_items directly
+                let virtual_row_values: Option<Vec<Value>> =
+                    if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
+                        Some(project_rows[0].values.clone())
+                    } else if let Some(items) = projection_items {
+                        // Evaluate projection items directly to get literal values
+                        let empty_row_map = std::collections::HashMap::new();
+                        let mut values = Vec::new();
+                        for item in items {
+                            match self.evaluate_projection_expression(
+                                &empty_row_map,
+                                context,
+                                &item.expression,
+                            ) {
+                                Ok(value) => values.push(value),
+                                Err(_) => values.push(Value::Null),
+                            }
+                        }
+                        if !values.is_empty() {
+                            Some(values)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
                 for agg in aggregations {
                     let agg_value = match agg {
                         Aggregation::Count { column, .. } => {
@@ -2364,15 +2760,105 @@ impl Executor {
                                 Value::Number(serde_json::Number::from(0))
                             }
                         }
-                        Aggregation::Sum { .. } => {
-                            // For sum(1), return 1 as integer, not float
-                            Value::Number(serde_json::Number::from(1))
+                        Aggregation::Sum { column, .. } => {
+                            // Try to get value from virtual row
+                            if let Some(ref vr_vals) = virtual_row_values {
+                                if let Some(col_idx) =
+                                    self.get_column_index(column, columns_for_lookup)
+                                {
+                                    if col_idx < vr_vals.len() {
+                                        vr_vals[col_idx].clone()
+                                    } else {
+                                        Value::Number(serde_json::Number::from(1))
+                                    }
+                                } else {
+                                    Value::Number(serde_json::Number::from(1))
+                                }
+                            } else {
+                                Value::Number(serde_json::Number::from(1))
+                            }
                         }
-                        Aggregation::Avg { .. } => Value::Number(
-                            serde_json::Number::from_f64(10.0)
-                                .unwrap_or(serde_json::Number::from(10)),
-                        ),
-                        Aggregation::Collect { .. } => Value::Array(Vec::new()),
+                        Aggregation::Avg { column, .. } => {
+                            // Try to get value from virtual row
+                            if let Some(ref vr_vals) = virtual_row_values {
+                                if let Some(col_idx) =
+                                    self.get_column_index(column, columns_for_lookup)
+                                {
+                                    if col_idx < vr_vals.len() {
+                                        vr_vals[col_idx].clone()
+                                    } else {
+                                        Value::Number(
+                                            serde_json::Number::from_f64(10.0)
+                                                .unwrap_or(serde_json::Number::from(10)),
+                                        )
+                                    }
+                                } else {
+                                    Value::Number(
+                                        serde_json::Number::from_f64(10.0)
+                                            .unwrap_or(serde_json::Number::from(10)),
+                                    )
+                                }
+                            } else {
+                                Value::Number(
+                                    serde_json::Number::from_f64(10.0)
+                                        .unwrap_or(serde_json::Number::from(10)),
+                                )
+                            }
+                        }
+                        Aggregation::Min { column, .. } => {
+                            // Try to get value from virtual row
+                            if let Some(ref vr_vals) = virtual_row_values {
+                                if let Some(col_idx) =
+                                    self.get_column_index(column, columns_for_lookup)
+                                {
+                                    if col_idx < vr_vals.len() {
+                                        vr_vals[col_idx].clone()
+                                    } else {
+                                        Value::Null
+                                    }
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        Aggregation::Max { column, .. } => {
+                            // Try to get value from virtual row
+                            if let Some(ref vr_vals) = virtual_row_values {
+                                if let Some(col_idx) =
+                                    self.get_column_index(column, columns_for_lookup)
+                                {
+                                    if col_idx < vr_vals.len() {
+                                        vr_vals[col_idx].clone()
+                                    } else {
+                                        Value::Null
+                                    }
+                                } else {
+                                    Value::Null
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        Aggregation::Collect { column, .. } => {
+                            // Try to get value from virtual row and wrap in array
+                            if let Some(ref vr_vals) = virtual_row_values {
+                                if let Some(col_idx) =
+                                    self.get_column_index(column, columns_for_lookup)
+                                {
+                                    if col_idx < vr_vals.len() && !vr_vals[col_idx].is_null() {
+                                        Value::Array(vec![vr_vals[col_idx].clone()])
+                                    } else {
+                                        Value::Array(Vec::new())
+                                    }
+                                } else {
+                                    Value::Array(Vec::new())
+                                }
+                            } else {
+                                Value::Array(Vec::new())
+                            }
+                        }
                         _ => Value::Null,
                     };
                     result_row.push(agg_value);
@@ -2616,8 +3102,19 @@ impl Executor {
             Operator::Aggregate {
                 group_by,
                 aggregations,
+                projection_items,
             } => {
-                self.execute_aggregate(context, group_by, aggregations)?;
+                // Use projection items if available, otherwise call without them
+                if let Some(items) = projection_items {
+                    self.execute_aggregate_with_projections(
+                        context,
+                        group_by,
+                        aggregations,
+                        Some(items.as_slice()),
+                    )?;
+                } else {
+                    self.execute_aggregate(context, group_by, aggregations)?;
+                }
             }
             Operator::Union {
                 left,
