@@ -100,6 +100,7 @@ impl<'a> QueryPlanner<'a> {
         let mut limit_count = None;
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
+        let mut create_patterns = Vec::new(); // Collect CREATE to insert after MATCH
         let mut match_hints = Vec::new(); // Collect hints from MATCH clauses
         let mut order_by_clause: Option<(Vec<String>, Vec<bool>)> = None; // Collect ORDER BY to add after projection
 
@@ -121,10 +122,8 @@ impl<'a> QueryPlanner<'a> {
                     // Query hints are stored in match_clause.hints and will be used during planning
                 }
                 Clause::Create(create_clause) => {
-                    // Add CREATE operator to create nodes/relationships in context
-                    operators.push(Operator::Create {
-                        pattern: create_clause.pattern.clone(),
-                    });
+                    // Collect CREATE patterns to add AFTER MATCH operators
+                    create_patterns.push(create_clause.pattern.clone());
                 }
                 Clause::Delete(delete_clause) => {
                     // Extract variables to delete from the delete clause
@@ -241,7 +240,17 @@ impl<'a> QueryPlanner<'a> {
                 &match_hints,
                 &mut operators,
             )?;
-        } else if !return_items.is_empty() || !unwind_operators.is_empty() {
+        }
+
+        // Add CREATE operators AFTER MATCH operators
+        // This ensures CREATE runs after all nodes are matched
+        for create_pattern in create_patterns {
+            operators.push(Operator::Create {
+                pattern: create_pattern,
+            });
+        }
+
+        if patterns.is_empty() && (!return_items.is_empty() || !unwind_operators.is_empty()) {
             // No patterns but have RETURN or UNWIND - check for aggregations first
             // This handles cases like: RETURN count(*), RETURN sum(1), etc.
             operators.extend(unwind_operators);

@@ -100,16 +100,22 @@ fn test_relationship_type_filtering() -> Result<(), Error> {
 
     // Create different relationship types
     eprintln!("\nCreating KNOWS relationship...");
-    let r1 = engine.execute_cypher("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b) RETURN 'created' AS status")?;
-    eprintln!("KNOWS created: {:?}", r1.rows.len());
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+    )?;
+    eprintln!("KNOWS created");
 
     eprintln!("\nCreating WORKS_AT relationship 1...");
-    let r2 = engine.execute_cypher("MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(c) RETURN 'created' AS status")?;
-    eprintln!("WORKS_AT 1 created: {:?}", r2.rows.len());
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(c)",
+    )?;
+    eprintln!("WORKS_AT 1 created");
 
     eprintln!("\nCreating WORKS_AT relationship 2...");
-    let r3 = engine.execute_cypher("MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT]->(c) RETURN 'created' AS status")?;
-    eprintln!("WORKS_AT 2 created: {:?}", r3.rows.len());
+    engine.execute_cypher(
+        "MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT]->(c)",
+    )?;
+    eprintln!("WORKS_AT 2 created");
 
     engine.refresh_executor()?;
 

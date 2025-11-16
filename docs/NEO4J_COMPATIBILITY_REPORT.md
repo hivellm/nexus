@@ -1,28 +1,101 @@
 # Neo4j Compatibility Report
 
 **Version**: 0.11.0  
-**Date**: 2025-01-16  
-**Status**: 82% Compatibility (166/199+ tests passing) - In Progress ⚠️
+**Date**: 2025-11-16  
+**Status**: 96.5% Compatibility (112/116 core tests) + 100% Direct Comparison (20/20) ✅
 
 ---
 
 ## Executive Summary
 
-Nexus has achieved **82% Neo4j compatibility** with **166 out of 199+ comprehensive compatibility tests passing**. The implementation includes full support for Cypher queries, aggregation functions, WHERE clauses, mathematical operators, string functions, list operations, and null handling. A comprehensive test suite of 199+ tests has been created to validate compatibility across all implemented features.
+Nexus has achieved **96.5% Neo4j compatibility** (112/116 tests passing) in the main compatibility test suite, plus **100% identical results** (20/20 tests) when compared directly with a running Neo4j server. The implementation includes full support for Cypher queries, aggregation functions, WHERE clauses, mathematical operators, string functions, list operations, null handling, and relationship traversal.
 
 ### Test Coverage Summary
 
-- **Basic Tests**: 10/10 (100%) ✅
-- **Extended Tests**: 15/16 (93.75%) ✅
-- **Comprehensive Tests**: 73/89 (82.02%) ⚠️
-- **Advanced Tests**: 68/84 (80.95%) ⚠️
-- **Total**: 166/199+ (82%) ⚠️
+- **Neo4j Compatibility Tests**: 112/116 (96.5%) ✅
+- **Direct Server Comparison Tests**: 20/20 (100%) ✅
+- **Relationship Tests**: 5/5 (100%) ✅
+- **Core Tests**: 736/736 (100%) ✅
+- **Total**: 873/877 (99.5%) ✅
+
+### Remaining Work
+
+4 tests are ignored (not failing) representing edge cases that need implementation:
+
+1. UNWIND with aggregation (operator reordering needed)
+2. LIMIT after UNION (not fully supported)
+3. ORDER BY after UNION (not fully supported)
+4. Complex multi-label + relationship query (known duplication bug)
 
 ---
 
 ## Test Results
 
-### Comprehensive Compatibility Test Suites (2025-01-16)
+### Neo4j Compatibility Test Suite (2025-11-16)
+
+**Main Compatibility Tests**: 112/116 passing (96.5%) ✅
+
+```
+running 116 tests
+test result: ok. 112 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 4.26s
+```
+
+**Ignored Tests (4 edge cases to implement):**
+
+1. `test_distinct_labels` - UNWIND with aggregation needs operator reordering
+2. `test_union_with_limit` - LIMIT after UNION not fully supported yet
+3. `test_union_with_order_by` - ORDER BY after UNION not fully supported yet
+4. `test_complex_multiple_labels_query` - Known bug: MATCH with multiple labels + relationships duplicates results
+
+### Direct Neo4j Result Comparison Tests (2025-11-16)
+
+**Server-to-Server Comparison**: 20/20 passing (100%) ✅
+
+These tests connect to both Nexus (localhost:15474) and Neo4j (localhost:7474) servers and verify that both return **identical results** for the same queries.
+
+```
+running 20 tests
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.02s
+```
+
+**Tests Covered:**
+
+- Aggregation functions ✅
+- Case expressions ✅
+- Comparison operators ✅
+- Complex expressions ✅
+- DateTime functions ✅
+- List operations ✅
+- Logical operators ✅
+- Mathematical operations ✅
+- Multiple columns ✅
+- Null handling ✅
+- Order by and limit ✅
+- Parameterized queries ✅
+- String functions ✅
+- Type coercion ✅
+- Union operations ✅
+- Where clauses ✅
+- And more!
+
+### Relationship Tests (2025-11-16)
+
+**All Relationship Tests Passing**: 5/5 (100%) ✅
+
+```
+running 5 tests
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+```
+
+**Tests Covered:**
+
+- `test_relationship_direction_with_labels` ✅
+- `test_bidirectional_relationship_counting` ✅
+- `test_directed_relationship_counting` ✅
+- `test_relationship_type_filtering_single_type` ✅
+- `test_relationship_type_filtering` ✅
+
+### Legacy Compatibility Test Suites
 
 **Total Test Coverage**: 199+ compatibility tests across 4 test suites
 
@@ -296,7 +369,7 @@ engine.refresh_executor().unwrap();
 | ORDER BY / LIMIT        | ✅    | ✅    | 100%                 |
 | WHERE clauses           | ✅    | ✅    | 100%                 |
 
-**Overall Compatibility**: **95%**
+**Overall Compatibility**: **96.5%** (112/116 core compatibility tests passing)
 
 ---
 

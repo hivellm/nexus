@@ -432,6 +432,11 @@ impl Executor {
         &mut self.udf_registry
     }
 
+    /// Get a clone of the internal store (for syncing changes back to engine)
+    pub fn get_store(&self) -> RecordStore {
+        self.store.clone()
+    }
+
     /// Execute a Cypher query
     pub fn execute(&mut self, query: &Query) -> Result<ResultSet> {
         // Parse the query into operators
@@ -625,7 +630,19 @@ impl Executor {
                     }
 
                     // Check if there are existing rows from MATCH
-                    let existing_rows = self.materialize_rows_from_variables(&context);
+                    // Prioritize result_set.rows over variables (variables get moved to rows after MATCH)
+                    let existing_rows = if !context.result_set.rows.is_empty() {
+                        // Convert result_set.rows to HashMap format
+                        let columns = context.result_set.columns.clone();
+                        context
+                            .result_set
+                            .rows
+                            .iter()
+                            .map(|row| self.row_to_map(row, &columns))
+                            .collect::<Vec<_>>()
+                    } else {
+                        self.materialize_rows_from_variables(&context)
+                    };
 
                     if existing_rows.is_empty() {
                         // CREATE standalone - create nodes and relationships directly
@@ -3012,22 +3029,40 @@ impl Executor {
 
     /// Execute CREATE operator with context from MATCH
     fn execute_create_with_context(
-        &self,
+        &mut self,
         context: &mut ExecutionContext,
         pattern: &parser::Pattern,
     ) -> Result<()> {
+        use crate::transaction::TransactionManager;
         use serde_json::Value as JsonValue;
 
-        // Get current rows from context (from MATCH)
-        let current_rows = self.materialize_rows_from_variables(context);
+        // CRITICAL FIX: Use result_set.rows instead of materialize_rows_from_variables()
+        // to avoid duplicate rows from cartesian products
+        let current_rows = if !context.result_set.rows.is_empty() {
+            // Convert result_set.rows to HashMap format
+            let columns = context.result_set.columns.clone();
+            context
+                .result_set
+                .rows
+                .iter()
+                .map(|row| self.row_to_map(row, &columns))
+                .collect::<Vec<_>>()
+        } else {
+            // Fallback to materialize if result_set is empty
+            self.materialize_rows_from_variables(context)
+        };
 
         // If no rows from MATCH, nothing to create
         if current_rows.is_empty() {
             return Ok(());
         }
 
+        // Create a transaction manager for this operation
+        let mut tx_mgr = TransactionManager::new()?;
+        let mut tx = tx_mgr.begin_write()?;
+
         // For each row in the MATCH result, create the pattern
-        for row in &current_rows {
+        for row in current_rows.iter() {
             let mut node_ids: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
 
@@ -3045,26 +3080,26 @@ impl Executor {
             // Now process the pattern elements to create new nodes and relationships
             let mut last_node_var: Option<String> = None;
 
-            for element in &pattern.elements {
+            for (idx, element) in pattern.elements.iter().enumerate() {
                 match element {
                     parser::PatternElement::Node(node) => {
                         if let Some(var) = &node.variable {
                             if !node_ids.contains_key(var) {
                                 // Create new node (not from MATCH)
-                                let _labels: Vec<u64> = node
+                                let labels: Vec<u64> = node
                                     .labels
                                     .iter()
                                     .filter_map(|l| self.catalog.get_or_create_label(l).ok())
                                     .map(|id| id as u64)
                                     .collect();
 
-                                let mut _label_bits = 0u64;
-                                for label_id in _labels {
-                                    _label_bits |= 1u64 << label_id;
+                                let mut label_bits = 0u64;
+                                for label_id in labels {
+                                    label_bits |= 1u64 << label_id;
                                 }
 
                                 // Extract properties
-                                let _properties = if let Some(props_map) = &node.properties {
+                                let properties = if let Some(props_map) = &node.properties {
                                     JsonValue::Object(
                                         props_map
                                             .properties
@@ -3080,8 +3115,11 @@ impl Executor {
                                     JsonValue::Object(serde_json::Map::new())
                                 };
 
-                                // Executor can't create nodes - no mutable Transaction
-                                // Skip creating new nodes in executor context
+                                // Create the node
+                                let node_id = self
+                                    .store
+                                    .create_node_with_label_bits(&mut tx, label_bits, properties)?;
+                                node_ids.insert(var.clone(), node_id);
                             }
 
                             // Track this node as the last one for relationship creation
@@ -3091,10 +3129,10 @@ impl Executor {
                     parser::PatternElement::Relationship(rel) => {
                         // Create relationship between last_node and next_node
                         if let Some(rel_type) = rel.types.first() {
-                            let _type_id = self.catalog.get_or_create_type(rel_type)?;
+                            let type_id = self.catalog.get_or_create_type(rel_type)?;
 
                             // Extract relationship properties
-                            let _properties = if let Some(props_map) = &rel.properties {
+                            let properties = if let Some(props_map) = &rel.properties {
                                 JsonValue::Object(
                                     props_map
                                         .properties
@@ -3111,26 +3149,22 @@ impl Executor {
                             };
 
                             // Source is the last_node_var, target will be the next node in pattern
-                            // We need to peek ahead to find the target node variable
                             if let Some(source_var) = &last_node_var {
-                                if let Some(_source_id) = node_ids.get(source_var) {
+                                if let Some(source_id) = node_ids.get(source_var) {
                                     // Find target node (next element after this relationship)
-                                    let current_idx = pattern
-                                        .elements
-                                        .iter()
-                                        .position(|e| {
-                                            matches!(e, parser::PatternElement::Relationship(_))
-                                        })
-                                        .unwrap_or(0);
-
-                                    if current_idx + 1 < pattern.elements.len() {
+                                    if idx + 1 < pattern.elements.len() {
                                         if let parser::PatternElement::Node(target_node) =
-                                            &pattern.elements[current_idx + 1]
+                                            &pattern.elements[idx + 1]
                                         {
                                             if let Some(target_var) = &target_node.variable {
-                                                if let Some(_target_id) = node_ids.get(target_var) {
-                                                    // Executor can't create relationships - no mutable Transaction
-                                                    // Skip creating relationships in executor context
+                                                if let Some(target_id) = node_ids.get(target_var) {
+                                                    // Create the relationship
+                                                    let _rel_id = self.store.create_relationship(
+                                                        &mut tx, *source_id, *target_id, type_id,
+                                                        properties,
+                                                    )?;
+
+                                                    // Relationship created successfully
                                                 }
                                             }
                                         }
@@ -3142,6 +3176,12 @@ impl Executor {
                 }
             }
         }
+
+        // Commit transaction
+        tx_mgr.commit(&mut tx)?;
+
+        // Flush to ensure persistence
+        self.store.flush()?;
 
         Ok(())
     }
@@ -3972,25 +4012,48 @@ impl Executor {
     ) -> Result<Vec<RelationshipInfo>> {
         let mut relationships = Vec::new();
 
-        // For MVP, we'll simulate finding relationships
-        // In a real implementation, this would traverse the linked lists in the storage layer
-
         // Read the node record to get the first relationship pointer
         if let Ok(node_record) = self.store.read_node(node_id) {
             let mut rel_ptr = node_record.first_rel_ptr;
+            let mut visited = std::collections::HashSet::new();
+            let mut iteration_count = 0;
+            const MAX_ITERATIONS: usize = 100000; // Failsafe limit
 
             while rel_ptr != 0 {
+                // Failsafe: Prevent infinite loops even if visited set fails
+                iteration_count += 1;
+                if iteration_count > MAX_ITERATIONS {
+                    eprintln!(
+                        "[ERROR] Maximum iterations ({}) exceeded in relationship chain for node {}, breaking",
+                        MAX_ITERATIONS, node_id
+                    );
+                    break;
+                }
+
+                // CRITICAL: Detect infinite loops in relationship chain
+                // This protects against circular references in the relationship linked list
+                if !visited.insert(rel_ptr) {
+                    eprintln!(
+                        "[WARN] Infinite loop detected in relationship chain for node {}, breaking at rel_ptr={}",
+                        node_id, rel_ptr
+                    );
+                    break;
+                }
+
                 let current_rel_id = rel_ptr.saturating_sub(1);
+
                 if let Ok(rel_record) = self.store.read_rel(current_rel_id) {
                     // Copy fields to local variables to avoid packed struct reference issues
                     let src_id = rel_record.src_id;
                     let dst_id = rel_record.dst_id;
+                    let next_src_ptr = rel_record.next_src_ptr;
+                    let next_dst_ptr = rel_record.next_dst_ptr;
 
                     if rel_record.is_deleted() {
                         rel_ptr = if src_id == node_id {
-                            rel_record.next_src_ptr
+                            next_src_ptr
                         } else {
-                            rel_record.next_dst_ptr
+                            next_dst_ptr
                         };
                         continue;
                     }
@@ -4012,9 +4075,9 @@ impl Executor {
                     }
 
                     rel_ptr = if src_id == node_id {
-                        rel_record.next_src_ptr
+                        next_src_ptr
                     } else {
-                        rel_record.next_dst_ptr
+                        next_dst_ptr
                     };
                 } else {
                     break;
@@ -7308,6 +7371,20 @@ impl Executor {
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
         }
+
+        // Check if both values are strings - then concatenate
+        if let (Value::String(l_str), Value::String(r_str)) = (left, right) {
+            return Ok(Value::String(format!("{}{}", l_str, r_str)));
+        }
+
+        // Check if both values are arrays - then concatenate
+        if let (Value::Array(l_arr), Value::Array(r_arr)) = (left, right) {
+            let mut result = l_arr.clone();
+            result.extend(r_arr.iter().cloned());
+            return Ok(Value::Array(result));
+        }
+
+        // Otherwise, treat as numeric addition
         let l = self.value_to_number(left)?;
         let r = self.value_to_number(right)?;
         serde_json::Number::from_f64(l + r)

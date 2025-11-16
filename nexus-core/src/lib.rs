@@ -375,182 +375,28 @@ impl Engine {
     }
 
     /// Execute MATCH ... CREATE query
-    fn execute_match_create_query(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
-        // Get session and check if it has an active transaction
-        let session_id = "default";
+    fn execute_match_create_query(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+        query_str_opt: Option<&str>,
+    ) -> Result<executor::ResultSet> {
+        // FIXED: Don't split the query - let the executor handle MATCH...CREATE as a single operation
+        // The executor's CREATE operator (execute_create_with_context) will correctly handle
+        // creating relationships using the MATCH results
 
-        // Check if session has active transaction
-        let has_active_tx = {
-            let session = self.session_manager.get_session(&session_id.to_string());
-            session.map(|s| s.has_active_transaction()).unwrap_or(false)
-        };
-
-        // Get transaction from session if available
-        let mut session_tx_opt = if has_active_tx {
-            let mut session = self
-                .session_manager
-                .get_session(&session_id.to_string())
-                .ok_or_else(|| Error::transaction("Session not found".to_string()))?;
-
-            session.active_transaction.take().map(|tx| (session, tx))
+        let cypher = if let Some(qs) = query_str_opt {
+            qs.to_string()
         } else {
-            None
+            self.query_to_string(ast)
         };
 
-        // First, execute the MATCH part to get the matching nodes
-        let mut match_query_clauses = Vec::new();
-        let mut create_clause_opt = None;
-
-        for clause in &ast.clauses {
-            match clause {
-                executor::parser::Clause::Match(_) | executor::parser::Clause::Where(_) => {
-                    match_query_clauses.push(clause.clone());
-                }
-                executor::parser::Clause::Create(create_clause) => {
-                    create_clause_opt = Some(create_clause.clone());
-                    break; // Stop at CREATE
-                }
-                _ => {
-                    match_query_clauses.push(clause.clone());
-                }
-            }
-        }
-
-        // Execute MATCH to get results
-        let match_query = executor::parser::CypherQuery {
-            clauses: match_query_clauses,
+        let query_obj = executor::Query {
+            cypher,
             params: ast.params.clone(),
         };
 
-        // Collect all node variables from MATCH clauses
-        let mut node_variables = Vec::new();
-        for clause in &match_query.clauses {
-            if let executor::parser::Clause::Match(mc) = clause {
-                for element in &mc.pattern.elements {
-                    if let executor::parser::PatternElement::Node(node) = element {
-                        if let Some(var) = &node.variable {
-                            if !node_variables.contains(var) {
-                                node_variables.push(var.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Rebuild MATCH query as string with explicit RETURN of all variables
-        let mut match_query_str = String::new();
-        for clause in &match_query.clauses {
-            if let executor::parser::Clause::Match(mc) = clause {
-                match_query_str.push_str("MATCH ");
-                // Reconstruct pattern - simplified for comma-separated nodes
-                for (idx, element) in mc.pattern.elements.iter().enumerate() {
-                    if let executor::parser::PatternElement::Node(node) = element {
-                        if idx > 0 {
-                            match_query_str.push_str(", ");
-                        }
-                        match_query_str.push('(');
-                        if let Some(var) = &node.variable {
-                            match_query_str.push_str(var);
-                        }
-                        for label in &node.labels {
-                            match_query_str.push_str(&format!(":{}", label));
-                        }
-                        if let Some(props) = &node.properties {
-                            match_query_str.push_str(" {");
-                            let mut first = true;
-                            for (key, val_expr) in &props.properties {
-                                if !first {
-                                    match_query_str.push_str(", ");
-                                }
-                                first = false;
-                                match_query_str.push_str(key);
-                                match_query_str.push_str(": ");
-                                if let executor::parser::Expression::Literal(lit) = val_expr {
-                                    match lit {
-                                        executor::parser::Literal::String(s) => {
-                                            match_query_str.push_str(&format!("\"{}\"", s));
-                                        }
-                                        executor::parser::Literal::Integer(i) => {
-                                            match_query_str.push_str(&i.to_string());
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            match_query_str.push('}');
-                        }
-                        match_query_str.push(')');
-                    }
-                }
-                match_query_str.push(' ');
-            }
-        }
-
-        // Add explicit RETURN for all node variables
-        match_query_str.push_str("RETURN ");
-        for (idx, var) in node_variables.iter().enumerate() {
-            if idx > 0 {
-                match_query_str.push_str(", ");
-            }
-            match_query_str.push_str(var);
-        }
-
-        let query_obj = executor::Query {
-            cypher: match_query_str,
-            params: std::collections::HashMap::new(),
-        };
-
-        let match_results = self.executor.execute(&query_obj)?;
-
-        // For each row in MATCH result, execute the CREATE
-        if let Some(create_clause) = create_clause_opt {
-            for row in &match_results.rows {
-                // Extract node IDs from the row
-                let mut node_vars = std::collections::HashMap::new();
-
-                for (idx, column) in match_results.columns.iter().enumerate() {
-                    if idx < row.values.len() {
-                        if let serde_json::Value::Object(obj) = &row.values[idx] {
-                            if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
-                                if let Some(node_id) = id.as_u64() {
-                                    node_vars.insert(column.clone(), node_id);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Create relationships from the pattern with session transaction if available
-                if let Some((ref mut sess, ref mut tx)) = session_tx_opt {
-                    let mut tx_ref: Option<&mut transaction::Transaction> = Some(tx);
-                    self.create_from_pattern_with_context_and_transaction(
-                        &create_clause.pattern,
-                        &node_vars,
-                        &mut tx_ref,
-                        Some(&mut sess.created_nodes),
-                    )?;
-                } else {
-                    let mut tx_ref: Option<&mut transaction::Transaction> = None;
-                    self.create_from_pattern_with_context_and_transaction(
-                        &create_clause.pattern,
-                        &node_vars,
-                        &mut tx_ref,
-                        None,
-                    )?;
-                }
-            }
-        }
-
-        // Put transaction back in session if we extracted it
-        // IMPORTANT: Update session with tracked nodes before putting it back
-        if let Some((mut session, tx)) = session_tx_opt {
-            session.active_transaction = Some(tx);
-            // Session already has tracked nodes from create_from_pattern_with_context_and_transaction
-            self.session_manager.update_session(session);
-        }
-
-        Ok(())
+        // Execute and return result
+        self.executor.execute(&query_obj)
     }
 
     /// Create from pattern with existing node context
@@ -1144,34 +990,33 @@ impl Engine {
         if has_create {
             if has_match {
                 // MATCH ... CREATE: execute MATCH first, then CREATE with results
-                self.execute_match_create_query(&ast)?;
-            } else {
-                // Standalone CREATE - execute through executor only (not through Engine)
-                // This prevents duplicate node creation
-                // The executor will handle CREATE internally
-                // Just refresh after to see changes
-                let query_obj = executor::Query {
-                    cypher: query.to_string(),
-                    params: std::collections::HashMap::new(),
-                };
-                let result = self.executor.execute(&query_obj)?;
+                let result = self.execute_match_create_query(&ast, Some(query))?;
 
-                // Refresh executor to see the changes (only if not in transaction)
-                let session_id = "default";
-                let in_transaction = {
-                    let session = self.session_manager.get_session(&session_id.to_string());
-                    session.map(|s| s.has_active_transaction()).unwrap_or(false)
-                };
+                // CRITICAL: Sync executor's store back to engine's storage
+                // The executor has a cloned store, so changes need to be synced back
+                self.storage = self.executor.get_store();
 
-                if !in_transaction {
-                    self.refresh_executor()?;
-                }
+                // NOTE: Do NOT call refresh_executor() here!
+                // The caller should call refresh_executor() explicitly when ready
+                // This allows batching multiple CREATE statements before refreshing
 
                 return Ok(result);
             }
 
+            // Standalone CREATE - execute through executor only (not through Engine)
+            // This prevents duplicate node creation
+            // The executor will handle CREATE internally
+            // Just refresh after to see changes
+            let query_obj = executor::Query {
+                cypher: query.to_string(),
+                params: std::collections::HashMap::new(),
+            };
+            let result = self.executor.execute(&query_obj)?;
+
+            // CRITICAL: Sync executor's store back to engine's storage
+            self.storage = self.executor.get_store();
+
             // Refresh executor to see the changes (only if not in transaction)
-            // Transactions will refresh after commit/rollback
             let session_id = "default";
             let in_transaction = {
                 let session = self.session_manager.get_session(&session_id.to_string());
@@ -1181,6 +1026,8 @@ impl Engine {
             if !in_transaction {
                 self.refresh_executor()?;
             }
+
+            return Ok(result);
         }
 
         // Execute the query normally
@@ -2820,7 +2667,15 @@ impl Engine {
         if has_create {
             if has_match {
                 // MATCH ... CREATE: execute MATCH first, then CREATE with results
-                self.execute_match_create_query(ast)?;
+                let result = self.execute_match_create_query(ast, None)?;
+
+                // CRITICAL: Sync executor's store back to engine's storage
+                self.storage = self.executor.get_store();
+
+                // Refresh executor to see the changes
+                self.refresh_executor()?;
+
+                return Ok(result);
             } else {
                 // Standalone CREATE
                 self.execute_create_query(ast)?;
