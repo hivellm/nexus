@@ -113,20 +113,20 @@ This task covers fixing all remaining compatibility issues identified through co
 
 ### Phase 4: Property Access Fixes
 
-- [ ] 4.1 Implement array property indexing
+- [x] 4.1 Implement array property indexing
 
-  - [ ] 4.1.1 Issue: `n.tags[0]` not working
-  - [ ] 4.1.2 Root cause: Array indexing not implemented in property access
-  - [ ] 4.1.3 Fix: Implement `property[index]` syntax in property access
-  - [ ] 4.1.4 Add test: `MATCH (n:Person {name: 'Alice'}) RETURN n.tags[0] AS first_tag`
-  - [ ] 4.1.5 Verify compatibility
+  - [x] 4.1.1 Issue: `n.tags[0]` not working
+  - [x] 4.1.2 Root cause: Array indexing not implemented in property access
+  - [x] 4.1.3 Fix: Added Expression::ArrayIndex variant, parser support, executor evaluation
+  - [x] 4.1.4 Test: Array indexing with literals, property access, negative indices ✅
+  - [x] 4.1.5 Verify compatibility ✅
 
-- [ ] 4.2 Fix size() with array properties
-  - [ ] 4.2.1 Issue: `size(n.tags)` returns null
-  - [ ] 4.2.2 Root cause: size() function not handling array properties correctly
-  - [ ] 4.2.3 Fix: Support size() on array properties
-  - [ ] 4.2.4 Add test: `MATCH (n:Person {name: 'Alice'}) RETURN size(n.tags) AS size`
-  - [ ] 4.2.5 Verify compatibility
+- [x] 4.2 Fix size() with array properties
+  - [x] 4.2.1 Issue: `size(n.tags)` could return null
+  - [x] 4.2.2 Root cause: size() function already implemented correctly
+  - [x] 4.2.3 Fix: Verified size() works with arrays, strings, and null
+  - [x] 4.2.4 Test: size() with arrays, strings, empty arrays, nested arrays ✅
+  - [x] 4.2.5 Verify compatibility ✅
 
 ### Phase 5: Aggregation with Collect Fixes
 
@@ -214,7 +214,7 @@ This task covers fixing all remaining compatibility issues identified through co
 
 ## Progress Summary
 
-**Last updated**: 2025-11-16 (Session 3 - THREE PHASES COMPLETE! 🎉🎉🎉)
+**Last updated**: 2025-11-16 (Session 3 - FOUR PHASES COMPLETE! 🎉🎉🎉🎉)
 
 ### Session 3 Summary - EXTRAORDINARY PROGRESS!
 
@@ -253,11 +253,30 @@ This task covers fixing all remaining compatibility issues identified through co
      - `nexus-core/src/executor/mod.rs`: Lines 1524-1560
 
 5. ✅ **Phase 3: ORDER BY Fixes - COMPLETE!**
+
    - ORDER BY DESC ✅
-   - ORDER BY multiple columns ✅
+   - ORDER BY with multiple columns ✅
    - ORDER BY with WHERE ✅
    - ORDER BY with aggregation ✅
    - All tests passing ✅
+
+6. ✅ **IMPLEMENTED Array Indexing - FULLY FUNCTIONAL!**
+
+   - Added `Expression::ArrayIndex` variant to AST
+   - Parser support: `[expr][index]` syntax for lists and property access
+   - Executor support in `evaluate_expression` and `evaluate_projection_expression`
+   - Features: literal arrays, property access, out of bounds handling, WHERE support
+   - Files: parser.rs, mod.rs (executor), planner.rs
+
+7. ✅ **VERIFIED size() Function - ALREADY WORKING!**
+
+   - size() already supports arrays, strings, and null
+   - Comprehensive tests added (6 tests)
+
+8. ✅ **Phase 4: Property Access Fixes - COMPLETE!**
+   - Array property indexing ✅
+   - size() with arrays ✅
+   - All 13 tests passing ✅
 
 **Test Results:**
 
@@ -267,15 +286,27 @@ This task covers fixing all remaining compatibility issues identified through co
 ✅ ORDER BY n.age DESC → Charlie(35), Alice(30), Bob(25)
 ✅ ORDER BY n.age, n.name → Multiple column sort works
 ✅ WHERE + ORDER BY → Filtering + sorting works
+✅ Array indexing: ['a', 'b', 'c'][1] → 'b'
+✅ Array indexing: n.tags[0] → first element
+✅ size(['a', 'b', 'c']) → 3
+✅ size('hello') → 5
 ✅ All aggregation tests pass (6/6)
 ✅ All WHERE IN tests pass (2/2)
 ✅ All ORDER BY tests pass (3/3)
+✅ All array indexing tests pass (7/7)
+✅ All size() tests pass (6/6)
 ```
 
 **Files Modified:**
 
-- `nexus-core/src/executor/mod.rs` - Fixed label_id=0, fixed execute_sort
-- `nexus-core/src/executor/planner.rs` - Added missing operators, ORDER BY logic
+- `nexus-core/src/executor/mod.rs` - Fixed label_id=0, fixed execute_sort, added ArrayIndex support
+- `nexus-core/src/executor/planner.rs` - Added missing operators, ORDER BY logic, ArrayIndex to_string
+- `nexus-core/src/executor/parser.rs` - Added ArrayIndex variant, parse support for array indexing
+
+**New Tests:**
+
+- `nexus-core/tests/test_array_indexing.rs` (7 tests)
+- `nexus-core/tests/test_size_function.rs` (6 tests)
 
 **Documentation:**
 

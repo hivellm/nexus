@@ -1311,6 +1311,11 @@ impl<'a> QueryPlanner<'a> {
             Expression::PropertyAccess { variable, property } => {
                 Ok(format!("{}.{}", variable, property))
             }
+            Expression::ArrayIndex { base, index } => {
+                let base_str = self.expression_to_string(base)?;
+                let index_str = self.expression_to_string(index)?;
+                Ok(format!("{}[{}]", base_str, index_str))
+            }
             Expression::Literal(literal) => match literal {
                 Literal::String(s) => Ok(format!("\"{}\"", s)),
                 Literal::Integer(i) => Ok(i.to_string()),

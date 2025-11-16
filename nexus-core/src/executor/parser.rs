@@ -707,6 +707,13 @@ pub enum Expression {
         /// Property name
         property: String,
     },
+    /// Array index access (expression[index])
+    ArrayIndex {
+        /// Base expression (array or property)
+        base: Box<Expression>,
+        /// Index expression
+        index: Box<Expression>,
+    },
     /// Function call
     FunctionCall {
         /// Function name
@@ -3840,10 +3847,25 @@ impl CypherParser {
         else if self.peek_char() == Some('.') {
             self.consume_char();
             let property = self.parse_identifier()?;
-            Ok(Expression::PropertyAccess {
+            let mut expr = Expression::PropertyAccess {
                 variable: identifier,
                 property,
-            })
+            };
+
+            // Check for array indexing after property access: n.tags[0]
+            while self.peek_char() == Some('[') {
+                self.consume_char(); // consume '['
+                self.skip_whitespace();
+                let index = self.parse_expression()?;
+                self.skip_whitespace();
+                self.expect_char(']')?;
+                expr = Expression::ArrayIndex {
+                    base: Box::new(expr),
+                    index: Box::new(index),
+                };
+            }
+
+            Ok(expr)
         } else {
             Ok(Expression::Variable(identifier))
         }
@@ -3987,7 +4009,23 @@ impl CypherParser {
         }
 
         self.expect_char(']')?;
-        Ok(Expression::List(elements))
+
+        let mut expr = Expression::List(elements);
+
+        // Check for array indexing after list: ['a', 'b'][0]
+        while self.peek_char() == Some('[') {
+            self.consume_char(); // consume '['
+            self.skip_whitespace();
+            let index = self.parse_expression()?;
+            self.skip_whitespace();
+            self.expect_char(']')?;
+            expr = Expression::ArrayIndex {
+                base: Box::new(expr),
+                index: Box::new(index),
+            };
+        }
+
+        Ok(expr)
     }
 
     /// Parse point literal

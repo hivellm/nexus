@@ -3699,6 +3699,36 @@ impl Executor {
                     }
                 }
             }
+            parser::Expression::ArrayIndex { base, index } => {
+                // Evaluate the base expression (should return an array)
+                let base_value = self.evaluate_expression(node, base, context)?;
+
+                // Evaluate the index expression (should return an integer)
+                let index_value = self.evaluate_expression(node, index, context)?;
+
+                // Extract index as i64
+                let idx = match index_value {
+                    Value::Number(n) => n.as_i64().unwrap_or(0),
+                    _ => return Ok(Value::Null), // Invalid index type
+                };
+
+                // Access array element
+                match base_value {
+                    Value::Array(arr) => {
+                        // Handle negative indices (Python-style)
+                        let array_len = arr.len() as i64;
+                        let actual_idx = if idx < 0 {
+                            (array_len + idx) as usize
+                        } else {
+                            idx as usize
+                        };
+
+                        // Return element or null if out of bounds
+                        Ok(arr.get(actual_idx).cloned().unwrap_or(Value::Null))
+                    }
+                    _ => Ok(Value::Null), // Base is not an array
+                }
+            }
             parser::Expression::Literal(literal) => match literal {
                 parser::Literal::String(s) => Ok(Value::String(s.clone())),
                 parser::Literal::Integer(i) => Ok(Value::Number((*i).into())),
@@ -5169,6 +5199,11 @@ impl Executor {
             parser::Expression::Parameter(_) => true, // Parameters can be evaluated
             parser::Expression::Variable(_) => false, // Variables need context
             parser::Expression::PropertyAccess { .. } => false, // Property access needs variables
+            parser::Expression::ArrayIndex { base, index } => {
+                // Can evaluate if both base and index can be evaluated without variables
+                self.can_evaluate_without_variables(base)
+                    && self.can_evaluate_without_variables(index)
+            }
             parser::Expression::BinaryOp { left, right, .. } => {
                 // Can evaluate if both operands can be evaluated
                 self.can_evaluate_without_variables(left)
@@ -5243,6 +5278,36 @@ impl Executor {
                     .get(variable)
                     .map(|entity| Self::extract_property(entity, property))
                     .unwrap_or(Value::Null))
+            }
+            parser::Expression::ArrayIndex { base, index } => {
+                // Evaluate the base expression (should return an array)
+                let base_value = self.evaluate_projection_expression(row, context, base)?;
+
+                // Evaluate the index expression (should return an integer)
+                let index_value = self.evaluate_projection_expression(row, context, index)?;
+
+                // Extract index as i64
+                let idx = match index_value {
+                    Value::Number(n) => n.as_i64().unwrap_or(0),
+                    _ => return Ok(Value::Null), // Invalid index type
+                };
+
+                // Access array element
+                match base_value {
+                    Value::Array(arr) => {
+                        // Handle negative indices (Python-style)
+                        let array_len = arr.len() as i64;
+                        let actual_idx = if idx < 0 {
+                            (array_len + idx) as usize
+                        } else {
+                            idx as usize
+                        };
+
+                        // Return element or null if out of bounds
+                        Ok(arr.get(actual_idx).cloned().unwrap_or(Value::Null))
+                    }
+                    _ => Ok(Value::Null), // Base is not an array
+                }
             }
             parser::Expression::Literal(literal) => match literal {
                 parser::Literal::String(s) => Ok(Value::String(s.clone())),
