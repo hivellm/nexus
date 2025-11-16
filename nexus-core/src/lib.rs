@@ -1146,8 +1146,28 @@ impl Engine {
                 // MATCH ... CREATE: execute MATCH first, then CREATE with results
                 self.execute_match_create_query(&ast)?;
             } else {
-                // Standalone CREATE
-                self.execute_create_query(&ast)?;
+                // Standalone CREATE - execute through executor only (not through Engine)
+                // This prevents duplicate node creation
+                // The executor will handle CREATE internally
+                // Just refresh after to see changes
+                let query_obj = executor::Query {
+                    cypher: query.to_string(),
+                    params: std::collections::HashMap::new(),
+                };
+                let result = self.executor.execute(&query_obj)?;
+
+                // Refresh executor to see the changes (only if not in transaction)
+                let session_id = "default";
+                let in_transaction = {
+                    let session = self.session_manager.get_session(&session_id.to_string());
+                    session.map(|s| s.has_active_transaction()).unwrap_or(false)
+                };
+
+                if !in_transaction {
+                    self.refresh_executor()?;
+                }
+
+                return Ok(result);
             }
 
             // Refresh executor to see the changes (only if not in transaction)

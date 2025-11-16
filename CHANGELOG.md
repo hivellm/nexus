@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Neo4j 100% Compatibility Progress (2025-11-16) 🚀
+
+- **Phase 1-4 Complete**: Aggregation Functions, WHERE Clause, ORDER BY, Property Access
+  - Fixed `min()`, `max()`, `collect()` without MATCH (virtual row support)
+  - Fixed `sum()` and `avg()` with literals
+  - Fixed `WHERE IN` operator and empty IN list handling
+  - Fixed `ORDER BY DESC`, multiple columns, with WHERE, with aggregation
+  - Implemented array indexing: `n.tags[0]`, `['a','b','c'][1]`
+  - Verified `size()` function with arrays and strings
+  - **44% Complete**: 4 of 9 phases done
+  - Tests: 21/21 passing for completed phases
+  - Files: `executor/mod.rs`, `executor/planner.rs`, `executor/parser.rs`
+
 ### Added - AllNodesScan Operator (2025-11-16) ✅
 
 - **AllNodesScan Operator**: Dedicated operator for scanning all nodes without label filter
@@ -26,6 +39,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Identifies nested patterns like `head(collect())`, `tail(collect())`, `reverse(collect())`
   - Foundation for future two-phase execution support
   - Status: Investigation paused - requires architectural refactoring
+
+### Fixed - Multiple Neo4j Compatibility Bugs (2025-11-16) ✅
+
+- **CREATE Duplication Bug #1**: Fixed MATCH returning duplicate nodes
+  - Root cause: `execute_node_by_label()` treated `label_id==0` as "scan all" special case
+  - But `label_id==0` is actually the first valid label ID
+  - Solution: Removed special case, always use label_index
+  - Impact: MATCH with specific labels now works correctly
+  
+- **WHERE IN Operator Bug**: Fixed IN operator not filtering correctly
+  - Root cause: Planner's `expression_to_string()` missing IN operator mapping
+  - Predicates malformed as `x.n ? []` instead of `x.n IN []`
+  - Solution: Added IN, CONTAINS, STARTS WITH, ENDS WITH, =~, ^, % operators
+  - Tests: WHERE IN operator tests passing (2/2)
+
+- **ORDER BY Implementation**: Complete ORDER BY support
+  - Fixed operator execution order (Sort after Project, before Limit)
+  - Fixed column name resolution (n.age vs age alias)
+  - Fixed row rebuilding issue (sort in-place)
+  - Tests: ORDER BY tests passing (4/4)
+
+- **Array Indexing Implementation**: Full array indexing support
+  - Added `Expression::ArrayIndex` AST variant
+  - Parser support for `array[index]` and `property[index]` syntax
+  - Negative index support (Python-style: `array[-1]`)
+  - Out of bounds handling (returns null)
+  - Tests: Array indexing tests passing (7/7)
+
+### Known Issues - Under Investigation (2025-11-16) 🔍
+
+- **CREATE Duplication Bug #2**: Node storage count mismatch
+  - Symptom: 3 CREATE statements create 4 nodes in storage
+  - Investigation: ID mapping issue between storage and executor
+  - Status: Root cause identified, fix in progress
+  - Impact: Affects relationship counting tests
+
+- **Phase 5 - Nested Aggregations**: Architecture limitation
+  - Queries like `head(collect(n.name))` return NULL
+  - Requires two-phase execution: Aggregate → Project
+  - Status: Paused for architectural refactoring
+  - Tests: 3/5 failing (head, tail, reverse with collect)
 
 ### Added - Comprehensive Neo4j Compatibility Testing ✅
 

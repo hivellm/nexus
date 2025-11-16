@@ -1123,9 +1123,38 @@ impl Executor {
         self.store.flush()?;
 
         // Update label index with created nodes
-        for (_var, node_id) in created_nodes.iter() {
+        // Scan all nodes from the store that were created (iterate based on node IDs, not variables)
+        let start_node_id = if created_nodes.is_empty() {
+            // If no variables were tracked, we need to find the new nodes
+            // For now, just iterate over ALL nodes in the recent range
+            // This is a workaround - ideally we'd track all created IDs, not just those with variables
+            // For standalone CREATE without variables, we need a different approach
+            // Let's assume created nodes are at the end of the node_count range
+            let node_count = self.store.node_count();
+            // Get the expected number of nodes created (pattern elements count)
+            let expected_created = pattern
+                .elements
+                .iter()
+                .filter(|e| matches!(e, parser::PatternElement::Node(_)))
+                .count();
+            if node_count as usize >= expected_created {
+                node_count - expected_created as u64
+            } else {
+                0
+            }
+        } else {
+            // Use the tracked nodes
+            *created_nodes.values().min().unwrap_or(&0)
+        };
+
+        let end_node_id = self.store.node_count();
+
+        for node_id in start_node_id..end_node_id {
             // Read the node to get its labels
-            if let Ok(node_record) = self.store.read_node(*node_id) {
+            if let Ok(node_record) = self.store.read_node(node_id) {
+                if node_record.is_deleted() {
+                    continue;
+                }
                 let mut label_ids = Vec::new();
                 for bit in 0..64 {
                     if (node_record.label_bits & (1u64 << bit)) != 0 {
@@ -1133,7 +1162,7 @@ impl Executor {
                     }
                 }
                 if !label_ids.is_empty() {
-                    self.label_index.add_node(*node_id, &label_ids)?;
+                    self.label_index.add_node(node_id, &label_ids)?;
                 }
             }
         }
