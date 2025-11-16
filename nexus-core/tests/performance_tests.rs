@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 #[tokio::test]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_rate_limiting_under_high_load() {
     // Rate limiting should handle high load efficiently
 
@@ -31,24 +35,29 @@ async fn test_rate_limiting_under_high_load() {
 
     let rate_limiter = Arc::new(RateLimiter::new(config));
 
-    // Simulate high load: 1000+ requests
-    let start = Instant::now();
-    let mut handles = Vec::new();
+    // Simulate high load: 1000+ requests with timeout
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let start = Instant::now();
+        let mut handles = Vec::new();
 
-    for i in 0..1000 {
-        let limiter = rate_limiter.clone();
-        let key = format!("key_{}", i % 10); // 10 different keys
-        let handle = tokio::spawn(async move { limiter.check_rate_limit(&key).await });
-        handles.push(handle);
-    }
+        for i in 0..1000 {
+            let limiter = rate_limiter.clone();
+            let key = format!("key_{}", i % 10); // 10 different keys
+            let handle = tokio::spawn(async move { limiter.check_rate_limit(&key).await });
+            handles.push(handle);
+        }
 
-    // Wait for all requests
-    let mut results = Vec::new();
-    for handle in handles {
-        results.push(handle.await.unwrap());
-    }
+        // Wait for all requests
+        let mut results = Vec::new();
+        for handle in handles {
+            results.push(handle.await.unwrap());
+        }
 
-    let elapsed = start.elapsed();
+        (start.elapsed(), results)
+    })
+    .await;
+
+    let (elapsed, results) = result.expect("Test timed out after 10 seconds");
 
     // Should complete in reasonable time (< 1 second for 1000 requests)
     assert!(
@@ -70,6 +79,10 @@ async fn test_rate_limiting_under_high_load() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_authentication_middleware_overhead() {
     // Authentication middleware should add minimal overhead (<1ms per request)
 
@@ -84,15 +97,18 @@ async fn test_authentication_middleware_overhead() {
         .generate_api_key("perf-test".to_string(), vec![Permission::Read])
         .unwrap();
 
-    // Measure verification time (includes Argon2 which is intentionally slow)
+    // Measure verification time (includes Argon2 which is intentionally slow) with timeout
     let iterations = 10; // Fewer iterations since Argon2 is slow
-    let start = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _ = auth_manager.verify_api_key(&full_key);
+        }
+        start.elapsed()
+    })
+    .await;
 
-    for _ in 0..iterations {
-        let _ = auth_manager.verify_api_key(&full_key);
-    }
-
-    let elapsed = start.elapsed();
+    let elapsed = result.expect("Test timed out after 30 seconds");
     let avg_nanos = (elapsed.as_nanos() / iterations as u128) as u64;
     let avg_time_per_request = Duration::from_nanos(avg_nanos);
 
@@ -111,6 +127,10 @@ async fn test_authentication_middleware_overhead() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_audit_logging_performance() {
     // Audit logging should not block requests significantly
 
@@ -124,21 +144,24 @@ async fn test_audit_logging_performance() {
 
     let logger = AuditLogger::new(config).unwrap();
 
-    // Measure logging time
+    // Measure logging time with timeout
     let iterations = 100;
-    let start = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let start = Instant::now();
+        for i in 0..iterations {
+            let _ = logger
+                .log_authentication_success(
+                    format!("user{}", i),
+                    format!("user-id-{}", i),
+                    "api_key".to_string(),
+                )
+                .await;
+        }
+        start.elapsed()
+    })
+    .await;
 
-    for i in 0..iterations {
-        let _ = logger
-            .log_authentication_success(
-                format!("user{}", i),
-                format!("user-id-{}", i),
-                "api_key".to_string(),
-            )
-            .await;
-    }
-
-    let elapsed = start.elapsed();
+    let elapsed = result.expect("Test timed out after 10 seconds");
     let avg_nanos = (elapsed.as_nanos() / iterations as u128) as u64;
     let avg_time_per_log = Duration::from_nanos(avg_nanos);
 
@@ -156,6 +179,10 @@ async fn test_audit_logging_performance() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 fn test_jwt_validation_performance() {
     // JWT validation should be fast (<0.5ms)
 
@@ -194,6 +221,10 @@ fn test_jwt_validation_performance() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_api_key_lookup_performance() {
     // API key lookup performance (includes Argon2 verification)
     // Note: Argon2 is intentionally slow for security, so we test with fewer iterations
@@ -215,16 +246,19 @@ async fn test_api_key_lookup_performance() {
         keys.push(full_key);
     }
 
-    // Measure lookup time (includes Argon2 verification)
+    // Measure lookup time (includes Argon2 verification) with timeout
     let iterations = 5; // Fewer iterations since Argon2 is slow
-    let start = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let start = Instant::now();
+        for i in 0..iterations {
+            let key = &keys[i % keys.len()];
+            let _ = auth_manager.verify_api_key(key);
+        }
+        start.elapsed()
+    })
+    .await;
 
-    for i in 0..iterations {
-        let key = &keys[i % keys.len()];
-        let _ = auth_manager.verify_api_key(key);
-    }
-
-    let elapsed = start.elapsed();
+    let elapsed = result.expect("Test timed out after 30 seconds");
     let avg_nanos = (elapsed.as_nanos() / iterations as u128) as u64;
     let avg_time_per_lookup = Duration::from_nanos(avg_nanos);
 
@@ -243,6 +277,10 @@ async fn test_api_key_lookup_performance() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_concurrent_authentication_performance() {
     // Concurrent authentication requests should be handled efficiently
     // Note: Argon2 is intentionally slow, so we test with fewer concurrent requests
@@ -258,24 +296,27 @@ async fn test_concurrent_authentication_performance() {
         .generate_api_key("concurrent-perf".to_string(), vec![Permission::Read])
         .unwrap();
 
-    // Measure concurrent verification time
+    // Measure concurrent verification time with timeout
     let concurrent_requests = 10; // Fewer requests since Argon2 is slow
-    let start = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let start = Instant::now();
+        let mut handles = Vec::new();
+        for _ in 0..concurrent_requests {
+            let manager = auth_manager.clone();
+            let key = full_key.clone();
+            let handle = tokio::spawn(async move { manager.verify_api_key(&key) });
+            handles.push(handle);
+        }
 
-    let mut handles = Vec::new();
-    for _ in 0..concurrent_requests {
-        let manager = auth_manager.clone();
-        let key = full_key.clone();
-        let handle = tokio::spawn(async move { manager.verify_api_key(&key) });
-        handles.push(handle);
-    }
+        // Wait for all requests
+        for handle in handles {
+            let _ = handle.await;
+        }
+        start.elapsed()
+    })
+    .await;
 
-    // Wait for all requests
-    for handle in handles {
-        let _ = handle.await;
-    }
-
-    let elapsed = start.elapsed();
+    let elapsed = result.expect("Test timed out after 30 seconds");
     let avg_nanos = (elapsed.as_nanos() / concurrent_requests as u128) as u64;
     let avg_time_per_request = Duration::from_nanos(avg_nanos);
 

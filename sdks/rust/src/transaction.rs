@@ -39,9 +39,9 @@ impl Transaction {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut tx = client.begin_transaction().await?;
     /// // Perform operations...
@@ -78,9 +78,9 @@ impl Transaction {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Transaction};
+    /// # use nexus_sdk::{NexusClient, Transaction};
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// # let mut tx: Transaction = client.begin_transaction().await?;
     /// tx.commit().await?;
@@ -110,9 +110,9 @@ impl Transaction {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Transaction};
+    /// # use nexus_sdk::{NexusClient, Transaction};
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// # let mut tx: Transaction = client.begin_transaction().await?;
     /// tx.rollback().await?;
@@ -158,10 +158,10 @@ impl Transaction {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Transaction};
+    /// # use nexus_sdk::{NexusClient, Transaction};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// # let mut tx: Transaction = client.begin_transaction().await?;
     /// let result = tx.execute("CREATE (n:Person {name: 'Alice'}) RETURN n", None).await?;
@@ -190,9 +190,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Transaction};
+    /// # use nexus_sdk::{NexusClient, Transaction};
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut tx: Transaction = client.begin_transaction().await?;
     /// // Perform operations...

@@ -74,9 +74,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.create_label("Person".to_string()).await?;
     /// println!("Create label result: {}", response.message);
@@ -114,9 +114,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.list_labels().await?;
     /// println!("Labels: {:?}", response.labels);
@@ -156,9 +156,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.create_rel_type("KNOWS".to_string()).await?;
     /// println!("Create rel type result: {}", response.message);
@@ -196,9 +196,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.list_rel_types().await?;
     /// println!("Relationship types: {:?}", response.types);

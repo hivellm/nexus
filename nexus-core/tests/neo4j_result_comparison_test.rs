@@ -269,7 +269,10 @@ fn compare_results(
 
 /// Detailed comparison of simple RETURN query
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_detailed_comparison_simple_return() {
     println!("\n=== Detailed Comparison: Simple RETURN ===");
 
@@ -303,7 +306,10 @@ async fn test_detailed_comparison_simple_return() {
 
 /// Detailed comparison of multiple value types
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_detailed_comparison_value_types() {
     println!("\n=== Detailed Comparison: Value Types ===");
 
@@ -346,7 +352,10 @@ async fn test_detailed_comparison_value_types() {
 
 /// Comprehensive compatibility test
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_comprehensive_compatibility() {
     println!("\n=== Comprehensive Nexus vs Neo4j Compatibility Test ===");
 
@@ -430,7 +439,10 @@ async fn test_comprehensive_compatibility() {
 
 /// Test aggregation functions
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_aggregation_functions() {
     println!("\n=== Testing Aggregation Functions ===");
 
@@ -489,7 +501,10 @@ async fn test_aggregation_functions() {
 
 /// Test mathematical operations
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_mathematical_operations() {
     println!("\n=== Testing Mathematical Operations ===");
 
@@ -552,7 +567,10 @@ async fn test_mathematical_operations() {
 
 /// Test string functions
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_string_functions() {
     println!("\n=== Testing String Functions ===");
 
@@ -612,7 +630,10 @@ async fn test_string_functions() {
 
 /// Test comparison operators
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_comparison_operators() {
     println!("\n=== Testing Comparison Operators ===");
 
@@ -675,7 +696,10 @@ async fn test_comparison_operators() {
 
 /// Test logical operators
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_logical_operators() {
     println!("\n=== Testing Logical Operators ===");
 
@@ -736,7 +760,10 @@ async fn test_logical_operators() {
 
 /// Test CASE expressions
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_case_expressions() {
     println!("\n=== Testing CASE Expressions ===");
 
@@ -801,7 +828,10 @@ async fn test_case_expressions() {
 
 /// Test date/time functions
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_datetime_functions() {
     println!("\n=== Testing Date/Time Functions ===");
 
@@ -875,7 +905,10 @@ async fn test_datetime_functions() {
 
 /// Test list operations
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_list_operations() {
     println!("\n=== Testing List Operations ===");
 
@@ -938,7 +971,10 @@ async fn test_list_operations() {
 
 /// Test ORDER BY and LIMIT
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_order_by_and_limit() {
     println!("\n=== Testing ORDER BY and LIMIT ===");
 
@@ -996,7 +1032,10 @@ async fn test_order_by_and_limit() {
 
 /// Test DISTINCT
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_distinct() {
     println!("\n=== Testing DISTINCT ===");
 
@@ -1053,7 +1092,10 @@ async fn test_distinct() {
 
 /// Test UNION operations
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_union_operations() {
     println!("\n=== Testing UNION Operations ===");
 
@@ -1113,7 +1155,10 @@ async fn test_union_operations() {
 
 /// Test WHERE clauses
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_where_clauses() {
     println!("\n=== Testing WHERE Clauses ===");
 
@@ -1177,7 +1222,10 @@ async fn test_where_clauses() {
 
 /// Test multiple columns
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_multiple_columns() {
     println!("\n=== Testing Multiple Columns ===");
 
@@ -1237,7 +1285,10 @@ async fn test_multiple_columns() {
 
 /// Test complex expressions
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_complex_expressions() {
     println!("\n=== Testing Complex Expressions ===");
 
@@ -1304,7 +1355,10 @@ async fn test_complex_expressions() {
 
 /// Test parameterized queries
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_parameterized_queries() {
     println!("\n=== Testing Parameterized Queries ===");
 
@@ -1403,7 +1457,10 @@ async fn test_parameterized_queries() {
 
 /// Test type coercion
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_type_coercion() {
     println!("\n=== Testing Type Coercion ===");
 
@@ -1460,7 +1517,10 @@ async fn test_type_coercion() {
 
 /// Test null handling
 #[tokio::test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "Slow test - enable with --features slow-tests"
+)]
 async fn test_null_handling() {
     println!("\n=== Testing Null Handling ===");
 

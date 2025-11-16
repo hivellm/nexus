@@ -1,6 +1,6 @@
 //! Basic usage example for Nexus Rust SDK
 
-use nexus_sdk_rust::*;
+use nexus_sdk::*;
 use std::collections::HashMap;
 
 #[tokio::main]

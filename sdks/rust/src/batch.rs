@@ -78,16 +78,16 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Value};
+    /// # use nexus_sdk::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut nodes = Vec::new();
     /// for i in 0..10 {
     ///     let mut properties = HashMap::new();
     ///     properties.insert("name".to_string(), Value::String(format!("Node{}", i)));
-    ///     nodes.push(nexus_sdk_rust::BatchNode {
+    ///     nodes.push(nexus_sdk::BatchNode {
     ///         labels: vec!["Person".to_string()],
     ///         properties,
     ///     });
@@ -137,14 +137,14 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Value};
+    /// # use nexus_sdk::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut relationships = Vec::new();
     /// for i in 0..5 {
-    ///     relationships.push(nexus_sdk_rust::BatchRelationship {
+    ///     relationships.push(nexus_sdk::BatchRelationship {
     ///         source_id: i,
     ///         target_id: i + 1,
     ///         rel_type: "KNOWS".to_string(),

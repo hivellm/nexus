@@ -1,6 +1,6 @@
 //! Integration tests for relationship operations (update and delete)
 
-use nexus_sdk_rust::{NexusClient, Value};
+use nexus_sdk::{NexusClient, Value};
 use std::collections::HashMap;
 
 // Note: These tests require a running Nexus server at http://localhost:15474

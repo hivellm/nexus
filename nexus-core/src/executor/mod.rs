@@ -3219,6 +3219,54 @@ impl Executor {
                     Ok(Value::Null)
                 }
             }
+            parser::Expression::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_expression(node, left, context)?;
+                let right_val = self.evaluate_expression(node, right, context)?;
+
+                match op {
+                    parser::BinaryOperator::And => {
+                        let left_bool = self.value_to_bool(&left_val)?;
+                        let right_bool = self.value_to_bool(&right_val)?;
+                        Ok(Value::Bool(left_bool && right_bool))
+                    }
+                    parser::BinaryOperator::Or => {
+                        let left_bool = self.value_to_bool(&left_val)?;
+                        let right_bool = self.value_to_bool(&right_val)?;
+                        Ok(Value::Bool(left_bool || right_bool))
+                    }
+                    parser::BinaryOperator::Equal => {
+                        if left_val.is_null() || right_val.is_null() {
+                            Ok(Value::Null)
+                        } else {
+                            Ok(Value::Bool(left_val == right_val))
+                        }
+                    }
+                    parser::BinaryOperator::NotEqual => {
+                        if left_val.is_null() || right_val.is_null() {
+                            Ok(Value::Null)
+                        } else {
+                            Ok(Value::Bool(left_val != right_val))
+                        }
+                    }
+                    parser::BinaryOperator::LessThan => Ok(Value::Bool(
+                        self.compare_values_for_sort(&left_val, &right_val)
+                            == std::cmp::Ordering::Less,
+                    )),
+                    parser::BinaryOperator::LessThanOrEqual => Ok(Value::Bool(matches!(
+                        self.compare_values_for_sort(&left_val, &right_val),
+                        std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+                    ))),
+                    parser::BinaryOperator::GreaterThan => Ok(Value::Bool(
+                        self.compare_values_for_sort(&left_val, &right_val)
+                            == std::cmp::Ordering::Greater,
+                    )),
+                    parser::BinaryOperator::GreaterThanOrEqual => Ok(Value::Bool(matches!(
+                        self.compare_values_for_sort(&left_val, &right_val),
+                        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+                    ))),
+                    _ => Ok(Value::Null), // Other operators not implemented in evaluate_expression
+                }
+            }
             parser::Expression::Case {
                 input,
                 when_clauses,

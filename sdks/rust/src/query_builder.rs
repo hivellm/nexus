@@ -41,7 +41,7 @@ impl QueryBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::query_builder::QueryBuilder;
+    /// use nexus_sdk::query_builder::QueryBuilder;
     ///
     /// let query = QueryBuilder::new()
     ///     .match_("(n:Person)")
@@ -58,7 +58,7 @@ impl QueryBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::query_builder::QueryBuilder;
+    /// use nexus_sdk::query_builder::QueryBuilder;
     ///
     /// let query = QueryBuilder::new()
     ///     .create("(n:Person {name: $name})")
@@ -83,7 +83,7 @@ impl QueryBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::query_builder::QueryBuilder;
+    /// use nexus_sdk::query_builder::QueryBuilder;
     ///
     /// let query = QueryBuilder::new()
     ///     .match_("(n:Person)")
@@ -102,7 +102,7 @@ impl QueryBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::query_builder::QueryBuilder;
+    /// use nexus_sdk::query_builder::QueryBuilder;
     ///
     /// let query = QueryBuilder::new()
     ///     .match_("(n:Person)")
@@ -141,7 +141,7 @@ impl QueryBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::query_builder::QueryBuilder;
+    /// use nexus_sdk::query_builder::QueryBuilder;
     ///
     /// let query = QueryBuilder::new()
     ///     .match_("(n:Person)")
@@ -160,7 +160,7 @@ impl QueryBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::query_builder::QueryBuilder;
+    /// use nexus_sdk::query_builder::QueryBuilder;
     ///
     /// let query = QueryBuilder::new()
     ///     .match_("(n:Person)")
@@ -186,7 +186,7 @@ impl QueryBuilder {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::query_builder::QueryBuilder;
+    /// use nexus_sdk::query_builder::QueryBuilder;
     ///
     /// let query = QueryBuilder::new()
     ///     .match_("(n:Person)")

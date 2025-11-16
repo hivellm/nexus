@@ -1,8 +1,8 @@
 # Nexus Rust SDK
 
-[![Crates.io](https://img.shields.io/crates/v/nexus-sdk-rust?style=flat-square)](https://crates.io/crates/nexus-sdk-rust)
-[![docs.rs](https://img.shields.io/docsrs/nexus-sdk-rust?style=flat-square)](https://docs.rs/nexus-sdk-rust)
-[![License](https://img.shields.io/crates/l/nexus-sdk-rust?style=flat-square)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/nexus-sdk?style=flat-square)](https://crates.io/crates/nexus-sdk)
+[![docs.rs](https://img.shields.io/docsrs/nexus-sdk?style=flat-square)](https://docs.rs/nexus-sdk)
+[![License](https://img.shields.io/crates/l/nexus-sdk?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange?style=flat-square)](https://www.rust-lang.org/)
 [![CI](https://img.shields.io/github/actions/workflow/status/hivellm/nexus/ci.yml?style=flat-square)](https://github.com/hivellm/nexus/actions)
 
@@ -14,7 +14,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-nexus-sdk-rust = "0.1.0"
+nexus-sdk = "0.1.0"
 ```
 
 ## Usage
@@ -22,7 +22,7 @@ nexus-sdk-rust = "0.1.0"
 ### Basic Example
 
 ```rust
-use nexus_sdk_rust::NexusClient;
+use nexus_sdk::NexusClient;
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a node
     let mut properties = HashMap::new();
-    properties.insert("name".to_string(), nexus_sdk_rust::Value::String("Alice".to_string()));
+    properties.insert("name".to_string(), nexus_sdk::Value::String("Alice".to_string()));
     let create_response = client.create_node(vec!["Person".to_string()], properties).await?;
     println!("Created node with ID: {}", create_response.node_id);
 
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### With Authentication
 
 ```rust
-use nexus_sdk_rust::NexusClient;
+use nexus_sdk::NexusClient;
 
 // Using API key
 let client = NexusClient::with_api_key("http://localhost:15474", "your-api-key")?;
@@ -177,3 +177,9 @@ The SDK includes comprehensive tests for:
 - [x] Retry logic with exponential backoff (basic implementation)
 - [x] Neo4j compatibility comparison tests
 - [ ] Connection pooling
+
+## License
+
+Licensed under the Apache License, Version 2.0.
+
+See [LICENSE](LICENSE) for details.

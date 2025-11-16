@@ -295,7 +295,11 @@ $passRate = if ($queries.Count -gt 0) {
 Write-Host "`n[RESULT] Pass Rate: $passRate%" -ForegroundColor $(if ($passRate -ge 90) { "Green" } elseif ($passRate -ge 70) { "Yellow" } else { "Red" })
 
 # Export results
-$reportPath = "cross-compatibility-report.json"
+$reportDir = Join-Path $PSScriptRoot "reports"
+if (-not (Test-Path $reportDir)) {
+    New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+}
+$reportPath = Join-Path $reportDir "neo4j-cross-compatibility-report.json"
 $results | ConvertTo-Json -Depth 3 | Out-File $reportPath
 Write-Host "`nReport saved to: $reportPath" -ForegroundColor Cyan
 

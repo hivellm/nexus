@@ -72,7 +72,7 @@ The compatibility test validates:
 
 The script generates:
 - Console output with pass/fail for each query
-- `cross-compatibility-report.json` - Detailed test results
+- `reports/neo4j-cross-compatibility-report.json` - Detailed test results
 - Summary with pass rate percentage
 
 ## Example Output

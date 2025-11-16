@@ -1,6 +1,6 @@
 //! Integration tests for transaction support
 
-use nexus_sdk_rust::{NexusClient, Transaction, Value};
+use nexus_sdk::{NexusClient, Transaction, Value};
 use std::collections::HashMap;
 
 // Note: These tests require a running Nexus server at http://localhost:15474
@@ -12,7 +12,7 @@ async fn test_begin_transaction() {
     let client = NexusClient::new("http://localhost:15474").unwrap();
     let mut tx: Transaction = client.begin_transaction().await.unwrap();
     assert!(tx.is_active());
-    assert_eq!(tx.status(), nexus_sdk_rust::TransactionStatus::Active);
+    assert_eq!(tx.status(), nexus_sdk::TransactionStatus::Active);
     tx.commit().await.unwrap();
 }
 
@@ -33,7 +33,7 @@ async fn test_commit_transaction() {
     // Commit transaction
     tx.commit().await.unwrap();
     assert!(!tx.is_active());
-    assert_eq!(tx.status(), nexus_sdk_rust::TransactionStatus::NotStarted);
+    assert_eq!(tx.status(), nexus_sdk::TransactionStatus::NotStarted);
 }
 
 #[tokio::test]
@@ -59,7 +59,7 @@ async fn test_rollback_transaction() {
     // Rollback transaction
     tx.rollback().await.unwrap();
     assert!(!tx.is_active());
-    assert_eq!(tx.status(), nexus_sdk_rust::TransactionStatus::NotStarted);
+    assert_eq!(tx.status(), nexus_sdk::TransactionStatus::NotStarted);
 }
 
 #[tokio::test]

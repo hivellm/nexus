@@ -5,7 +5,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use nexus_sdk_rust::NexusClient;
+//! use nexus_sdk::NexusClient;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {

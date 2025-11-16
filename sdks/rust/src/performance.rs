@@ -116,9 +116,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let stats = client.get_query_statistics().await?;
     /// println!("Total queries: {}", stats.statistics.total_queries);
@@ -155,9 +155,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let slow_queries = client.get_slow_queries().await?;
     /// println!("Found {} slow queries", slow_queries.count);
@@ -196,9 +196,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let cache_stats = client.get_plan_cache_statistics().await?;
     /// println!("Cached plans: {}", cache_stats.cached_plans);
@@ -235,9 +235,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.clear_plan_cache().await?;
     /// println!("Plan cache cleared: {:?}", response);

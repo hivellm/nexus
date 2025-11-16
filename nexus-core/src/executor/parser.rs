@@ -3291,12 +3291,12 @@ impl CypherParser {
 
     /// Parse AND expressions
     fn parse_and_expression(&mut self) -> Result<Expression> {
-        let mut left = self.parse_comparison_expression()?;
+        let mut left = self.parse_not_expression()?;
 
         while self.peek_keyword("AND") {
             self.parse_keyword()?;
             self.skip_whitespace();
-            let right = self.parse_comparison_expression()?;
+            let right = self.parse_not_expression()?;
             left = Expression::BinaryOp {
                 left: Box::new(left),
                 op: BinaryOperator::And,
@@ -3305,6 +3305,33 @@ impl CypherParser {
         }
 
         Ok(left)
+    }
+
+    /// Parse NOT expressions
+    fn parse_not_expression(&mut self) -> Result<Expression> {
+        self.skip_whitespace();
+
+        if self.peek_keyword("NOT") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            // Check if next is a parenthesized expression
+            let operand = if self.peek_char() == Some('(') {
+                self.expect_char('(')?;
+                self.skip_whitespace();
+                let expr = self.parse_or_expression()?;
+                self.skip_whitespace();
+                self.expect_char(')')?;
+                expr
+            } else {
+                self.parse_comparison_expression()?
+            };
+            return Ok(Expression::UnaryOp {
+                op: UnaryOperator::Not,
+                operand: Box::new(operand),
+            });
+        }
+
+        self.parse_comparison_expression()
     }
 
     /// Parse comparison expressions (=, <>, <, <=, >, >=, IS NULL, IS NOT NULL, STARTS WITH, ENDS WITH, CONTAINS, =~)

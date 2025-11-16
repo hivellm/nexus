@@ -135,10 +135,10 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Value};
+    /// # use nexus_sdk::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut properties = HashMap::new();
     /// properties.insert("name".to_string(), Value::String("Alice".to_string()));
@@ -186,9 +186,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.get_node(0).await?; // Replace 0 with an actual node ID
     /// if let Some(node) = response.node {
@@ -233,10 +233,10 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Value};
+    /// # use nexus_sdk::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut properties = HashMap::new();
     /// properties.insert("name".to_string(), Value::String("Bob".to_string()));
@@ -287,9 +287,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.delete_node(0).await?; // Replace 0 with an actual node ID
     /// println!("Delete result: {}", response.message);
@@ -334,10 +334,10 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Value};
+    /// # use nexus_sdk::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut properties = HashMap::new();
     /// properties.insert("weight".to_string(), Value::Float(1.5));
@@ -393,10 +393,10 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::{NexusClient, Value};
+    /// # use nexus_sdk::{NexusClient, Value};
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let mut properties = HashMap::new();
     /// properties.insert("weight".to_string(), Value::Float(2.0));
@@ -443,9 +443,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.delete_relationship(1).await?;
     /// println!("Delete relationship result: {}", response.message);

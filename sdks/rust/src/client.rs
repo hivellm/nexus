@@ -46,10 +46,10 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::NexusClient;
+    /// use nexus_sdk::NexusClient;
     ///
     /// let client = NexusClient::new("http://localhost:15474")?;
-    /// # Ok::<(), nexus_sdk_rust::NexusError>(())
+    /// # Ok::<(), nexus_sdk::NexusError>(())
     /// ```
     pub fn new(base_url: &str) -> Result<Self> {
         Self::with_config(ClientConfig {
@@ -68,10 +68,10 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::NexusClient;
+    /// use nexus_sdk::NexusClient;
     ///
     /// let client = NexusClient::with_api_key("http://localhost:15474", "your-api-key")?;
-    /// # Ok::<(), nexus_sdk_rust::NexusError>(())
+    /// # Ok::<(), nexus_sdk::NexusError>(())
     /// ```
     pub fn with_api_key(base_url: &str, api_key: &str) -> Result<Self> {
         Self::with_config(ClientConfig {
@@ -92,10 +92,10 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// use nexus_sdk_rust::NexusClient;
+    /// use nexus_sdk::NexusClient;
     ///
     /// let client = NexusClient::with_credentials("http://localhost:15474", "user", "pass")?;
-    /// # Ok::<(), nexus_sdk_rust::NexusError>(())
+    /// # Ok::<(), nexus_sdk::NexusError>(())
     /// ```
     pub fn with_credentials(base_url: &str, username: &str, password: &str) -> Result<Self> {
         Self::with_config(ClientConfig {
@@ -119,7 +119,7 @@ impl NexusClient {
 
         let client_builder = ClientBuilder::new()
             .timeout(timeout)
-            .user_agent("nexus-sdk-rust/0.1.0");
+            .user_agent("nexus-sdk/0.1.0");
 
         // Build HTTP client
         let client = client_builder.build()?;
@@ -144,9 +144,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let result = client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None).await?;
     /// println!("Found {} rows", result.rows.len());
@@ -178,9 +178,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let stats = client.get_stats().await?;
     /// println!("Total nodes: {}", stats.catalog.node_count);
@@ -204,9 +204,9 @@ impl NexusClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use nexus_sdk_rust::NexusClient;
+    /// # use nexus_sdk::NexusClient;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk_rust::NexusError> {
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let healthy = client.health_check().await?;
     /// println!("Server is healthy: {}", healthy);

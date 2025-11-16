@@ -1,6 +1,6 @@
 //! Example using authentication with Nexus Rust SDK
 
-use nexus_sdk_rust::*;
+use nexus_sdk::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {

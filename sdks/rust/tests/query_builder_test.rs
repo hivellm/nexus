@@ -1,6 +1,6 @@
 //! Integration tests for query builder
 
-use nexus_sdk_rust::{NexusClient, QueryBuilder};
+use nexus_sdk::{NexusClient, QueryBuilder};
 
 // Note: These tests require a running Nexus server at http://localhost:15474
 // They are skipped by default unless NEXUS_TEST_SERVER is set
@@ -167,7 +167,7 @@ async fn test_query_builder_build() {
     let params = query.params().unwrap();
     assert_eq!(
         params.get("name").unwrap(),
-        &nexus_sdk_rust::Value::String("Alice".to_string())
+        &nexus_sdk::Value::String("Alice".to_string())
     );
 }
 

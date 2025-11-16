@@ -694,7 +694,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Slow test"]
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "Slow test - enable with --features slow-tests"
+    )]
     fn test_memory_allocation() {
         let config = MemoryPoolConfig::default();
         let pool = MemoryPool::new(config).unwrap();
@@ -708,7 +711,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Slow test"]
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "Slow test - enable with --features slow-tests"
+    )]
     fn test_memory_deallocation() {
         let config = MemoryPoolConfig::default();
         let pool = MemoryPool::new(config).unwrap();
@@ -722,7 +728,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Slow test"]
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "Slow test - enable with --features slow-tests"
+    )]
     fn test_memory_coalescing() {
         let config = MemoryPoolConfig::default();
         let pool = MemoryPool::new(config).unwrap();
@@ -740,7 +749,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Slow test"]
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "Slow test - enable with --features slow-tests"
+    )]
     fn test_allocation_strategies() {
         // Test first-fit
         let config1 = MemoryPoolConfig {
