@@ -811,6 +811,11 @@ impl<'a> QueryPlanner<'a> {
             let mut projection_items: Vec<ProjectionItem> = Vec::new();
 
             for item in return_items {
+                // First, check if this expression contains any nested aggregations
+                if self.contains_aggregation(&item.expression) {
+                    has_aggregation = true;
+                }
+
                 match &item.expression {
                     Expression::FunctionCall { name, args } => {
                         let func_name = name.to_lowercase();
@@ -1390,6 +1395,64 @@ impl<'a> QueryPlanner<'a> {
                 Ok(format!("{} {}", op_str, operand_str))
             }
             _ => Ok("?".to_string()),
+        }
+    }
+
+    /// Check if an expression contains an aggregation function (recursively)
+    fn contains_aggregation(&self, expr: &Expression) -> bool {
+        match expr {
+            Expression::FunctionCall { name, args } => {
+                let func_name = name.to_lowercase();
+                // Check if this is an aggregation function
+                if matches!(
+                    func_name.as_str(),
+                    "count" | "sum" | "avg" | "min" | "max" | "collect"
+                ) {
+                    return true;
+                }
+                // Recursively check arguments
+                for arg in args {
+                    if self.contains_aggregation(arg) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Expression::BinaryOp { left, right, .. } => {
+                self.contains_aggregation(left) || self.contains_aggregation(right)
+            }
+            Expression::UnaryOp { operand, .. } => self.contains_aggregation(operand),
+            Expression::List(elements) => elements.iter().any(|e| self.contains_aggregation(e)),
+            Expression::Map(map) => map.values().any(|e| self.contains_aggregation(e)),
+            Expression::Case {
+                input,
+                when_clauses,
+                else_clause,
+            } => {
+                if let Some(input_expr) = input {
+                    if self.contains_aggregation(input_expr) {
+                        return true;
+                    }
+                }
+                for when in when_clauses {
+                    if self.contains_aggregation(&when.condition)
+                        || self.contains_aggregation(&when.result)
+                    {
+                        return true;
+                    }
+                }
+                if let Some(else_expr) = else_clause {
+                    if self.contains_aggregation(else_expr) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Expression::IsNull { expr, .. } => self.contains_aggregation(expr),
+            Expression::ArrayIndex { base, index } => {
+                self.contains_aggregation(base) || self.contains_aggregation(index)
+            }
+            _ => false,
         }
     }
 
