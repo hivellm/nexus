@@ -12,12 +12,12 @@ input_file = sys.argv[1]
 output_file = sys.argv[2]
 
 try:
-    with open(input_file, 'r', encoding='utf-8') as f:
+    with open(input_file, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
+
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    
+
     print(f"✅ Converted {input_file} to {output_file}")
 except Exception as e:
     print(f"❌ Error: {e}")

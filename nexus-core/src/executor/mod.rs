@@ -1350,7 +1350,7 @@ impl Executor {
                         })
                 };
 
-            for row in rows {
+            for row in &rows {
                 let source_value = row
                     .get(source_var)
                     .cloned()
@@ -1403,8 +1403,16 @@ impl Executor {
             }
         }
 
-        self.update_variables_from_rows(context, &expanded_rows);
-        self.update_result_set_from_rows(context, &expanded_rows);
+        // If no rows were expanded but we had input rows, preserve columns to indicate MATCH was executed but returned empty
+        if expanded_rows.is_empty() && !rows.is_empty() {
+            // Preserve columns to indicate MATCH was executed but returned empty
+            // This will be detected by Aggregate operator via has_match_columns check
+            // Don't clear columns - they indicate that MATCH was executed
+            context.result_set.rows.clear();
+        } else {
+            self.update_variables_from_rows(context, &expanded_rows);
+            self.update_result_set_from_rows(context, &expanded_rows);
+        }
 
         Ok(())
     }
@@ -1553,14 +1561,31 @@ impl Executor {
     ) -> Result<()> {
         use std::collections::HashMap;
 
-        if context.result_set.rows.is_empty() && !context.variables.is_empty() {
+        // Preserve columns from Project operator if they exist (for aggregations with literals)
+        let project_columns = context.result_set.columns.clone();
+
+        // Check if project_columns contain variable names (indicating MATCH was executed before Project)
+        // If columns contain variable names like "n", "a", etc., it means MATCH was executed
+        let has_match_columns = !project_columns.is_empty()
+            && project_columns.iter().any(|col| {
+                // Variable names are typically single letters or short identifiers
+                // Check if column name matches a variable pattern (not an aggregation alias)
+                col.len() <= 10
+                    && !col.starts_with("__")
+                    && !col.contains("(")
+                    && !col.contains(")")
+            });
+
+        // Only create rows from variables if we don't have match columns (indicating MATCH returned empty)
+        // If we have match columns but no rows, it means MATCH was executed but returned empty
+        // In that case, we should not create rows from variables
+        if context.result_set.rows.is_empty() && !context.variables.is_empty() && !has_match_columns
+        {
             let rows = self.materialize_rows_from_variables(context);
             self.update_result_set_from_rows(context, &rows);
         }
 
         let rows = context.result_set.rows.clone();
-        // Preserve columns from Project operator if they exist (for aggregations with literals)
-        let project_columns = context.result_set.columns.clone();
         let mut groups: HashMap<Vec<Value>, Vec<Row>> = HashMap::new();
 
         // If we have aggregations without GROUP BY and no rows, create a virtual row
@@ -1568,8 +1593,16 @@ impl Executor {
         // In Neo4j, this returns 1 for count(*), not 0
         // Note: If Project created rows with literal values (for aggregations like sum(1)),
         // those rows should already be in context.result_set.rows
+        // IMPORTANT: Only create virtual row if there are NO variables in context AND no columns from MATCH
+        // If there are variables but no rows, it means MATCH returned empty, so don't create virtual row
+        // Also check if Project columns contain variable names (indicating MATCH was executed)
         let has_rows = !rows.is_empty();
-        let needs_virtual_row = rows.is_empty() && group_by.is_empty() && !aggregations.is_empty();
+        let has_variables = !context.variables.is_empty();
+        let needs_virtual_row = rows.is_empty()
+            && group_by.is_empty()
+            && !aggregations.is_empty()
+            && !has_variables
+            && !has_match_columns;
 
         if needs_virtual_row {
             // Create a virtual row with projected values from columns
@@ -1662,8 +1695,12 @@ impl Executor {
         // Check if we have an empty result set with aggregations but no GROUP BY
         // But only if we didn't create a virtual row (i.e., we had MATCH that returned nothing)
         // Note: If we created a virtual row, groups should not be empty, so is_empty_aggregation should be false
-        let is_empty_aggregation =
-            groups.is_empty() && group_by.is_empty() && has_rows && !needs_virtual_row;
+        // IMPORTANT: If there are variables but no rows, OR if there are MATCH columns but no rows, it means MATCH returned empty
+        let is_empty_aggregation = groups.is_empty()
+            && group_by.is_empty()
+            && (has_variables || has_match_columns)
+            && !has_rows
+            && !needs_virtual_row;
 
         // Use project_columns for column lookups if available
         let columns_for_lookup = if !project_columns.is_empty() {
@@ -2237,6 +2274,8 @@ impl Executor {
         // If no groups and no GROUP BY, still return one row with aggregation values
         // This handles cases like: MATCH (n:NonExistent) RETURN count(*)
         if is_empty_aggregation {
+            // Clear any existing rows first
+            context.result_set.rows.clear();
             let mut result_row = Vec::new();
             for agg in aggregations {
                 let agg_value = match agg {
@@ -2260,7 +2299,14 @@ impl Executor {
 
         // CRITICAL: Final check - if we needed a virtual row, ALWAYS ensure we have correct values
         // This is the ultimate fallback to fix any issues with groups processing
-        if needs_virtual_row && group_by.is_empty() {
+        // BUT: Only execute if we don't have variables or MATCH columns (no MATCH that returned empty)
+        // IMPORTANT: Don't execute if is_empty_aggregation was already handled (it has priority)
+        if !is_empty_aggregation
+            && needs_virtual_row
+            && group_by.is_empty()
+            && !has_variables
+            && !has_match_columns
+        {
             // Always replace rows when we needed a virtual row - this ensures correctness
             context.result_set.rows.clear();
             let mut result_row = Vec::new();
@@ -2290,7 +2336,14 @@ impl Executor {
         // FINAL ABSOLUTE CHECK: If we have aggregations without GROUP BY and result has Null or is empty,
         // ALWAYS create virtual row result - this is the ultimate fallback
         // This handles cases where Project created rows but they're empty or incorrect
-        if group_by.is_empty() && !aggregations.is_empty() {
+        // BUT: Only execute if we don't have variables or MATCH columns (no MATCH that returned empty)
+        // IMPORTANT: Don't execute if is_empty_aggregation was already handled (it has priority)
+        if !is_empty_aggregation
+            && group_by.is_empty()
+            && !aggregations.is_empty()
+            && !has_variables
+            && !has_match_columns
+        {
             let has_null_or_empty = context.result_set.rows.is_empty()
                 || context
                     .result_set
@@ -3273,8 +3326,12 @@ impl Executor {
             while rel_ptr != 0 {
                 let current_rel_id = rel_ptr.saturating_sub(1);
                 if let Ok(rel_record) = self.store.read_rel(current_rel_id) {
+                    // Copy fields to local variables to avoid packed struct reference issues
+                    let src_id = rel_record.src_id;
+                    let dst_id = rel_record.dst_id;
+
                     if rel_record.is_deleted() {
-                        rel_ptr = if rel_record.src_id == node_id {
+                        rel_ptr = if src_id == node_id {
                             rel_record.next_src_ptr
                         } else {
                             rel_record.next_dst_ptr
@@ -3284,21 +3341,21 @@ impl Executor {
 
                     let matches_type = type_id.is_none() || Some(rel_record.type_id) == type_id;
                     let matches_direction = match direction {
-                        Direction::Outgoing => rel_record.src_id == node_id,
-                        Direction::Incoming => rel_record.dst_id == node_id,
+                        Direction::Outgoing => src_id == node_id,
+                        Direction::Incoming => dst_id == node_id,
                         Direction::Both => true,
                     };
 
                     if matches_type && matches_direction {
                         relationships.push(RelationshipInfo {
                             id: current_rel_id,
-                            source_id: rel_record.src_id,
-                            target_id: rel_record.dst_id,
+                            source_id: src_id,
+                            target_id: dst_id,
                             type_id: rel_record.type_id,
                         });
                     }
 
-                    rel_ptr = if rel_record.src_id == node_id {
+                    rel_ptr = if src_id == node_id {
                         rel_record.next_src_ptr
                     } else {
                         rel_record.next_dst_ptr

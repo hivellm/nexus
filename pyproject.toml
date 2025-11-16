@@ -1,4 +1,14 @@
 [tool.codespell]
-skip = "*.lock,*.json,target,node_modules,.git,Cargo.lock"
+skip = "*.lock,*.json,target,node_modules,.git,Cargo.lock,tests/RESUMO_TESTES.md"
 ignore-words-list = "crate,ser,deser,fof"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# This is a Rust project with Python scripts, not a Python package
+# Explicitly disable package discovery to avoid setuptools errors
+packages = []
+py-modules = []
 
