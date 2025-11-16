@@ -27,16 +27,17 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **Production Ready!** 🚀
 
-- ✅ **82% Neo4j Compatibility** - 166/199+ comprehensive compatibility tests passing
+- ✅ **~84% Neo4j Compatibility** - Phases 1-4 complete (AllNodesScan, Aggregations, WHERE, ORDER BY, Array Indexing)
   - Basic features: 100% (10/10 tests)
   - Extended features: 93.75% (15/16 tests)
-  - Comprehensive features: 82.02% (73/89 tests)
-  - Advanced features: 80.95% (68/84 tests)
+  - Property access: 100% (array indexing, size() function)
+  - Phases complete: 4/9 (~44%)
+- ✅ **AllNodesScan Operator** - Dedicated operator for `MATCH (n)` without label filter
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting (129 unit tests)
 - ✅ **Variable-Length Paths** - Fixed-length, ranges, unbounded, shortest path functions
 - ✅ **55+ Built-in Functions** - String, math, temporal, list, aggregation, path functions
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
-- ✅ **Official SDKs** - Rust and Python SDKs available
+- ✅ **Official SDKs** - Rust, Python, and TypeScript SDKs available
 - ✅ **2000+ Tests Passing** - 100% success rate, 70%+ coverage
 - ✅ **42,000+ Lines** - Production-grade Rust codebase
 

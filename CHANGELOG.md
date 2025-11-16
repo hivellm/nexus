@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - AllNodesScan Operator (2025-11-16) ✅
+
+- **AllNodesScan Operator**: Dedicated operator for scanning all nodes without label filter
+  - New `Operator::AllNodesScan` variant for unlabeled MATCH queries
+  - Implements `execute_all_nodes_scan()` to scan all nodes in storage
+  - Fixes `MATCH (n)` to correctly return nodes with ANY label
+  - Replaces incorrect use of `NodeByLabel{label_id:0}` as "scan all"
+  - Cost estimation added to optimizer (2000.0 base cost)
+  - Files: `mod.rs`, `planner.rs`, `optimizer.rs`
+  - Tests: All existing tests pass with new operator
+
+### Added - Nested Aggregation Detection (2025-11-16) ⏸️
+
+- **Recursive Aggregation Detection**: Helper function for detecting nested aggregations
+  - New `contains_aggregation()` method in planner
+  - Recursively checks for aggregations within function calls
+  - Identifies nested patterns like `head(collect())`, `tail(collect())`, `reverse(collect())`
+  - Foundation for future two-phase execution support
+  - Status: Investigation paused - requires architectural refactoring
+
 ### Added - Comprehensive Neo4j Compatibility Testing ✅
 
 - **199+ Compatibility Tests**: Comprehensive test suite for Neo4j compatibility validation

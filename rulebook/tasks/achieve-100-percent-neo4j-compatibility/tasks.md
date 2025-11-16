@@ -224,7 +224,63 @@ This task covers fixing all remaining compatibility issues identified through co
 
 ## Progress Summary
 
-**Last updated**: 2025-11-16 (Session 3 Extended - Phase 5 Investigation 🔍)
+**Last updated**: 2025-11-16 (Session 4 - AllNodesScan Implemented! 🎉)
+
+### Session 4 Summary - AllNodesScan Operator + Phase 6 Investigation
+
+**Work Completed:**
+
+1. ✅ **FIXED MATCH (n) Bug - AllNodesScan Operator Implemented**
+
+   - Root cause: Planner used `label_id: 0` for "scan all nodes" but executor treated it as regular label after previous fix
+   - Solution: Created new dedicated `Operator::AllNodesScan` for scanning all nodes without label filter
+   - Files modified:
+     - `nexus-core/src/executor/mod.rs`: New operator variant + `execute_all_nodes_scan()` function
+     - `nexus-core/src/executor/planner.rs`: Uses `AllNodesScan` instead of `NodeByLabel{label_id:0}`
+     - `nexus-core/src/executor/optimizer.rs`: Cost estimation for `AllNodesScan`
+   - Status: ✅ MATCH (n) now correctly returns ALL nodes including different labels
+
+2. 🔍 **Phase 5: Nested Aggregations Investigation (PAUSED)**
+
+   - Problem: `head(collect(n.name))` returns NULL instead of first element
+   - Root cause: Nested aggregations require two-phase execution (Aggregate → Project)
+   - Current architecture limitation: Cannot decompose nested expressions
+   - Tests created: `test_collect_aggregation.rs` (5 tests: 2 passing, 3 failing)
+   - Decision: Paused - requires significant planner/executor refactoring
+   - Added `contains_aggregation()` helper for recursive detection
+   - Status: ⏸️ Move to simpler Phases 6-9 first
+
+3. 🐛 **Phase 6: CREATE Duplication Bug #2 Discovered**
+   - Symptom: 3 CREATE statements create 4 nodes in storage
+   - Details: Node 3 (Company "Acme") is duplicated but only node 2 appears in label_index
+   - Impact: Blocks relationship counting tests
+   - Status: ❌ Needs investigation and fix in next session
+
+**Test Results:**
+
+```
+✅ AllNodesScan: MATCH (n) returns all nodes including Company
+✅ test_directed_relationship_counting: PASS (3 relationships)
+✅ test_bidirectional_relationship_counting: PASS (6 relationships)
+✅ test_relationship_direction_with_labels: PASS
+❌ test_relationship_type_filtering: FAIL (expected 3, got 4 - CREATE bug)
+❌ test_relationship_debug: FAIL (expected 3 nodes, got 4 - CREATE bug)
+```
+
+**Files Modified:**
+
+- `nexus-core/src/executor/mod.rs`: Added AllNodesScan operator + execution
+- `nexus-core/src/executor/planner.rs`: Modified for AllNodesScan, added `contains_aggregation()`
+- `nexus-core/src/executor/optimizer.rs`: Added AllNodesScan cost calculation
+- `nexus-core/tests/test_relationship_counting.rs`: New (5 tests)
+- `nexus-core/tests/test_relationship_debug.rs`: New (1 test)
+- `nexus-core/tests/test_collect_aggregation.rs`: New (5 tests, 3 failing)
+
+**Next Steps:**
+
+1. Fix CREATE duplication bug #2 (node storage vs label_index mismatch)
+2. Complete Phase 6: Relationship Query Fixes
+3. Continue with Phases 7-9 (Mathematical operators, String functions, Test environment)
 
 ### Session 3 Extended Summary - Phase 5 Investigation
 
