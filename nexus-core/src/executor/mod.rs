@@ -1349,9 +1349,15 @@ impl Executor {
         let expr = parser.parse_expression()?;
 
         // Get rows from variables OR from result_set.rows (e.g., from UNWIND)
-        let rows = if !context.result_set.rows.is_empty() {
+        let had_existing_rows = !context.result_set.rows.is_empty();
+        let existing_columns = if had_existing_rows {
+            context.result_set.columns.clone()
+        } else {
+            Vec::new()
+        };
+
+        let rows = if had_existing_rows {
             // Convert existing rows to row maps for filtering
-            let existing_columns = context.result_set.columns.clone();
             context
                 .result_set
                 .rows
@@ -1369,7 +1375,7 @@ impl Executor {
         // Columns might have markers from previous Filter execution, which is OK
         let is_return_where_scenario = rows.is_empty()
             && context.variables.is_empty()
-            && context.result_set.rows.is_empty()
+            && !had_existing_rows
             && self.can_evaluate_without_variables(&expr);
 
         if is_return_where_scenario {
@@ -1408,8 +1414,23 @@ impl Executor {
             if context.result_set.columns.is_empty() {
                 context.result_set.columns = vec!["__filter_created__".to_string()];
             }
+        } else if had_existing_rows {
+            // Had rows from result_set (e.g., from UNWIND) - preserve columns and update rows
+            // Update variables first
+            self.update_variables_from_rows(context, &filtered_rows);
+            // Preserve existing columns and update rows
+            context.result_set.columns = existing_columns.clone();
+            context.result_set.rows = filtered_rows
+                .iter()
+                .map(|row_map| Row {
+                    values: existing_columns
+                        .iter()
+                        .map(|column| row_map.get(column).cloned().unwrap_or(Value::Null))
+                        .collect(),
+                })
+                .collect();
         } else {
-            // Had rows initially - update result set normally
+            // Had rows initially from variables - update result set normally
             self.update_variables_from_rows(context, &filtered_rows);
             self.update_result_set_from_rows(context, &filtered_rows);
         }
