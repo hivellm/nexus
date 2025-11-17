@@ -1275,20 +1275,22 @@ impl<'a> QueryPlanner<'a> {
                         // This ensures multi-hop patterns chain correctly
                         prev_node_var = Some(target_var.clone());
 
-                        // Get type_id from relationship types
-                        let type_id = if let Some(first_type) = rel.types.first() {
-                            // Try to get type_id from catalog
-                            self.catalog.get_type_id(first_type)?
-                        } else {
-                            // No type specified - match all types
-                            None
-                        };
+                        // Get type_ids from relationship types (support multiple types like :TYPE1|TYPE2)
+                        let type_ids: Vec<u32> = rel
+                            .types
+                            .iter()
+                            .filter_map(|type_name| {
+                                self.catalog.get_type_id(type_name).ok().flatten()
+                            })
+                            .collect();
 
                         // Check if this is a variable-length path (has quantifier)
                         if let Some(quantifier) = &rel.quantifier {
                             // Use VariableLengthPath operator for variable-length paths
                             // Check if pattern has a path variable assigned
                             let path_var = pattern.path_variable.clone().unwrap_or_default();
+                            // For variable-length paths, only use first type for now
+                            let type_id = type_ids.first().copied();
                             operators.push(Operator::VariableLengthPath {
                                 type_id,
                                 direction,
@@ -1301,7 +1303,7 @@ impl<'a> QueryPlanner<'a> {
                         } else {
                             // Use regular Expand operator for single-hop relationships
                             operators.push(Operator::Expand {
-                                type_id,
+                                type_ids,
                                 source_var,
                                 target_var,
                                 rel_var: rel.variable.clone().unwrap_or_default(),
@@ -2100,7 +2102,7 @@ mod tests {
                 predicate: "n.age > 18".to_string(),
             },
             Operator::Expand {
-                type_id: Some(1),
+                type_ids: vec![1],
                 source_var: "n".to_string(),
                 target_var: "m".to_string(),
                 rel_var: "r".to_string(),

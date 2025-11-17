@@ -21,25 +21,30 @@ fn create_test_executor() -> (Executor, TempDir) {
 #[test]
 fn test_create_single_node_with_property_return() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // CREATE with RETURN - should return 1 row with name='Alice'
     let query = Query {
         cypher: "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n.name AS name".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
-    assert_eq!(result.rows.len(), 1, "Expected 1 row, got {}", result.rows.len());
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "Expected 1 row, got {}",
+        result.rows.len()
+    );
     assert_eq!(result.columns.len(), 1);
     assert_eq!(result.columns[0], "name");
-    
+
     // Verify the returned value
     let row = &result.rows[0];
     if let Some(Value::String(name)) = row.values.first() {
@@ -52,25 +57,30 @@ fn test_create_single_node_with_property_return() {
 #[test]
 fn test_create_and_return_literal() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // CREATE with RETURN literal - should return 1 row with status='created'
     let query = Query {
         cypher: "CREATE (n:Person {name: 'Bob'}) RETURN 'created' AS status".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
-    assert_eq!(result.rows.len(), 1, "Expected 1 row, got {}", result.rows.len());
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "Expected 1 row, got {}",
+        result.rows.len()
+    );
     assert_eq!(result.columns.len(), 1);
     assert_eq!(result.columns[0], "status");
-    
+
     // Verify the returned value
     let row = &result.rows[0];
     if let Some(Value::String(status)) = row.values.first() {
@@ -83,24 +93,31 @@ fn test_create_and_return_literal() {
 #[test]
 fn test_create_multiple_properties_return() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // CREATE with RETURN multiple properties
     let query = Query {
-        cypher: "CREATE (n:Person {name: 'Charlie', age: 35, city: 'NYC'}) RETURN n.name, n.age, n.city".to_string(),
+        cypher:
+            "CREATE (n:Person {name: 'Charlie', age: 35, city: 'NYC'}) RETURN n.name, n.age, n.city"
+                .to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
-    assert_eq!(result.rows.len(), 1, "Expected 1 row, got {}", result.rows.len());
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "Expected 1 row, got {}",
+        result.rows.len()
+    );
     assert_eq!(result.columns.len(), 3);
-    
+
     // Verify the returned values
     let row = &result.rows[0];
     assert_eq!(row.values[0], Value::String("Charlie".to_string()));
@@ -111,25 +128,30 @@ fn test_create_multiple_properties_return() {
 #[test]
 fn test_create_return_node_object() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // CREATE with RETURN node object
     let query = Query {
         cypher: "CREATE (n:Person {name: 'Eve'}) RETURN n".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
-    assert_eq!(result.rows.len(), 1, "Expected 1 row, got {}", result.rows.len());
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "Expected 1 row, got {}",
+        result.rows.len()
+    );
     assert_eq!(result.columns.len(), 1);
     assert_eq!(result.columns[0], "n");
-    
+
     // Verify the returned value is an object
     let row = &result.rows[0];
     match row.values.first() {
@@ -143,25 +165,30 @@ fn test_create_return_node_object() {
 #[test]
 fn test_create_return_id_function() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // CREATE with RETURN id() function
     let query = Query {
         cypher: "CREATE (n:Person {name: 'Frank'}) RETURN id(n) AS node_id".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
-    assert_eq!(result.rows.len(), 1, "Expected 1 row, got {}", result.rows.len());
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "Expected 1 row, got {}",
+        result.rows.len()
+    );
     assert_eq!(result.columns.len(), 1);
     assert_eq!(result.columns[0], "node_id");
-    
+
     // Verify the returned value is a number (ID)
     let row = &result.rows[0];
     match row.values.first() {
@@ -175,24 +202,30 @@ fn test_create_return_id_function() {
 #[test]
 fn test_create_multiple_nodes_with_return() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // CREATE multiple nodes with RETURN
     let query = Query {
-        cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) RETURN a.name, b.name".to_string(),
+        cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) RETURN a.name, b.name"
+            .to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
-    assert_eq!(result.rows.len(), 1, "Expected 1 row, got {}", result.rows.len());
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "Expected 1 row, got {}",
+        result.rows.len()
+    );
     assert_eq!(result.columns.len(), 2);
-    
+
     // Verify the returned values
     let row = &result.rows[0];
     assert_eq!(row.values[0], Value::String("Alice".to_string()));
@@ -202,25 +235,31 @@ fn test_create_multiple_nodes_with_return() {
 #[test]
 fn test_create_arithmetic_expression_in_return() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // CREATE with arithmetic expression in RETURN
     let query = Query {
-        cypher: "CREATE (n:Person {name: 'Grace', age: 28}) RETURN n.age * 2 AS double_age".to_string(),
+        cypher: "CREATE (n:Person {name: 'Grace', age: 28}) RETURN n.age * 2 AS double_age"
+            .to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
-    assert_eq!(result.rows.len(), 1, "Expected 1 row, got {}", result.rows.len());
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "Expected 1 row, got {}",
+        result.rows.len()
+    );
     assert_eq!(result.columns.len(), 1);
     assert_eq!(result.columns[0], "double_age");
-    
+
     // Verify the returned value
     let row = &result.rows[0];
     match &row.values[0] {

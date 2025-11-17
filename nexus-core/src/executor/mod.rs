@@ -83,8 +83,8 @@ pub enum Operator {
     },
     /// Expand relationships
     Expand {
-        /// Type ID (None = all types)
-        type_id: Option<u32>,
+        /// Type IDs (empty = all types, multiple types are OR'd together)
+        type_ids: Vec<u32>,
         /// Direction (Outgoing, Incoming, Both)
         direction: Direction,
         /// Source variable
@@ -571,7 +571,7 @@ impl Executor {
                     self.execute_filter(&mut context, predicate)?;
                 }
                 Operator::Expand {
-                    type_id,
+                    type_ids,
                     direction,
                     source_var,
                     target_var,
@@ -579,7 +579,7 @@ impl Executor {
                 } => {
                     self.execute_expand(
                         &mut context,
-                        *type_id,
+                        type_ids,
                         *direction,
                         source_var,
                         target_var,
@@ -1366,7 +1366,7 @@ impl Executor {
     fn execute_expand(
         &self,
         context: &mut ExecutionContext,
-        type_id: Option<u32>,
+        type_ids: &[u32],
         direction: Direction,
         source_var: &str,
         target_var: &str,
@@ -1391,7 +1391,9 @@ impl Executor {
                         continue;
                     }
 
-                    let matches_type = type_id.is_none() || Some(rel_record.type_id) == type_id;
+                    // Copy type_id to local variable (rel_record is packed struct)
+                    let record_type_id = rel_record.type_id;
+                    let matches_type = type_ids.is_empty() || type_ids.contains(&record_type_id);
                     if !matches_type {
                         continue;
                     }
@@ -1467,7 +1469,7 @@ impl Executor {
                     None => continue,
                 };
 
-                let relationships = self.find_relationships(source_id, type_id, direction)?;
+                let relationships = self.find_relationships(source_id, type_ids, direction)?;
                 if relationships.is_empty() {
                     continue;
                 }
@@ -2627,8 +2629,8 @@ impl Executor {
                         Value::Array(Vec::new())
                     }
                     Aggregation::Sum { .. } => {
-                        // SUM on empty set returns 0 (not NULL)
-                        Value::Number(serde_json::Number::from(0))
+                        // SUM on empty set returns NULL (Neo4j behavior)
+                        Value::Null
                     }
                     _ => {
                         // AVG/MIN/MAX on empty set return NULL
@@ -3201,14 +3203,14 @@ impl Executor {
                 self.execute_filter(context, predicate)?;
             }
             Operator::Expand {
-                type_id,
+                type_ids,
                 direction,
                 source_var,
                 target_var,
                 rel_var,
             } => {
                 self.execute_expand(
-                    context, *type_id, *direction, source_var, target_var, rel_var,
+                    context, type_ids, *direction, source_var, target_var, rel_var,
                 )?;
             }
             Operator::Project { items } => {
@@ -3850,6 +3852,63 @@ impl Executor {
                     _ => Ok(Value::Null), // Base is not an array
                 }
             }
+            parser::Expression::ArraySlice { base, start, end } => {
+                // Evaluate the base expression (should return an array)
+                let base_value = self.evaluate_expression(node, base, context)?;
+
+                match base_value {
+                    Value::Array(arr) => {
+                        let array_len = arr.len() as i64;
+
+                        // Evaluate start index (default to 0)
+                        let start_idx = if let Some(start_expr) = start {
+                            let start_val = self.evaluate_expression(node, start_expr, context)?;
+                            match start_val {
+                                Value::Number(n) => {
+                                    let idx = n.as_i64().unwrap_or(0);
+                                    // Handle negative indices
+                                    if idx < 0 {
+                                        ((array_len + idx).max(0)) as usize
+                                    } else {
+                                        idx.min(array_len) as usize
+                                    }
+                                }
+                                _ => 0,
+                            }
+                        } else {
+                            0
+                        };
+
+                        // Evaluate end index (default to array length)
+                        let end_idx = if let Some(end_expr) = end {
+                            let end_val = self.evaluate_expression(node, end_expr, context)?;
+                            match end_val {
+                                Value::Number(n) => {
+                                    let idx = n.as_i64().unwrap_or(array_len);
+                                    // Handle negative indices
+                                    if idx < 0 {
+                                        ((array_len + idx).max(0)) as usize
+                                    } else {
+                                        idx.min(array_len) as usize
+                                    }
+                                }
+                                _ => arr.len(),
+                            }
+                        } else {
+                            arr.len()
+                        };
+
+                        // Return slice (empty if start >= end)
+                        if start_idx <= end_idx && start_idx < arr.len() {
+                            let slice = arr[start_idx..end_idx.min(arr.len())].to_vec();
+                            Ok(Value::Array(slice))
+                        } else {
+                            Ok(Value::Array(Vec::new()))
+                        }
+                    }
+                    _ => Ok(Value::Null), // Base is not an array
+                }
+            }
             parser::Expression::Literal(literal) => match literal {
                 parser::Literal::String(s) => Ok(Value::String(s.clone())),
                 parser::Literal::Integer(i) => Ok(Value::Number((*i).into())),
@@ -4007,7 +4066,7 @@ impl Executor {
     fn find_relationships(
         &self,
         node_id: u64,
-        type_id: Option<u32>,
+        type_ids: &[u32],
         direction: Direction,
     ) -> Result<Vec<RelationshipInfo>> {
         let mut relationships = Vec::new();
@@ -4058,7 +4117,9 @@ impl Executor {
                         continue;
                     }
 
-                    let matches_type = type_id.is_none() || Some(rel_record.type_id) == type_id;
+                    // Copy type_id to local variable (rel_record is packed struct)
+                    let record_type_id = rel_record.type_id;
+                    let matches_type = type_ids.is_empty() || type_ids.contains(&record_type_id);
                     let matches_direction = match direction {
                         Direction::Outgoing => src_id == node_id,
                         Direction::Incoming => dst_id == node_id,
@@ -4201,8 +4262,10 @@ impl Executor {
 
                 // Continue expanding if we haven't reached max length
                 if path_length < max_length {
-                    // Find neighbors
-                    let neighbors = self.find_relationships(current_node, type_id, direction)?;
+                    // Find neighbors (convert Option<u32> to slice)
+                    let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
+                    let neighbors =
+                        self.find_relationships(current_node, &type_ids_slice, direction)?;
 
                     for rel_info in neighbors {
                         let next_node = match direction {
@@ -4301,8 +4364,9 @@ impl Executor {
                 }));
             }
 
-            // Find neighbors
-            let neighbors = self.find_relationships(current, type_id, direction)?;
+            // Find neighbors (convert Option<u32> to slice)
+            let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
+            let neighbors = self.find_relationships(current, &type_ids_slice, direction)?;
             for rel_info in neighbors {
                 let next_node = match direction {
                     Direction::Outgoing => rel_info.target_id,
@@ -4355,7 +4419,8 @@ impl Executor {
                 break; // Found target
             }
 
-            let neighbors = self.find_relationships(current, type_id, direction)?;
+            let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
+            let neighbors = self.find_relationships(current, &type_ids_slice, direction)?;
             for rel_info in neighbors {
                 let next_node = match direction {
                     Direction::Outgoing => rel_info.target_id,
@@ -4419,7 +4484,8 @@ impl Executor {
             for i in 0..current_path.len() - 1 {
                 let from = current_path[i];
                 let to = current_path[i + 1];
-                let neighbors = self.find_relationships(from, type_id, direction)?;
+                let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
+                let neighbors = self.find_relationships(from, &type_ids_slice, direction)?;
                 if let Some(rel_info) = neighbors.iter().find(|r| match direction {
                     Direction::Outgoing => r.target_id == to,
                     Direction::Incoming => r.source_id == to,
@@ -4446,7 +4512,8 @@ impl Executor {
             }
         }
 
-        let neighbors = self.find_relationships(current, type_id, direction)?;
+        let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
+        let neighbors = self.find_relationships(current, &type_ids_slice, direction)?;
         for rel_info in neighbors {
             let next_node = match direction {
                 Direction::Outgoing => rel_info.target_id,
@@ -5348,6 +5415,18 @@ impl Executor {
                 self.can_evaluate_without_variables(base)
                     && self.can_evaluate_without_variables(index)
             }
+            parser::Expression::ArraySlice { base, start, end } => {
+                // Can evaluate if base and both indices can be evaluated without variables
+                self.can_evaluate_without_variables(base)
+                    && start
+                        .as_ref()
+                        .map(|s| self.can_evaluate_without_variables(s))
+                        .unwrap_or(true)
+                    && end
+                        .as_ref()
+                        .map(|e| self.can_evaluate_without_variables(e))
+                        .unwrap_or(true)
+            }
             parser::Expression::BinaryOp { left, right, .. } => {
                 // Can evaluate if both operands can be evaluated
                 self.can_evaluate_without_variables(left)
@@ -5449,6 +5528,65 @@ impl Executor {
 
                         // Return element or null if out of bounds
                         Ok(arr.get(actual_idx).cloned().unwrap_or(Value::Null))
+                    }
+                    _ => Ok(Value::Null), // Base is not an array
+                }
+            }
+            parser::Expression::ArraySlice { base, start, end } => {
+                // Evaluate the base expression (should return an array)
+                let base_value = self.evaluate_projection_expression(row, context, base)?;
+
+                match base_value {
+                    Value::Array(arr) => {
+                        let array_len = arr.len() as i64;
+
+                        // Evaluate start index (default to 0)
+                        let start_idx = if let Some(start_expr) = start {
+                            let start_val =
+                                self.evaluate_projection_expression(row, context, start_expr)?;
+                            match start_val {
+                                Value::Number(n) => {
+                                    let idx = n.as_i64().unwrap_or(0);
+                                    // Handle negative indices
+                                    if idx < 0 {
+                                        ((array_len + idx).max(0)) as usize
+                                    } else {
+                                        idx.min(array_len) as usize
+                                    }
+                                }
+                                _ => 0,
+                            }
+                        } else {
+                            0
+                        };
+
+                        // Evaluate end index (default to array length)
+                        let end_idx = if let Some(end_expr) = end {
+                            let end_val =
+                                self.evaluate_projection_expression(row, context, end_expr)?;
+                            match end_val {
+                                Value::Number(n) => {
+                                    let idx = n.as_i64().unwrap_or(array_len);
+                                    // Handle negative indices
+                                    if idx < 0 {
+                                        ((array_len + idx).max(0)) as usize
+                                    } else {
+                                        idx.min(array_len) as usize
+                                    }
+                                }
+                                _ => arr.len(),
+                            }
+                        } else {
+                            arr.len()
+                        };
+
+                        // Return slice (empty if start >= end)
+                        if start_idx <= end_idx && start_idx < arr.len() {
+                            let slice = arr[start_idx..end_idx.min(arr.len())].to_vec();
+                            Ok(Value::Array(slice))
+                        } else {
+                            Ok(Value::Array(Vec::new()))
+                        }
                     }
                     _ => Ok(Value::Null), // Base is not an array
                 }
@@ -5611,21 +5749,31 @@ impl Executor {
                             if let (Value::String(s), Value::Number(start_num)) =
                                 (string_val, start_val)
                             {
-                                let start = start_num.as_i64().unwrap_or(0).max(0) as usize;
+                                let char_len = s.chars().count() as i64;
+                                let start_i64 = start_num.as_i64().unwrap_or(0);
+
+                                // Handle negative indices (count from end)
+                                let start = if start_i64 < 0 {
+                                    ((char_len + start_i64).max(0)) as usize
+                                } else {
+                                    start_i64.min(char_len) as usize
+                                };
 
                                 if args.len() >= 3 {
                                     let length_val = self
                                         .evaluate_projection_expression(row, context, &args[2])?;
                                     if let Value::Number(len_num) = length_val {
                                         let length = len_num.as_i64().unwrap_or(0).max(0) as usize;
-                                        let end = (start + length).min(s.len());
+                                        let chars: Vec<char> = s.chars().collect();
+                                        let end = (start + length).min(chars.len());
                                         return Ok(Value::String(
-                                            s.chars().skip(start).take(end - start).collect(),
+                                            chars[start..end].iter().collect(),
                                         ));
                                     }
                                 } else {
                                     // No length specified - take from start to end
-                                    return Ok(Value::String(s.chars().skip(start).collect()));
+                                    let chars: Vec<char> = s.chars().collect();
+                                    return Ok(Value::String(chars[start..].iter().collect()));
                                 }
                             }
                         }

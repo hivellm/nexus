@@ -1297,24 +1297,28 @@ pub async fn execute_cypher(
                 }
             }) {
                 tracing::info!("Processing RETURN clause for CREATE/MERGE");
-                
+
                 // Build result from variable_context and RETURN projection
                 let mut columns = Vec::new();
                 let mut row_values = Vec::new();
-                
+
                 for item in &return_clause.items {
                     columns.push(item.alias.clone().unwrap_or_else(|| "result".to_string()));
-                    
+
                     // Evaluate the expression using the variable context
                     let value = match &item.expression {
-                        nexus_core::executor::parser::Expression::PropertyAccess { variable, property } => {
+                        nexus_core::executor::parser::Expression::PropertyAccess {
+                            variable,
+                            property,
+                        } => {
                             if let Some(node_ids) = variable_context.get(variable) {
                                 if let Some(node_id) = node_ids.first() {
                                     // Load node properties
                                     match engine.storage.load_node_properties(*node_id) {
-                                        Ok(Some(props)) => {
-                                            props.get(property).cloned().unwrap_or(serde_json::Value::Null)
-                                        }
+                                        Ok(Some(props)) => props
+                                            .get(property)
+                                            .cloned()
+                                            .unwrap_or(serde_json::Value::Null),
                                         _ => serde_json::Value::Null,
                                     }
                                 } else {
@@ -1324,26 +1328,30 @@ pub async fn execute_cypher(
                                 serde_json::Value::Null
                             }
                         }
-                        nexus_core::executor::parser::Expression::Literal(lit) => {
-                            match lit {
-                                nexus_core::executor::parser::Literal::String(s) => serde_json::Value::String(s.clone()),
-                                nexus_core::executor::parser::Literal::Integer(i) => serde_json::Value::Number((*i).into()),
-                                nexus_core::executor::parser::Literal::Float(f) => {
-                                    serde_json::Number::from_f64(*f)
-                                        .map(serde_json::Value::Number)
-                                        .unwrap_or(serde_json::Value::Null)
-                                }
-                                nexus_core::executor::parser::Literal::Boolean(b) => serde_json::Value::Bool(*b),
-                                nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
-                                nexus_core::executor::parser::Literal::Point(p) => p.to_json_value(),
+                        nexus_core::executor::parser::Expression::Literal(lit) => match lit {
+                            nexus_core::executor::parser::Literal::String(s) => {
+                                serde_json::Value::String(s.clone())
                             }
-                        }
+                            nexus_core::executor::parser::Literal::Integer(i) => {
+                                serde_json::Value::Number((*i).into())
+                            }
+                            nexus_core::executor::parser::Literal::Float(f) => {
+                                serde_json::Number::from_f64(*f)
+                                    .map(serde_json::Value::Number)
+                                    .unwrap_or(serde_json::Value::Null)
+                            }
+                            nexus_core::executor::parser::Literal::Boolean(b) => {
+                                serde_json::Value::Bool(*b)
+                            }
+                            nexus_core::executor::parser::Literal::Null => serde_json::Value::Null,
+                            nexus_core::executor::parser::Literal::Point(p) => p.to_json_value(),
+                        },
                         _ => serde_json::Value::Null,
                     };
-                    
+
                     row_values.push(value);
                 }
-                
+
                 return Json(CypherResponse {
                     columns,
                     rows: vec![serde_json::Value::Array(row_values)],

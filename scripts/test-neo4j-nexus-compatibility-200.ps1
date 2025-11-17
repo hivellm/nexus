@@ -217,8 +217,8 @@ Run-Test -Name "1.12 RETURN multiplication" -Query "RETURN 3 * 4 AS product"
 Run-Test -Name "1.13 RETURN division" -Query "RETURN 20 / 4 AS quotient"
 Run-Test -Name "1.14 RETURN modulo" -Query "RETURN 17 % 5 AS remainder"
 Run-Test -Name "1.15 RETURN string concatenation" -Query "RETURN 'Hello' + ' ' + 'World' AS text"
-Run-Test -Name "1.16 RETURN comparison true" -Query "RETURN 5 > 3 AS result"
-Run-Test -Name "1.17 RETURN comparison false" -Query "RETURN 2 > 10 AS result"
+Run-Test -Name "1.16 RETURN comparison true" -Query 'RETURN 5 > 3 AS result'
+Run-Test -Name "1.17 RETURN comparison false" -Query 'RETURN 2 > 10 AS result'
 Run-Test -Name "1.18 RETURN equality" -Query "RETURN 'test' = 'test' AS result"
 Run-Test -Name "1.19 RETURN logical AND" -Query "RETURN true AND false AS result"
 Run-Test -Name "1.20 RETURN logical OR" -Query "RETURN true OR false AS result"
@@ -235,12 +235,12 @@ Run-Test -Name "2.02 MATCH all Company nodes" -Query "MATCH (n:Company) RETURN c
 Run-Test -Name "2.03 MATCH all nodes" -Query "MATCH (n) RETURN count(n) AS cnt"
 Run-Test -Name "2.04 MATCH Person with property" -Query "MATCH (n:Person {name: 'Alice'}) RETURN n.name AS name"
 Run-Test -Name "2.05 MATCH and return multiple properties" -Query "MATCH (n:Person {name: 'Alice'}) RETURN n.name AS name, n.age AS age"
-Run-Test -Name "2.06 MATCH with WHERE clause" -Query "MATCH (n:Person) WHERE n.age > 30 RETURN count(n) AS cnt"
+Run-Test -Name "2.06 MATCH with WHERE clause" -Query 'MATCH (n:Person) WHERE n.age > 30 RETURN count(n) AS cnt'
 Run-Test -Name "2.07 MATCH with WHERE equality" -Query "MATCH (n:Person) WHERE n.name = 'Bob' RETURN n.name"
-Run-Test -Name "2.08 MATCH with WHERE inequality" -Query "MATCH (n:Person) WHERE n.name <> 'Alice' RETURN count(n) AS cnt"
-Run-Test -Name "2.09 MATCH with WHERE AND" -Query "MATCH (n:Person) WHERE n.age > 25 AND n.age < 35 RETURN count(n) AS cnt"
+Run-Test -Name "2.08 MATCH with WHERE inequality" -Query 'MATCH (n:Person) WHERE n.name <> ''Alice'' RETURN count(n) AS cnt'
+Run-Test -Name "2.09 MATCH with WHERE AND" -Query 'MATCH (n:Person) WHERE n.age > 25 AND n.age < 35 RETURN count(n) AS cnt'
 Run-Test -Name "2.10 MATCH with WHERE OR" -Query "MATCH (n:Person) WHERE n.name = 'Alice' OR n.name = 'Bob' RETURN count(n) AS cnt"
-Run-Test -Name "2.11 MATCH with WHERE NOT" -Query "MATCH (n:Person) WHERE NOT n.age > 35 RETURN count(n) AS cnt"
+Run-Test -Name "2.11 MATCH with WHERE NOT" -Query 'MATCH (n:Person) WHERE NOT n.age > 35 RETURN count(n) AS cnt'
 Run-Test -Name "2.12 MATCH with WHERE IN" -Query "MATCH (n:Person) WHERE n.name IN ['Alice', 'Bob'] RETURN count(n) AS cnt"
 Run-Test -Name "2.13 MATCH with WHERE empty IN" -Query "MATCH (n:Person) WHERE n.name IN [] RETURN count(n) AS cnt"
 Run-Test -Name "2.14 MATCH with WHERE IS NULL" -Query "MATCH (n:Person) WHERE n.city IS NULL RETURN count(n) AS cnt"
@@ -265,7 +265,7 @@ Write-Host "└─────────────────────�
 
 Run-Test -Name "3.01 COUNT all nodes" -Query "MATCH (n) RETURN count(n) AS cnt"
 Run-Test -Name "3.02 COUNT Person nodes" -Query "MATCH (n:Person) RETURN count(n) AS cnt"
-Run-Test -Name "3.03 COUNT with WHERE" -Query "MATCH (n:Person) WHERE n.age > 30 RETURN count(n) AS cnt"
+Run-Test -Name "3.03 COUNT with WHERE" -Query 'MATCH (n:Person) WHERE n.age > 30 RETURN count(n) AS cnt'
 Run-Test -Name "3.04 COUNT(*)" -Query "MATCH (n:Person) RETURN count(*) AS cnt"
 Run-Test -Name "3.05 COUNT DISTINCT" -Query "MATCH (n:Person) RETURN count(DISTINCT n.city) AS cnt"
 Run-Test -Name "3.06 SUM ages" -Query "MATCH (n:Person) RETURN sum(n.age) AS total"
@@ -315,7 +315,7 @@ Run-Test -Name "4.16 WHERE with string function" -Query "MATCH (n:Person) WHERE 
 Run-Test -Name "4.17 WHERE STARTS WITH" -Query "MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN count(n) AS cnt"
 Run-Test -Name "4.18 WHERE ENDS WITH" -Query "MATCH (n:Person) WHERE n.name ENDS WITH 'e' RETURN count(n) AS cnt"
 Run-Test -Name "4.19 WHERE CONTAINS" -Query "MATCH (n:Person) WHERE n.name CONTAINS 'li' RETURN count(n) AS cnt"
-Run-Test -Name "4.20 String comparison" -Query "RETURN 'apple' < 'banana' AS result"
+Run-Test -Name "4.20 String comparison" -Query 'RETURN ''apple'' < ''banana'' AS result'
 
 #═══════════════════════════════════════════════════════════════════
 # SECTION 5: LIST/ARRAY OPERATIONS (20 tests)
@@ -369,7 +369,7 @@ Run-Test -Name "6.14 Expression with parentheses" -Query "RETURN (2 + 3) * 4 AS 
 Run-Test -Name "6.15 Complex expression" -Query "RETURN (10 + 5) * 2 - 8 / 4 AS result"
 Run-Test -Name "6.16 Float division" -Query "RETURN 10.0 / 4.0 AS result"
 Run-Test -Name "6.17 Negative numbers" -Query "RETURN -5 + 3 AS result"
-Run-Test -Name "6.18 Math with WHERE" -Query "MATCH (n:Person) WHERE n.age * 2 > 50 RETURN count(n) AS cnt"
+Run-Test -Name "6.18 Math with WHERE" -Query 'MATCH (n:Person) WHERE n.age * 2 > 50 RETURN count(n) AS cnt'
 Run-Test -Name "6.19 Math in RETURN" -Query "MATCH (n:Person) RETURN n.age * 2 AS double_age LIMIT 1"
 Run-Test -Name "6.20 Math aggregation" -Query "MATCH (n:Person) RETURN sum(n.age) / count(n) AS avg_age"
 
@@ -397,7 +397,7 @@ Run-Test -Name "7.04 MATCH bidirectional" -Query "MATCH (a)-[r]-(b) RETURN count
 Run-Test -Name "7.05 Return relationship type" -Query "MATCH ()-[r]->() RETURN type(r) AS rel_type LIMIT 1"
 Run-Test -Name "7.06 Return relationship property" -Query "MATCH ()-[r:WORKS_AT]->() RETURN r.since AS year LIMIT 1"
 Run-Test -Name "7.07 Count relationships by type" -Query "MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS cnt ORDER BY t"
-Run-Test -Name "7.08 WHERE on relationship property" -Query "MATCH ()-[r:WORKS_AT]->() WHERE r.since > 2020 RETURN count(r) AS cnt"
+Run-Test -Name "7.08 WHERE on relationship property" -Query 'MATCH ()-[r:WORKS_AT]->() WHERE r.since > 2020 RETURN count(r) AS cnt'
 Run-Test -Name "7.09 MATCH with node labels" -Query "MATCH (a:Person)-[r]->(b:Company) RETURN count(r) AS cnt"
 Run-Test -Name "7.10 MATCH with node properties" -Query "MATCH (a:Person {name: 'Alice'})-[r]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.11 Return source node" -Query "MATCH (a)-[r:KNOWS]->(b) RETURN a.name AS source"
@@ -451,16 +451,16 @@ Write-Host "`n┌─────────────────────
 Write-Host "│ Section 9: CASE Expressions (10 tests)             │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
 
-Run-Test -Name "9.01 Simple CASE" -Query "RETURN CASE WHEN 5 > 3 THEN 'yes' ELSE 'no' END AS result"
-Run-Test -Name "9.02 CASE with multiple WHEN" -Query "RETURN CASE WHEN 1 > 2 THEN 'a' WHEN 2 > 1 THEN 'b' ELSE 'c' END AS result"
+Run-Test -Name "9.01 Simple CASE" -Query 'RETURN CASE WHEN 5 > 3 THEN ''yes'' ELSE ''no'' END AS result'
+Run-Test -Name "9.02 CASE with multiple WHEN" -Query 'RETURN CASE WHEN 1 > 2 THEN ''a'' WHEN 2 > 1 THEN ''b'' ELSE ''c'' END AS result'
 Run-Test -Name "9.03 CASE without ELSE" -Query "RETURN CASE WHEN false THEN 'yes' END AS result"
-Run-Test -Name "9.04 CASE with property" -Query "MATCH (n:Person) RETURN CASE WHEN n.age > 30 THEN 'old' ELSE 'young' END AS category LIMIT 1"
+Run-Test -Name "9.04 CASE with property" -Query 'MATCH (n:Person) RETURN CASE WHEN n.age > 30 THEN ''old'' ELSE ''young'' END AS category LIMIT 1'
 Run-Test -Name "9.05 CASE with NULL" -Query "RETURN CASE WHEN null THEN 'yes' ELSE 'no' END AS result"
 Run-Test -Name "9.06 CASE with arithmetic" -Query "RETURN CASE WHEN 10 / 2 = 5 THEN 'correct' ELSE 'wrong' END AS result"
 Run-Test -Name "9.07 CASE with string" -Query "RETURN CASE WHEN 'a' = 'a' THEN 'match' ELSE 'nomatch' END AS result"
 Run-Test -Name "9.08 Nested CASE" -Query "RETURN CASE WHEN true THEN CASE WHEN true THEN 'nested' END END AS result"
-Run-Test -Name "9.09 CASE in aggregation" -Query "MATCH (n:Person) RETURN count(CASE WHEN n.age > 30 THEN 1 END) AS cnt"
-Run-Test -Name "9.10 CASE with ORDER BY" -Query "MATCH (n:Person) RETURN n.name, CASE WHEN n.age > 30 THEN 1 ELSE 0 END AS flag ORDER BY flag, n.name LIMIT 3"
+Run-Test -Name "9.09 CASE in aggregation" -Query 'MATCH (n:Person) RETURN count(CASE WHEN n.age > 30 THEN 1 END) AS cnt'
+Run-Test -Name "9.10 CASE with ORDER BY" -Query 'MATCH (n:Person) RETURN n.name, CASE WHEN n.age > 30 THEN 1 ELSE 0 END AS flag ORDER BY flag, n.name LIMIT 3'
 
 #═══════════════════════════════════════════════════════════════════
 # SECTION 10: UNION QUERIES (10 tests)
@@ -473,7 +473,7 @@ Run-Test -Name "10.01 UNION two queries" -Query "MATCH (n:Person) RETURN n.name 
 Run-Test -Name "10.02 UNION ALL" -Query "MATCH (n:Person) RETURN n.name AS name UNION ALL MATCH (n:Company) RETURN n.name AS name"
 Run-Test -Name "10.03 UNION with literals" -Query "RETURN 1 AS num UNION RETURN 2 AS num"
 Run-Test -Name "10.04 UNION ALL with duplicates" -Query "RETURN 1 AS num UNION ALL RETURN 1 AS num"
-Run-Test -Name "10.05 UNION with WHERE" -Query "MATCH (n:Person) WHERE n.age > 30 RETURN n.name AS name UNION MATCH (n:Company) RETURN n.name AS name"
+Run-Test -Name "10.05 UNION with WHERE" -Query 'MATCH (n:Person) WHERE n.age > 30 RETURN n.name AS name UNION MATCH (n:Company) RETURN n.name AS name'
 Run-Test -Name "10.06 UNION with COUNT" -Query "MATCH (n:Person) RETURN count(n) AS cnt UNION MATCH (n:Company) RETURN count(n) AS cnt"
 Run-Test -Name "10.07 UNION three queries" -Query "RETURN 'a' AS val UNION RETURN 'b' AS val UNION RETURN 'c' AS val"
 Run-Test -Name "10.08 UNION empty results" -Query "MATCH (n:NonExistent) RETURN n.name AS name UNION MATCH (n:Person) RETURN n.name AS name"
@@ -542,4 +542,5 @@ if ($passRate -ge 95) {
     Write-Host "❌ NEEDS WORK - Nexus needs significant improvements for Neo4j compatibility." -ForegroundColor Red
 }
 Write-Host ""
+
 

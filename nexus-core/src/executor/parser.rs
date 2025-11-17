@@ -714,6 +714,15 @@ pub enum Expression {
         /// Index expression
         index: Box<Expression>,
     },
+    /// Array slice access (expression[start..end])
+    ArraySlice {
+        /// Base expression (array or property)
+        base: Box<Expression>,
+        /// Start index (inclusive, optional)
+        start: Option<Box<Expression>>,
+        /// End index (exclusive, optional)
+        end: Option<Box<Expression>>,
+    },
     /// Function call
     FunctionCall {
         /// Function name
@@ -1728,10 +1737,21 @@ impl CypherParser {
     fn parse_types(&mut self) -> Result<Vec<String>> {
         let mut types = Vec::new();
 
-        while self.peek_char() == Some(':') {
+        // First type must be preceded by ':'
+        if self.peek_char() == Some(':') {
             self.consume_char(); // consume ':'
             let r#type = self.parse_identifier()?;
             types.push(r#type);
+
+            // Additional types can be separated by '|' (e.g., :TYPE1|TYPE2)
+            self.skip_whitespace();
+            while self.peek_char() == Some('|') {
+                self.consume_char(); // consume '|'
+                self.skip_whitespace();
+                let r#type = self.parse_identifier()?;
+                types.push(r#type);
+                self.skip_whitespace();
+            }
         }
 
         Ok(types)
@@ -3856,13 +3876,52 @@ impl CypherParser {
             while self.peek_char() == Some('[') {
                 self.consume_char(); // consume '['
                 self.skip_whitespace();
-                let index = self.parse_expression()?;
-                self.skip_whitespace();
-                self.expect_char(']')?;
-                expr = Expression::ArrayIndex {
-                    base: Box::new(expr),
-                    index: Box::new(index),
+
+                // Check for slice syntax [start..end] or [:end] or [start:]
+                let has_start = self.peek_char() != Some('.');
+
+                let start_expr = if has_start && self.peek_char() != Some(':') {
+                    Some(Box::new(self.parse_expression()?))
+                } else {
+                    None
                 };
+
+                self.skip_whitespace();
+
+                // Check for '..' (slice operator)
+                if self.peek_char() == Some('.') && self.peek_char_at(1) == Some('.') {
+                    self.consume_char(); // consume first '.'
+                    self.consume_char(); // consume second '.'
+                    self.skip_whitespace();
+
+                    let end_expr = if self.peek_char() != Some(']') {
+                        Some(Box::new(self.parse_expression()?))
+                    } else {
+                        None
+                    };
+
+                    self.skip_whitespace();
+                    self.expect_char(']')?;
+
+                    expr = Expression::ArraySlice {
+                        base: Box::new(expr),
+                        start: start_expr,
+                        end: end_expr,
+                    };
+                } else {
+                    // Regular array indexing
+                    self.skip_whitespace();
+                    self.expect_char(']')?;
+
+                    if let Some(index) = start_expr {
+                        expr = Expression::ArrayIndex {
+                            base: Box::new(expr),
+                            index,
+                        };
+                    } else {
+                        return Err(self.error("Array index or slice expected"));
+                    }
+                }
             }
 
             Ok(expr)
@@ -4012,17 +4071,56 @@ impl CypherParser {
 
         let mut expr = Expression::List(elements);
 
-        // Check for array indexing after list: ['a', 'b'][0]
+        // Check for array indexing or slicing after list: ['a', 'b'][0] or ['a', 'b'][1..3]
         while self.peek_char() == Some('[') {
             self.consume_char(); // consume '['
             self.skip_whitespace();
-            let index = self.parse_expression()?;
-            self.skip_whitespace();
-            self.expect_char(']')?;
-            expr = Expression::ArrayIndex {
-                base: Box::new(expr),
-                index: Box::new(index),
+
+            // Check for slice syntax [start..end]
+            let has_start = self.peek_char() != Some('.');
+
+            let start_expr = if has_start && self.peek_char() != Some(':') {
+                Some(Box::new(self.parse_expression()?))
+            } else {
+                None
             };
+
+            self.skip_whitespace();
+
+            // Check for '..' (slice operator)
+            if self.peek_char() == Some('.') && self.peek_char_at(1) == Some('.') {
+                self.consume_char(); // consume first '.'
+                self.consume_char(); // consume second '.'
+                self.skip_whitespace();
+
+                let end_expr = if self.peek_char() != Some(']') {
+                    Some(Box::new(self.parse_expression()?))
+                } else {
+                    None
+                };
+
+                self.skip_whitespace();
+                self.expect_char(']')?;
+
+                expr = Expression::ArraySlice {
+                    base: Box::new(expr),
+                    start: start_expr,
+                    end: end_expr,
+                };
+            } else {
+                // Regular array indexing
+                self.skip_whitespace();
+                self.expect_char(']')?;
+
+                if let Some(index) = start_expr {
+                    expr = Expression::ArrayIndex {
+                        base: Box::new(expr),
+                        index,
+                    };
+                } else {
+                    return Err(self.error("Array index or slice expected"));
+                }
+            }
         }
 
         Ok(expr)
@@ -5175,7 +5273,7 @@ mod tests {
     #[test]
     fn test_parse_multiple_relationship_types() {
         let mut parser =
-            CypherParser::new("MATCH (a)-[r:KNOWS:WORKS_WITH]->(b) RETURN a".to_string());
+            CypherParser::new("MATCH (a)-[r:KNOWS|WORKS_WITH]->(b) RETURN a".to_string());
         let query = parser.parse().unwrap();
 
         match &query.clauses[0] {

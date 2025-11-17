@@ -21,17 +21,17 @@ fn create_test_executor() -> (Executor, TempDir) {
 #[test]
 fn test_array_concat_simple() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Simple array concatenation [1, 2] + [3, 4] should return [1, 2, 3, 4]
     let query = Query {
         cypher: "RETURN [1, 2] + [3, 4] AS result".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.columns[0], "result");
-    
+
     let row = &result.rows[0];
     match &row.values[0] {
         Value::Array(arr) => {
@@ -48,16 +48,16 @@ fn test_array_concat_simple() {
 #[test]
 fn test_array_concat_empty() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Concatenate with empty arrays
     let query = Query {
         cypher: "RETURN [1, 2] + [] + [3] AS result".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
-    
+
     let row = &result.rows[0];
     match &row.values[0] {
         Value::Array(arr) => {
@@ -73,16 +73,16 @@ fn test_array_concat_empty() {
 #[test]
 fn test_array_concat_mixed_types() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Concatenate arrays with different types
     let query = Query {
         cypher: "RETURN [1, 2] + ['a', 'b'] AS result".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
-    
+
     let row = &result.rows[0];
     match &row.values[0] {
         Value::Array(arr) => {
@@ -99,30 +99,30 @@ fn test_array_concat_mixed_types() {
 #[test]
 fn test_array_concat_with_property() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Clean database
     let query = Query {
         cypher: "MATCH (n) DETACH DELETE n".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // Create node with array property
     let query = Query {
         cypher: "CREATE (n:Person {name: 'Alice'})".to_string(),
         params: std::collections::HashMap::new(),
     };
     executor.execute(&query).unwrap();
-    
+
     // Concatenate arrays in RETURN
     let query = Query {
         cypher: "MATCH (n:Person) RETURN [1, 2] + [3, 4] AS all_nums".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
-    
+
     let row = &result.rows[0];
     match &row.values[0] {
         Value::Array(arr) => {
@@ -139,16 +139,16 @@ fn test_array_concat_with_property() {
 #[test]
 fn test_array_concat_nested() {
     let (mut executor, _dir) = create_test_executor();
-    
+
     // Concatenate nested arrays (should concatenate at top level)
     let query = Query {
         cypher: "RETURN [[1, 2]] + [[3, 4]] AS result".to_string(),
         params: std::collections::HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
-    
+
     assert_eq!(result.rows.len(), 1);
-    
+
     let row = &result.rows[0];
     match &row.values[0] {
         Value::Array(arr) => {
@@ -175,4 +175,3 @@ fn test_array_concat_nested() {
         other => panic!("Expected array, got: {:?}", other),
     }
 }
-
