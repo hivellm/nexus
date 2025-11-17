@@ -188,7 +188,10 @@ impl Engine {
 
         // Initialize multi-layer cache system
         let cache_config = cache::CacheConfig::default();
-        let cache = cache::MultiLayerCache::new(cache_config)?;
+        let mut cache = cache::MultiLayerCache::new(cache_config)?;
+
+        // Warm up the cache system before creating the engine
+        cache.warm_cache(&catalog, &storage, &indexes)?;
 
         // Engine shares the same TransactionManager Arc with SessionManager
         let mut engine = Engine {

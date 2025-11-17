@@ -25,18 +25,20 @@
 //! - **Page Cache**: Enhanced page cache with LRU eviction and prefetching
 //! - **Unified API**: Single interface for cache operations across layers
 
+use crate::Result;
 use crate::executor::ResultSet;
 use crate::page_cache::{Page, PageCache};
-use crate::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub mod index_cache;
 pub mod object_cache;
 pub mod query_cache;
 
-pub use object_cache::{ObjectCache, ObjectKey, CachedObject};
-pub use query_cache::{QueryCache, QueryKey, CachedQueryResult};
+pub use index_cache::{CachedIndexPage, IndexCache, IndexKey};
+pub use object_cache::{CachedObject, ObjectCache, ObjectKey};
+pub use query_cache::{CachedQueryResult, QueryCache, QueryKey};
 
 /// Statistics for the object cache
 #[derive(Debug, Clone, Default)]
@@ -93,7 +95,7 @@ pub struct CacheStats {
 impl CacheStats {
     /// Record a cache operation
     pub fn record_operation(&mut self, layer: CacheLayer, operation: CacheOperation) {
-        let layer_ops = self.operations.entry(layer).or_insert_with(HashMap::new);
+        let layer_ops = self.operations.entry(layer).or_default();
         *layer_ops.entry(operation).or_insert(0) += 1;
     }
 
@@ -112,16 +114,18 @@ impl CacheStats {
         if let Some(ops) = self.operations.get(&layer) {
             let hits = ops.get(&CacheOperation::Hit).copied().unwrap_or(0);
             let total = hits + ops.get(&CacheOperation::Miss).copied().unwrap_or(0);
-            let hit_rate = if total > 0 { hits as f64 / total as f64 } else { 0.0 };
+            let hit_rate = if total > 0 {
+                hits as f64 / total as f64
+            } else {
+                0.0
+            };
             self.hit_rates.insert(layer, hit_rate);
         }
     }
 
     /// Get total operations across all layers
     pub fn total_operations(&self) -> u64 {
-        self.operations.values()
-            .flat_map(|ops| ops.values())
-            .sum()
+        self.operations.values().flat_map(|ops| ops.values()).sum()
     }
 }
 
@@ -199,9 +203,9 @@ impl Default for CacheConfig {
                 prefetch_distance: 2,
             },
             object_cache: ObjectCacheConfig {
-                max_memory: 50 * 1024 * 1024, // 50MB
+                max_memory: 50 * 1024 * 1024,          // 50MB
                 default_ttl: Duration::from_secs(300), // 5 minutes
-                max_object_size: 1024 * 1024, // 1MB
+                max_object_size: 1024 * 1024,          // 1MB
             },
             query_cache: QueryCacheConfig {
                 max_plans: 1000,
@@ -231,7 +235,7 @@ pub struct MultiLayerCache {
     /// Query cache (execution layer)
     query_cache: QueryCache,
     /// Index cache (lookup acceleration layer)
-    index_cache: HashMap<String, serde_json::Value>, // Placeholder for now
+    index_cache: IndexCache,
     /// Configuration
     config: CacheConfig,
     /// Statistics
@@ -246,12 +250,13 @@ impl MultiLayerCache {
         let page_cache = PageCache::new(config.page_cache.max_pages)?;
         let object_cache = ObjectCache::new(config.object_cache.clone());
         let query_cache = QueryCache::new(config.query_cache.clone());
+        let index_cache = IndexCache::new(config.index_cache.clone());
 
         Ok(Self {
             page_cache,
             object_cache,
             query_cache,
-            index_cache: HashMap::new(),
+            index_cache,
             config,
             stats: CacheStats::default(),
             last_stats_update: Instant::now(),
@@ -260,7 +265,8 @@ impl MultiLayerCache {
 
     /// Get page from cache (with prefetch if enabled)
     pub fn get_page(&mut self, page_id: u64) -> Result<Arc<Page>> {
-        self.stats.record_operation(CacheLayer::Page, CacheOperation::Hit);
+        self.stats
+            .record_operation(CacheLayer::Page, CacheOperation::Hit);
 
         let page = self.page_cache.get_page(page_id)?;
 
@@ -276,11 +282,13 @@ impl MultiLayerCache {
     pub fn get_object(&mut self, key: &ObjectKey) -> Option<serde_json::Value> {
         match self.object_cache.get(key) {
             Some(obj) => {
-                self.stats.record_operation(CacheLayer::Object, CacheOperation::Hit);
+                self.stats
+                    .record_operation(CacheLayer::Object, CacheOperation::Hit);
                 Some(obj.data)
             }
             None => {
-                self.stats.record_operation(CacheLayer::Object, CacheOperation::Miss);
+                self.stats
+                    .record_operation(CacheLayer::Object, CacheOperation::Miss);
                 None
             }
         }
@@ -295,18 +303,25 @@ impl MultiLayerCache {
     pub fn get_query_result(&mut self, query_hash: &str) -> Option<CachedQueryResult> {
         match self.query_cache.get_result(query_hash) {
             Some(result) => {
-                self.stats.record_operation(CacheLayer::Query, CacheOperation::Hit);
+                self.stats
+                    .record_operation(CacheLayer::Query, CacheOperation::Hit);
                 Some(result)
             }
             None => {
-                self.stats.record_operation(CacheLayer::Query, CacheOperation::Miss);
+                self.stats
+                    .record_operation(CacheLayer::Query, CacheOperation::Miss);
                 None
             }
         }
     }
 
     /// Cache query result
-    pub fn put_query_result(&mut self, query_hash: String, result: ResultSet, execution_time: Duration) {
+    pub fn put_query_result(
+        &mut self,
+        query_hash: String,
+        result: ResultSet,
+        execution_time: Duration,
+    ) {
         // Only cache if execution took long enough
         if execution_time >= self.config.query_cache.min_execution_time {
             let cached_result = CachedQueryResult::new(result);
@@ -316,13 +331,31 @@ impl MultiLayerCache {
 
     /// Get cached query plan
     pub fn get_query_plan(&mut self, query_hash: &str) -> Option<serde_json::Value> {
-        // Placeholder - will implement proper plan caching later
-        self.index_cache.get(query_hash).cloned()
+        // For now, retrieve query plans from the index cache
+        // TODO: Implement proper plan caching in QueryCache
+        let hash = query_hash
+            .as_bytes()
+            .iter()
+            .fold(0u64, |acc, &b| acc.wrapping_add(b as u64));
+        self.index_cache
+            .get(&IndexKey::FullText(hash))
+            .map(|page| page.data)
     }
 
     /// Cache query plan
     pub fn put_query_plan(&mut self, query_hash: String, plan: serde_json::Value) {
-        self.index_cache.insert(query_hash, plan);
+        // For now, store query plans in the index cache as a placeholder
+        // TODO: Implement proper query plan caching in QueryCache
+        self.index_cache.put(
+            IndexKey::FullText(
+                query_hash
+                    .as_bytes()
+                    .iter()
+                    .fold(0u64, |acc, &b| acc.wrapping_add(b as u64)),
+            ),
+            plan,
+            index_cache::IndexType::FullText,
+        );
     }
 
     /// Get cache statistics
@@ -333,7 +366,7 @@ impl MultiLayerCache {
 
     /// Clear all caches
     pub fn clear(&mut self) {
-        self.page_cache.clear();
+        let _ = self.page_cache.clear();
         self.object_cache.clear();
         self.query_cache.clear();
         self.index_cache.clear();
@@ -369,29 +402,113 @@ impl MultiLayerCache {
     }
 
     /// Force update of all cache statistics
-    fn update_stats(&mut self) {
+    pub fn update_stats(&mut self) {
         // Update page cache stats
         let page_stats = self.page_cache.stats();
-        self.stats.update_size(CacheLayer::Page, page_stats.cache_size);
-        self.stats.update_memory(CacheLayer::Page, page_stats.cache_size * 8192); // Rough estimate
+        self.stats
+            .update_size(CacheLayer::Page, page_stats.cache_size);
+        self.stats
+            .update_memory(CacheLayer::Page, page_stats.cache_size * 8192); // Rough estimate
 
         // Update object cache stats
         let obj_memory = self.object_cache.memory_usage();
-        self.stats.update_size(CacheLayer::Object, self.object_cache.size());
+        self.stats
+            .update_size(CacheLayer::Object, self.object_cache.size());
         self.stats.update_memory(CacheLayer::Object, obj_memory);
 
         // Update query cache stats
-        self.stats.update_size(CacheLayer::Query, self.query_cache.size());
-        self.stats.update_memory(CacheLayer::Query, self.query_cache.memory_usage());
+        self.stats
+            .update_size(CacheLayer::Query, self.query_cache.size());
+        self.stats
+            .update_memory(CacheLayer::Query, self.query_cache.memory_usage());
 
         // Update index cache stats
-        self.stats.update_size(CacheLayer::Index, self.index_cache.len());
-        self.stats.update_memory(CacheLayer::Index, self.index_cache.len() * 1024); // Rough estimate
+        self.stats
+            .update_size(CacheLayer::Index, self.index_cache.size());
+        self.stats
+            .update_memory(CacheLayer::Index, self.index_cache.memory_usage());
 
         // Calculate hit rates
-        for &layer in &[CacheLayer::Page, CacheLayer::Object, CacheLayer::Query, CacheLayer::Index] {
+        for &layer in &[
+            CacheLayer::Page,
+            CacheLayer::Object,
+            CacheLayer::Query,
+            CacheLayer::Index,
+        ] {
             self.stats.calculate_hit_rate(layer);
         }
+    }
+
+    /// Warm up the cache by preloading frequently accessed data
+    /// This should be called after engine initialization but before serving queries
+    pub fn warm_cache(
+        &mut self,
+        _catalog: &crate::catalog::Catalog,
+        _storage: &crate::storage::RecordStore,
+        _indexes: &crate::index::IndexManager,
+    ) -> Result<()> {
+        if !self.config.global.enable_warming {
+            return Ok(());
+        }
+
+        println!("Warming up multi-layer cache system...");
+
+        // For now, just warm up with basic structures to avoid complex transaction/serialization issues
+        // In a production implementation, this would preload actual data
+
+        // 1. Warm up page cache by preloading first few pages
+        self.warm_page_cache()?;
+
+        // 2. Warm up query cache with common query patterns
+        self.warm_query_cache()?;
+
+        println!("Cache warming completed.");
+        Ok(())
+    }
+
+    /// Warm up page cache by preloading hot pages
+    fn warm_page_cache(&mut self) -> Result<()> {
+        // Preload first N pages which typically contain metadata and frequently accessed data
+        let pages_to_warm = (self.config.page_cache.max_pages / 20).min(50); // Warm up 5% or max 50 pages
+
+        for page_id in 0..pages_to_warm {
+            // Try to load page (ignore errors for non-existent pages)
+            let _ = self.get_page(page_id as u64);
+        }
+
+        Ok(())
+    }
+
+    /// Warm up query cache with common query patterns
+    fn warm_query_cache(&mut self) -> Result<()> {
+        // Pre-compile and cache common query patterns
+        let common_queries = vec![
+            "MATCH (n) RETURN count(n)",
+            "MATCH (n) RETURN n LIMIT 10",
+            "MATCH ()-[r]-() RETURN count(r)",
+        ];
+
+        for query in common_queries {
+            // For now, just store the query hash -> plan mapping
+            // In a real implementation, this would involve actual query planning
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+
+            let mut hasher = DefaultHasher::new();
+            query.hash(&mut hasher);
+            let query_hash = format!("{:x}", hasher.finish());
+
+            let plan = serde_json::json!({
+                "query": query,
+                "estimated_cost": 1.0,
+                "cached_at_startup": true
+            });
+
+            // Use put_query_plan method
+            self.put_query_plan(query_hash, plan);
+        }
+
+        Ok(())
     }
 }
 
@@ -436,7 +553,11 @@ mod tests {
         let query_hash = "SELECT * FROM test";
         let result = ResultSet::default();
 
-        cache.put_query_result(query_hash.to_string(), result.clone(), Duration::from_millis(50));
+        cache.put_query_result(
+            query_hash.to_string(),
+            result.clone(),
+            Duration::from_millis(50),
+        );
         let cached = cache.get_query_result(query_hash);
         assert!(cached.is_some());
     }
@@ -455,6 +576,9 @@ mod tests {
         cache.put_object(obj_key.clone(), obj_data);
         let _ = cache.get_object(&obj_key); // Hit
         let _ = cache.get_object(&ObjectKey::Node(2)); // Miss
+
+        // Force stats update
+        cache.update_stats();
 
         // Check stats
         let stats = cache.stats();

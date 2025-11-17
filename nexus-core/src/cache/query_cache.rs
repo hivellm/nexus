@@ -86,11 +86,17 @@ impl CachedQueryResult {
             serde_json::Value::Number(n) => n.to_string().len(),
             serde_json::Value::String(s) => s.len(),
             serde_json::Value::Array(arr) => {
-                8 + arr.iter().map(|v| Self::estimate_json_size(v)).sum::<usize>()
+                8 + arr
+                    .iter()
+                    .map(|v| Self::estimate_json_size(v))
+                    .sum::<usize>()
             }
             serde_json::Value::Object(obj) => {
-                8 + obj.keys().map(|k| k.len()).sum::<usize>() +
-                obj.values().map(|v| Self::estimate_json_size(v)).sum::<usize>()
+                8 + obj.keys().map(|k| k.len()).sum::<usize>()
+                    + obj
+                        .values()
+                        .map(|v| Self::estimate_json_size(v))
+                        .sum::<usize>()
             }
         }
     }
@@ -230,7 +236,8 @@ impl QueryCache {
                 // Remove expired result
                 let memory_freed = result.memory_size;
                 cache.remove(&query_hash.to_string());
-                self.current_memory.fetch_sub(memory_freed, Ordering::Relaxed);
+                self.current_memory
+                    .fetch_sub(memory_freed, Ordering::Relaxed);
                 self.stats.evictions.fetch_add(1, Ordering::Relaxed);
                 self.stats.result_misses.fetch_add(1, Ordering::Relaxed);
                 return None;
@@ -254,7 +261,8 @@ impl QueryCache {
         };
 
         // Add to memory usage
-        self.current_memory.fetch_add(result.memory_size, Ordering::Relaxed);
+        self.current_memory
+            .fetch_add(result.memory_size, Ordering::Relaxed);
 
         // Put in cache (LRU will handle eviction)
         cache.put(query_hash, result);
@@ -291,7 +299,8 @@ impl QueryCache {
         };
 
         if let Some(result) = cache.remove(&query_hash.to_string()) {
-            self.current_memory.fetch_sub(result.memory_size, Ordering::Relaxed);
+            self.current_memory
+                .fetch_sub(result.memory_size, Ordering::Relaxed);
             true
         } else {
             false
@@ -385,7 +394,6 @@ impl QueryCache {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

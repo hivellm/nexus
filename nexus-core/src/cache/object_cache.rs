@@ -73,11 +73,17 @@ impl CachedObject {
             serde_json::Value::Number(n) => n.to_string().len(),
             serde_json::Value::String(s) => s.len(),
             serde_json::Value::Array(arr) => {
-                8 + arr.iter().map(|v| Self::estimate_memory_size(v)).sum::<usize>()
+                8 + arr
+                    .iter()
+                    .map(|v| Self::estimate_memory_size(v))
+                    .sum::<usize>()
             }
             serde_json::Value::Object(obj) => {
-                8 + obj.keys().map(|k| k.len()).sum::<usize>() +
-                obj.values().map(|v| Self::estimate_memory_size(v)).sum::<usize>()
+                8 + obj.keys().map(|k| k.len()).sum::<usize>()
+                    + obj
+                        .values()
+                        .map(|v| Self::estimate_memory_size(v))
+                        .sum::<usize>()
             }
         }
     }
@@ -130,7 +136,8 @@ impl ObjectCache {
                 // Remove expired object
                 let memory_freed = obj.memory_size;
                 drop(cache.remove(key));
-                self.current_memory.fetch_sub(memory_freed, Ordering::Relaxed);
+                self.current_memory
+                    .fetch_sub(memory_freed, Ordering::Relaxed);
                 self.stats.evictions.fetch_add(1, Ordering::Relaxed);
                 self.stats.misses.fetch_add(1, Ordering::Relaxed);
                 return None;
@@ -174,10 +181,12 @@ impl ObjectCache {
         // Insert the new object
         if let Some(old_obj) = cache.insert(key, obj.clone()) {
             // Adjust memory for replaced object
-            self.current_memory.fetch_sub(old_obj.memory_size, Ordering::Relaxed);
+            self.current_memory
+                .fetch_sub(old_obj.memory_size, Ordering::Relaxed);
         }
 
-        self.current_memory.fetch_add(obj.memory_size, Ordering::Relaxed);
+        self.current_memory
+            .fetch_add(obj.memory_size, Ordering::Relaxed);
         self.stats.inserts.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -189,7 +198,8 @@ impl ObjectCache {
         };
 
         if let Some(obj) = cache.remove(key) {
-            self.current_memory.fetch_sub(obj.memory_size, Ordering::Relaxed);
+            self.current_memory
+                .fetch_sub(obj.memory_size, Ordering::Relaxed);
             true
         } else {
             false
@@ -255,7 +265,8 @@ impl ObjectCache {
         }
 
         if memory_freed > 0 {
-            self.current_memory.fetch_sub(memory_freed, Ordering::Relaxed);
+            self.current_memory
+                .fetch_sub(memory_freed, Ordering::Relaxed);
             self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -283,13 +294,13 @@ impl ObjectCache {
 
         for key in to_remove {
             if let Some(obj) = cache.remove(&key) {
-                self.current_memory.fetch_sub(obj.memory_size, Ordering::Relaxed);
+                self.current_memory
+                    .fetch_sub(obj.memory_size, Ordering::Relaxed);
                 self.stats.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

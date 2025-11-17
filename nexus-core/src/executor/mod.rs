@@ -47,8 +47,7 @@ pub struct Row {
 }
 
 /// Query result set
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ResultSet {
     /// Column names
     pub columns: Vec<String>,
