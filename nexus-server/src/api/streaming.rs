@@ -579,7 +579,7 @@ async fn handle_create_relationship(
     let properties = args.get("properties").cloned().unwrap_or(json!({}));
 
     // Use executor to create relationship
-    let mut executor = server.executor.write().await;
+    let executor = server.executor.clone();
 
     // Execute Cypher CREATE query for relationship
     let create_query = format!(
@@ -721,7 +721,7 @@ async fn handle_execute_cypher(
     }
 
     // Execute query normally through executor for RETURN/MATCH clauses
-    let mut executor = server.executor.write().await;
+    let executor = server.executor.clone();
     let query_obj = CypherQuery {
         cypher: query.to_string(),
         params: HashMap::new(),

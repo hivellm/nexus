@@ -114,6 +114,8 @@ pub struct Engine {
     pub page_cache: page_cache::PageCache,
     /// Write-ahead log for durability
     pub wal: wal::Wal,
+    /// Asynchronous WAL writer for improved performance
+    pub async_wal_writer: Option<wal::AsyncWalWriter>,
     /// Transaction manager for MVCC (shared with SessionManager via Arc)
     pub transaction_manager: Arc<RwLock<transaction::TransactionManager>>,
     /// Session manager for transaction context
@@ -161,6 +163,9 @@ impl Engine {
         // Initialize WAL
         let wal = wal::Wal::new(data_dir.join("wal.log"))?;
 
+        // Initialize async WAL writer (optional - can be disabled for testing)
+        let async_wal_writer = Some(wal::AsyncWalWriter::new(wal.clone(), wal::AsyncWalConfig::default())?);
+
         // Initialize transaction manager (shared between Engine and SessionManager)
         let transaction_manager = transaction::TransactionManager::new()?;
         let transaction_manager_arc = Arc::new(RwLock::new(transaction_manager));
@@ -181,6 +186,7 @@ impl Engine {
             storage,
             page_cache,
             wal,
+            async_wal_writer,
             transaction_manager: transaction_manager_arc,
             session_manager,
             indexes,
@@ -752,6 +758,33 @@ impl Engine {
             wal_entries: self.wal.entry_count(),
             active_transactions: self.transaction_manager.read().active_count(),
         })
+    }
+
+    /// Write a WAL entry asynchronously (if async writer is enabled)
+    /// Falls back to synchronous WAL if async writer is not available
+    pub fn write_wal_async(&mut self, entry: wal::WalEntry) -> Result<()> {
+        if let Some(ref writer) = self.async_wal_writer {
+            writer.append(entry)?;
+            Ok(())
+        } else {
+            // Fallback to synchronous WAL
+            self.wal.append(&entry)?;
+            self.wal.flush()?;
+            Ok(())
+        }
+    }
+
+    /// Force flush all pending async WAL entries
+    pub fn flush_async_wal(&mut self) -> Result<()> {
+        if let Some(ref writer) = self.async_wal_writer {
+            writer.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Get async WAL statistics (if available)
+    pub fn async_wal_stats(&self) -> Option<wal::AsyncWalStats> {
+        self.async_wal_writer.as_ref().map(|w| w.stats())
     }
 
     /// Execute a Cypher query
@@ -2958,9 +2991,17 @@ impl Engine {
 
         // Only commit if we created our own transaction
         if !has_session_tx {
-            self.transaction_manager.write().commit(tx)?;
-            // CRITICAL FIX: Flush storage to ensure data is persisted to disk
-            self.storage.flush()?;
+            let _epoch = self.transaction_manager.write().commit(tx)?;
+
+            // Write WAL entry for node creation (async) after commit
+            let wal_entry = wal::WalEntry::CreateNode {
+                node_id,
+                label_bits,
+            };
+            self.write_wal_async(wal_entry)?;
+
+            // Use async WAL flush instead of synchronous storage flush
+            self.flush_async_wal()?;
             // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
             self.refresh_executor()?;
         }
@@ -3012,9 +3053,19 @@ impl Engine {
 
         // Only commit if we created our own transaction
         if !has_session_tx {
-            self.transaction_manager.write().commit(tx)?;
-            // CRITICAL FIX: Flush storage to ensure data is persisted to disk
-            self.storage.flush()?;
+            let _epoch = self.transaction_manager.write().commit(tx)?;
+
+            // Write WAL entry for relationship creation (async) after commit
+            let wal_entry = wal::WalEntry::CreateRel {
+                rel_id,
+                src: from,
+                dst: to,
+                type_id,
+            };
+            self.write_wal_async(wal_entry)?;
+
+            // Use async WAL flush instead of synchronous storage flush
+            self.flush_async_wal()?;
             // CRITICAL FIX: Refresh executor to ensure it sees the newly written properties
             self.refresh_executor()?;
         }
@@ -3533,6 +3584,17 @@ pub enum HealthState {
 impl Default for Engine {
     fn default() -> Self {
         Self::new().expect("Failed to create default engine")
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // Ensure async WAL writer is properly shut down
+        if let Some(ref mut writer) = self.async_wal_writer {
+            if let Err(e) = writer.shutdown() {
+                eprintln!("Warning: Failed to shutdown async WAL writer: {}", e);
+            }
+        }
     }
 }
 

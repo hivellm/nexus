@@ -5,13 +5,13 @@ use nexus_core::executor::{Executor, Query};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Global executor instance (shared with cypher endpoint)
-static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
+/// Executor is Clone and contains only Arc internally, so no RwLock needed
+static EXECUTOR: std::sync::OnceLock<Arc<Executor>> = std::sync::OnceLock::new();
 
 /// Initialize the executor (called from cypher module)
-pub fn init_executor(executor: Arc<RwLock<Executor>>) -> anyhow::Result<()> {
+pub fn init_executor(executor: Arc<Executor>) -> anyhow::Result<()> {
     EXECUTOR
         .set(executor)
         .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
@@ -77,9 +77,9 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
         request.k
     );
 
-    // Get executor instance
-    let executor_guard = match EXECUTOR.get() {
-        Some(executor) => executor,
+    // Get executor instance - clone for concurrent execution
+    let executor = match EXECUTOR.get() {
+        Some(executor) => executor.clone(),
         None => {
             tracing::error!("Executor not initialized");
             return Json(KnnTraverseResponse {
@@ -90,8 +90,8 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
         }
     };
 
-    // Execute KNN search
-    let mut executor = executor_guard.write().await;
+    // Execute KNN search - clone executor for concurrent execution
+    let executor = executor.clone();
 
     // For MVP, we'll use a simple approach:
     // 1. Find nodes with the specified label

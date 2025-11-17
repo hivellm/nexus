@@ -25,6 +25,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+pub mod async_wal;
+pub use async_wal::{AsyncWalWriter, AsyncWalConfig, AsyncWalStats};
+
 /// WAL entry types
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,6 +407,24 @@ impl Wal {
     /// Get the number of WAL entries
     pub fn entry_count(&self) -> u64 {
         self.stats.entries_written
+    }
+}
+
+impl Clone for Wal {
+    fn clone(&self) -> Self {
+        // Re-open the file for reading (for recovery operations)
+        // This is safe because we only clone for AsyncWalWriter which needs read access
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&self.path)
+            .expect("Failed to clone WAL file handle");
+
+        Self {
+            path: self.path.clone(),
+            file,
+            offset: self.offset,
+            stats: self.stats.clone(),
+        }
     }
 }
 

@@ -4026,7 +4026,7 @@ impl CypherParser {
                                 } else {
                                     // Not a number, parse as regular expression
                                     self.pos = start; // Reset position
-                                    Some(Box::new(self.parse_expression()?))
+                        Some(Box::new(self.parse_expression()?))
                                 }
                             } else {
                                 Some(Box::new(self.parse_expression()?))

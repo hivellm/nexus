@@ -28,7 +28,8 @@ use config::RootUserConfig;
 #[derive(Clone)]
 pub struct NexusServer {
     /// Executor for Cypher queries
-    pub executor: Arc<RwLock<nexus_core::executor::Executor>>,
+    /// Executor is Clone and contains only Arc internally, so no RwLock needed
+    pub executor: Arc<nexus_core::executor::Executor>,
     /// Engine for all operations (contains Catalog, LabelIndex, KnnIndex, etc.)
     pub engine: Arc<RwLock<nexus_core::Engine>>,
     /// Database manager for multi-database support
@@ -49,7 +50,7 @@ impl NexusServer {
     /// Create a new Nexus server instance
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        executor: Arc<RwLock<nexus_core::executor::Executor>>,
+        executor: Arc<nexus_core::executor::Executor>,
         engine: Arc<RwLock<nexus_core::Engine>>,
         database_manager: Arc<RwLock<nexus_core::database::DatabaseManager>>,
         rbac: Arc<RwLock<nexus_core::auth::RoleBasedAccessControl>>,

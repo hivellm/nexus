@@ -48,6 +48,7 @@ chrono.workspace = true
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 crc32fast = "1.4"
 tempfile = "3.15"
+crossbeam-channel = "0.5"
 rand.workspace = true
 regex = "1.11"
 tracing = "0.1"

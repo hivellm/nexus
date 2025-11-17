@@ -16,6 +16,7 @@
 //! - POST /mcp - MCP StreamableHTTP endpoint
 
 use axum::{
+    Json,
     Router,
     extract::Request,
     middleware::Next,
@@ -26,6 +27,10 @@ use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use std::thread;
+
+// Server imports
+use tokio::net::TcpListener;
 
 use axum::middleware as axum_middleware;
 use nexus_core::auth::middleware::AuthMiddleware;
@@ -34,8 +39,37 @@ use nexus_server::{
     middleware::{RateLimiter, create_auth_middleware, mcp_auth_middleware_handler},
 };
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Configure Tokio runtime for high concurrency
+    // Use CPU count * 2 for worker threads, minimum 8, maximum 32
+    let worker_threads = (thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4) * 2)
+        .max(8)
+        .min(32);
+
+    // Use CPU count * 4 for blocking threads, minimum 32, maximum 128
+    let blocking_threads = (thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4) * 4)
+        .max(32)
+        .min(128);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(blocking_threads)
+        .thread_name("nexus-worker")
+        .thread_stack_size(2 * 1024 * 1024) // 2MB stack
+        .enable_all()
+        .build()?;
+
+    eprintln!("[RUNTIME] Configured Tokio runtime: {} worker threads, {} blocking threads",
+              worker_threads, blocking_threads);
+
+    rt.block_on(async_main(worker_threads))
+}
+
+async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
         .with(
@@ -231,7 +265,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(api::health::health_check))
         .route("/health", get(api::health::health_check))
         .route("/metrics", get(api::health::metrics))
+        .route("/test", get(|| async { "Test endpoint working" }))
+        .route("/cypher-debug", post(|body: String| async move {
+            println!("[DEBUG] Raw body received on /cypher-debug: {}", body);
+            Json(serde_json::json!({"message": "Debug endpoint received", "body": body}))
+        }))
         .route("/cypher", post(api::cypher::execute_cypher))
+        .route("/test-handler", get(|| async {
+            println!("[TEST] Handler called!");
+            "Handler called successfully"
+        }))
         // Always insert None auth context for endpoints when auth is disabled
         .layer({
             let auth_enabled = config.auth.enabled;
@@ -449,10 +492,13 @@ async fn main() -> anyhow::Result<()> {
     // Apply tracing layer
     let app = app.layer(TraceLayer::new_for_http());
 
-    // Start server
-    let listener = tokio::net::TcpListener::bind(&config.addr).await?;
+    // Start server with optimized configuration for high concurrency
+    let listener = TcpListener::bind(&config.addr).await?;
     info!("Nexus Server listening on {}", config.addr);
 
+    eprintln!("[SERVER] Starting optimized Axum server with high concurrency settings");
+
+    // Start server
     axum::serve(listener, app).await?;
 
     Ok(())

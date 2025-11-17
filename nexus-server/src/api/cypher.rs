@@ -11,8 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-/// Global executor instance (deprecated - use EXECUTOR_SHARED instead)
-static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
+/// Global executor instance for concurrent execution
+/// Executor is Clone and contains only Arc internally, so no RwLock needed
+/// Multiple queries can clone the executor and execute in parallel
+static EXECUTOR: std::sync::OnceLock<Arc<Executor>> = std::sync::OnceLock::new();
 
 /// Global executor shared state for concurrent execution
 /// Note: Currently not used - Executor is cloned directly from EXECUTOR
@@ -22,9 +24,9 @@ static _EXECUTOR_SHARED: std::sync::OnceLock<Arc<ExecutorShared>> = std::sync::O
 static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
 
 /// Initialize the executor (deprecated - use init_engine_with_executor instead)
-pub fn init_executor() -> anyhow::Result<Arc<RwLock<Executor>>> {
+pub fn init_executor() -> anyhow::Result<Arc<Executor>> {
     let executor = Executor::default();
-    let executor_arc = Arc::new(RwLock::new(executor));
+    let executor_arc = Arc::new(executor);
     EXECUTOR
         .set(executor_arc.clone())
         .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
@@ -50,8 +52,9 @@ pub fn init_engine_with_executor(engine: Arc<RwLock<nexus_core::Engine>>) -> any
     // We'll use a pattern where we access the engine's executor via the engine itself
     // For now, we'll still use a dummy executor for non-CREATE queries
     // The real solution is to make CREATE and MATCH both use the engine
+    // Executor is Clone and contains only Arc internally, so no RwLock needed
     let executor = Executor::default();
-    let executor_arc = Arc::new(RwLock::new(executor));
+    let executor_arc = Arc::new(executor);
     EXECUTOR
         .set(executor_arc)
         .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
@@ -60,7 +63,7 @@ pub fn init_engine_with_executor(engine: Arc<RwLock<nexus_core::Engine>>) -> any
 }
 
 /// Get the executor instance
-pub fn get_executor() -> Arc<RwLock<Executor>> {
+pub fn get_executor() -> Arc<Executor> {
     EXECUTOR.get().expect("Executor not initialized").clone()
 }
 
@@ -372,6 +375,7 @@ pub async fn execute_cypher(
     auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CypherRequest>,
 ) -> Json<CypherResponse> {
+    println!("[CYCHER-API] Received query: {}", request.query);
     let auth_context = auth_context.and_then(|e| e.0);
     let start_time = std::time::Instant::now();
     let query_for_tracking = request.query.clone();
@@ -1414,8 +1418,10 @@ pub async fn execute_cypher(
     }
 
     // Get executor instance for other queries
-    let executor_guard = match EXECUTOR.get() {
-        Some(executor) => executor,
+    // Executor is Clone and contains only Arc internally, so we can clone directly
+    // without any locks - this enables true parallel execution
+    let executor = match EXECUTOR.get() {
+        Some(executor) => executor.clone(),
         None => {
             tracing::error!("Executor not initialized");
             return Json(CypherResponse {
@@ -1445,14 +1451,30 @@ pub async fn execute_cypher(
     // This removes the global lock bottleneck - each query gets its own executor clone
     // that shares the underlying data structures (catalog, store, indexes) via Arc
     // Use spawn_blocking to execute in a separate thread pool for true parallelism
-    let executor_clone = executor_guard.read().await.clone();
+    // No lock needed - Executor is Clone and Arc is thread-safe
+    let executor_clone = executor.clone();
     let query_clone = query.clone();
+
+    // Debug: Log thread info before spawning
+    let thread_id_before = std::thread::current().id();
+    println!("[DEBUG] Spawning blocking task from thread {:?}", thread_id_before);
+    eprintln!("[DEBUG] Spawning blocking task from thread {:?}", thread_id_before);
+    tracing::info!("Spawning blocking task from thread {:?}", thread_id_before);
 
     // Execute in blocking thread pool for true parallel execution
     // This allows multiple queries to run concurrently across CPU cores
+    // Tokio's blocking thread pool automatically scales with CPU count
     let execution_result = match tokio::task::spawn_blocking(move || {
-        let mut executor = executor_clone;
-        executor.execute(&query_clone)
+        let thread_id_after = std::thread::current().id();
+        println!("[DEBUG] Executing in blocking thread {:?}", thread_id_after);
+        eprintln!("[DEBUG] Executing in blocking thread {:?}", thread_id_after);
+        tracing::info!("Executing in blocking thread {:?}", thread_id_after);
+
+        let result = executor_clone.execute(&query_clone);
+        println!("[DEBUG] Query executed successfully in blocking thread {:?}", thread_id_after);
+        eprintln!("[DEBUG] Query executed successfully in blocking thread {:?}", thread_id_after);
+        tracing::info!("Query executed successfully in blocking thread {:?}", thread_id_after);
+        result
     })
     .await
     {

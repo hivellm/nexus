@@ -530,7 +530,8 @@ impl Executor {
     }
 
     /// Execute a Cypher query
-    pub fn execute(&mut self, query: &Query) -> Result<ResultSet> {
+    /// Note: Changed to &self for concurrent execution - Executor is Clone and contains only Arc internally
+    pub fn execute(&self, query: &Query) -> Result<ResultSet> {
         // Parse the query into operators
         let operators = self.parse_and_plan(&query.cypher)?;
 
@@ -924,11 +925,19 @@ impl Executor {
         let mut parser = parser::CypherParser::new(cypher.to_string());
         let ast = parser.parse()?;
 
-        // Use the planner to create an optimized plan
-        // Hold locks for the duration of planner creation
-        let label_index_guard = self.label_index();
-        let knn_index_guard = self.knn_index();
-        let planner = QueryPlanner::new(self.catalog(), &label_index_guard, &knn_index_guard);
+        // Clone index data instead of holding locks during planning
+        // This reduces lock contention and allows better parallelization
+        let label_index_snapshot = {
+            let _guard = self.label_index();
+            _guard.clone()
+        };
+        let knn_index_snapshot = {
+            let _guard = self.knn_index();
+            _guard.clone()
+        };
+        
+        // Locks are released here - planning happens with cloned data
+        let planner = QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
 
         let mut operators = planner.plan_query(&ast)?;
 
@@ -1034,7 +1043,7 @@ impl Executor {
     /// Execute CREATE pattern to create nodes and relationships
     /// Returns map of variable names to created node IDs
     fn execute_create_pattern_with_variables(
-        &mut self,
+        &self,
         pattern: &parser::Pattern,
     ) -> Result<(
         std::collections::HashMap<String, u64>,
@@ -1057,7 +1066,7 @@ impl Executor {
 
     /// Internal implementation of CREATE pattern execution
     fn execute_create_pattern_internal(
-        &mut self,
+        &self,
         pattern: &parser::Pattern,
         created_nodes: &mut std::collections::HashMap<String, u64>,
         created_relationships: &mut std::collections::HashMap<String, RelationshipInfo>,
@@ -3279,7 +3288,7 @@ impl Executor {
 
     /// Execute CREATE operator with context from MATCH
     fn execute_create_with_context(
-        &mut self,
+        &self,
         context: &mut ExecutionContext,
         pattern: &parser::Pattern,
     ) -> Result<()> {
