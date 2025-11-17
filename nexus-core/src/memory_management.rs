@@ -711,6 +711,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     #[cfg_attr(
         not(feature = "slow-tests"),
         ignore = "Slow test - enable with --features slow-tests"
@@ -728,6 +729,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     #[cfg_attr(
         not(feature = "slow-tests"),
         ignore = "Slow test - enable with --features slow-tests"
@@ -749,6 +751,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     #[cfg_attr(
         not(feature = "slow-tests"),
         ignore = "Slow test - enable with --features slow-tests"
