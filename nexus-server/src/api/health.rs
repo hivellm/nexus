@@ -127,6 +127,7 @@ async fn check_database() -> ComponentStatus {
         match nexus_core::Engine::new() {
             Ok(engine) => {
                 // Test basic operations
+                let mut engine = engine; // Make mutable
                 let _stats = engine
                     .stats()
                     .map_err(|e| format!("Stats check failed: {}", e))?;
@@ -210,6 +211,7 @@ async fn check_indexes() -> ComponentStatus {
         match nexus_core::Engine::new() {
             Ok(engine) => {
                 // Test index operations
+                let mut engine = engine; // Make mutable
                 let _stats = engine
                     .stats()
                     .map_err(|e| format!("Index stats failed: {}", e))?;
@@ -293,8 +295,9 @@ async fn check_page_cache() -> ComponentStatus {
     match timeout(Duration::from_millis(500), async {
         // Create a test engine to verify page cache
         match nexus_core::Engine::new() {
-            Ok(mut engine) => {
+            Ok(engine) => {
                 // Test page cache operations
+                let mut engine = engine; // Make mutable
                 let _stats = engine
                     .stats()
                     .map_err(|e| format!("Page cache stats failed: {}", e))?;

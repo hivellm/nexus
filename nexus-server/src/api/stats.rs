@@ -94,7 +94,7 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
 
     // Try to get stats from Engine first (if available)
     if let Some(engine) = ENGINE.get() {
-        let engine_guard = engine.read().await;
+        let mut engine_guard = engine.write().await;
         if let Ok(engine_stats) = engine_guard.stats() {
             tracing::info!(
                 "Database stats - Labels: {}, RelTypes: {}, Nodes: {}, Rels: {}",

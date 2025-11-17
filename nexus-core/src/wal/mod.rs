@@ -283,6 +283,33 @@ impl Wal {
         Ok(())
     }
 
+    /// Reopen WAL file (useful for recovery from permission errors)
+    ///
+    /// This method attempts to reopen the WAL file, which can help recover
+    /// from temporary permission issues or file locking problems.
+    pub fn reopen(&mut self) -> Result<()> {
+        // Close current file handle
+        // Note: File will be closed when dropped
+
+        // Reopen the file
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.path)?;
+
+        // Get current size (in case file was truncated or modified)
+        let metadata = file.metadata()?;
+        let current_size = metadata.len();
+
+        // Update offset to current file size
+        self.offset = current_size;
+        self.file = file;
+
+        Ok(())
+    }
+
     /// Create a checkpoint
     ///
     /// Writes checkpoint marker and flushes to disk.

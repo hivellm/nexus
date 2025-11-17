@@ -131,6 +131,7 @@ pub async fn list_labels() -> Json<ListLabelsResponse> {
     // Implement proper label listing
     match nexus_core::Engine::new() {
         Ok(engine) => {
+            let mut engine = engine; // Make mutable
             let stats = match engine.stats() {
                 Ok(stats) => stats,
                 Err(e) => {
@@ -236,6 +237,7 @@ pub async fn list_rel_types() -> Json<ListRelTypesResponse> {
     // Implement proper relationship type listing
     match nexus_core::Engine::new() {
         Ok(engine) => {
+            let mut engine = engine; // Make mutable
             let stats = match engine.stats() {
                 Ok(stats) => stats,
                 Err(e) => {

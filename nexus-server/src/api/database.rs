@@ -130,7 +130,7 @@ pub async fn get_database(
 
     match manager.get_database(&name) {
         Ok(engine) => {
-            let engine_guard = engine.read();
+            let mut engine_guard = engine.write();
             let (node_count, relationship_count) = match engine_guard.stats() {
                 Ok(stats) => (stats.nodes, stats.relationships),
                 Err(_) => (0, 0),

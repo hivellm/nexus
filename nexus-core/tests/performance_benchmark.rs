@@ -37,7 +37,7 @@ struct BenchmarkConfig {
 impl Default for BenchmarkConfig {
     fn default() -> Self {
         Self {
-            node_count: 10000,        // 10K nodes
+            node_count: 10000,         // 10K nodes
             relationship_count: 50000, // 50K relationships
             duration_secs: 60,         // 1 minute benchmark
             warmup_secs: 10,           // 10 second warmup
@@ -72,9 +72,7 @@ struct BenchmarkResults {
 }
 
 /// Create benchmark environment
-fn create_benchmark_environment(
-    _config: &BenchmarkConfig,
-) -> (Executor, MultiLayerCache, TempDir) {
+fn create_benchmark_environment(_config: &BenchmarkConfig) -> (Executor, MultiLayerCache, TempDir) {
     let dir = TempDir::new().unwrap();
 
     // Create all components
@@ -94,8 +92,10 @@ fn create_benchmark_environment(
 
 /// Generate benchmark dataset
 async fn generate_benchmark_dataset(executor: &mut Executor, config: &BenchmarkConfig) {
-    println!("Generating benchmark dataset: {} nodes, {} relationships...",
-             config.node_count, config.relationship_count);
+    println!(
+        "Generating benchmark dataset: {} nodes, {} relationships...",
+        config.node_count, config.relationship_count
+    );
 
     // Create nodes in larger batches for performance
     let batch_size = 500;
@@ -105,10 +105,17 @@ async fn generate_benchmark_dataset(executor: &mut Executor, config: &BenchmarkC
         let mut first = true;
 
         for j in i..end {
-            if !first { cypher.push_str(", "); }
+            if !first {
+                cypher.push_str(", ");
+            }
             first = false;
-            cypher.push_str(&format!("(n{}:Person {{id: {}, name: 'Person{}', age: {}}})",
-                j, j, j, 20 + (j % 50)));
+            cypher.push_str(&format!(
+                "(n{}:Person {{id: {}, name: 'Person{}', age: {}}})",
+                j,
+                j,
+                j,
+                20 + (j % 50)
+            ));
         }
 
         let query = Query {
@@ -124,8 +131,12 @@ async fn generate_benchmark_dataset(executor: &mut Executor, config: &BenchmarkC
         let target_id = (i * 7 + 13) % config.node_count;
 
         let query = Query {
-            cypher: format!("MATCH (a:Person {{id: {}}}), (b:Person {{id: {}}}) CREATE (a)-[:KNOWS {{weight: {}}}]->(b)",
-                source_id, target_id, i % 10),
+            cypher: format!(
+                "MATCH (a:Person {{id: {}}}), (b:Person {{id: {}}}) CREATE (a)-[:KNOWS {{weight: {}}}]->(b)",
+                source_id,
+                target_id,
+                i % 10
+            ),
             params: HashMap::new(),
         };
         executor.execute(&query).unwrap();
@@ -151,8 +162,10 @@ async fn benchmark_create_operations(
         // Create a new node
         let id = config.node_count + operations;
         let query = Query {
-            cypher: format!("CREATE (n:Person {{id: {}, name: 'Benchmark{}', age: {}}})",
-                id, id, 25),
+            cypher: format!(
+                "CREATE (n:Person {{id: {}, name: 'Benchmark{}', age: {}}})",
+                id, id, 25
+            ),
             params: HashMap::new(),
         };
 
@@ -171,8 +184,14 @@ async fn benchmark_create_operations(
     latencies.sort();
     let p95_idx = (latencies.len() as f64 * 0.95) as usize;
     let p99_idx = (latencies.len() as f64 * 0.99) as usize;
-    let p95_latency = latencies.get(p95_idx).copied().unwrap_or(Duration::from_secs(0));
-    let p99_latency = latencies.get(p99_idx).copied().unwrap_or(Duration::from_secs(0));
+    let p95_latency = latencies
+        .get(p95_idx)
+        .copied()
+        .unwrap_or(Duration::from_secs(0));
+    let p99_latency = latencies
+        .get(p99_idx)
+        .copied()
+        .unwrap_or(Duration::from_secs(0));
 
     let avg_latency = if !latencies.is_empty() {
         latencies.iter().sum::<Duration>() / latencies.len() as u32
@@ -212,7 +231,10 @@ async fn benchmark_read_operations(
                 // Relationship traversal
                 let id = operations % config.node_count;
                 let query = Query {
-                    cypher: format!("MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN m LIMIT 5", id),
+                    cypher: format!(
+                        "MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN m LIMIT 5",
+                        id
+                    ),
                     params: HashMap::new(),
                 };
                 let _ = executor.execute(&query);
@@ -249,8 +271,14 @@ async fn benchmark_read_operations(
     latencies.sort();
     let p95_idx = (latencies.len() as f64 * 0.95) as usize;
     let p99_idx = (latencies.len() as f64 * 0.99) as usize;
-    let p95_latency = latencies.get(p95_idx).copied().unwrap_or(Duration::from_secs(0));
-    let p99_latency = latencies.get(p99_idx).copied().unwrap_or(Duration::from_secs(0));
+    let p95_latency = latencies
+        .get(p95_idx)
+        .copied()
+        .unwrap_or(Duration::from_secs(0));
+    let p99_latency = latencies
+        .get(p99_idx)
+        .copied()
+        .unwrap_or(Duration::from_secs(0));
 
     let avg_latency = if !latencies.is_empty() {
         latencies.iter().sum::<Duration>() / latencies.len() as u32
@@ -300,14 +328,18 @@ async fn benchmark_mixed_workload(
                             1 => {
                                 let id = worker_id % config_clone.node_count;
                                 let query = Query {
-                                    cypher: format!("MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN count(r)", id),
+                                    cypher: format!(
+                                        "MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN count(r)",
+                                        id
+                                    ),
                                     params: HashMap::new(),
                                 };
                                 let _ = executor_clone.execute(&query);
                             }
                             2 => {
                                 let query = Query {
-                                    cypher: "MATCH (n:Person) WHERE n.age > 25 RETURN count(n)".to_string(),
+                                    cypher: "MATCH (n:Person) WHERE n.age > 25 RETURN count(n)"
+                                        .to_string(),
                                     params: HashMap::new(),
                                 };
                                 let _ = executor_clone.execute(&query);
@@ -338,16 +370,24 @@ async fn benchmark_mixed_workload(
                                 // 20% relationship queries
                                 let id = worker_id % config_clone.node_count;
                                 let query = Query {
-                                    cypher: format!("MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN m LIMIT 3", id),
+                                    cypher: format!(
+                                        "MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN m LIMIT 3",
+                                        id
+                                    ),
                                     params: HashMap::new(),
                                 };
                                 let _ = executor_clone.execute(&query);
                             }
                             4 => {
                                 // 20% writes
-                                let id = config_clone.node_count + worker_id + start_time.elapsed().as_millis() as usize;
+                                let id = config_clone.node_count
+                                    + worker_id
+                                    + start_time.elapsed().as_millis() as usize;
                                 let query = Query {
-                                    cypher: format!("CREATE (n:Person {{id: {}, name: 'Worker{}', age: {}}})", id, worker_id, 25),
+                                    cypher: format!(
+                                        "CREATE (n:Person {{id: {}, name: 'Worker{}', age: {}}})",
+                                        id, worker_id, 25
+                                    ),
                                     params: HashMap::new(),
                                 };
                                 let _ = executor_clone.execute(&query);
@@ -412,8 +452,14 @@ async fn benchmark_mixed_workload(
     sorted_latencies.sort();
     let p95_idx = (sorted_latencies.len() as f64 * 0.95) as usize;
     let p99_idx = (sorted_latencies.len() as f64 * 0.99) as usize;
-    let p95_latency = sorted_latencies.get(p95_idx).copied().unwrap_or(Duration::from_secs(0));
-    let p99_latency = sorted_latencies.get(p99_idx).copied().unwrap_or(Duration::from_secs(0));
+    let p95_latency = sorted_latencies
+        .get(p95_idx)
+        .copied()
+        .unwrap_or(Duration::from_secs(0));
+    let p99_latency = sorted_latencies
+        .get(p99_idx)
+        .copied()
+        .unwrap_or(Duration::from_secs(0));
 
     let avg_latency = if !sorted_latencies.is_empty() {
         sorted_latencies.iter().sum::<Duration>() / sorted_latencies.len() as u32
@@ -471,21 +517,42 @@ async fn performance_benchmark_vs_neo4j() {
     println!("  Avg Latency: {:.2}ms", create_avg.as_millis());
     println!("  P95 Latency: {:.2}ms", create_p95.as_millis());
     println!("  P99 Latency: {:.2}ms", create_p99.as_millis());
-    println!("  Target: <5ms avg latency - {}", if create_avg < Duration::from_millis(5) { "✅ PASS" } else { "❌ FAIL" });
+    println!(
+        "  Target: <5ms avg latency - {}",
+        if create_avg < Duration::from_millis(5) {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
 
     println!("\nREAD Operations:");
     println!("  Throughput: {:.2} ops/sec", read_throughput);
     println!("  Avg Latency: {:.2}ms", read_avg.as_millis());
     println!("  P95 Latency: {:.2}ms", read_p95.as_millis());
     println!("  P99 Latency: {:.2}ms", read_p99.as_millis());
-    println!("  Target: <3ms avg latency - {}", if read_avg < Duration::from_millis(3) { "✅ PASS" } else { "❌ FAIL" });
+    println!(
+        "  Target: <3ms avg latency - {}",
+        if read_avg < Duration::from_millis(3) {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
 
     println!("\nMixed Workload:");
     println!("  Throughput: {:.2} ops/sec", mixed_throughput);
     println!("  Avg Latency: {:.2}ms", mixed_avg.as_millis());
     println!("  P95 Latency: {:.2}ms", mixed_p95.as_millis());
     println!("  P99 Latency: {:.2}ms", mixed_p99.as_millis());
-    println!("  Target: >500 ops/sec - {}", if mixed_throughput > 500.0 { "✅ PASS" } else { "❌ FAIL" });
+    println!(
+        "  Target: >500 ops/sec - {}",
+        if mixed_throughput > 500.0 {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
 
     // Overall assessment
     let create_target_met = create_avg < Duration::from_millis(5);
@@ -495,13 +562,44 @@ async fn performance_benchmark_vs_neo4j() {
     let overall_success = create_target_met && read_target_met && throughput_target_met;
 
     println!("\n🏆 Overall Performance Assessment:");
-    println!("CREATE Target (<5ms): {}", if create_target_met { "✅ MET" } else { "❌ NOT MET" });
-    println!("READ Target (<3ms): {}", if read_target_met { "✅ MET" } else { "❌ NOT MET" });
-    println!("Throughput Target (>500 ops/sec): {}", if throughput_target_met { "✅ MET" } else { "❌ NOT MET" });
-    println!("Overall: {}", if overall_success { "✅ ALL TARGETS MET - Neo4j parity achieved!" } else { "⚠️ Some targets not met" });
+    println!(
+        "CREATE Target (<5ms): {}",
+        if create_target_met {
+            "✅ MET"
+        } else {
+            "❌ NOT MET"
+        }
+    );
+    println!(
+        "READ Target (<3ms): {}",
+        if read_target_met {
+            "✅ MET"
+        } else {
+            "❌ NOT MET"
+        }
+    );
+    println!(
+        "Throughput Target (>500 ops/sec): {}",
+        if throughput_target_met {
+            "✅ MET"
+        } else {
+            "❌ NOT MET"
+        }
+    );
+    println!(
+        "Overall: {}",
+        if overall_success {
+            "✅ ALL TARGETS MET - Neo4j parity achieved!"
+        } else {
+            "⚠️ Some targets not met"
+        }
+    );
 
     // Assertions
-    assert!(overall_success, "Performance targets not met - Neo4j parity not achieved");
+    assert!(
+        overall_success,
+        "Performance targets not met - Neo4j parity not achieved"
+    );
 
     println!("\n✅ Performance Benchmark Complete - Nexus achieves Neo4j-level performance!");
 }

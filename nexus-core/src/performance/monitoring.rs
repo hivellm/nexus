@@ -696,7 +696,7 @@ mod tests {
     }
 
     /// Get cache hit rate metrics across all layers
-    pub async fn get_cache_hit_rates(&self) -> Result<CacheHitRateMetrics, Box<dyn std::error::Error>> {
+    pub async fn get_cache_hit_rates() -> Result<CacheHitRateMetrics, Box<dyn std::error::Error>> {
         // This would integrate with the actual cache system
         // For now, return placeholder metrics
         Ok(CacheHitRateMetrics {
@@ -710,7 +710,8 @@ mod tests {
     }
 
     /// Get query execution time distribution
-    pub async fn get_query_execution_stats(&self) -> Result<QueryExecutionStats, Box<dyn std::error::Error>> {
+    pub async fn get_query_execution_stats()
+    -> Result<QueryExecutionStats, Box<dyn std::error::Error>> {
         // This would integrate with actual query execution tracking
         // For now, return placeholder statistics
         Ok(QueryExecutionStats {
@@ -725,7 +726,8 @@ mod tests {
     }
 
     /// Get memory usage breakdown by component
-    pub async fn get_memory_usage_by_component(&self) -> Result<MemoryUsageByComponent, Box<dyn std::error::Error>> {
+    pub async fn get_memory_usage_by_component()
+    -> Result<MemoryUsageByComponent, Box<dyn std::error::Error>> {
         // This would integrate with actual memory tracking
         // For now, return placeholder breakdown
         Ok(MemoryUsageByComponent {
@@ -742,11 +744,12 @@ mod tests {
     }
 
     /// Get comprehensive performance dashboard
-    pub async fn get_performance_dashboard(&self) -> Result<PerformanceDashboard, Box<dyn std::error::Error>> {
-        let system_metrics = self.get_metrics().await?;
-        let cache_hit_rates = self.get_cache_hit_rates().await?;
-        let query_stats = self.get_query_execution_stats().await?;
-        let memory_breakdown = self.get_memory_usage_by_component().await?;
+    pub async fn get_performance_dashboard()
+    -> Result<PerformanceDashboard, Box<dyn std::error::Error>> {
+        let system_metrics = Self::get_metrics().await?;
+        let cache_hit_rates = Self::get_cache_hit_rates().await?;
+        let query_stats = Self::get_query_execution_stats().await?;
+        let memory_breakdown = Self::get_memory_usage_by_component().await?;
 
         Ok(PerformanceDashboard {
             system_metrics,

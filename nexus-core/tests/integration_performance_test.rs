@@ -94,7 +94,10 @@ fn create_optimized_test_environment(
 
 /// Generate test data: nodes and relationships
 async fn generate_test_data(executor: &mut Executor, config: &IntegrationTestConfig) {
-    println!("Generating {} nodes and {} relationships...", config.node_count, config.relationship_count);
+    println!(
+        "Generating {} nodes and {} relationships...",
+        config.node_count, config.relationship_count
+    );
 
     // Create nodes in batches
     let batch_size = 100;
@@ -104,15 +107,19 @@ async fn generate_test_data(executor: &mut Executor, config: &IntegrationTestCon
         let mut params = HashMap::new();
 
         for j in i..end {
-            if j > i { cypher.push_str(", "); }
-            cypher.push_str(&format!("(n{}:Person {{id: {}, name: '{}', age: {}}})",
-                j, j, format!("Person{}", j), 20 + (j % 50)));
+            if j > i {
+                cypher.push_str(", ");
+            }
+            cypher.push_str(&format!(
+                "(n{}:Person {{id: {}, name: '{}', age: {}}})",
+                j,
+                j,
+                format!("Person{}", j),
+                20 + (j % 50)
+            ));
         }
 
-        let query = Query {
-            cypher,
-            params,
-        };
+        let query = Query { cypher, params };
         executor.execute(&query).unwrap();
     }
 
@@ -122,8 +129,12 @@ async fn generate_test_data(executor: &mut Executor, config: &IntegrationTestCon
         let target_id = (i * 7 + 13) % config.node_count; // Pseudo-random but deterministic
 
         let query = Query {
-            cypher: format!("MATCH (a:Person {{id: {}}}), (b:Person {{id: {}}}) CREATE (a)-[:KNOWS {{weight: {}}}]->(b)",
-                source_id, target_id, i % 10),
+            cypher: format!(
+                "MATCH (a:Person {{id: {}}}), (b:Person {{id: {}}}) CREATE (a)-[:KNOWS {{weight: {}}}]->(b)",
+                source_id,
+                target_id,
+                i % 10
+            ),
             params: HashMap::new(),
         };
         executor.execute(&query).unwrap();
@@ -161,7 +172,10 @@ async fn run_concurrent_workload_test(
                     0 => {
                         // Node lookup by label
                         let query = Query {
-                            cypher: format!("MATCH (n:Person) WHERE n.id = {} RETURN n", worker_id % config_clone.node_count),
+                            cypher: format!(
+                                "MATCH (n:Person) WHERE n.id = {} RETURN n",
+                                worker_id % config_clone.node_count
+                            ),
                             params: HashMap::new(),
                         };
                         let _ = executor_clone.execute(&query);
@@ -169,7 +183,10 @@ async fn run_concurrent_workload_test(
                     1 => {
                         // Relationship traversal
                         let query = Query {
-                            cypher: format!("MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN m", worker_id % config_clone.node_count),
+                            cypher: format!(
+                                "MATCH (n:Person {{id: {}}})-[r:KNOWS]->(m) RETURN m",
+                                worker_id % config_clone.node_count
+                            ),
                             params: HashMap::new(),
                         };
                         let _ = executor_clone.execute(&query);
@@ -285,8 +302,13 @@ async fn test_system_integration_performance() {
     generate_test_data(&mut executor, &config).await;
 
     // Phase 2: Run concurrent workload
-    println!("\n⚡ Phase 2: Running concurrent workload test ({}s)", config.test_duration_secs);
-    let test_results = run_concurrent_workload_test(&executor, &config).await.unwrap();
+    println!(
+        "\n⚡ Phase 2: Running concurrent workload test ({}s)",
+        config.test_duration_secs
+    );
+    let test_results = run_concurrent_workload_test(&executor, &config)
+        .await
+        .unwrap();
 
     // Phase 3: Validate data consistency
     println!("\n🔍 Phase 3: Validating data consistency");
@@ -296,21 +318,53 @@ async fn test_system_integration_performance() {
     println!("\n📊 Phase 4: Test Results");
     println!("Duration: {:.2}s", test_results.duration.as_secs_f64());
     println!("Throughput: {:.2} ops/sec", test_results.throughput);
-    println!("Average Latency: {:.2}ms", test_results.avg_latency.as_millis());
-    println!("Cache Hit Rate: {:.2}%", test_results.cache_hit_rate * 100.0);
-    println!("Plan Cache Hit Rate: {:.2}%", test_results.plan_cache_hit_rate * 100.0);
+    println!(
+        "Average Latency: {:.2}ms",
+        test_results.avg_latency.as_millis()
+    );
+    println!(
+        "Cache Hit Rate: {:.2}%",
+        test_results.cache_hit_rate * 100.0
+    );
+    println!(
+        "Plan Cache Hit Rate: {:.2}%",
+        test_results.plan_cache_hit_rate * 100.0
+    );
     println!("Memory Usage: {:.2}MB", test_results.memory_usage_mb);
-    println!("WAL Queue Depth Avg: {:.2}", test_results.wal_queue_depth_avg);
-    println!("Data Consistency: {}", if data_consistent { "✅ PASS" } else { "❌ FAIL" });
-    println!("Performance Targets Met: {}", if test_results.targets_met { "✅ PASS" } else { "❌ FAIL" });
+    println!(
+        "WAL Queue Depth Avg: {:.2}",
+        test_results.wal_queue_depth_avg
+    );
+    println!(
+        "Data Consistency: {}",
+        if data_consistent {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
+    println!(
+        "Performance Targets Met: {}",
+        if test_results.targets_met {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
 
     // Assertions
     assert!(data_consistent, "Data consistency check failed");
     assert!(test_results.targets_met, "Performance targets not met");
 
     // Component-specific validations (simplified)
-    assert!(test_results.throughput > 0.0, "Should have processed some operations");
-    assert!(test_results.avg_latency > Duration::from_secs(0), "Should have measured latency");
+    assert!(
+        test_results.throughput > 0.0,
+        "Should have processed some operations"
+    );
+    assert!(
+        test_results.avg_latency > Duration::from_secs(0),
+        "Should have measured latency"
+    );
 
     println!("\n✅ System Integration Performance Test PASSED");
     println!("All performance optimizations are working correctly together!");

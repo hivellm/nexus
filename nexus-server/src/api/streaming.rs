@@ -869,7 +869,7 @@ async fn handle_get_stats(
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     // Get stats from Engine
-    let engine = server.engine.read().await;
+    let mut engine = server.engine.write().await;
     match engine.stats() {
         Ok(stats) => {
             let response = json!({

@@ -12,6 +12,7 @@
 use crate::error::{Error, Result};
 use crate::wal::{Wal, WalEntry};
 use crossbeam_channel::{Receiver, Sender, bounded};
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -51,6 +52,8 @@ pub struct AsyncWalStats {
     pub current_queue_depth: u64,
     /// Max queue depth seen
     pub max_queue_depth: u64,
+    /// Total WAL I/O errors encountered
+    pub wal_errors: u64,
 }
 
 /// Configuration for the async WAL writer
@@ -263,33 +266,132 @@ impl AsyncWalWriter {
 
         let start_time = Instant::now();
 
-        // Write all entries in batch
-        for entry in batch {
-            if let Err(e) = wal.append(entry) {
-                eprintln!("Failed to append WAL entry: {}", e);
-                // Continue with other entries - don't fail the whole batch
+        // Try to flush batch with retry logic for I/O errors
+        let mut retry_count = 0;
+        const MAX_RETRIES: u32 = 3;
+
+        while retry_count < MAX_RETRIES {
+            let mut success_count = 0;
+            let mut last_error = None;
+
+            // Write all entries in batch
+            for entry in batch {
+                match wal.append(entry) {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        last_error = Some(e);
+                        eprintln!(
+                            "Failed to append WAL entry (attempt {}): {}",
+                            retry_count + 1,
+                            last_error.as_ref().unwrap()
+                        );
+
+                        // If it's a permission error, try to recover
+                        if let Error::Io(io_err) = last_error.as_ref().unwrap() {
+                            if io_err.raw_os_error() == Some(5) {
+                                // ERROR_ACCESS_DENIED
+                                eprintln!(
+                                    "Permission denied error detected, attempting WAL recovery..."
+                                );
+
+                                // Try to reopen WAL file
+                                if let Err(recovery_err) = wal.reopen() {
+                                    eprintln!("WAL recovery failed: {}", recovery_err);
+                                } else {
+                                    eprintln!("WAL recovery successful, retrying batch...");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If all entries were written successfully, flush to disk
+            if success_count == batch.len() {
+                match wal.flush() {
+                    Ok(_) => {
+                        // Success - update stats and return
+                        let elapsed = start_time.elapsed();
+                        let elapsed_us = elapsed.as_micros() as u64;
+
+                        let current_stats =
+                            unsafe { &mut *(Arc::as_ptr(stats) as *mut AsyncWalStats) };
+                        current_stats.entries_written += batch.len() as u64;
+                        current_stats.batches_flushed += 1;
+                        current_stats.total_write_latency_us += elapsed_us;
+
+                        if batch.len() >= 100 {
+                            current_stats.size_batches += 1;
+                        } else {
+                            current_stats.timeout_batches += 1;
+                        }
+
+                        if retry_count > 0 {
+                            eprintln!(
+                                "WAL batch flushed successfully after {} retries",
+                                retry_count
+                            );
+                        }
+                        return;
+                    }
+                    Err(e) => {
+                        last_error = Some(e);
+                        eprintln!(
+                            "Failed to flush WAL (attempt {}): {}",
+                            retry_count + 1,
+                            last_error.as_ref().unwrap()
+                        );
+                    }
+                }
+            }
+
+            retry_count += 1;
+
+            // Wait before retry with exponential backoff
+            if retry_count < MAX_RETRIES {
+                let wait_time = Duration::from_millis(100 * (1 << retry_count)); // 200ms, 400ms, 800ms
+                eprintln!("Retrying WAL flush in {:?}", wait_time);
+                thread::sleep(wait_time);
             }
         }
 
-        // Flush to disk
-        if let Err(e) = wal.flush() {
-            eprintln!("Failed to flush WAL: {}", e);
-            return;
-        }
-
-        let elapsed = start_time.elapsed();
-        let elapsed_us = elapsed.as_micros() as u64;
-
-        // Update stats
+        // If we get here, all retries failed
         let current_stats = unsafe { &mut *(Arc::as_ptr(stats) as *mut AsyncWalStats) };
-        current_stats.entries_written += batch.len() as u64;
-        current_stats.batches_flushed += 1;
-        current_stats.total_write_latency_us += elapsed_us;
+        current_stats.wal_errors += batch.len() as u64;
 
-        if batch.len() >= 100 {
-            current_stats.size_batches += 1;
-        } else {
-            current_stats.timeout_batches += 1;
+        eprintln!(
+            "CRITICAL: Failed to flush WAL batch after {} retries. {} entries lost!",
+            MAX_RETRIES,
+            batch.len()
+        );
+
+        // Try emergency save to a backup WAL file
+        Self::emergency_save_batch(batch);
+    }
+
+    /// Emergency save batch to backup WAL file when main WAL fails
+    fn emergency_save_batch(batch: &[WalEntry]) {
+        let backup_path = format!("data/wal-emergency-{}.log", chrono::Utc::now().timestamp());
+
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&backup_path)
+        {
+            Ok(mut file) => {
+                for entry in batch {
+                    if let Ok(data) = bincode::serialize(entry) {
+                        let _ = file.write_all(&(data.len() as u32).to_le_bytes());
+                        let _ = file.write_all(&data);
+                    }
+                }
+                let _ = file.flush();
+                eprintln!("Emergency WAL batch saved to: {}", backup_path);
+            }
+            Err(e) => {
+                eprintln!("CRITICAL: Even emergency WAL save failed: {}", e);
+            }
         }
     }
 }

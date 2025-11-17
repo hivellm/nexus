@@ -3025,10 +3025,15 @@ mod tests {
     }
 
     /// Check if aggregation can be optimized with streaming
-    pub fn can_use_streaming_aggregation(&self, operators: &[Operator]) -> bool {
+    pub fn can_use_streaming_aggregation(operators: &[Operator]) -> bool {
         // Check if we have aggregation operations that can benefit from streaming
         for operator in operators {
-            if let Operator::Aggregate { group_by, aggregations, .. } = operator {
+            if let Operator::Aggregate {
+                group_by,
+                aggregations,
+                ..
+            } = operator
+            {
                 // Streaming is beneficial when:
                 // 1. We have aggregations that can be computed incrementally
                 // 2. Group-by keys are not too numerous (to avoid memory explosion)
@@ -3041,7 +3046,9 @@ mod tests {
                 // Check aggregation types - streaming works best with COUNT, SUM, AVG
                 for agg in aggregations {
                     match agg {
-                        Aggregation::Count { .. } | Aggregation::Sum { .. } | Aggregation::Avg { .. } => {
+                        Aggregation::Count { .. }
+                        | Aggregation::Sum { .. }
+                        | Aggregation::Avg { .. } => {
                             // These can be streamed
                         }
                         Aggregation::Min { .. } | Aggregation::Max { .. } => {
@@ -3073,19 +3080,28 @@ mod tests {
     }
 
     /// Optimize aggregation operations by pushing them down in the query plan
-    pub fn optimize_aggregations(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
+    pub fn optimize_aggregations(operators: Vec<Operator>) -> Result<Vec<Operator>> {
         let mut result = Vec::new();
 
         for operator in operators {
             match operator {
-                Operator::Aggregate { aggregations, group_by, source, .. } => {
+                Operator::Aggregate {
+                    aggregations,
+                    group_by,
+                    source,
+                    ..
+                } => {
                     // Check if we can push aggregation down to reduce data volume earlier
                     if let Some(source_op) = source.as_ref() {
-                        if self.can_push_aggregation_down(source_op, &aggregations, &group_by) {
+                        if can_push_aggregation_down(source_op, &aggregations, &group_by) {
                             // Create a new aggregation operator with push-down optimization
                             let optimized_agg = Operator::Aggregate {
                                 aggregations,
                                 group_by,
+                                projection_items: None,
+                                source: None,
+                                streaming_optimized: false,
+                                push_down_optimized: false,
                                 source: source.clone(),
                                 push_down_optimized: true,
                             };
@@ -3095,10 +3111,14 @@ mod tests {
                     }
 
                     // Use streaming aggregation if beneficial
-                    if self.can_use_streaming_aggregation(&[operator.clone()]) {
+                    if can_use_streaming_aggregation(&[operator.clone()]) {
                         let streaming_agg = Operator::Aggregate {
                             aggregations,
                             group_by,
+                            projection_items: None,
+                            source: None,
+                            streaming_optimized: false,
+                            push_down_optimized: false,
                             source,
                             streaming_optimized: true,
                             push_down_optimized: false,
@@ -3118,18 +3138,22 @@ mod tests {
     }
 
     /// Check if aggregation can be pushed down to reduce data processing
-    fn can_push_aggregation_down(&self, source_op: &Operator, aggregations: &[Aggregation], group_by: &[Expression]) -> bool {
+    fn can_push_aggregation_down(
+        source_op: &Operator,
+        aggregations: &[Aggregation],
+        group_by: &[Expression],
+    ) -> bool {
         match source_op {
-            Operator::Filter { source, .. } => {
+            Operator::Filter { predicate, .. } => {
                 // We can push aggregation past filters
                 if let Some(inner_source) = source.as_ref() {
-                    return self.can_push_aggregation_down(inner_source, aggregations, group_by);
+                    return can_push_aggregation_down(inner_source, aggregations, group_by);
                 }
             }
-            Operator::Project { source, .. } => {
+            Operator::Project { items, .. } => {
                 // Check if projection includes all needed columns for aggregation
                 if let Some(inner_source) = source.as_ref() {
-                    return self.can_push_aggregation_down(inner_source, aggregations, group_by);
+                    return can_push_aggregation_down(inner_source, aggregations, group_by);
                 }
             }
             Operator::Expand { .. } => {
@@ -3146,9 +3170,15 @@ mod tests {
     }
 
     /// Check if a source operator supports aggregation optimization
-    fn source_supports_aggregation(&self, source_op: &Operator, _aggregations: &[Aggregation], _group_by: &[Expression]) -> bool {
+    fn source_supports_aggregation(
+        source_op: &Operator,
+        _aggregations: &[Aggregation],
+        _group_by: &[Expression],
+    ) -> bool {
         match source_op {
-            Operator::NodeByLabel { .. } | Operator::AllNodesScan { .. } | Operator::IndexScan { .. } => {
+            Operator::NodeByLabel { .. }
+            | Operator::AllNodesScan { .. }
+            | Operator::IndexScan { .. } => {
                 // These are good sources for aggregation - they produce nodes we can aggregate
                 true
             }
@@ -3161,12 +3191,17 @@ mod tests {
     }
 
     /// Create optimized COUNT operations
-    pub fn optimize_count_operations(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
+    pub fn optimize_count_operations(operators: Vec<Operator>) -> Result<Vec<Operator>> {
         let mut result = Vec::new();
 
         for operator in operators {
             match operator {
-                Operator::Aggregate { aggregations, group_by, source, .. } => {
+                Operator::Aggregate {
+                    aggregations,
+                    group_by,
+                    source,
+                    ..
+                } => {
                     let mut optimized_aggregations = Vec::new();
 
                     for agg in aggregations {
@@ -3201,7 +3236,7 @@ mod tests {
     }
 
     /// Check if COUNT(*) can be optimized (e.g., using index statistics)
-    fn can_optimize_count_star(&self, source: &Option<Box<Operator>>) -> bool {
+    fn can_optimize_count_star(source: &Option<Box<Operator>>) -> bool {
         if let Some(source_op) = source {
             match source_op.as_ref() {
                 Operator::NodeByLabel { label_id, .. } => {
