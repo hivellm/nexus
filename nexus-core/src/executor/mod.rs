@@ -1351,14 +1351,55 @@ impl Executor {
         let rows = self.materialize_rows_from_variables(context);
         let mut filtered_rows = Vec::new();
 
-        for row in rows {
-            if self.evaluate_predicate_on_row(&row, context, &expr)? {
-                filtered_rows.push(row);
+        // If no rows exist but predicate can be evaluated without variables,
+        // evaluate the predicate directly without creating a row first
+        // (for RETURN ... WHERE without MATCH)
+        if rows.is_empty()
+            && context.variables.is_empty()
+            && self.can_evaluate_without_variables(&expr)
+        {
+            // Evaluate predicate directly without a row
+            let empty_row = std::collections::HashMap::new();
+            if self.evaluate_predicate_on_row(&empty_row, context, &expr)? {
+                // Only create a row if predicate is true
+                filtered_rows.push(empty_row);
+            }
+            // If predicate is false, filtered_rows stays empty (no rows returned)
+        } else {
+            for row in &rows {
+                if self.evaluate_predicate_on_row(row, context, &expr)? {
+                    filtered_rows.push(row.clone());
+                }
             }
         }
 
-        self.update_variables_from_rows(context, &filtered_rows);
-        self.update_result_set_from_rows(context, &filtered_rows);
+        // If Filter processed rows and there were no rows/variables to begin with (RETURN ... WHERE),
+        // we need to handle it specially:
+        // - If predicate was false: set a marker column so Project knows not to create a row
+        // - If predicate was true: update result set normally (row will be in result_set.rows)
+        let had_no_rows_initially = rows.is_empty() && context.variables.is_empty();
+        if filtered_rows.is_empty() && had_no_rows_initially {
+            // Predicate was false - Filter removed all rows, set marker so Project doesn't create a row
+            // Do this BEFORE update_variables_from_rows to preserve the marker
+            context.result_set.columns = vec!["__filtered__".to_string()];
+            context.result_set.rows.clear();
+            // Clear variables since we have no rows
+            context.variables.clear();
+        } else if !filtered_rows.is_empty() && had_no_rows_initially {
+            // Predicate was true - Filter created a row from empty
+            // Update variables and result set, but preserve that Filter created the row
+            self.update_variables_from_rows(context, &filtered_rows);
+            self.update_result_set_from_rows(context, &filtered_rows);
+            // If columns are empty after update (no variables), mark that Filter created the row
+            // so Project knows not to create another one
+            if context.result_set.columns.is_empty() {
+                context.result_set.columns = vec!["__filter_created__".to_string()];
+            }
+        } else {
+            // Had rows initially - update result set normally
+            self.update_variables_from_rows(context, &filtered_rows);
+            self.update_result_set_from_rows(context, &filtered_rows);
+        }
         Ok(())
     }
 
@@ -1550,7 +1591,8 @@ impl Executor {
         context: &mut ExecutionContext,
         items: &[ProjectionItem],
     ) -> Result<Vec<Row>> {
-        // Use existing result_set.rows if available (from UNWIND, etc), otherwise materialize from variables
+        // Use existing result_set.rows if available (from UNWIND, Filter, etc), otherwise materialize from variables
+        // If result_set has columns but no rows, it means Filter removed all rows, so don't create new rows
         let rows = if !context.result_set.rows.is_empty() {
             // Convert existing rows to row maps for projection
             let existing_columns = context.result_set.columns.clone();
@@ -1561,24 +1603,39 @@ impl Executor {
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect()
         } else {
-            let materialized = self.materialize_rows_from_variables(context);
-            // If we have no rows from variables and no variables, but we have projection items that can be evaluated,
-            // we need to create at least one row to evaluate the expressions
-            // This handles: RETURN 1+1 AS result, RETURN 5 > 3 AS gt, RETURN CASE WHEN ... END, etc.
-            // But NOT: MATCH (n:NonExistent) RETURN n (which should return 0 rows)
-            // And NOT: UNWIND [] AS x RETURN x (which should return 0 rows)
-            if materialized.is_empty()
-                && context.variables.is_empty()
-                && !items.is_empty()
-                && items.iter().any(|item| {
-                    // Check if any projection item can be evaluated without variables
-                    self.can_evaluate_without_variables(&item.expression)
-                })
-            {
-                // Create single empty row for expression evaluation
-                vec![std::collections::HashMap::new()]
+            // If result_set has columns but no rows, Filter already ran and removed all rows
+            // (marked with "__filtered__" column). Don't create new rows in this case.
+            // Also check for "__filter_created__" which means Filter already created a row
+            // Check if Filter already ran and removed all rows (marked with "__filtered__" or "__filter_created__")
+            let has_filter_marker = context.result_set.columns.iter().any(|c| {
+                let s = c.as_str();
+                s == "__filtered__" || s == "__filter_created__"
+            });
+            if has_filter_marker && context.result_set.rows.is_empty() {
+                // Filter already processed and removed all rows, don't create new ones
+                vec![]
             } else {
-                materialized
+                let materialized = self.materialize_rows_from_variables(context);
+                // If we have no rows from variables and no variables, but we have projection items that can be evaluated,
+                // we need to create at least one row to evaluate the expressions
+                // This handles: RETURN 1+1 AS result, RETURN 5 > 3 AS gt, RETURN CASE WHEN ... END, etc.
+                // But NOT: MATCH (n:NonExistent) RETURN n (which should return 0 rows)
+                // And NOT: UNWIND [] AS x RETURN x (which should return 0 rows)
+                // But NOT: RETURN ... WHERE false (Filter already processed and removed all rows)
+                if materialized.is_empty()
+                    && context.variables.is_empty()
+                    && !items.is_empty()
+                    && !has_filter_marker // Don't create row if Filter already ran
+                    && items.iter().any(|item| {
+                        // Check if any projection item can be evaluated without variables
+                        self.can_evaluate_without_variables(&item.expression)
+                    })
+                {
+                    // Create single empty row for expression evaluation
+                    vec![std::collections::HashMap::new()]
+                } else {
+                    materialized
+                }
             }
         };
 
