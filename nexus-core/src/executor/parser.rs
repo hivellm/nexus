@@ -3939,11 +3939,15 @@ impl CypherParser {
 
                 let start_expr = if is_slice {
                     // For slice, we need to parse the start expression carefully
-                    // Check if we start with a number
+                    // Check if we start with a number (including negative)
                     if let Some(c) = self.peek_char() {
-                        if c.is_ascii_digit() {
+                        if c.is_ascii_digit() || c == '-' {
                             // Parse number manually to avoid consuming the '.' after it
                             let start = self.pos;
+                            // Consume '-' if present
+                            if c == '-' {
+                                self.consume_char();
+                            }
                             while self.pos < self.input.len() {
                                 if let Some(ch) = self.peek_char() {
                                     if ch.is_ascii_digit() {
@@ -3956,13 +3960,15 @@ impl CypherParser {
                                 }
                             }
                             let num_str = &self.input[start..self.pos];
-                            if !num_str.is_empty() {
+                            if !num_str.is_empty() && num_str != "-" {
                                 let num = num_str
                                     .parse::<i64>()
                                     .map_err(|_| self.error("Invalid number in slice"))?;
                                 Some(Box::new(Expression::Literal(Literal::Integer(num))))
                             } else {
-                                None
+                                // Not a number, parse as regular expression
+                                self.pos = start; // Reset position
+                                Some(Box::new(self.parse_expression()?))
                             }
                         } else if c == '.' || c == ':' {
                             None
@@ -3991,7 +3997,43 @@ impl CypherParser {
                     self.skip_whitespace();
 
                     let end_expr = if self.peek_char() != Some(']') {
-                        Some(Box::new(self.parse_expression()?))
+                        // Check if we start with a number (including negative)
+                        if let Some(c) = self.peek_char() {
+                            if c.is_ascii_digit() || c == '-' {
+                                // Parse number manually
+                                let start = self.pos;
+                                // Consume '-' if present
+                                if c == '-' {
+                                    self.consume_char();
+                                }
+                                while self.pos < self.input.len() {
+                                    if let Some(ch) = self.peek_char() {
+                                        if ch.is_ascii_digit() {
+                                            self.consume_char();
+                                        } else {
+                                            break;
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                let num_str = &self.input[start..self.pos];
+                                if !num_str.is_empty() && num_str != "-" {
+                                    let num = num_str
+                                        .parse::<i64>()
+                                        .map_err(|_| self.error("Invalid number in slice"))?;
+                                    Some(Box::new(Expression::Literal(Literal::Integer(num))))
+                                } else {
+                                    // Not a number, parse as regular expression
+                                    self.pos = start; // Reset position
+                                    Some(Box::new(self.parse_expression()?))
+                                }
+                            } else {
+                                Some(Box::new(self.parse_expression()?))
+                            }
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };

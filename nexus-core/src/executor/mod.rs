@@ -4041,8 +4041,16 @@ impl Executor {
                                 Value::Number(n) => {
                                     let idx = n.as_i64().unwrap_or(array_len);
                                     // Handle negative indices
+                                    // In Cypher, negative end index excludes that many elements from the end
+                                    // e.g., [1..-1] means from index 1 to (length - 1), excluding the last element
                                     if idx < 0 {
-                                        ((array_len + idx).max(0)) as usize
+                                        let calculated = array_len + idx;
+                                        // Ensure we don't go below 0, but negative end should exclude elements
+                                        if calculated <= 0 {
+                                            0
+                                        } else {
+                                            calculated as usize
+                                        }
                                     } else {
                                         idx.min(array_len) as usize
                                     }
@@ -5746,8 +5754,16 @@ impl Executor {
                                 Value::Number(n) => {
                                     let idx = n.as_i64().unwrap_or(array_len);
                                     // Handle negative indices
+                                    // In Cypher, negative end index excludes that many elements from the end
+                                    // e.g., [1..-1] means from index 1 to (length - 1), excluding the last element
                                     if idx < 0 {
-                                        ((array_len + idx).max(0)) as usize
+                                        let calculated = array_len + idx;
+                                        // Ensure we don't go below 0, but negative end should exclude elements
+                                        if calculated <= 0 {
+                                            0
+                                        } else {
+                                            calculated as usize
+                                        }
                                     } else {
                                         idx.min(array_len) as usize
                                     }
