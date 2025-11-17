@@ -1348,7 +1348,20 @@ impl Executor {
         let mut parser = parser::CypherParser::new(predicate.to_string());
         let expr = parser.parse_expression()?;
 
-        let rows = self.materialize_rows_from_variables(context);
+        // Get rows from variables OR from result_set.rows (e.g., from UNWIND)
+        let rows = if !context.result_set.rows.is_empty() {
+            // Convert existing rows to row maps for filtering
+            let existing_columns = context.result_set.columns.clone();
+            context
+                .result_set
+                .rows
+                .iter()
+                .map(|row| self.row_to_map(row, &existing_columns))
+                .collect()
+        } else {
+            // Materialize rows from variables
+            self.materialize_rows_from_variables(context)
+        };
         let mut filtered_rows = Vec::new();
 
         // Check if we're in a RETURN ... WHERE scenario (no MATCH, no variables, no existing rows)
