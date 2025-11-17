@@ -11,9 +11,9 @@
 
 use crate::error::{Error, Result};
 use crate::wal::{Wal, WalEntry};
-use crossbeam_channel::{bounded, Receiver, Sender};
-use std::sync::atomic::{AtomicBool, Ordering};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -71,11 +71,11 @@ pub struct AsyncWalConfig {
 impl Default for AsyncWalConfig {
     fn default() -> Self {
         Self {
-            max_batch_size: 100,           // Batch up to 100 entries
+            max_batch_size: 100,                      // Batch up to 100 entries
             max_batch_age: Duration::from_millis(10), // Or flush after 10ms
-            max_queue_depth: 10_000,       // Block if queue gets too deep
+            max_queue_depth: 10_000,                  // Block if queue gets too deep
             flush_interval: Duration::from_millis(5), // Background flush every 5ms
-            channel_buffer_size: 1000,     // Channel buffer for commands
+            channel_buffer_size: 1000,                // Channel buffer for commands
         }
     }
 }
@@ -191,7 +191,9 @@ impl AsyncWalWriter {
 
         // Wait for thread to finish
         if let Some(handle) = self.handle.take() {
-            handle.join().map_err(|_| Error::wal("Writer thread panicked"))?;
+            handle
+                .join()
+                .map_err(|_| Error::wal("Writer thread panicked"))?;
         }
 
         Ok(())
@@ -214,7 +216,8 @@ impl AsyncWalWriter {
             match receiver.recv_timeout(config.max_batch_age.min(config.flush_interval)) {
                 Ok(WalCommand::Append(entry)) => {
                     batch.push(entry);
-                    let current_stats = unsafe { &mut *(Arc::as_ptr(&stats) as *mut AsyncWalStats) };
+                    let current_stats =
+                        unsafe { &mut *(Arc::as_ptr(&stats) as *mut AsyncWalStats) };
                     current_stats.current_queue_depth -= 1;
                 }
                 Ok(WalCommand::Flush) => {
@@ -306,8 +309,8 @@ impl Drop for AsyncWalWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use crate::wal::WalEntry;
+    use tempfile::TempDir;
 
     fn create_test_writer() -> (AsyncWalWriter, TempDir) {
         let dir = TempDir::new().unwrap();
@@ -395,7 +398,7 @@ mod tests {
         let wal = Wal::new(&wal_path).unwrap();
 
         let config = AsyncWalConfig {
-            max_batch_size: 5,  // Small batch size for testing
+            max_batch_size: 5,                         // Small batch size for testing
             max_batch_age: Duration::from_millis(100), // Short timeout for testing
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(50), // Short flush interval
@@ -420,7 +423,11 @@ mod tests {
         assert_eq!(stats.entries_submitted, 10);
         // With batch size 5, 10 entries should create at least 2 batches
         // But due to timing, we might get fewer - just check that some batches were flushed
-        assert!(stats.batches_flushed > 0, "No batches were flushed, got {}", stats.batches_flushed);
+        assert!(
+            stats.batches_flushed > 0,
+            "No batches were flushed, got {}",
+            stats.batches_flushed
+        );
 
         writer.shutdown().unwrap();
     }

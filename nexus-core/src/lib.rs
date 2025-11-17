@@ -41,6 +41,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
 pub mod auth;
+pub mod cache;
 pub mod catalog;
 pub mod concurrent_access;
 pub mod database;
@@ -124,6 +125,8 @@ pub struct Engine {
     pub indexes: index::IndexManager,
     /// Query executor
     pub executor: executor::Executor,
+    /// Multi-layer cache system for performance optimization
+    pub cache: cache::MultiLayerCache,
     /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
     _temp_dir: Option<tempfile::TempDir>,
 }
@@ -164,7 +167,10 @@ impl Engine {
         let wal = wal::Wal::new(data_dir.join("wal.log"))?;
 
         // Initialize async WAL writer (optional - can be disabled for testing)
-        let async_wal_writer = Some(wal::AsyncWalWriter::new(wal.clone(), wal::AsyncWalConfig::default())?);
+        let async_wal_writer = Some(wal::AsyncWalWriter::new(
+            wal.clone(),
+            wal::AsyncWalConfig::default(),
+        )?);
 
         // Initialize transaction manager (shared between Engine and SessionManager)
         let transaction_manager = transaction::TransactionManager::new()?;
@@ -180,6 +186,10 @@ impl Engine {
         let executor =
             executor::Executor::new(&catalog, &storage, &indexes.label_index, &indexes.knn_index)?;
 
+        // Initialize multi-layer cache system
+        let cache_config = cache::CacheConfig::default();
+        let cache = cache::MultiLayerCache::new(cache_config)?;
+
         // Engine shares the same TransactionManager Arc with SessionManager
         let mut engine = Engine {
             catalog,
@@ -191,6 +201,7 @@ impl Engine {
             session_manager,
             indexes,
             executor,
+            cache,
             _temp_dir: None,
         };
 
@@ -747,7 +758,7 @@ impl Engine {
     }
 
     /// Get engine statistics
-    pub fn stats(&self) -> Result<EngineStats> {
+    pub fn stats(&mut self) -> Result<EngineStats> {
         Ok(EngineStats {
             nodes: self.storage.node_count(),
             relationships: self.storage.relationship_count(),
@@ -757,6 +768,7 @@ impl Engine {
             page_cache_misses: self.page_cache.miss_count(),
             wal_entries: self.wal.entry_count(),
             active_transactions: self.transaction_manager.read().active_count(),
+            cache_stats: self.cache.stats().clone(),
         })
     }
 
@@ -2991,7 +3003,7 @@ impl Engine {
 
         // Only commit if we created our own transaction
         if !has_session_tx {
-            let _epoch = self.transaction_manager.write().commit(tx)?;
+            self.transaction_manager.write().commit(tx)?;
 
             // Write WAL entry for node creation (async) after commit
             let wal_entry = wal::WalEntry::CreateNode {
@@ -3053,7 +3065,7 @@ impl Engine {
 
         // Only commit if we created our own transaction
         if !has_session_tx {
-            let _epoch = self.transaction_manager.write().commit(tx)?;
+            self.transaction_manager.write().commit(tx)?;
 
             // Write WAL entry for relationship creation (async) after commit
             let wal_entry = wal::WalEntry::CreateRel {
@@ -3564,6 +3576,7 @@ pub struct EngineStats {
     pub page_cache_misses: u64,
     pub wal_entries: u64,
     pub active_transactions: u64,
+    pub cache_stats: cache::CacheStats,
 }
 
 /// Health status
@@ -3753,7 +3766,7 @@ mod tests {
 
     #[test]
     fn test_engine_creation() {
-        let engine = Engine::new();
+        let mut engine = Engine::new();
         assert!(engine.is_ok());
         let engine = engine.unwrap();
 
@@ -3785,7 +3798,7 @@ mod tests {
 
     #[test]
     fn test_engine_stats() {
-        let engine = Engine::new().unwrap();
+        let mut engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
 
         // Test that stats are accessible
@@ -3861,7 +3874,7 @@ mod tests {
 
     #[test]
     fn test_engine_knn_search() {
-        let engine = Engine::new().unwrap();
+        let mut engine = Engine::new().unwrap();
 
         // Test KNN search
         let vector = vec![0.1, 0.2, 0.3, 0.4];
@@ -3872,7 +3885,7 @@ mod tests {
 
     #[test]
     fn test_engine_health_check() {
-        let engine = Engine::new().unwrap();
+        let mut engine = Engine::new().unwrap();
 
         // Test health check
         let status = engine.health_check().unwrap();
@@ -3893,7 +3906,7 @@ mod tests {
 
     #[test]
     fn test_engine_stats_serialization() {
-        let engine = Engine::new().unwrap();
+        let mut engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
 
         // Test JSON serialization
@@ -3961,7 +3974,7 @@ mod tests {
 
     #[test]
     fn test_engine_stats_clone() {
-        let engine = Engine::new().unwrap();
+        let mut engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
         let cloned_stats = stats.clone();
 
@@ -4003,7 +4016,7 @@ mod tests {
 
     #[test]
     fn test_engine_stats_debug() {
-        let engine = Engine::new().unwrap();
+        let mut engine = Engine::new().unwrap();
         let stats = engine.stats().unwrap();
         let debug = format!("{:?}", stats);
 
@@ -4045,7 +4058,7 @@ mod tests {
 
     #[test]
     fn test_engine_component_access() {
-        let engine = Engine::new().unwrap();
+        let mut engine = Engine::new().unwrap();
 
         // Test that all components are accessible
         let _catalog = &engine.catalog;

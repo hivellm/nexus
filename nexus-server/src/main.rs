@@ -16,18 +16,17 @@
 //! - POST /mcp - MCP StreamableHTTP endpoint
 
 use axum::{
-    Json,
-    Router,
+    Json, Router,
     extract::Request,
     middleware::Next,
     routing::{any, delete, get, post, put},
 };
 use std::sync::Arc;
+use std::thread;
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use std::thread;
 
 // Server imports
 use tokio::net::TcpListener;
@@ -44,16 +43,18 @@ fn main() -> anyhow::Result<()> {
     // Use CPU count * 2 for worker threads, minimum 8, maximum 32
     let worker_threads = (thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4) * 2)
-        .max(8)
-        .min(32);
+        .unwrap_or(4)
+        * 2)
+    .max(8)
+    .min(32);
 
     // Use CPU count * 4 for blocking threads, minimum 32, maximum 128
     let blocking_threads = (thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4) * 4)
-        .max(32)
-        .min(128);
+        .unwrap_or(4)
+        * 4)
+    .max(32)
+    .min(128);
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
@@ -63,8 +64,10 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
 
-    eprintln!("[RUNTIME] Configured Tokio runtime: {} worker threads, {} blocking threads",
-              worker_threads, blocking_threads);
+    eprintln!(
+        "[RUNTIME] Configured Tokio runtime: {} worker threads, {} blocking threads",
+        worker_threads, blocking_threads
+    );
 
     rt.block_on(async_main(worker_threads))
 }

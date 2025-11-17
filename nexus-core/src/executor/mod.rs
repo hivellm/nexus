@@ -48,6 +48,7 @@ pub struct Row {
 
 /// Query result set
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ResultSet {
     /// Column names
     pub columns: Vec<String>,
@@ -935,7 +936,7 @@ impl Executor {
             let _guard = self.knn_index();
             _guard.clone()
         };
-        
+
         // Locks are released here - planning happens with cloned data
         let planner = QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
 

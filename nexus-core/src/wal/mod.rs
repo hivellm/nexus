@@ -26,7 +26,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 pub mod async_wal;
-pub use async_wal::{AsyncWalWriter, AsyncWalConfig, AsyncWalStats};
+pub use async_wal::{AsyncWalConfig, AsyncWalStats, AsyncWalWriter};
 
 /// WAL entry types
 #[repr(u8)]

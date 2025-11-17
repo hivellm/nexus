@@ -1457,8 +1457,14 @@ pub async fn execute_cypher(
 
     // Debug: Log thread info before spawning
     let thread_id_before = std::thread::current().id();
-    println!("[DEBUG] Spawning blocking task from thread {:?}", thread_id_before);
-    eprintln!("[DEBUG] Spawning blocking task from thread {:?}", thread_id_before);
+    println!(
+        "[DEBUG] Spawning blocking task from thread {:?}",
+        thread_id_before
+    );
+    eprintln!(
+        "[DEBUG] Spawning blocking task from thread {:?}",
+        thread_id_before
+    );
     tracing::info!("Spawning blocking task from thread {:?}", thread_id_before);
 
     // Execute in blocking thread pool for true parallel execution
@@ -1471,9 +1477,18 @@ pub async fn execute_cypher(
         tracing::info!("Executing in blocking thread {:?}", thread_id_after);
 
         let result = executor_clone.execute(&query_clone);
-        println!("[DEBUG] Query executed successfully in blocking thread {:?}", thread_id_after);
-        eprintln!("[DEBUG] Query executed successfully in blocking thread {:?}", thread_id_after);
-        tracing::info!("Query executed successfully in blocking thread {:?}", thread_id_after);
+        println!(
+            "[DEBUG] Query executed successfully in blocking thread {:?}",
+            thread_id_after
+        );
+        eprintln!(
+            "[DEBUG] Query executed successfully in blocking thread {:?}",
+            thread_id_after
+        );
+        tracing::info!(
+            "Query executed successfully in blocking thread {:?}",
+            thread_id_after
+        );
         result
     })
     .await

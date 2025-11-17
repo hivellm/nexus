@@ -190,7 +190,7 @@ impl DatabaseManager {
         let mut databases: Vec<DatabaseInfo> = dbs
             .iter()
             .map(|(name, engine)| {
-                let engine_guard = engine.read();
+                let mut engine_guard = engine.write();
                 let (node_count, relationship_count) = match engine_guard.stats() {
                     Ok(stats) => (stats.nodes, stats.relationships),
                     Err(_) => (0, 0),
@@ -290,7 +290,7 @@ mod tests {
         assert!(manager.exists("test_db"));
 
         // Verify engine works
-        let engine = db.read();
+        let mut engine = db.write();
         let stats = engine.stats().unwrap();
         assert_eq!(stats.nodes, 0);
     }
@@ -358,7 +358,7 @@ mod tests {
         manager.create_database("test_db").unwrap();
 
         let db = manager.get_database("test_db").unwrap();
-        let engine = db.read();
+        let mut engine = db.write();
         let stats = engine.stats().unwrap();
         assert_eq!(stats.nodes, 0);
     }
@@ -396,7 +396,7 @@ mod tests {
         let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
 
         let db = manager.get_default_database().unwrap();
-        let engine = db.read();
+        let mut engine = db.write();
         let stats = engine.stats().unwrap();
         assert_eq!(stats.nodes, 0);
     }
@@ -423,14 +423,14 @@ mod tests {
 
         // Verify db2 is empty
         {
-            let engine2 = db2.read();
+            let mut engine2 = db2.write();
             let stats = engine2.stats().unwrap();
             assert_eq!(stats.nodes, 0);
         }
 
         // Verify db1 has data
         {
-            let engine1 = db1.read();
+            let mut engine1 = db1.write();
             let stats = engine1.stats().unwrap();
             assert_eq!(stats.nodes, 1);
         }
@@ -512,7 +512,7 @@ mod tests {
         }
 
         // Verify all nodes created
-        let engine = db.read();
+        let mut engine = db.write();
         let stats = engine.stats().unwrap();
         assert_eq!(stats.nodes, 5);
     }
