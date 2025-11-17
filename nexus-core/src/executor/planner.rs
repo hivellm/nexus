@@ -255,6 +255,13 @@ impl<'a> QueryPlanner<'a> {
             // This handles cases like: RETURN count(*), RETURN sum(1), etc.
             operators.extend(unwind_operators);
 
+            // Add filter operators for WHERE clauses (when there are no patterns)
+            // This handles cases like: RETURN 42 WHERE false, RETURN 5 WHERE 5 > 10, etc.
+            for where_clause in &where_clauses {
+                let predicate = self.expression_to_string(where_clause)?;
+                operators.push(Operator::Filter { predicate });
+            }
+
             if !return_items.is_empty() {
                 // Check if any return items contain aggregate functions
                 let mut has_aggregation = false;
