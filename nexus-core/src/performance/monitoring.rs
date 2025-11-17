@@ -14,6 +14,53 @@ use std::{
 };
 use tokio::{sync::RwLock, task::JoinHandle, time::interval};
 
+/// Cache hit rate metrics across all layers
+#[derive(Debug, Clone)]
+pub struct CacheHitRateMetrics {
+    pub overall_hit_rate: f64,
+    pub page_cache_hit_rate: f64,
+    pub object_cache_hit_rate: f64,
+    pub query_cache_hit_rate: f64,
+    pub index_cache_hit_rate: f64,
+    pub relationship_index_hit_rate: f64,
+}
+
+/// Query execution time distribution statistics
+#[derive(Debug, Clone)]
+pub struct QueryExecutionStats {
+    pub total_queries: u64,
+    pub avg_execution_time_ms: f64,
+    pub p50_execution_time_ms: f64,
+    pub p95_execution_time_ms: f64,
+    pub p99_execution_time_ms: f64,
+    pub slow_queries_count: u64,
+    pub very_slow_queries_count: u64,
+}
+
+/// Memory usage breakdown by component
+#[derive(Debug, Clone)]
+pub struct MemoryUsageByComponent {
+    pub total_memory_mb: f64,
+    pub page_cache_mb: f64,
+    pub object_cache_mb: f64,
+    pub query_cache_mb: f64,
+    pub index_cache_mb: f64,
+    pub relationship_index_mb: f64,
+    pub query_execution_mb: f64,
+    pub wal_buffer_mb: f64,
+    pub other_mb: f64,
+}
+
+/// Comprehensive performance dashboard
+#[derive(Debug, Clone)]
+pub struct PerformanceDashboard {
+    pub system_metrics: SystemMetrics,
+    pub cache_hit_rates: CacheHitRateMetrics,
+    pub query_execution_stats: QueryExecutionStats,
+    pub memory_usage_breakdown: MemoryUsageByComponent,
+    pub timestamp: Instant,
+}
+
 /// System resource monitor
 pub struct SystemMonitor {
     metrics_history: Arc<RwLock<Vec<SystemMetrics>>>,
@@ -646,6 +693,68 @@ mod tests {
 
         // Should have some recommendations based on thresholds
         assert!(!recommendations.is_empty());
+    }
+
+    /// Get cache hit rate metrics across all layers
+    pub async fn get_cache_hit_rates(&self) -> Result<CacheHitRateMetrics, Box<dyn std::error::Error>> {
+        // This would integrate with the actual cache system
+        // For now, return placeholder metrics
+        Ok(CacheHitRateMetrics {
+            overall_hit_rate: 0.85,
+            page_cache_hit_rate: 0.90,
+            object_cache_hit_rate: 0.80,
+            query_cache_hit_rate: 0.75,
+            index_cache_hit_rate: 0.95,
+            relationship_index_hit_rate: 0.88,
+        })
+    }
+
+    /// Get query execution time distribution
+    pub async fn get_query_execution_stats(&self) -> Result<QueryExecutionStats, Box<dyn std::error::Error>> {
+        // This would integrate with actual query execution tracking
+        // For now, return placeholder statistics
+        Ok(QueryExecutionStats {
+            total_queries: 1000,
+            avg_execution_time_ms: 15.5,
+            p50_execution_time_ms: 12.0,
+            p95_execution_time_ms: 45.0,
+            p99_execution_time_ms: 120.0,
+            slow_queries_count: 25,
+            very_slow_queries_count: 5,
+        })
+    }
+
+    /// Get memory usage breakdown by component
+    pub async fn get_memory_usage_by_component(&self) -> Result<MemoryUsageByComponent, Box<dyn std::error::Error>> {
+        // This would integrate with actual memory tracking
+        // For now, return placeholder breakdown
+        Ok(MemoryUsageByComponent {
+            total_memory_mb: 512.0,
+            page_cache_mb: 100.0,
+            object_cache_mb: 50.0,
+            query_cache_mb: 25.0,
+            index_cache_mb: 30.0,
+            relationship_index_mb: 20.0,
+            query_execution_mb: 15.0,
+            wal_buffer_mb: 10.0,
+            other_mb: 50.0,
+        })
+    }
+
+    /// Get comprehensive performance dashboard
+    pub async fn get_performance_dashboard(&self) -> Result<PerformanceDashboard, Box<dyn std::error::Error>> {
+        let system_metrics = self.get_metrics().await?;
+        let cache_hit_rates = self.get_cache_hit_rates().await?;
+        let query_stats = self.get_query_execution_stats().await?;
+        let memory_breakdown = self.get_memory_usage_by_component().await?;
+
+        Ok(PerformanceDashboard {
+            system_metrics,
+            cache_hit_rates,
+            query_execution_stats: query_stats,
+            memory_usage_breakdown: memory_breakdown,
+            timestamp: Instant::now(),
+        })
     }
 
     #[tokio::test]

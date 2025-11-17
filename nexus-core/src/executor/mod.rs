@@ -120,6 +120,12 @@ pub enum Operator {
         aggregations: Vec<Aggregation>,
         /// Projection items (for evaluating literals in aggregation functions without MATCH)
         projection_items: Option<Vec<ProjectionItem>>,
+        /// Source operator (for optimization analysis)
+        source: Option<Box<Operator>>,
+        /// Whether streaming optimization is applied
+        streaming_optimized: bool,
+        /// Whether push-down optimization is applied
+        push_down_optimized: bool,
     },
     /// Union two result sets
     Union {
@@ -332,6 +338,11 @@ pub enum Aggregation {
     StDevP {
         /// Column to calculate population standard deviation
         column: String,
+        /// Alias for result
+        alias: String,
+    },
+    /// Optimized COUNT(*) using index statistics
+    CountStarOptimized {
         /// Alias for result
         alias: String,
     },
@@ -706,6 +717,9 @@ impl Executor {
                     group_by,
                     aggregations,
                     projection_items,
+                    source: _,
+                    streaming_optimized: _,
+                    push_down_optimized: _,
                 } => {
                     // Use projection items from the operator itself
                     self.execute_aggregate_with_projections(
@@ -947,7 +961,8 @@ impl Executor {
         };
 
         // Locks are released here - planning happens with cloned data
-        let mut planner = QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
+        let mut planner =
+            QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
 
         let mut operators = planner.plan_query(&ast)?;
 
@@ -2293,6 +2308,10 @@ impl Executor {
 
             for agg in aggregations {
                 let agg_value = match agg {
+                    Aggregation::CountStarOptimized { .. } => {
+                        // Optimized count using index statistics (placeholder for now)
+                        Value::Number(serde_json::Number::from(effective_row_count))
+                    }
                     Aggregation::Count {
                         column, distinct, ..
                     } => {
@@ -3498,6 +3517,9 @@ impl Executor {
                 group_by,
                 aggregations,
                 projection_items,
+                source: _,
+                streaming_optimized: _,
+                push_down_optimized: _,
             } => {
                 // Use projection items if available, otherwise call without them
                 if let Some(items) = projection_items {
@@ -8105,7 +8127,8 @@ impl Executor {
             | Aggregation::PercentileDisc { alias, .. }
             | Aggregation::PercentileCont { alias, .. }
             | Aggregation::StDev { alias, .. }
-            | Aggregation::StDevP { alias, .. } => alias.clone(),
+            | Aggregation::StDevP { alias, .. }
+            | Aggregation::CountStarOptimized { alias, .. } => alias.clone(),
         }
     }
 }

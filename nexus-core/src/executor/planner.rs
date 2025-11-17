@@ -76,6 +76,133 @@ pub struct PlanReuseStats {
     pub reuse_distribution: HashMap<String, u64>,
 }
 
+/// Cached aggregation result
+#[derive(Debug, Clone)]
+pub struct CachedAggregationResult {
+    /// The aggregation key (group by columns + aggregation expressions)
+    key: String,
+    /// The computed result
+    result: serde_json::Value,
+    /// When this result was cached
+    cached_at: Instant,
+    /// How many times this result has been used
+    access_count: u64,
+    /// Time-to-live for this cached result
+    ttl: Duration,
+}
+
+/// Aggregation result cache
+#[derive(Debug)]
+pub struct AggregationCache {
+    /// Cache of aggregation results
+    cache: HashMap<String, CachedAggregationResult>,
+    /// Maximum number of cached results
+    max_results: usize,
+    /// Default TTL for cached results
+    default_ttl: Duration,
+}
+
+impl AggregationCache {
+    /// Create a new aggregation cache
+    pub fn new(max_results: usize, default_ttl: Duration) -> Self {
+        Self {
+            cache: HashMap::new(),
+            max_results,
+            default_ttl,
+        }
+    }
+
+    /// Get a cached aggregation result
+    pub fn get(&mut self, key: &str) -> Option<&serde_json::Value> {
+        if let Some(result) = self.cache.get(key) {
+            // Check if expired
+            if result.cached_at.elapsed() > result.ttl {
+                self.cache.remove(key);
+                return None;
+            }
+
+            // Update access count
+            if let Some(result) = self.cache.get_mut(key) {
+                result.access_count += 1;
+            }
+
+            Some(&self.cache[key].result)
+        } else {
+            None
+        }
+    }
+
+    /// Store an aggregation result in cache
+    pub fn put(&mut self, key: String, result: serde_json::Value) {
+        // Evict if cache is full (simple LRU)
+        if self.cache.len() >= self.max_results {
+            if let Some(oldest_key) = self
+                .cache
+                .iter()
+                .min_by_key(|(_, result)| result.cached_at)
+                .map(|(key, _)| key.clone())
+            {
+                self.cache.remove(&oldest_key);
+            }
+        }
+
+        let cached_result = CachedAggregationResult {
+            key: key.clone(),
+            result,
+            cached_at: Instant::now(),
+            access_count: 0,
+            ttl: self.default_ttl,
+        };
+
+        self.cache.insert(key, cached_result);
+    }
+
+    /// Clean expired entries
+    pub fn clean_expired(&mut self) {
+        let mut expired = Vec::new();
+        for (key, result) in &self.cache {
+            if result.cached_at.elapsed() > result.ttl {
+                expired.push(key.clone());
+            }
+        }
+
+        for key in expired {
+            self.cache.remove(&key);
+        }
+    }
+
+    /// Get cache statistics
+    pub fn stats(&self) -> AggregationCacheStats {
+        let mut total_accesses = 0u64;
+        let mut max_accesses = 0u64;
+
+        for result in self.cache.values() {
+            total_accesses += result.access_count;
+            max_accesses = max_accesses.max(result.access_count);
+        }
+
+        AggregationCacheStats {
+            total_results: self.cache.len() as u64,
+            total_accesses,
+            avg_accesses_per_result: if self.cache.is_empty() {
+                0.0
+            } else {
+                total_accesses as f64 / self.cache.len() as f64
+            },
+            max_accesses,
+        }
+    }
+}
+
+/// Statistics for aggregation cache
+#[derive(Debug, Clone)]
+pub struct AggregationCacheStats {
+    pub total_results: u64,
+    pub total_accesses: u64,
+    pub avg_accesses_per_result: f64,
+    pub max_accesses: u64,
+}
+
 /// Query planner for optimizing Cypher execution
 pub struct QueryPlanner<'a> {
     catalog: &'a Catalog,
@@ -83,6 +210,8 @@ pub struct QueryPlanner<'a> {
     knn_index: &'a KnnIndex,
     /// Query plan cache for performance optimization
     plan_cache: QueryPlanCache,
+    /// Aggregation result cache for intermediate results
+    aggregation_cache: AggregationCache,
 }
 
 impl QueryPlanCache {
@@ -127,7 +256,8 @@ impl QueryPlanCache {
         // Evict if cache is full (simple LRU-like behavior)
         if self.plans.len() >= self.max_plans {
             // Remove oldest plan (simple implementation)
-            if let Some(oldest_hash) = self.plans
+            if let Some(oldest_hash) = self
+                .plans
                 .iter()
                 .min_by_key(|(_, plan)| plan.cached_at)
                 .map(|(hash, _)| *hash)
@@ -256,6 +386,7 @@ impl<'a> QueryPlanner<'a> {
             label_index,
             knn_index,
             plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
+            aggregation_cache: AggregationCache::new(500, Duration::from_secs(180)), // 500 results, 3min TTL
         }
     }
 
@@ -765,6 +896,9 @@ impl<'a> QueryPlanner<'a> {
                         } else {
                             Some(projection_items)
                         },
+                        source: None,
+                        streaming_optimized: false,
+                        push_down_optimized: false,
                     });
                 } else {
                     // Regular projection (no aggregations)
@@ -853,8 +987,11 @@ impl<'a> QueryPlanner<'a> {
 
         // Cache the planned operators for future use
         // Estimate cost using the improved cost model
-        let estimated_cost = self.estimate_plan_cost(&operators).unwrap_or(operators.len() as f64);
-        self.plan_cache.put(query_hash, operators.clone(), estimated_cost);
+        let estimated_cost = self
+            .estimate_plan_cost(&operators)
+            .unwrap_or(operators.len() as f64);
+        self.plan_cache
+            .put(query_hash, operators.clone(), estimated_cost);
 
         Ok(operators)
     }
@@ -1510,6 +1647,9 @@ impl<'a> QueryPlanner<'a> {
                     } else {
                         Some(projection_items)
                     },
+                    source: None,
+                    streaming_optimized: false,
+                    push_down_optimized: false,
                 });
 
                 // After aggregation, apply any non-aggregate functions that wrap aggregations
@@ -2102,22 +2242,55 @@ impl<'a> QueryPlanner<'a> {
         self.plan_cache.plan_reuse_stats()
     }
 
+    /// Get aggregation cache statistics
+    pub fn aggregation_cache_stats(&self) -> AggregationCacheStats {
+        self.aggregation_cache.stats()
+    }
+
+    /// Clean expired entries from both caches
+    pub fn clean_expired_caches(&mut self) {
+        self.plan_cache.clean_expired();
+        self.aggregation_cache.clean_expired();
+    }
+
     /// Update performance metrics with query plan cache statistics
-    pub async fn update_performance_metrics(&self, metrics: &crate::performance::PerformanceMetrics) {
+    pub async fn update_performance_metrics(
+        &self,
+        metrics: &crate::performance::PerformanceMetrics,
+    ) {
         let stats = self.plan_cache.stats();
 
         // Update counters
-        metrics.increment_counter("query_plan_cache_lookups", stats.lookups).await;
-        metrics.increment_counter("query_plan_cache_hits", stats.hits).await;
-        metrics.increment_counter("query_plan_cache_misses", stats.misses).await;
-        metrics.increment_counter("query_plan_cache_evictions", stats.evictions).await;
-        metrics.increment_counter("query_plan_cache_expirations", stats.expirations).await;
+        metrics
+            .increment_counter("query_plan_cache_lookups", stats.lookups)
+            .await;
+        metrics
+            .increment_counter("query_plan_cache_hits", stats.hits)
+            .await;
+        metrics
+            .increment_counter("query_plan_cache_misses", stats.misses)
+            .await;
+        metrics
+            .increment_counter("query_plan_cache_evictions", stats.evictions)
+            .await;
+        metrics
+            .increment_counter("query_plan_cache_expirations", stats.expirations)
+            .await;
 
         // Update gauges
-        metrics.set_gauge("query_plan_cache_hit_rate",
-            if stats.lookups > 0 { stats.hits as f64 / stats.lookups as f64 } else { 0.0 }
-        ).await;
-        metrics.set_gauge("query_plan_cache_size", stats.cached_plans as f64).await;
+        metrics
+            .set_gauge(
+                "query_plan_cache_hit_rate",
+                if stats.lookups > 0 {
+                    stats.hits as f64 / stats.lookups as f64
+                } else {
+                    0.0
+                },
+            )
+            .await;
+        metrics
+            .set_gauge("query_plan_cache_size", stats.cached_plans as f64)
+            .await;
     }
 
     /// Clear query plan cache
@@ -2145,7 +2318,9 @@ impl<'a> QueryPlanner<'a> {
 
         for operator in operators {
             match &operator {
-                Operator::NodeByLabel { .. } | Operator::AllNodesScan { .. } | Operator::IndexScan { .. } => {
+                Operator::NodeByLabel { .. }
+                | Operator::AllNodesScan { .. }
+                | Operator::IndexScan { .. } => {
                     scans.push(operator);
                 }
                 Operator::Filter { .. } => {
@@ -2166,7 +2341,9 @@ impl<'a> QueryPlanner<'a> {
         // Optimize scan order: put lowest cost scans first
         let mut scan_costs = Vec::new();
         for (i, scan) in scans.iter().enumerate() {
-            let cost = self.estimate_plan_cost(&[scan.clone()]).unwrap_or(1000.0);
+            let cost = self
+                .estimate_plan_cost(std::slice::from_ref(scan))
+                .unwrap_or(1000.0);
             scan_costs.push((cost, i));
         }
         scan_costs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -2211,7 +2388,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![
@@ -2263,7 +2440,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let operators = vec![
             Operator::NodeByLabel {
@@ -2290,7 +2467,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![
@@ -2360,7 +2537,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![
@@ -2407,7 +2584,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![
@@ -2464,7 +2641,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![
@@ -2532,7 +2709,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![
@@ -2595,7 +2772,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![],
@@ -2611,7 +2788,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let expr = Expression::Variable("test_var".to_string());
         let result = planner.expression_to_string(&expr).unwrap();
@@ -2623,7 +2800,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let expr = Expression::PropertyAccess {
             variable: "n".to_string(),
@@ -2638,7 +2815,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         // Test string literal
         let expr = Expression::Literal(Literal::String("hello".to_string()));
@@ -2671,7 +2848,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let expr = Expression::BinaryOp {
             left: Box::new(Expression::Variable("a".to_string())),
@@ -2695,7 +2872,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let expr = Expression::Parameter("param1".to_string());
         let result = planner.expression_to_string(&expr).unwrap();
@@ -2707,7 +2884,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let operators = vec![
             Operator::NodeByLabel {
@@ -2783,7 +2960,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let operators = vec![
             Operator::NodeByLabel {
@@ -2807,7 +2984,7 @@ mod tests {
         let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
-        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+        let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
         let query = CypherQuery {
             clauses: vec![
@@ -2844,6 +3021,203 @@ mod tests {
                 assert_eq!(items[0].alias, "person");
             }
             _ => panic!("Expected Project operator with alias"),
+        }
+    }
+
+    /// Check if aggregation can be optimized with streaming
+    pub fn can_use_streaming_aggregation(&self, operators: &[Operator]) -> bool {
+        // Check if we have aggregation operations that can benefit from streaming
+        for operator in operators {
+            if let Operator::Aggregate { group_by, aggregations, .. } = operator {
+                // Streaming is beneficial when:
+                // 1. We have aggregations that can be computed incrementally
+                // 2. Group-by keys are not too numerous (to avoid memory explosion)
+                // 3. We don't have complex expressions in aggregations
+
+                if aggregations.len() > 10 {
+                    return false; // Too many aggregations, stick with in-memory
+                }
+
+                // Check aggregation types - streaming works best with COUNT, SUM, AVG
+                for agg in aggregations {
+                    match agg {
+                        Aggregation::Count { .. } | Aggregation::Sum { .. } | Aggregation::Avg { .. } => {
+                            // These can be streamed
+                        }
+                        Aggregation::Min { .. } | Aggregation::Max { .. } => {
+                            // These can also be streamed
+                        }
+                        Aggregation::Collect { .. } => {
+                            // Collect requires storing all values, not suitable for streaming
+                            return false;
+                        }
+                        Aggregation::CountStarOptimized { .. } => {
+                            // Optimized count is already efficient
+                        }
+                        _ => {
+                            // Other aggregations may not be suitable for streaming
+                            return false;
+                        }
+                    }
+                }
+
+                // Check group-by complexity
+                if group_by.len() > 3 {
+                    return false; // Too many group-by keys for streaming
+                }
+
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Optimize aggregation operations by pushing them down in the query plan
+    pub fn optimize_aggregations(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
+        let mut result = Vec::new();
+
+        for operator in operators {
+            match operator {
+                Operator::Aggregate { aggregations, group_by, source, .. } => {
+                    // Check if we can push aggregation down to reduce data volume earlier
+                    if let Some(source_op) = source.as_ref() {
+                        if self.can_push_aggregation_down(source_op, &aggregations, &group_by) {
+                            // Create a new aggregation operator with push-down optimization
+                            let optimized_agg = Operator::Aggregate {
+                                aggregations,
+                                group_by,
+                                source: source.clone(),
+                                push_down_optimized: true,
+                            };
+                            result.push(optimized_agg);
+                            continue;
+                        }
+                    }
+
+                    // Use streaming aggregation if beneficial
+                    if self.can_use_streaming_aggregation(&[operator.clone()]) {
+                        let streaming_agg = Operator::Aggregate {
+                            aggregations,
+                            group_by,
+                            source,
+                            streaming_optimized: true,
+                            push_down_optimized: false,
+                        };
+                        result.push(streaming_agg);
+                        continue;
+                    }
+
+                    // Default aggregation
+                    result.push(operator);
+                }
+                _ => result.push(operator),
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Check if aggregation can be pushed down to reduce data processing
+    fn can_push_aggregation_down(&self, source_op: &Operator, aggregations: &[Aggregation], group_by: &[Expression]) -> bool {
+        match source_op {
+            Operator::Filter { source, .. } => {
+                // We can push aggregation past filters
+                if let Some(inner_source) = source.as_ref() {
+                    return self.can_push_aggregation_down(inner_source, aggregations, group_by);
+                }
+            }
+            Operator::Project { source, .. } => {
+                // Check if projection includes all needed columns for aggregation
+                if let Some(inner_source) = source.as_ref() {
+                    return self.can_push_aggregation_down(inner_source, aggregations, group_by);
+                }
+            }
+            Operator::Expand { .. } => {
+                // Relationship expansions can sometimes be optimized with aggregation
+                // For now, be conservative and don't push down
+                return false;
+            }
+            _ => {
+                // Other operators - check if they produce data we need for aggregation
+                return self.source_supports_aggregation(source_op, aggregations, group_by);
+            }
+        }
+        false
+    }
+
+    /// Check if a source operator supports aggregation optimization
+    fn source_supports_aggregation(&self, source_op: &Operator, _aggregations: &[Aggregation], _group_by: &[Expression]) -> bool {
+        match source_op {
+            Operator::NodeByLabel { .. } | Operator::AllNodesScan { .. } | Operator::IndexScan { .. } => {
+                // These are good sources for aggregation - they produce nodes we can aggregate
+                true
+            }
+            Operator::Expand { .. } => {
+                // Relationship traversal results can be aggregated
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Create optimized COUNT operations
+    pub fn optimize_count_operations(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
+        let mut result = Vec::new();
+
+        for operator in operators {
+            match operator {
+                Operator::Aggregate { aggregations, group_by, source, .. } => {
+                    let mut optimized_aggregations = Vec::new();
+
+                    for agg in aggregations {
+                        match agg {
+                            Aggregation::Count { column: None, .. } => {
+                                // Optimize COUNT(*) operations
+                                if self.can_optimize_count_star(&source) {
+                                    optimized_aggregations.push(Aggregation::CountStarOptimized {
+                                        alias: "count".to_string(), // Default alias
+                                    });
+                                } else {
+                                    optimized_aggregations.push(agg);
+                                }
+                            }
+                            _ => optimized_aggregations.push(agg),
+                        }
+                    }
+
+                    result.push(Operator::Aggregate {
+                        aggregations: optimized_aggregations,
+                        group_by,
+                        source,
+                        streaming_optimized: false,
+                        push_down_optimized: false,
+                    });
+                }
+                _ => result.push(operator),
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Check if COUNT(*) can be optimized (e.g., using index statistics)
+    fn can_optimize_count_star(&self, source: &Option<Box<Operator>>) -> bool {
+        if let Some(source_op) = source {
+            match source_op.as_ref() {
+                Operator::NodeByLabel { label_id, .. } => {
+                    // We can potentially use label index statistics for COUNT(*)
+                    // This would require label index to track counts per label
+                    let _ = label_id; // We'll use this in the future
+                    false // For now, not implemented
+                }
+                Operator::AllNodesScan { .. } => {
+                    // For all nodes, we could potentially use total node count
+                    false // For now, not implemented
+                }
+                _ => false,
+            }
+        } else {
+            false
         }
     }
 }
