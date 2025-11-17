@@ -3685,7 +3685,9 @@ impl Executor {
                         if left_val.is_null() || right_val.is_null() {
                             Ok(false) // null comparisons in WHERE clauses evaluate to false
                         } else {
-                            Ok(left_val == right_val)
+                            // Use numeric comparison for numbers to handle 1.0 == 1
+                            let is_equal = self.values_equal_for_comparison(&left_val, &right_val);
+                            Ok(is_equal)
                         }
                     }
                     parser::BinaryOperator::NotEqual => {
@@ -3971,6 +3973,12 @@ impl Executor {
                         self.compare_values_for_sort(&left_val, &right_val),
                         std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
                     ))),
+                    parser::BinaryOperator::Add => self.add_values(&left_val, &right_val),
+                    parser::BinaryOperator::Subtract => self.subtract_values(&left_val, &right_val),
+                    parser::BinaryOperator::Multiply => self.multiply_values(&left_val, &right_val),
+                    parser::BinaryOperator::Divide => self.divide_values(&left_val, &right_val),
+                    parser::BinaryOperator::Modulo => self.modulo_values(&left_val, &right_val),
+                    parser::BinaryOperator::Power => self.power_values(&left_val, &right_val),
                     _ => Ok(Value::Null), // Other operators not implemented in evaluate_expression
                 }
             }
@@ -4014,6 +4022,23 @@ impl Executor {
                 }
             }
             _ => Ok(Value::Null), // Other expressions not implemented in MVP
+        }
+    }
+
+    /// Compare two values for equality, handling numeric type differences (1.0 == 1)
+    fn values_equal_for_comparison(&self, left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::Number(a), Value::Number(b)) => {
+                // Compare numbers (handle int/float conversion)
+                if let (Some(a_i64), Some(b_i64)) = (a.as_i64(), b.as_i64()) {
+                    a_i64 == b_i64
+                } else if let (Some(a_f64), Some(b_f64)) = (a.as_f64(), b.as_f64()) {
+                    (a_f64 - b_f64).abs() < f64::EPSILON * 10.0
+                } else {
+                    false
+                }
+            }
+            _ => left == right,
         }
     }
 
@@ -7052,7 +7077,9 @@ impl Executor {
                         if left_val.is_null() || right_val.is_null() {
                             Ok(Value::Null)
                         } else {
-                            Ok(Value::Bool(left_val == right_val))
+                            Ok(Value::Bool(
+                                self.values_equal_for_comparison(&left_val, &right_val),
+                            ))
                         }
                     }
                     parser::BinaryOperator::NotEqual => {
