@@ -50,7 +50,7 @@
 - [x] 7.2 Fix modulo operator in WHERE
 - [x] 7.3 Fix arithmetic expression precedence
 - [x] 7.4 Fix substring with negative index
-- [✓] 7.5 Fix test environment data duplication (cleanup already exists)
+- [x] 7.5 Fix test environment data duplication (cleanup already exists)
 
 ## Progress Summary
 

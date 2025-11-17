@@ -3877,13 +3877,109 @@ impl CypherParser {
                 self.consume_char(); // consume '['
                 self.skip_whitespace();
 
-                // Check for slice syntax [start..end] or [:end] or [start:]
-                let has_start = self.peek_char() != Some('.');
+                // Check if this is a slice by looking ahead for '..'
+                // We need to check this BEFORE parsing the start expression,
+                // because parse_numeric_literal() will consume a single '.' as part of a float
+                let is_slice = {
+                    let saved_pos = self.pos;
+                    let mut check_pos = 0;
 
-                let start_expr = if has_start && self.peek_char() != Some(':') {
-                    Some(Box::new(self.parse_expression()?))
+                    // Skip whitespace
+                    while let Some(c) = self.peek_char_at(check_pos) {
+                        if c.is_whitespace() {
+                            check_pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Check if we start with '..' (Case: [..end] or [:end])
+                    if self.peek_char_at(check_pos) == Some('.')
+                        && self.peek_char_at(check_pos + 1) == Some('.')
+                    {
+                        self.pos = saved_pos;
+                        true
+                    } else if let Some(c) = self.peek_char_at(check_pos) {
+                        // Check if we have a number followed by '..'
+                        if c.is_ascii_digit() {
+                            // Skip the number
+                            let mut num_end = check_pos + 1;
+                            while let Some(ch) = self.peek_char_at(num_end) {
+                                if ch.is_ascii_digit() {
+                                    num_end += 1;
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            // Skip whitespace after number
+                            let mut after_num = num_end;
+                            while let Some(ch) = self.peek_char_at(after_num) {
+                                if ch.is_whitespace() {
+                                    after_num += 1;
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            // Check for '..' after number
+                            let is_slice = self.peek_char_at(after_num) == Some('.')
+                                && self.peek_char_at(after_num + 1) == Some('.');
+                            self.pos = saved_pos;
+                            is_slice
+                        } else {
+                            self.pos = saved_pos;
+                            false
+                        }
+                    } else {
+                        self.pos = saved_pos;
+                        false
+                    }
+                };
+
+                let start_expr = if is_slice {
+                    // For slice, we need to parse the start expression carefully
+                    // Check if we start with a number
+                    if let Some(c) = self.peek_char() {
+                        if c.is_ascii_digit() {
+                            // Parse number manually to avoid consuming the '.' after it
+                            let start = self.pos;
+                            while self.pos < self.input.len() {
+                                if let Some(ch) = self.peek_char() {
+                                    if ch.is_ascii_digit() {
+                                        self.consume_char();
+                                    } else {
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            let num_str = &self.input[start..self.pos];
+                            if !num_str.is_empty() {
+                                let num = num_str
+                                    .parse::<i64>()
+                                    .map_err(|_| self.error("Invalid number in slice"))?;
+                                Some(Box::new(Expression::Literal(Literal::Integer(num))))
+                            } else {
+                                None
+                            }
+                        } else if c == '.' || c == ':' {
+                            None
+                        } else {
+                            // Parse as regular expression
+                            Some(Box::new(self.parse_expression()?))
+                        }
+                    } else {
+                        None
+                    }
                 } else {
-                    None
+                    // Regular indexing - parse normally
+                    if self.peek_char() != Some('.') && self.peek_char() != Some(':') {
+                        Some(Box::new(self.parse_expression()?))
+                    } else {
+                        None
+                    }
                 };
 
                 self.skip_whitespace();
@@ -4076,13 +4172,109 @@ impl CypherParser {
             self.consume_char(); // consume '['
             self.skip_whitespace();
 
-            // Check for slice syntax [start..end]
-            let has_start = self.peek_char() != Some('.');
+            // Check if this is a slice by looking ahead for '..'
+            // We need to check this BEFORE parsing the start expression,
+            // because parse_numeric_literal() will consume a single '.' as part of a float
+            let is_slice = {
+                let saved_pos = self.pos;
+                let mut check_pos = 0;
 
-            let start_expr = if has_start && self.peek_char() != Some(':') {
-                Some(Box::new(self.parse_expression()?))
+                // Skip whitespace
+                while let Some(c) = self.peek_char_at(check_pos) {
+                    if c.is_whitespace() {
+                        check_pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Check if we start with '..' (Case: [..end] or [:end])
+                if self.peek_char_at(check_pos) == Some('.')
+                    && self.peek_char_at(check_pos + 1) == Some('.')
+                {
+                    self.pos = saved_pos;
+                    true
+                } else if let Some(c) = self.peek_char_at(check_pos) {
+                    // Check if we have a number followed by '..'
+                    if c.is_ascii_digit() {
+                        // Skip the number
+                        let mut num_end = check_pos + 1;
+                        while let Some(ch) = self.peek_char_at(num_end) {
+                            if ch.is_ascii_digit() {
+                                num_end += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        // Skip whitespace after number
+                        let mut after_num = num_end;
+                        while let Some(ch) = self.peek_char_at(after_num) {
+                            if ch.is_whitespace() {
+                                after_num += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        // Check for '..' after number
+                        let is_slice = self.peek_char_at(after_num) == Some('.')
+                            && self.peek_char_at(after_num + 1) == Some('.');
+                        self.pos = saved_pos;
+                        is_slice
+                    } else {
+                        self.pos = saved_pos;
+                        false
+                    }
+                } else {
+                    self.pos = saved_pos;
+                    false
+                }
+            };
+
+            let start_expr = if is_slice {
+                // For slice, we need to parse the start expression carefully
+                // Check if we start with a number
+                if let Some(c) = self.peek_char() {
+                    if c.is_ascii_digit() {
+                        // Parse number manually to avoid consuming the '.' after it
+                        let start = self.pos;
+                        while self.pos < self.input.len() {
+                            if let Some(ch) = self.peek_char() {
+                                if ch.is_ascii_digit() {
+                                    self.consume_char();
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                        let num_str = &self.input[start..self.pos];
+                        if !num_str.is_empty() {
+                            let num = num_str
+                                .parse::<i64>()
+                                .map_err(|_| self.error("Invalid number in slice"))?;
+                            Some(Box::new(Expression::Literal(Literal::Integer(num))))
+                        } else {
+                            None
+                        }
+                    } else if c == '.' || c == ':' {
+                        None
+                    } else {
+                        // Parse as regular expression
+                        Some(Box::new(self.parse_expression()?))
+                    }
+                } else {
+                    None
+                }
             } else {
-                None
+                // Regular indexing - parse normally
+                if self.peek_char() != Some('.') && self.peek_char() != Some(':') {
+                    Some(Box::new(self.parse_expression()?))
+                } else {
+                    None
+                }
             };
 
             self.skip_whitespace();

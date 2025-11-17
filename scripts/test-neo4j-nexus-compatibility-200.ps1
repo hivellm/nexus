@@ -325,15 +325,15 @@ Write-Host "│ Section 5: List/Array Operations (20 tests)        │" -Foregro
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
 
 Run-Test -Name "5.01 Return literal array" -Query "RETURN [1, 2, 3, 4, 5] AS numbers"
-Run-Test -Name "5.02 Array size" -Query "RETURN size([1, 2, 3]) AS length"
-Run-Test -Name "5.03 head function" -Query "RETURN head([1, 2, 3]) AS first"
-Run-Test -Name "5.04 tail function" -Query "RETURN tail([1, 2, 3]) AS rest"
-Run-Test -Name "5.05 last function" -Query "RETURN last([1, 2, 3]) AS final"
+Run-Test -Name "5.02 Array size" -Query 'RETURN size([1, 2, 3]) AS length'
+Run-Test -Name "5.03 head function" -Query 'RETURN head([1, 2, 3]) AS first'
+Run-Test -Name "5.04 tail function" -Query 'RETURN tail([1, 2, 3]) AS rest'
+Run-Test -Name "5.05 last function" -Query 'RETURN last([1, 2, 3]) AS final'
 Run-Test -Name "5.06 Array indexing" -Query "RETURN [1, 2, 3][0] AS first"
 Run-Test -Name "5.07 Array slicing" -Query "RETURN [1, 2, 3, 4, 5][1..3] AS slice"
 Run-Test -Name "5.08 Array concatenation" -Query "RETURN [1, 2] + [3, 4] AS combined"
 Run-Test -Name "5.09 IN operator with array" -Query "RETURN 2 IN [1, 2, 3] AS result"
-Run-Test -Name "5.10 reverse array" -Query "RETURN reverse([1, 2, 3]) AS reversed"
+Run-Test -Name "5.10 reverse array" -Query 'RETURN reverse([1, 2, 3]) AS reversed'
 Run-Test -Name "5.11 range function" -Query "RETURN range(1, 5) AS numbers"
 Run-Test -Name "5.12 range with step" -Query "RETURN range(0, 10, 2) AS evens"
 Run-Test -Name "5.13 Array with strings" -Query "RETURN ['a', 'b', 'c'] AS letters"
