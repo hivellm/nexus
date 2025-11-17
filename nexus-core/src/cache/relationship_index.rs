@@ -63,6 +63,12 @@ pub struct RelationshipIndexStats {
     pub hits: u64,
 }
 
+impl Default for RelationshipIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RelationshipIndex {
     /// Create a new relationship index
     pub fn new() -> Self {
@@ -76,35 +82,45 @@ impl RelationshipIndex {
     }
 
     /// Index a new relationship
-    pub fn add_relationship(&self, rel_id: u64, src_id: u64, dst_id: u64, type_id: u32) -> Result<()> {
+    pub fn add_relationship(
+        &self,
+        rel_id: u64,
+        src_id: u64,
+        dst_id: u64,
+        type_id: u32,
+    ) -> Result<()> {
         // Update type index
         {
             let mut type_index = self.type_index.write().unwrap();
             type_index
                 .type_to_rels
                 .entry(type_id)
-                .or_insert_with(RoaringBitmap::new)
+                .or_default()
                 .insert(rel_id as u32);
         }
 
         // Update node index for source node (outgoing)
         {
             let mut node_index = self.node_index.write().unwrap();
-            let src_entry = node_index.entry(src_id).or_insert_with(|| NodeRelationshipIndex {
-                outgoing: HashMap::new(),
-                incoming: HashMap::new(),
-            });
-            src_entry.outgoing.entry(type_id).or_insert_with(Vec::new).push(rel_id);
+            let src_entry = node_index
+                .entry(src_id)
+                .or_insert_with(|| NodeRelationshipIndex {
+                    outgoing: HashMap::new(),
+                    incoming: HashMap::new(),
+                });
+            src_entry.outgoing.entry(type_id).or_default().push(rel_id);
         }
 
         // Update node index for destination node (incoming)
         {
             let mut node_index = self.node_index.write().unwrap();
-            let dst_entry = node_index.entry(dst_id).or_insert_with(|| NodeRelationshipIndex {
-                outgoing: HashMap::new(),
-                incoming: HashMap::new(),
-            });
-            dst_entry.incoming.entry(type_id).or_insert_with(Vec::new).push(rel_id);
+            let dst_entry = node_index
+                .entry(dst_id)
+                .or_insert_with(|| NodeRelationshipIndex {
+                    outgoing: HashMap::new(),
+                    incoming: HashMap::new(),
+                });
+            dst_entry.incoming.entry(type_id).or_default().push(rel_id);
         }
 
         // Update stats
@@ -124,7 +140,13 @@ impl RelationshipIndex {
     }
 
     /// Remove a relationship from the index
-    pub fn remove_relationship(&self, rel_id: u64, src_id: u64, dst_id: u64, type_id: u32) -> Result<()> {
+    pub fn remove_relationship(
+        &self,
+        rel_id: u64,
+        src_id: u64,
+        dst_id: u64,
+        type_id: u32,
+    ) -> Result<()> {
         // Update type index
         {
             let mut type_index = self.type_index.write().unwrap();
@@ -203,13 +225,22 @@ impl RelationshipIndex {
     }
 
     /// Get relationships for a node with specific types and direction
-    pub fn get_node_relationships(&self, node_id: u64, type_ids: &[u32], outgoing: bool) -> Result<Vec<u64>> {
+    pub fn get_node_relationships(
+        &self,
+        node_id: u64,
+        type_ids: &[u32],
+        outgoing: bool,
+    ) -> Result<Vec<u64>> {
         let node_index = self.node_index.read().unwrap();
 
         let mut result = Vec::new();
 
         if let Some(node_entry) = node_index.get(&node_id) {
-            let type_map = if outgoing { &node_entry.outgoing } else { &node_entry.incoming };
+            let type_map = if outgoing {
+                &node_entry.outgoing
+            } else {
+                &node_entry.incoming
+            };
 
             if type_ids.is_empty() {
                 // Return all relationships of this direction
@@ -260,7 +291,7 @@ impl RelationshipIndex {
         // Count total relationships from type index
         let mut total_from_types = 0u64;
         for bitmap in type_index.type_to_rels.values() {
-            total_from_types += bitmap.len() as u64;
+            total_from_types += bitmap.len();
         }
 
         // Count total relationships from node index

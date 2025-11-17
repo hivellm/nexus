@@ -444,9 +444,12 @@ impl MultiLayerCache {
 
         // Update relationship index stats
         let rel_stats = self.relationship_index.stats();
+        self.stats.update_size(
+            CacheLayer::Relationship,
+            rel_stats.total_relationships as usize,
+        );
         self.stats
-            .update_size(CacheLayer::Relationship, rel_stats.total_relationships as usize);
-        self.stats.update_memory(CacheLayer::Relationship, rel_stats.memory_usage);
+            .update_memory(CacheLayer::Relationship, rel_stats.memory_usage);
 
         // Calculate hit rates
         for &layer in &[

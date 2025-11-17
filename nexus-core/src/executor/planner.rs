@@ -6,13 +6,246 @@ use super::{Aggregation, Direction, Operator, ProjectionItem};
 use crate::catalog::Catalog;
 use crate::index::{KnnIndex, LabelIndex};
 use crate::{Error, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::time::{Duration, Instant};
+
+/// Cached query plan with metadata
+#[derive(Debug, Clone)]
+pub struct CachedQueryPlan {
+    /// The planned operators
+    pub operators: Vec<Operator>,
+    /// When this plan was cached
+    pub cached_at: Instant,
+    /// How many times this plan has been used
+    pub access_count: u64,
+    /// Estimated cost of the plan
+    pub estimated_cost: f64,
+}
+
+/// Query plan cache for optimizing repeated queries
+#[derive(Debug)]
+pub struct QueryPlanCache {
+    /// Cache of plans by query hash
+    plans: HashMap<u64, CachedQueryPlan>,
+    /// Maximum number of cached plans
+    max_plans: usize,
+    /// Time-to-live for cached plans
+    ttl: Duration,
+    /// Statistics
+    stats: QueryPlanCacheStats,
+}
+
+/// Statistics for query plan cache
+#[derive(Debug, Clone, Default)]
+pub struct QueryPlanCacheStats {
+    /// Total cache lookups
+    pub lookups: u64,
+    /// Cache hits
+    pub hits: u64,
+    /// Cache misses
+    pub misses: u64,
+    /// Plans evicted due to size limits
+    pub evictions: u64,
+    /// Plans evicted due to TTL expiration
+    pub expirations: u64,
+    /// Total plans currently cached
+    pub cached_plans: u64,
+    /// Total plan reuse count (sum of access_count for all cached plans)
+    pub total_reuse_count: u64,
+    /// Average reuse count per plan
+    pub avg_reuse_per_plan: f64,
+    /// Total memory used by cached plans (estimated)
+    pub memory_usage: usize,
+}
+
+/// Detailed plan reuse statistics
+#[derive(Debug, Clone)]
+pub struct PlanReuseStats {
+    /// Total number of cached plans
+    pub total_plans: u64,
+    /// Number of plans used only once
+    pub single_use_plans: u64,
+    /// Number of plans used multiple times
+    pub multi_use_plans: u64,
+    /// Maximum reuse count for any plan
+    pub max_reuse_count: u64,
+    /// Average reuse count across all plans
+    pub avg_reuse_count: f64,
+    /// Plans with reuse count in different ranges
+    pub reuse_distribution: HashMap<String, u64>,
+}
 
 /// Query planner for optimizing Cypher execution
 pub struct QueryPlanner<'a> {
     catalog: &'a Catalog,
     label_index: &'a LabelIndex,
     knn_index: &'a KnnIndex,
+    /// Query plan cache for performance optimization
+    plan_cache: QueryPlanCache,
+}
+
+impl QueryPlanCache {
+    /// Create a new query plan cache
+    pub fn new(max_plans: usize, ttl: Duration) -> Self {
+        Self {
+            plans: HashMap::new(),
+            max_plans,
+            ttl,
+            stats: QueryPlanCacheStats::default(),
+        }
+    }
+
+    /// Get a cached plan by query hash
+    pub fn get(&mut self, query_hash: u64) -> Option<&CachedQueryPlan> {
+        self.stats.lookups += 1;
+
+        if let Some(plan) = self.plans.get(&query_hash) {
+            // Check if plan has expired
+            if plan.cached_at.elapsed() > self.ttl {
+                // Remove expired plan
+                self.plans.remove(&query_hash);
+                self.stats.expirations += 1;
+                self.stats.misses += 1;
+                return None;
+            }
+
+            // Update access statistics (need to get mutable reference again)
+            if let Some(plan) = self.plans.get_mut(&query_hash) {
+                plan.access_count += 1;
+            }
+            self.stats.hits += 1;
+            self.plans.get(&query_hash)
+        } else {
+            self.stats.misses += 1;
+            None
+        }
+    }
+
+    /// Store a plan in cache
+    pub fn put(&mut self, query_hash: u64, operators: Vec<Operator>, estimated_cost: f64) {
+        // Evict if cache is full (simple LRU-like behavior)
+        if self.plans.len() >= self.max_plans {
+            // Remove oldest plan (simple implementation)
+            if let Some(oldest_hash) = self.plans
+                .iter()
+                .min_by_key(|(_, plan)| plan.cached_at)
+                .map(|(hash, _)| *hash)
+            {
+                self.plans.remove(&oldest_hash);
+                self.stats.evictions += 1;
+            }
+        }
+
+        let cached_plan = CachedQueryPlan {
+            operators,
+            cached_at: Instant::now(),
+            access_count: 0,
+            estimated_cost,
+        };
+
+        self.plans.insert(query_hash, cached_plan);
+        self.update_stats();
+    }
+
+    /// Get cache statistics
+    pub fn stats(&self) -> &QueryPlanCacheStats {
+        &self.stats
+    }
+
+    /// Clear all cached plans
+    pub fn clear(&mut self) {
+        self.plans.clear();
+        self.stats = QueryPlanCacheStats::default();
+    }
+
+    /// Clean expired plans
+    pub fn clean_expired(&mut self) {
+        let mut expired = Vec::new();
+        for (hash, plan) in &self.plans {
+            if plan.cached_at.elapsed() > self.ttl {
+                expired.push(*hash);
+            }
+        }
+
+        for hash in expired {
+            self.plans.remove(&hash);
+            self.stats.expirations += 1;
+        }
+
+        self.update_stats();
+    }
+
+    /// Update computed statistics
+    fn update_stats(&mut self) {
+        self.stats.cached_plans = self.plans.len() as u64;
+
+        let mut total_reuse = 0u64;
+        let mut max_reuse = 0u64;
+        let mut memory_usage = 0usize;
+
+        for plan in self.plans.values() {
+            total_reuse += plan.access_count;
+            max_reuse = max_reuse.max(plan.access_count);
+            // Rough memory estimation: operators + overhead
+            memory_usage += std::mem::size_of_val(&plan.operators) + 100;
+        }
+
+        self.stats.total_reuse_count = total_reuse;
+        self.stats.avg_reuse_per_plan = if self.stats.cached_plans > 0 {
+            total_reuse as f64 / self.stats.cached_plans as f64
+        } else {
+            0.0
+        };
+        self.stats.memory_usage = memory_usage;
+    }
+
+    /// Get detailed plan reuse statistics
+    pub fn plan_reuse_stats(&self) -> PlanReuseStats {
+        let mut single_use = 0u64;
+        let mut multi_use = 0u64;
+        let mut max_reuse = 0u64;
+        let mut total_reuse = 0u64;
+        let mut distribution = HashMap::new();
+
+        for plan in self.plans.values() {
+            total_reuse += plan.access_count;
+            max_reuse = max_reuse.max(plan.access_count);
+
+            if plan.access_count == 1 {
+                single_use += 1;
+            } else if plan.access_count > 1 {
+                multi_use += 1;
+            }
+
+            // Build reuse distribution
+            let range = match plan.access_count {
+                0 => unreachable!(),
+                1 => "1".to_string(),
+                2..=5 => "2-5".to_string(),
+                6..=10 => "6-10".to_string(),
+                11..=50 => "11-50".to_string(),
+                51..=100 => "51-100".to_string(),
+                _ => "100+".to_string(),
+            };
+            *distribution.entry(range).or_insert(0) += 1;
+        }
+
+        let avg_reuse = if self.plans.is_empty() {
+            0.0
+        } else {
+            total_reuse as f64 / self.plans.len() as f64
+        };
+
+        PlanReuseStats {
+            total_plans: self.plans.len() as u64,
+            single_use_plans: single_use,
+            multi_use_plans: multi_use,
+            max_reuse_count: max_reuse,
+            avg_reuse_count: avg_reuse,
+            reuse_distribution: distribution,
+        }
+    }
 }
 
 impl<'a> QueryPlanner<'a> {
@@ -22,11 +255,29 @@ impl<'a> QueryPlanner<'a> {
             catalog,
             label_index,
             knn_index,
+            plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
         }
     }
 
-    /// Plan a Cypher query into optimized operators
-    pub fn plan_query(&self, query: &CypherQuery) -> Result<Vec<Operator>> {
+    /// Generate a hash for query caching based on query structure
+    fn hash_query(&self, query: &CypherQuery) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut hasher = DefaultHasher::new();
+
+        // Hash the clauses (this captures the query structure)
+        for clause in &query.clauses {
+            clause.hash(&mut hasher);
+        }
+
+        // Hash parameters if they affect planning (for now, ignore runtime parameters)
+        // In a full implementation, we'd hash parameter types but not values
+
+        hasher.finish()
+    }
+
+    /// Plan a Cypher query into optimized operators with caching
+    pub fn plan_query(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
         // Validate that query has at least one clause
         // Exceptions: CALL procedures and USE DATABASE can be standalone
         if query.clauses.is_empty() {
@@ -48,6 +299,13 @@ impl<'a> QueryPlanner<'a> {
                 }
                 _ => {}
             }
+        }
+
+        // Try to get cached plan first
+        let query_hash = self.hash_query(query);
+        if let Some(cached_plan) = self.plan_cache.get(query_hash) {
+            // Return cached operators (clone them since they're cached)
+            return Ok(cached_plan.operators.clone());
         }
 
         // Check if query contains UNION - if so, split and plan separately
@@ -592,6 +850,11 @@ impl<'a> QueryPlanner<'a> {
                 operators.push(sort_op);
             }
         }
+
+        // Cache the planned operators for future use
+        // Estimate cost using the improved cost model
+        let estimated_cost = self.estimate_plan_cost(&operators).unwrap_or(operators.len() as f64);
+        self.plan_cache.put(query_hash, operators.clone(), estimated_cost);
 
         Ok(operators)
     }
@@ -1741,17 +2004,193 @@ impl<'a> QueryPlanner<'a> {
     }
 
     /// Estimate selectivity of a label
-    fn estimate_label_selectivity(&self, _label_id: u32) -> Result<f64> {
-        // For MVP, return a simple estimate
-        // In a full implementation, we would use statistics
+    fn estimate_label_selectivity(&self, label_id: u32) -> Result<f64> {
+        // Try to get real statistics from the label index
+        let stats = self.label_index.get_stats();
+        if stats.total_nodes > 0 {
+            let label_count = self.label_index.get_nodes_with_labels(&[label_id])?.len();
+            return Ok(label_count as f64 / stats.total_nodes as f64);
+        }
+
+        // Fallback to a conservative estimate if statistics unavailable
         Ok(0.1) // 10% selectivity
+    }
+
+    /// Estimate the total cost of an operator plan
+    pub fn estimate_plan_cost(&self, operators: &[Operator]) -> Result<f64> {
+        let mut total_cost = 0.0;
+
+        for operator in operators {
+            match operator {
+                Operator::NodeByLabel { label_id, .. } => {
+                    // Estimate cost based on label selectivity
+                    let selectivity = self.estimate_label_selectivity(*label_id)?;
+                    // Cost is proportional to nodes scanned
+                    total_cost += 1000.0 * selectivity;
+                }
+                Operator::AllNodesScan { .. } => {
+                    // Scanning all nodes is expensive
+                    total_cost += 2000.0;
+                }
+                Operator::Filter { .. } => {
+                    // Filter operations are relatively cheap
+                    total_cost += 10.0;
+                }
+                Operator::Expand { .. } => {
+                    // Relationship traversal cost depends on fan-out
+                    total_cost += 500.0;
+                }
+                Operator::Join { left, right, .. } => {
+                    // Join cost depends on the join type and sizes
+                    let left_cost = self.estimate_plan_cost(&[*left.clone()])?;
+                    let right_cost = self.estimate_plan_cost(&[*right.clone()])?;
+                    total_cost += left_cost + right_cost + 200.0; // Base join cost
+                }
+                Operator::Union { left, right, .. } => {
+                    // Union cost is sum of both sides
+                    let left_cost = self.estimate_plan_cost(left)?;
+                    let right_cost = self.estimate_plan_cost(right)?;
+                    total_cost += left_cost + right_cost;
+                }
+                Operator::Project { .. } => {
+                    // Projection is cheap
+                    total_cost += 5.0;
+                }
+                Operator::Sort { .. } => {
+                    // Sorting can be expensive depending on data size
+                    total_cost += 1000.0;
+                }
+                Operator::Limit { .. } => {
+                    // Limit reduces cost
+                    total_cost += 1.0;
+                }
+                Operator::Aggregate { .. } => {
+                    // Aggregation can be expensive
+                    total_cost += 500.0;
+                }
+                Operator::Create { .. } => {
+                    // Write operations have different cost characteristics
+                    total_cost += 100.0;
+                }
+                Operator::Delete { .. } => {
+                    total_cost += 100.0;
+                }
+                Operator::DetachDelete { .. } => {
+                    total_cost += 150.0;
+                }
+                Operator::IndexScan { .. } => {
+                    // Index scans are generally efficient
+                    total_cost += 50.0;
+                }
+                _ => {
+                    // Default cost for other operators
+                    total_cost += 50.0;
+                }
+            }
+        }
+
+        Ok(total_cost)
+    }
+
+    /// Get query plan cache statistics
+    pub fn plan_cache_stats(&self) -> &QueryPlanCacheStats {
+        self.plan_cache.stats()
+    }
+
+    /// Get detailed plan reuse statistics
+    pub fn plan_reuse_stats(&self) -> PlanReuseStats {
+        self.plan_cache.plan_reuse_stats()
+    }
+
+    /// Update performance metrics with query plan cache statistics
+    pub async fn update_performance_metrics(&self, metrics: &crate::performance::PerformanceMetrics) {
+        let stats = self.plan_cache.stats();
+
+        // Update counters
+        metrics.increment_counter("query_plan_cache_lookups", stats.lookups).await;
+        metrics.increment_counter("query_plan_cache_hits", stats.hits).await;
+        metrics.increment_counter("query_plan_cache_misses", stats.misses).await;
+        metrics.increment_counter("query_plan_cache_evictions", stats.evictions).await;
+        metrics.increment_counter("query_plan_cache_expirations", stats.expirations).await;
+
+        // Update gauges
+        metrics.set_gauge("query_plan_cache_hit_rate",
+            if stats.lookups > 0 { stats.hits as f64 / stats.lookups as f64 } else { 0.0 }
+        ).await;
+        metrics.set_gauge("query_plan_cache_size", stats.cached_plans as f64).await;
+    }
+
+    /// Clear query plan cache
+    pub fn clear_plan_cache(&mut self) {
+        self.plan_cache.clear();
+    }
+
+    /// Clean expired plans from cache
+    pub fn clean_expired_plans(&mut self) {
+        self.plan_cache.clean_expired();
     }
 
     /// Optimize operator order based on cost estimates
     pub fn optimize_operator_order(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
-        // For MVP, just return operators in original order
-        // In a full implementation, we would reorder based on cost estimates
-        Ok(operators)
+        if operators.len() <= 1 {
+            return Ok(operators);
+        }
+
+        // Separate operators into different categories
+        let mut scans = Vec::new();
+        let mut filters = Vec::new();
+        let mut expansions = Vec::new();
+        let mut joins = Vec::new();
+        let mut others = Vec::new();
+
+        for operator in operators {
+            match &operator {
+                Operator::NodeByLabel { .. } | Operator::AllNodesScan { .. } | Operator::IndexScan { .. } => {
+                    scans.push(operator);
+                }
+                Operator::Filter { .. } => {
+                    filters.push(operator);
+                }
+                Operator::Expand { .. } => {
+                    expansions.push(operator);
+                }
+                Operator::Join { .. } => {
+                    joins.push(operator);
+                }
+                _ => {
+                    others.push(operator);
+                }
+            }
+        }
+
+        // Optimize scan order: put lowest cost scans first
+        let mut scan_costs = Vec::new();
+        for (i, scan) in scans.iter().enumerate() {
+            let cost = self.estimate_plan_cost(&[scan.clone()]).unwrap_or(1000.0);
+            scan_costs.push((cost, i));
+        }
+        scan_costs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut optimized_scans = Vec::new();
+        for (_, idx) in scan_costs {
+            optimized_scans.push(scans[idx].clone());
+        }
+
+        // Optimize join order: put smaller joins first (simple heuristic)
+        let mut optimized_joins = Vec::new();
+        for join in joins {
+            optimized_joins.push(join);
+        }
+
+        // Combine in optimal order: scans -> filters -> expansions -> joins -> others
+        let mut result = Vec::new();
+        result.extend(optimized_scans);
+        result.extend(filters);
+        result.extend(expansions);
+        result.extend(optimized_joins);
+        result.extend(others);
+
+        Ok(result)
     }
 }
 

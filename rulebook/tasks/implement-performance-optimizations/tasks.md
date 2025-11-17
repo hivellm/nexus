@@ -13,7 +13,7 @@ Implement critical performance optimizations to achieve Neo4j-level performance.
 **Estimated Duration:** 8-12 weeks
 **Expected Impact:** 70-80% faster writes, 50-65% faster reads, 3-5x throughput improvement
 
-**Status**: 🟡 **PHASE 3 COMPLETE** - Relationship indexing implemented, proceeding to Phase 4 (Week 8-9)
+**Status**: 🟡 **PHASE 4 COMPLETE** - Query optimization implemented, proceeding to Phase 5 (Week 10)
 
 ## ✅ **Phase 1: Async WAL Implementation (COMPLETED - Week 1-2)**
 
@@ -253,10 +253,10 @@ Implement critical performance optimizations to achieve Neo4j-level performance.
 - [x] Risk mitigation and rollback plans
 
 **Next Steps**:
-1. **Phase 4 Planning**: Begin query optimization enhancements - focus on query plan caching and aggregation push-down
-2. **Performance Validation**: Run comprehensive benchmarks comparing Nexus vs Neo4j performance
-3. **Memory Optimization**: Fine-tune cache sizes based on real workload patterns
-4. **Integration Testing**: Test all components working together under concurrent load
+1. **Phase 5 Planning**: Final integration and validation - comprehensive benchmarks vs Neo4j
+2. **System Integration**: Test all performance components working together
+3. **Load Testing**: Validate performance under concurrent workloads
+4. **Documentation**: Update performance guides with complete optimization capabilities
 5. **Documentation**: Update performance guides with relationship indexing capabilities
 
 **Expected Outcome**: Nexus achieving 90-95% of Neo4j performance across all workloads
@@ -284,7 +284,7 @@ Implement critical performance optimizations to achieve Neo4j-level performance.
 - [x] Phase 1: Async WAL (Week 1-2) - ✅ **COMPLETED**
 - [x] Phase 2: Multi-Layer Cache (Week 3-5) - ✅ **COMPLETED** (All caches implemented and validated)
 - [x] Phase 3: Relationship Indexing (Week 6-7) - ✅ **COMPLETED** (O(1) vs O(n) improvement)
-- [ ] Phase 4: Query Optimization (Week 8-9)
+- [x] Phase 4: Query Optimization & Monitoring (Week 8-9) - ✅ **COMPLETED** (Query plan caching, cost estimation, reuse stats)
 - [ ] Phase 5: Integration & Validation (Week 10)
 
 ## 🚨 **Risk Mitigation**

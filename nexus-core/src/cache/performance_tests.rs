@@ -83,16 +83,33 @@ mod tests {
         }
 
         let hit_rate = hits as f64 / total_accesses as f64;
-        println!("Cache hit rate: {:.2}% ({} hits / {} accesses)", hit_rate * 100.0, hits, total_accesses);
+        println!(
+            "Cache hit rate: {:.2}% ({} hits / {} accesses)",
+            hit_rate * 100.0,
+            hits,
+            total_accesses
+        );
 
         // Assert hit rate > 90%
-        assert!(hit_rate > 0.90, "Cache hit rate {:.2}% is below 90% threshold", hit_rate * 100.0);
+        assert!(
+            hit_rate > 0.90,
+            "Cache hit rate {:.2}% is below 90% threshold",
+            hit_rate * 100.0
+        );
 
         // Force stats update and verify cache stats
         cache.update_stats();
         let stats = cache.stats();
-        let object_hit_rate = stats.hit_rates.get(&CacheLayer::Object).copied().unwrap_or(0.0);
-        assert!(object_hit_rate > 0.90, "Object cache hit rate {:.2}% is below 90%", object_hit_rate * 100.0);
+        let object_hit_rate = stats
+            .hit_rates
+            .get(&CacheLayer::Object)
+            .copied()
+            .unwrap_or(0.0);
+        assert!(
+            object_hit_rate > 0.90,
+            "Object cache hit rate {:.2}% is below 90%",
+            object_hit_rate * 100.0
+        );
     }
 
     /// Test read operations complete in under 3ms for cached data
@@ -135,15 +152,22 @@ mod tests {
             total_time += elapsed;
 
             // Each individual read should be fast (< 1ms), but we'll check average
-            assert!(elapsed < Duration::from_millis(1), "Individual read took {:?}", elapsed);
+            assert!(
+                elapsed < Duration::from_millis(1),
+                "Individual read took {:?}",
+                elapsed
+            );
         }
 
         let avg_time = total_time / num_iterations as u32;
         println!("Average cached read time: {:?}", avg_time);
 
         // Assert average read time < 3ms
-        assert!(avg_time < Duration::from_millis(3),
-            "Average read time {:?} exceeds 3ms threshold", avg_time);
+        assert!(
+            avg_time < Duration::from_millis(3),
+            "Average read time {:?} exceeds 3ms threshold",
+            avg_time
+        );
     }
 
     /// Test cache memory management and eviction under memory pressure
@@ -194,16 +218,29 @@ mod tests {
         // Force stats update and verify cache stats
         cache.update_stats();
         let stats = cache.stats();
-        let memory_usage = stats.memory_usage.get(&CacheLayer::Object).copied().unwrap_or(0);
+        let memory_usage = stats
+            .memory_usage
+            .get(&CacheLayer::Object)
+            .copied()
+            .unwrap_or(0);
         println!("Final memory usage: {} bytes", memory_usage);
 
         // Memory usage should be close to but not exceed limit
-        assert!(memory_usage <= 2 * 1024 * 1024, "Memory usage {} exceeds safety limit", memory_usage);
+        assert!(
+            memory_usage <= 2 * 1024 * 1024,
+            "Memory usage {} exceeds safety limit",
+            memory_usage
+        );
 
         // Should have some evictions - check if we inserted enough to trigger eviction
-        if inserted > 50 { // If we inserted more than 50KB worth of objects
+        if inserted > 50 {
+            // If we inserted more than 50KB worth of objects
             let total_evictions = stats.evictions.values().sum::<u64>();
-            assert!(total_evictions > 0 || inserted > 100, "No evictions occurred with {} insertions", inserted);
+            assert!(
+                total_evictions > 0 || inserted > 100,
+                "No evictions occurred with {} insertions",
+                inserted
+            );
         }
     }
 
@@ -253,11 +290,7 @@ mod tests {
                 let query_hash = format!("query_{}", i % 10);
                 let result = crate::executor::ResultSet::default();
 
-                cache.put_query_result(
-                    query_hash.clone(),
-                    result,
-                    Duration::from_millis(50),
-                );
+                cache.put_query_result(query_hash.clone(), result, Duration::from_millis(50));
 
                 let _cached_result = cache.get_query_result(&query_hash);
             }
@@ -269,12 +302,18 @@ mod tests {
         println!("Multi-layer cache performance: {:.0} ops/sec", ops_per_sec);
 
         // Should handle at least 1000 ops/sec under normal load
-        assert!(ops_per_sec > 1000.0, "Performance {:.0} ops/sec below threshold", ops_per_sec);
+        assert!(
+            ops_per_sec > 1000.0,
+            "Performance {:.0} ops/sec below threshold",
+            ops_per_sec
+        );
 
         // Check that all cache layers are being utilized
         let stats = cache.stats();
-        assert!(stats.total_operations() > operations,
-            "Not all operations were recorded in stats");
+        assert!(
+            stats.total_operations() > operations,
+            "Not all operations were recorded in stats"
+        );
     }
 
     /// Test cache warming effectiveness
@@ -292,7 +331,8 @@ mod tests {
         let mut cache = MultiLayerCache::new(config).unwrap();
 
         // Create temporary directory for test components with unique name
-        let temp_dir = std::env::temp_dir().join(format!("nexus_cache_test_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("nexus_cache_test_{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         // Create test catalog, storage, and indexes with error handling
@@ -301,7 +341,9 @@ mod tests {
         let indexes_result = crate::index::IndexManager::new(&temp_dir);
 
         // If any component fails to create, skip the test (this is acceptable for unit tests)
-        if let (Ok(catalog), Ok(storage), Ok(indexes)) = (catalog_result, storage_result, indexes_result) {
+        if let (Ok(catalog), Ok(storage), Ok(indexes)) =
+            (catalog_result, storage_result, indexes_result)
+        {
             // Warm up the cache
             let warming_result = cache.warm_cache(&catalog, &storage, &indexes);
 
@@ -406,7 +448,11 @@ mod tests {
 
         // Should maintain reasonable hit rate even under concurrent load
         // Note: Concurrent access patterns may have lower hit rates due to thread contention
-        assert!(hit_rate > 0.40, "Concurrent hit rate {:.2}% below 40%", hit_rate * 100.0);
+        assert!(
+            hit_rate > 0.40,
+            "Concurrent hit rate {:.2}% below 40%",
+            hit_rate * 100.0
+        );
     }
 
     /// Test RelationshipIndex performance vs linked list traversal
@@ -428,16 +474,21 @@ mod tests {
             let dst_id = ((i * 997) + 123) % num_nodes;
             let type_id = (i % 5) as u32; // 5 different relationship types
 
-            index.add_relationship(i as u64, src_id as u64, dst_id as u64, type_id).unwrap();
+            index
+                .add_relationship(i as u64, src_id as u64, dst_id as u64, type_id)
+                .unwrap();
         }
 
-        println!("Created relationship index with {} nodes and {} relationships", num_nodes, num_relationships);
+        println!(
+            "Created relationship index with {} nodes and {} relationships",
+            num_nodes, num_relationships
+        );
 
         // Test query performance for different scenarios
         let test_queries = vec![
-            (100u64, &[][..], true),   // Node 100, all outgoing relationships
-            (200u64, &[1u32][..], true), // Node 200, outgoing type 1 relationships
-            (300u64, &[][..], false),  // Node 300, all incoming relationships
+            (100u64, &[][..], true),      // Node 100, all outgoing relationships
+            (200u64, &[1u32][..], true),  // Node 200, outgoing type 1 relationships
+            (300u64, &[][..], false),     // Node 300, all incoming relationships
             (400u64, &[2u32][..], false), // Node 400, incoming type 2 relationships
         ];
 
@@ -447,13 +498,22 @@ mod tests {
         // Benchmark indexed queries
         for (node_id, type_ids, outgoing) in &test_queries {
             let start = Instant::now();
-            let results = index.get_node_relationships(*node_id, type_ids, *outgoing).unwrap();
+            let results = index
+                .get_node_relationships(*node_id, type_ids, *outgoing)
+                .unwrap();
             let elapsed = start.elapsed();
 
             total_index_time += elapsed;
             total_results += results.len();
 
-            println!("Indexed query for node {} (outgoing: {}, types: {:?}): {} results in {:?}", node_id, outgoing, type_ids, results.len(), elapsed);
+            println!(
+                "Indexed query for node {} (outgoing: {}, types: {:?}): {} results in {:?}",
+                node_id,
+                outgoing,
+                type_ids,
+                results.len(),
+                elapsed
+            );
         }
 
         let avg_index_time = total_index_time / test_queries.len() as u32;
@@ -461,8 +521,11 @@ mod tests {
         println!("Total results found: {}", total_results);
 
         // The indexed queries should be very fast (< 1ms each on average)
-        assert!(avg_index_time < Duration::from_millis(1),
-            "Average indexed query time {:?} exceeds 1ms threshold", avg_index_time);
+        assert!(
+            avg_index_time < Duration::from_millis(1),
+            "Average indexed query time {:?} exceeds 1ms threshold",
+            avg_index_time
+        );
 
         // Test type-based queries
         let type_queries = vec![&[][..], &[0u32][..], &[1u32][..], &[2u32][..], &[3u32][..]];
@@ -472,11 +535,20 @@ mod tests {
             let results = index.get_relationships_by_types(type_ids).unwrap();
             let elapsed = start.elapsed();
 
-            println!("Type query for types {:?}: {} results in {:?}", type_ids, results.len(), elapsed);
+            println!(
+                "Type query for types {:?}: {} results in {:?}",
+                type_ids,
+                results.len(),
+                elapsed
+            );
 
             // Type queries should also be fast
-            assert!(elapsed < Duration::from_millis(5),
-                "Type query for {:?} took {:?}, exceeds 5ms threshold", type_ids, elapsed);
+            assert!(
+                elapsed < Duration::from_millis(5),
+                "Type query for {:?} took {:?}, exceeds 5ms threshold",
+                type_ids,
+                elapsed
+            );
         }
 
         // Verify index statistics
@@ -485,8 +557,10 @@ mod tests {
         assert!(stats.total_nodes > 0);
         assert!(stats.memory_usage > 0);
 
-        println!("Index stats: {} relationships, {} nodes, {} bytes memory",
-            stats.total_relationships, stats.total_nodes, stats.memory_usage);
+        println!(
+            "Index stats: {} relationships, {} nodes, {} bytes memory",
+            stats.total_relationships, stats.total_nodes, stats.memory_usage
+        );
 
         // Health check should pass
         index.health_check().unwrap();

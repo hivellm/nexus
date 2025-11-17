@@ -6589,3 +6589,11 @@ mod tests {
         }
     }
 }
+
+// Simplified Hash implementation for Clause to enable query plan caching
+// We only hash the clause type for basic structural similarity
+impl std::hash::Hash for Clause {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+    }
+}

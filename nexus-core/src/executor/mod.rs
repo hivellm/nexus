@@ -947,7 +947,7 @@ impl Executor {
         };
 
         // Locks are released here - planning happens with cloned data
-        let planner = QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
+        let mut planner = QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
 
         let mut operators = planner.plan_query(&ast)?;
 
@@ -1552,6 +1552,7 @@ impl Executor {
     }
 
     /// Execute Expand operator
+    #[allow(clippy::too_many_arguments)]
     fn execute_expand(
         &self,
         context: &mut ExecutionContext,
@@ -1659,7 +1660,8 @@ impl Executor {
                     None => continue,
                 };
 
-                let relationships = self.find_relationships(source_id, type_ids, direction, cache)?;
+                let relationships =
+                    self.find_relationships(source_id, type_ids, direction, cache)?;
                 if relationships.is_empty() {
                     continue;
                 }
@@ -4380,10 +4382,13 @@ impl Executor {
             // Get relationship IDs from index
             let rel_ids = match direction {
                 Direction::Outgoing => rel_index.get_node_relationships(node_id, type_ids, true)?,
-                Direction::Incoming => rel_index.get_node_relationships(node_id, type_ids, false)?,
+                Direction::Incoming => {
+                    rel_index.get_node_relationships(node_id, type_ids, false)?
+                }
                 Direction::Both => {
                     let mut outgoing = rel_index.get_node_relationships(node_id, type_ids, true)?;
-                    let mut incoming = rel_index.get_node_relationships(node_id, type_ids, false)?;
+                    let mut incoming =
+                        rel_index.get_node_relationships(node_id, type_ids, false)?;
                     outgoing.append(&mut incoming);
                     outgoing
                 }

@@ -2381,7 +2381,7 @@ impl Engine {
         // Use the query AST directly if it has clauses, otherwise parse the string
         let operators = if !query.clauses.is_empty() {
             // Use the planner directly with the AST
-            let planner = executor::planner::QueryPlanner::new(
+            let mut planner = executor::planner::QueryPlanner::new(
                 &self.catalog,
                 &self.indexes.label_index,
                 &self.indexes.knn_index,
@@ -2427,7 +2427,7 @@ impl Engine {
         // Use the query AST directly if it has clauses, otherwise parse the string
         let operators = if !query.clauses.is_empty() {
             // Use the planner directly with the AST
-            let planner = executor::planner::QueryPlanner::new(
+            let mut planner = executor::planner::QueryPlanner::new(
                 &self.catalog,
                 &self.indexes.label_index,
                 &self.indexes.knn_index,
@@ -3071,7 +3071,11 @@ impl Engine {
             .create_relationship(tx, from, to, type_id, properties)?;
 
         // Update relationship index for performance (Phase 3 optimization)
-        if let Err(e) = self.cache.relationship_index().add_relationship(rel_id, from, to, type_id) {
+        if let Err(e) = self
+            .cache
+            .relationship_index()
+            .add_relationship(rel_id, from, to, type_id)
+        {
             eprintln!("[WARN] Failed to update relationship index: {}", e);
             // Don't fail the operation, just log the warning
         }
@@ -3233,7 +3237,10 @@ impl Engine {
                     rel_record.dst_id,
                     rel_record.type_id,
                 ) {
-                    eprintln!("[WARN] Failed to update relationship index on deletion: {}", e);
+                    eprintln!(
+                        "[WARN] Failed to update relationship index on deletion: {}",
+                        e
+                    );
                     // Don't fail the operation, just log the warning
                 }
             }
