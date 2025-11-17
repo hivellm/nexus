@@ -1352,6 +1352,8 @@ impl Executor {
         let mut filtered_rows = Vec::new();
 
         // Check if we're in a RETURN ... WHERE scenario (no MATCH, no variables, no existing rows)
+        // For RETURN ... WHERE, we should have no rows, no variables, and no existing result_set rows
+        // Columns might have markers from previous Filter execution, which is OK
         let is_return_where_scenario = rows.is_empty()
             && context.variables.is_empty()
             && context.result_set.rows.is_empty()
@@ -1638,29 +1640,66 @@ impl Executor {
                 // Filter already processed and removed all rows, don't create new ones
                 vec![]
             } else {
-                let materialized = self.materialize_rows_from_variables(context);
-                // If we have no rows from variables and no variables, but we have projection items that can be evaluated,
-                // we need to create at least one row to evaluate the expressions
-                // This handles: RETURN 1+1 AS result, RETURN 5 > 3 AS gt, RETURN CASE WHEN ... END, etc.
-                // But NOT: MATCH (n:NonExistent) RETURN n (which should return 0 rows)
-                // And NOT: UNWIND [] AS x RETURN x (which should return 0 rows)
-                // But NOT: RETURN ... WHERE false (Filter already processed and removed all rows)
-                if materialized.is_empty()
-                    && context.variables.is_empty()
-                    && !items.is_empty()
-                    && !has_filter_marker // Don't create row if Filter already ran
-                    && items.iter().any(|item| {
-                        // Check if any projection item can be evaluated without variables
-                        self.can_evaluate_without_variables(&item.expression)
-                    })
-                {
-                    // Create single empty row for expression evaluation
-                    vec![std::collections::HashMap::new()]
+                // If Filter marker exists, don't create any rows
+                if has_filter_marker {
+                    vec![]
                 } else {
-                    materialized
+                    let materialized = self.materialize_rows_from_variables(context);
+                    // If we have no rows from variables and no variables, but we have projection items that can be evaluated,
+                    // we need to create at least one row to evaluate the expressions
+                    // This handles: RETURN 1+1 AS result, RETURN 5 > 3 AS gt, RETURN CASE WHEN ... END, etc.
+                    // But NOT: MATCH (n:NonExistent) RETURN n (which should return 0 rows)
+                    // And NOT: UNWIND [] AS x RETURN x (which should return 0 rows)
+                    // But NOT: RETURN ... WHERE false (Filter already processed and removed all rows)
+                    if materialized.is_empty()
+                        && context.variables.is_empty()
+                        && !items.is_empty()
+                        && items.iter().any(|item| {
+                            // Check if any projection item can be evaluated without variables
+                            self.can_evaluate_without_variables(&item.expression)
+                        })
+                    {
+                        // Create single empty row for expression evaluation
+                        vec![std::collections::HashMap::new()]
+                    } else {
+                        materialized
+                    }
                 }
             }
         };
+
+        // Double-check filter marker before creating projected rows
+        // This is a safety check in case rows were created despite filter marker
+        let has_filter_marker_final = context
+            .result_set
+            .columns
+            .iter()
+            .any(|c| c == "__filtered__" || c == "__filter_created__");
+        if has_filter_marker_final
+            && context
+                .result_set
+                .columns
+                .iter()
+                .any(|c| c == "__filtered__")
+        {
+            // Filter filtered out all rows, return empty result
+            context.result_set.columns = items.iter().map(|item| item.alias.clone()).collect();
+            context.result_set.rows.clear();
+            return Ok(vec![]);
+        }
+
+        // Final safety check: if Filter marker exists, don't create any projected rows
+        let has_filter_marker_before_projection = context
+            .result_set
+            .columns
+            .iter()
+            .any(|c| c == "__filtered__");
+        if has_filter_marker_before_projection {
+            // Filter filtered out all rows, return empty result
+            context.result_set.columns = items.iter().map(|item| item.alias.clone()).collect();
+            context.result_set.rows.clear();
+            return Ok(vec![]);
+        }
 
         let mut projected_rows = Vec::new();
 
