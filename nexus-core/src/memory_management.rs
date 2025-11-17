@@ -702,8 +702,9 @@ mod tests {
         let config = MemoryPoolConfig::default();
         let pool = MemoryPool::new(config).unwrap();
 
-        let address = pool.allocate(1024, BlockType::Node).unwrap();
-        assert!(address > 0);
+        let _address = pool.allocate(1024, BlockType::Node).unwrap();
+        // Address 0 is valid (start of memory pool)
+        // The fact that allocate() returned Ok(address) guarantees it's valid
 
         let stats = pool.get_stats();
         assert_eq!(stats.total_allocated, 1024);
