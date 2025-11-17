@@ -8,3 +8,4 @@ Write-Host "Running compatibility tests..." -ForegroundColor Cyan
 Write-Host "Results saved to: $outputFile" -ForegroundColor Green
 Get-Content $outputFile | Select-Object -Last 50
 
+

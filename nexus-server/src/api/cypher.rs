@@ -4,15 +4,19 @@ use crate::NexusServer;
 use axum::extract::{Extension, Json, State};
 use nexus_core::auth::{Permission, middleware::AuthContext};
 use nexus_core::executor::parser::PropertyMap;
-use nexus_core::executor::{Executor, Query};
+use nexus_core::executor::{Executor, ExecutorShared, Query};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-/// Global executor instance
+/// Global executor instance (deprecated - use EXECUTOR_SHARED instead)
 static EXECUTOR: std::sync::OnceLock<Arc<RwLock<Executor>>> = std::sync::OnceLock::new();
+
+/// Global executor shared state for concurrent execution
+/// Note: Currently not used - Executor is cloned directly from EXECUTOR
+static _EXECUTOR_SHARED: std::sync::OnceLock<Arc<ExecutorShared>> = std::sync::OnceLock::new();
 
 /// Global engine instance for CREATE operations
 static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
@@ -1437,8 +1441,10 @@ pub async fn execute_cypher(
         nexus_core::performance::memory_tracking::QueryMemoryTracker::get_current_memory_usage()
             .ok();
 
-    // Execute query
-    let mut executor = executor_guard.write().await;
+    // Execute query - clone executor for concurrent execution
+    // This removes the global lock bottleneck - each query gets its own executor clone
+    // that shares the underlying data structures (catalog, store, indexes) via Arc
+    let mut executor = executor_guard.read().await.clone();
     let execution_result = executor.execute(&query);
 
     // Get memory delta after execution

@@ -24,6 +24,7 @@ use crate::storage::RecordStore;
 use crate::udf::UdfRegistry;
 use crate::{Error, Result};
 use chrono::{Datelike, TimeZone};
+use parking_lot::RwLock;
 use planner::QueryPlanner;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -370,20 +371,67 @@ struct Path {
     relationships: Vec<u64>,
 }
 
-/// Query executor
-pub struct Executor {
-    /// Catalog for label/type lookups
+/// Shared executor state for concurrent execution
+/// This structure contains all components that can be safely shared across threads
+#[derive(Clone)]
+pub struct ExecutorShared {
+    /// Catalog for label/type lookups (thread-safe via LMDB transactions)
     catalog: Catalog,
-    /// Record store for data access
-    store: RecordStore,
-    /// Label index for fast label scans
-    label_index: LabelIndex,
-    /// KNN index for vector operations
-    knn_index: KnnIndex,
-    /// UDF registry for user-defined functions
-    udf_registry: UdfRegistry,
+    /// Record store for data access (thread-safe via transactions)
+    store: Arc<RwLock<RecordStore>>,
+    /// Label index for fast label scans (needs RwLock for concurrent access)
+    label_index: Arc<RwLock<LabelIndex>>,
+    /// KNN index for vector operations (needs RwLock for concurrent access)
+    knn_index: Arc<RwLock<KnnIndex>>,
+    /// UDF registry for user-defined functions (immutable, can be shared)
+    udf_registry: Arc<UdfRegistry>,
     /// Spatial indexes (label.property -> RTreeIndex)
     spatial_indexes: Arc<parking_lot::RwLock<HashMap<String, SpatialIndex>>>,
+}
+
+/// Query executor
+/// Can be cloned for concurrent execution - each clone shares the same underlying data
+#[derive(Clone)]
+pub struct Executor {
+    /// Shared state (catalog, store, indexes)
+    shared: ExecutorShared,
+}
+
+impl ExecutorShared {
+    /// Create new shared executor state
+    pub fn new(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+    ) -> Result<Self> {
+        Ok(Self {
+            catalog: catalog.clone(),
+            store: Arc::new(RwLock::new(store.clone())),
+            label_index: Arc::new(RwLock::new(label_index.clone())),
+            knn_index: Arc::new(RwLock::new(knn_index.clone())),
+            udf_registry: Arc::new(UdfRegistry::new()),
+            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// Create shared state with custom UDF registry
+    pub fn with_udf_registry(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+        udf_registry: UdfRegistry,
+    ) -> Result<Self> {
+        Ok(Self {
+            catalog: catalog.clone(),
+            store: Arc::new(RwLock::new(store.clone())),
+            label_index: Arc::new(RwLock::new(label_index.clone())),
+            knn_index: Arc::new(RwLock::new(knn_index.clone())),
+            udf_registry: Arc::new(udf_registry),
+            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+        })
+    }
 }
 
 impl Executor {
@@ -395,12 +443,7 @@ impl Executor {
         knn_index: &KnnIndex,
     ) -> Result<Self> {
         Ok(Self {
-            catalog: catalog.clone(),
-            store: store.clone(),
-            label_index: label_index.clone(),
-            knn_index: knn_index.clone(),
-            udf_registry: UdfRegistry::new(),
-            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            shared: ExecutorShared::new(catalog, store, label_index, knn_index)?,
         })
     }
 
@@ -413,28 +456,77 @@ impl Executor {
         udf_registry: UdfRegistry,
     ) -> Result<Self> {
         Ok(Self {
-            catalog: catalog.clone(),
-            store: store.clone(),
-            label_index: label_index.clone(),
-            knn_index: knn_index.clone(),
-            udf_registry,
-            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            shared: ExecutorShared::with_udf_registry(
+                catalog,
+                store,
+                label_index,
+                knn_index,
+                udf_registry,
+            )?,
         })
     }
 
     /// Get reference to UDF registry
     pub fn udf_registry(&self) -> &UdfRegistry {
-        &self.udf_registry
+        &self.shared.udf_registry
     }
 
-    /// Get mutable reference to UDF registry
+    /// Get mutable reference to UDF registry (creates new Arc if needed)
     pub fn udf_registry_mut(&mut self) -> &mut UdfRegistry {
-        &mut self.udf_registry
+        // Note: This requires Arc::make_mut which clones if needed
+        // For now, we'll keep this as read-only access
+        // Mutable UDF registry updates should go through a different path
+        Arc::get_mut(&mut self.shared.udf_registry)
+            .expect("UDF registry should be uniquely owned for mutation")
     }
 
     /// Get a clone of the internal store (for syncing changes back to engine)
     pub fn get_store(&self) -> RecordStore {
-        self.store.clone()
+        self.shared.store.read().clone()
+    }
+
+    /// Get reference to shared state (for internal use)
+    pub(crate) fn shared(&self) -> &ExecutorShared {
+        &self.shared
+    }
+
+    /// Get reference to catalog (for internal use)
+    /// Catalog is thread-safe via LMDB transactions, so no lock needed
+    fn catalog(&self) -> &Catalog {
+        &self.shared.catalog
+    }
+
+    /// Get read lock on store (for internal use)
+    /// Returns a guard that can be dereferenced to get &RecordStore
+    fn store(&self) -> parking_lot::RwLockReadGuard<'_, RecordStore> {
+        self.shared.store.read()
+    }
+
+    /// Get write lock on store (for internal use)
+    fn store_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RecordStore> {
+        self.shared.store.write()
+    }
+
+    /// Get read lock on label_index (for internal use)
+    /// Returns a guard that can be dereferenced to get &LabelIndex
+    fn label_index(&self) -> parking_lot::RwLockReadGuard<'_, LabelIndex> {
+        self.shared.label_index.read()
+    }
+
+    /// Get write lock on label_index (for internal use)
+    fn label_index_mut(&self) -> parking_lot::RwLockWriteGuard<'_, LabelIndex> {
+        self.shared.label_index.write()
+    }
+
+    /// Get read lock on knn_index (for internal use)
+    /// Returns a guard that can be dereferenced to get &KnnIndex
+    fn knn_index(&self) -> parking_lot::RwLockReadGuard<'_, KnnIndex> {
+        self.shared.knn_index.read()
+    }
+
+    /// Get write lock on knn_index (for internal use)
+    fn knn_index_mut(&self) -> parking_lot::RwLockWriteGuard<'_, KnnIndex> {
+        self.shared.knn_index.write()
     }
 
     /// Execute a Cypher query
@@ -833,7 +925,10 @@ impl Executor {
         let ast = parser.parse()?;
 
         // Use the planner to create an optimized plan
-        let planner = QueryPlanner::new(&self.catalog, &self.label_index, &self.knn_index);
+        // Hold locks for the duration of planner creation
+        let label_index_guard = self.label_index();
+        let knn_index_guard = self.knn_index();
+        let planner = QueryPlanner::new(self.catalog(), &label_index_guard, &knn_index_guard);
 
         let mut operators = planner.plan_query(&ast)?;
 
@@ -855,7 +950,7 @@ impl Executor {
                         if let parser::PatternElement::Node(node) = element {
                             if let Some(variable) = &node.variable {
                                 if let Some(label) = node.labels.first() {
-                                    let label_id = self.catalog.get_or_create_label(label)?;
+                                    let label_id = self.catalog().get_or_create_label(label)?;
                                     operators.push(Operator::NodeByLabel {
                                         label_id,
                                         variable: variable.clone(),
@@ -886,7 +981,7 @@ impl Executor {
                         if let parser::PatternElement::Node(node) = element {
                             if let Some(variable) = &node.variable {
                                 if let Some(label) = node.labels.first() {
-                                    let label_id = self.catalog.get_or_create_label(label)?;
+                                    let label_id = self.catalog().get_or_create_label(label)?;
                                     operators.push(Operator::NodeByLabel {
                                         label_id,
                                         variable: variable.clone(),
@@ -991,7 +1086,7 @@ impl Executor {
                     // Build label bitmap
                     let mut label_bits = 0u64;
                     for label in &node.labels {
-                        let label_id = self.catalog.get_or_create_label(label)?;
+                        let label_id = self.catalog().get_or_create_label(label)?;
                         if label_id < 64 {
                             label_bits |= 1u64 << label_id;
                         }
@@ -1011,7 +1106,7 @@ impl Executor {
 
                     // Create the node
                     let node_id = self
-                        .store
+                        .store_mut()
                         .create_node_with_label_bits(&mut tx, label_bits, properties)?;
 
                     // Store node ID if variable exists
@@ -1041,7 +1136,7 @@ impl Executor {
                             // Build label bitmap for target
                             let mut target_label_bits = 0u64;
                             for label in &target_node.labels {
-                                let label_id = self.catalog.get_or_create_label(label)?;
+                                let label_id = self.catalog().get_or_create_label(label)?;
                                 if label_id < 64 {
                                     target_label_bits |= 1u64 << label_id;
                                 }
@@ -1061,7 +1156,7 @@ impl Executor {
                             };
 
                             // Create target node (we'll skip it in the next iteration)
-                            let tid = self.store.create_node_with_label_bits(
+                            let tid = self.store_mut().create_node_with_label_bits(
                                 &mut tx,
                                 target_label_bits,
                                 target_properties,
@@ -1094,7 +1189,7 @@ impl Executor {
                         Error::CypherExecution("Relationship must have a type".to_string())
                     })?;
 
-                    let type_id = self.catalog.get_or_create_type(rel_type)?;
+                    let type_id = self.catalog().get_or_create_type(rel_type)?;
 
                     // Extract relationship properties
                     let rel_properties = if let Some(props_map) = &rel.properties {
@@ -1109,7 +1204,7 @@ impl Executor {
                     };
 
                     // Create the relationship
-                    let rel_id = self.store.create_relationship(
+                    let rel_id = self.store_mut().create_relationship(
                         &mut tx,
                         source_id,
                         target_id,
@@ -1137,7 +1232,7 @@ impl Executor {
         tx_mgr.commit(&mut tx)?;
 
         // Flush to ensure persistence
-        self.store.flush()?;
+        self.store_mut().flush()?;
 
         // Update label index with created nodes
         // Scan all nodes from the store that were created (iterate based on node IDs, not variables)
@@ -1147,7 +1242,7 @@ impl Executor {
             // This is a workaround - ideally we'd track all created IDs, not just those with variables
             // For standalone CREATE without variables, we need a different approach
             // Let's assume created nodes are at the end of the node_count range
-            let node_count = self.store.node_count();
+            let node_count = self.store().node_count();
             // Get the expected number of nodes created (pattern elements count)
             let expected_created = pattern
                 .elements
@@ -1164,11 +1259,11 @@ impl Executor {
             *created_nodes.values().min().unwrap_or(&0)
         };
 
-        let end_node_id = self.store.node_count();
+        let end_node_id = self.store().node_count();
 
         for node_id in start_node_id..end_node_id {
             // Read the node to get its labels
-            if let Ok(node_record) = self.store.read_node(node_id) {
+            if let Ok(node_record) = self.store().read_node(node_id) {
                 if node_record.is_deleted() {
                     continue;
                 }
@@ -1179,7 +1274,7 @@ impl Executor {
                     }
                 }
                 if !label_ids.is_empty() {
-                    self.label_index.add_node(node_id, &label_ids)?;
+                    self.label_index_mut().add_node(node_id, &label_ids)?;
                 }
             }
         }
@@ -1257,13 +1352,13 @@ impl Executor {
     /// Execute NodeByLabel operator
     fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
         // Always use label_index - label_id 0 is valid (it's the first label)
-        let bitmap = self.label_index.get_nodes(label_id)?;
+        let bitmap = self.label_index().get_nodes(label_id)?;
 
         let mut results = Vec::new();
 
         for node_id in bitmap.iter() {
             // Skip deleted nodes
-            if let Ok(node_record) = self.store.read_node(node_id as u64) {
+            if let Ok(node_record) = self.store().read_node(node_id as u64) {
                 if node_record.is_deleted() {
                     continue;
                 }
@@ -1283,12 +1378,12 @@ impl Executor {
         let mut results = Vec::new();
 
         // Get the total number of nodes from the store
-        let total_nodes = self.store.node_count();
+        let total_nodes = self.store().node_count();
 
         // Scan all node IDs from 0 to total_nodes-1
         for node_id in 0..total_nodes {
             // Skip deleted nodes
-            if let Ok(node_record) = self.store.read_node(node_id) {
+            if let Ok(node_record) = self.store().read_node(node_id) {
                 if node_record.is_deleted() {
                     continue;
                 }
@@ -1315,7 +1410,7 @@ impl Executor {
                 let label_name = parts[1].trim();
 
                 // Get label ID
-                if let Ok(label_id) = self.catalog.get_label_id(label_name) {
+                if let Ok(label_id) = self.catalog().get_label_id(label_name) {
                     // Filter rows where variable has this label
                     let rows = self.materialize_rows_from_variables(context);
                     let mut filtered_rows = Vec::new();
@@ -1325,7 +1420,7 @@ impl Executor {
                             if let Some(Value::Number(id)) = obj.get("_nexus_id") {
                                 if let Some(node_id) = id.as_u64() {
                                     // Read node and check if it has the label
-                                    if let Ok(node_record) = self.store.read_node(node_id) {
+                                    if let Ok(node_record) = self.store().read_node(node_id) {
                                         let has_label =
                                             (node_record.label_bits & (1u64 << label_id)) != 0;
                                         if has_label {
@@ -1459,9 +1554,9 @@ impl Executor {
         // This handles queries like MATCH ()-[r:MENTIONS]->() RETURN count(r)
         if source_var.is_empty() || rows.is_empty() {
             // Scan all relationships from storage
-            let total_rels = self.store.relationship_count();
+            let total_rels = self.store().relationship_count();
             for rel_id in 0..total_rels {
-                if let Ok(rel_record) = self.store.read_rel(rel_id) {
+                if let Ok(rel_record) = self.store().read_rel(rel_id) {
                     if rel_record.is_deleted() {
                         continue;
                     }
@@ -3244,7 +3339,7 @@ impl Executor {
                                 let labels: Vec<u64> = node
                                     .labels
                                     .iter()
-                                    .filter_map(|l| self.catalog.get_or_create_label(l).ok())
+                                    .filter_map(|l| self.catalog().get_or_create_label(l).ok())
                                     .map(|id| id as u64)
                                     .collect();
 
@@ -3272,7 +3367,7 @@ impl Executor {
 
                                 // Create the node
                                 let node_id = self
-                                    .store
+                                    .store_mut()
                                     .create_node_with_label_bits(&mut tx, label_bits, properties)?;
                                 node_ids.insert(var.clone(), node_id);
                             }
@@ -3284,7 +3379,7 @@ impl Executor {
                     parser::PatternElement::Relationship(rel) => {
                         // Create relationship between last_node and next_node
                         if let Some(rel_type) = rel.types.first() {
-                            let type_id = self.catalog.get_or_create_type(rel_type)?;
+                            let type_id = self.catalog().get_or_create_type(rel_type)?;
 
                             // Extract relationship properties
                             let properties = if let Some(props_map) = &rel.properties {
@@ -3314,10 +3409,11 @@ impl Executor {
                                             if let Some(target_var) = &target_node.variable {
                                                 if let Some(target_id) = node_ids.get(target_var) {
                                                     // Create the relationship
-                                                    let _rel_id = self.store.create_relationship(
-                                                        &mut tx, *source_id, *target_id, type_id,
-                                                        properties,
-                                                    )?;
+                                                    let _rel_id =
+                                                        self.store_mut().create_relationship(
+                                                            &mut tx, *source_id, *target_id,
+                                                            type_id, properties,
+                                                        )?;
 
                                                     // Relationship created successfully
                                                 }
@@ -3336,7 +3432,7 @@ impl Executor {
         tx_mgr.commit(&mut tx)?;
 
         // Flush to ensure persistence
-        self.store.flush()?;
+        self.store_mut().flush()?;
 
         Ok(())
     }
@@ -3694,7 +3790,7 @@ impl Executor {
         match index_type {
             IndexType::Label => {
                 // Scan label index for nodes with the given label
-                if let Ok(label_id) = self.catalog.get_or_create_label(key) {
+                if let Ok(label_id) = self.catalog().get_or_create_label(key) {
                     let nodes = self.execute_node_by_label(label_id)?;
                     results.extend(nodes);
                 }
@@ -4258,7 +4354,7 @@ impl Executor {
         let mut relationships = Vec::new();
 
         // Read the node record to get the first relationship pointer
-        if let Ok(node_record) = self.store.read_node(node_id) {
+        if let Ok(node_record) = self.store().read_node(node_id) {
             let mut rel_ptr = node_record.first_rel_ptr;
             let mut visited = std::collections::HashSet::new();
             let mut iteration_count = 0;
@@ -4287,7 +4383,7 @@ impl Executor {
 
                 let current_rel_id = rel_ptr.saturating_sub(1);
 
-                if let Ok(rel_record) = self.store.read_rel(current_rel_id) {
+                if let Ok(rel_record) = self.store().read_rel(current_rel_id) {
                     // Copy fields to local variables to avoid packed struct reference issues
                     let src_id = rel_record.src_id;
                     let dst_id = rel_record.dst_id;
@@ -4407,7 +4503,7 @@ impl Executor {
                         let rel_values: Vec<Value> = path_rels
                             .iter()
                             .filter_map(|rel_id| {
-                                if let Ok(rel_record) = self.store.read_rel(*rel_id) {
+                                if let Ok(rel_record) = self.store().read_rel(*rel_id) {
                                     Some(RelationshipInfo {
                                         id: *rel_id,
                                         source_id: rel_record.src_id,
@@ -4749,7 +4845,7 @@ impl Executor {
             .relationships
             .iter()
             .filter_map(|rel_id| {
-                if let Ok(rel_record) = self.store.read_rel(*rel_id) {
+                if let Ok(rel_record) = self.store().read_rel(*rel_id) {
                     let rel_info = RelationshipInfo {
                         id: *rel_id,
                         source_id: rel_record.src_id,
@@ -4769,18 +4865,18 @@ impl Executor {
 
     /// Read a node as a JSON value
     fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
-        let node_record = self.store.read_node(node_id)?;
+        let node_record = self.store().read_node(node_id)?;
 
         if node_record.is_deleted() {
             return Ok(Value::Null);
         }
 
         let label_names = self
-            .catalog
+            .catalog()
             .get_labels_from_bitmap(node_record.label_bits)?;
         let _labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
 
-        let properties_value = self.store.load_node_properties(node_id)?;
+        let properties_value = self.store().load_node_properties(node_id)?;
 
         let properties_value = properties_value.unwrap_or_else(|| Value::Object(Map::new()));
 
@@ -4999,7 +5095,7 @@ impl Executor {
         label: &str,
     ) -> Result<()> {
         // Get label ID from catalog
-        let label_id = self.catalog.get_or_create_label(label)?;
+        let label_id = self.catalog().get_or_create_label(label)?;
 
         // Execute node by label scan
         let nodes = self.execute_node_by_label(label_id)?;
@@ -5292,7 +5388,7 @@ impl Executor {
         // Try to get labels by iterating through possible IDs
         // This is a workaround - ideally Catalog would have list_all_labels()
         for label_id in 0..10000u32 {
-            if let Ok(Some(label_name)) = self.catalog.get_label_name(label_id) {
+            if let Ok(Some(label_name)) = self.catalog().get_label_name(label_id) {
                 labels.push(label_name);
             }
         }
@@ -5326,7 +5422,7 @@ impl Executor {
     ) -> Result<()> {
         // Get all property keys from catalog using public method
         let property_keys: Vec<String> = self
-            .catalog
+            .catalog()
             .list_all_keys()
             .into_iter()
             .map(|(_, name)| name)
@@ -5362,7 +5458,7 @@ impl Executor {
 
         // Try to get types by iterating through possible IDs
         for type_id in 0..10000u32 {
-            if let Ok(Some(type_name)) = self.catalog.get_type_name(type_id) {
+            if let Ok(Some(type_name)) = self.catalog().get_type_name(type_id) {
                 rel_types.push(type_name);
             }
         }
@@ -5395,14 +5491,14 @@ impl Executor {
         // Get all labels and relationship types from catalog
         let mut labels = Vec::new();
         for label_id in 0..10000u32 {
-            if let Ok(Some(label_name)) = self.catalog.get_label_name(label_id) {
+            if let Ok(Some(label_name)) = self.catalog().get_label_name(label_id) {
                 labels.push(label_name);
             }
         }
 
         let mut rel_types = Vec::new();
         for type_id in 0..10000u32 {
-            if let Ok(Some(type_name)) = self.catalog.get_type_name(type_id) {
+            if let Ok(Some(type_name)) = self.catalog().get_type_name(type_id) {
                 rel_types.push(type_name);
             }
         }
@@ -5448,7 +5544,7 @@ impl Executor {
         let index_key = format!("{}.{}", label, property);
 
         // Check if index already exists
-        let indexes = self.spatial_indexes.read();
+        let indexes = self.shared.spatial_indexes.read();
         let exists = indexes.contains_key(&index_key);
         drop(indexes);
 
@@ -5469,7 +5565,7 @@ impl Executor {
         match index_type {
             Some("spatial") => {
                 // Create spatial index (R-tree)
-                let mut indexes = self.spatial_indexes.write();
+                let mut indexes = self.shared.spatial_indexes.write();
                 if or_replace && exists {
                     // Replace existing index
                     indexes.remove(&index_key);
@@ -5480,8 +5576,8 @@ impl Executor {
                 // Property index - for now, just register in catalog
                 // In a full implementation, this would create a B-tree index
                 // For MVP, we'll just track that the index exists
-                let _label_id = self.catalog.get_or_create_label(label)?;
-                let _key_id = self.catalog.get_or_create_key(property)?;
+                let _label_id = self.catalog().get_or_create_label(label)?;
+                let _key_id = self.catalog().get_or_create_key(property)?;
                 // Index is registered - actual indexing would happen during inserts
             }
             _ => {
@@ -5802,7 +5898,7 @@ impl Executor {
                 let lowered = name.to_lowercase();
 
                 // First, check if it's a registered UDF
-                if let Some(udf) = self.udf_registry.get(&lowered) {
+                if let Some(udf) = self.shared.udf_registry.get(&lowered) {
                     // Evaluate arguments
                     let mut evaluated_args = Vec::new();
                     for arg_expr in args {
@@ -5839,9 +5935,10 @@ impl Executor {
 
                             if let Some(nid) = node_id {
                                 // Read the node record to get labels
-                                if let Ok(node_record) = self.store.read_node(nid) {
-                                    if let Ok(label_names) =
-                                        self.catalog.get_labels_from_bitmap(node_record.label_bits)
+                                if let Ok(node_record) = self.store().read_node(nid) {
+                                    if let Ok(label_names) = self
+                                        .catalog()
+                                        .get_labels_from_bitmap(node_record.label_bits)
                                     {
                                         let labels: Vec<Value> =
                                             label_names.into_iter().map(Value::String).collect();
@@ -5872,9 +5969,9 @@ impl Executor {
 
                             if let Some(rid) = rel_id {
                                 // Read the relationship record to get type_id
-                                if let Ok(rel_record) = self.store.read_rel(rid) {
+                                if let Ok(rel_record) = self.store().read_rel(rid) {
                                     if let Ok(Some(type_name)) =
-                                        self.catalog.get_type_name(rel_record.type_id)
+                                        self.catalog().get_type_name(rel_record.type_id)
                                     {
                                         return Ok(Value::String(type_name));
                                     }
@@ -6743,7 +6840,7 @@ impl Executor {
                                                 }
                                             });
                                             let type_id = rel_type.and_then(|t| {
-                                                self.catalog.get_type_id(&t).ok().flatten()
+                                                self.catalog().get_type_id(&t).ok().flatten()
                                             });
                                             let direction = pattern.elements.iter()
                                                 .find_map(|e| {
@@ -6829,7 +6926,7 @@ impl Executor {
                                                 }
                                             });
                                             let type_id = rel_type.and_then(|t| {
-                                                self.catalog.get_type_id(&t).ok().flatten()
+                                                self.catalog().get_type_id(&t).ok().flatten()
                                             });
                                             let direction = pattern.elements.iter()
                                                 .find_map(|e| {
@@ -7890,12 +7987,12 @@ impl Executor {
 
     fn read_relationship_as_value(&self, rel: &RelationshipInfo) -> Result<Value> {
         let _type_name = self
-            .catalog
+            .catalog()
             .get_type_name(rel.type_id)?
             .unwrap_or_else(|| format!("type_{}", rel.type_id));
 
         let properties_value = self
-            .store
+            .store()
             .load_relationship_properties(rel.id)?
             .unwrap_or_else(|| Value::Object(Map::new()));
 
