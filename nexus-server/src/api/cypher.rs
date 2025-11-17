@@ -1444,8 +1444,28 @@ pub async fn execute_cypher(
     // Execute query - clone executor for concurrent execution
     // This removes the global lock bottleneck - each query gets its own executor clone
     // that shares the underlying data structures (catalog, store, indexes) via Arc
-    let mut executor = executor_guard.read().await.clone();
-    let execution_result = executor.execute(&query);
+    // Use spawn_blocking to execute in a separate thread pool for true parallelism
+    let executor_clone = executor_guard.read().await.clone();
+    let query_clone = query.clone();
+
+    // Execute in blocking thread pool for true parallel execution
+    // This allows multiple queries to run concurrently across CPU cores
+    let execution_result = match tokio::task::spawn_blocking(move || {
+        let mut executor = executor_clone;
+        executor.execute(&query_clone)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            return Json(CypherResponse {
+                columns: vec![],
+                rows: vec![],
+                execution_time_ms: start_time.elapsed().as_millis() as u64,
+                error: Some(format!("Task execution error: {}", e)),
+            });
+        }
+    };
 
     // Get memory delta after execution
     let memory_usage = initial_memory.and_then(|initial| {
