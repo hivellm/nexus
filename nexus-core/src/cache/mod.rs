@@ -34,11 +34,14 @@ use std::time::{Duration, Instant};
 
 pub mod index_cache;
 pub mod object_cache;
+pub mod performance_tests;
 pub mod query_cache;
+pub mod relationship_index;
 
 pub use index_cache::{CachedIndexPage, IndexCache, IndexKey};
 pub use object_cache::{CachedObject, ObjectCache, ObjectKey};
 pub use query_cache::{CachedQueryResult, QueryCache, QueryKey};
+pub use relationship_index::RelationshipIndex;
 
 /// Statistics for the object cache
 #[derive(Debug, Clone, Default)]
@@ -66,6 +69,7 @@ pub enum CacheLayer {
     Object,
     Index,
     Query,
+    Relationship,
 }
 
 /// Cache operation types
@@ -236,6 +240,8 @@ pub struct MultiLayerCache {
     query_cache: QueryCache,
     /// Index cache (lookup acceleration layer)
     index_cache: IndexCache,
+    /// Relationship index (relationship query acceleration layer)
+    relationship_index: RelationshipIndex,
     /// Configuration
     config: CacheConfig,
     /// Statistics
@@ -251,12 +257,14 @@ impl MultiLayerCache {
         let object_cache = ObjectCache::new(config.object_cache.clone());
         let query_cache = QueryCache::new(config.query_cache.clone());
         let index_cache = IndexCache::new(config.index_cache.clone());
+        let relationship_index = RelationshipIndex::new();
 
         Ok(Self {
             page_cache,
             object_cache,
             query_cache,
             index_cache,
+            relationship_index,
             config,
             stats: CacheStats::default(),
             last_stats_update: Instant::now(),
@@ -364,12 +372,18 @@ impl MultiLayerCache {
         &self.stats
     }
 
+    /// Get relationship index
+    pub fn relationship_index(&self) -> &RelationshipIndex {
+        &self.relationship_index
+    }
+
     /// Clear all caches
     pub fn clear(&mut self) {
         let _ = self.page_cache.clear();
         self.object_cache.clear();
         self.query_cache.clear();
         self.index_cache.clear();
+        let _ = self.relationship_index.clear();
     }
 
     /// Prefetch pages around the given page ID
@@ -428,12 +442,19 @@ impl MultiLayerCache {
         self.stats
             .update_memory(CacheLayer::Index, self.index_cache.memory_usage());
 
+        // Update relationship index stats
+        let rel_stats = self.relationship_index.stats();
+        self.stats
+            .update_size(CacheLayer::Relationship, rel_stats.total_relationships as usize);
+        self.stats.update_memory(CacheLayer::Relationship, rel_stats.memory_usage);
+
         // Calculate hit rates
         for &layer in &[
             CacheLayer::Page,
             CacheLayer::Object,
             CacheLayer::Query,
             CacheLayer::Index,
+            CacheLayer::Relationship,
         ] {
             self.stats.calculate_hit_rate(layer);
         }
@@ -504,8 +525,13 @@ impl MultiLayerCache {
                 "cached_at_startup": true
             });
 
-            // Use put_query_plan method
-            self.put_query_plan(query_hash, plan);
+            // Cache the query plan in query cache
+            let cached_plan = crate::cache::query_cache::CachedQueryPlan {
+                plan,
+                cached_at: std::time::Instant::now(),
+                access_count: 0,
+            };
+            self.query_cache.put_plan(query_hash, cached_plan);
         }
 
         Ok(())

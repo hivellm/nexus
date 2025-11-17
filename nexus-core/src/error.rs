@@ -50,6 +50,10 @@ pub enum Error {
     #[error("Index error: {0}")]
     Index(String),
 
+    /// Index consistency errors
+    #[error("Index consistency error: {0}")]
+    IndexConsistency(String),
+
     /// Query executor errors
     #[error("Executor error: {0}")]
     Executor(String),

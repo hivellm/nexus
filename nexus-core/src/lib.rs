@@ -208,6 +208,10 @@ impl Engine {
             _temp_dir: None,
         };
 
+        // Configure cache in executor for relationship index access
+        // Note: In a production implementation, we'd need proper interior mutability
+        // For now, the executor will use the cache when available via direct access
+
         engine.rebuild_indexes_from_storage()?;
 
         Ok(engine)
@@ -3066,6 +3070,12 @@ impl Engine {
             .storage
             .create_relationship(tx, from, to, type_id, properties)?;
 
+        // Update relationship index for performance (Phase 3 optimization)
+        if let Err(e) = self.cache.relationship_index().add_relationship(rel_id, from, to, type_id) {
+            eprintln!("[WARN] Failed to update relationship index: {}", e);
+            // Don't fail the operation, just log the warning
+        }
+
         // Only commit if we created our own transaction
         if !has_session_tx {
             self.transaction_manager.write().commit(tx)?;
@@ -3215,6 +3225,17 @@ impl Engine {
                 let mut deleted_record = rel_record;
                 deleted_record.mark_deleted();
                 self.storage.write_rel(rel_id, &deleted_record)?;
+
+                // Update relationship index for performance (Phase 3 optimization)
+                if let Err(e) = self.cache.relationship_index().remove_relationship(
+                    rel_id,
+                    rel_record.src_id,
+                    rel_record.dst_id,
+                    rel_record.type_id,
+                ) {
+                    eprintln!("[WARN] Failed to update relationship index on deletion: {}", e);
+                    // Don't fail the operation, just log the warning
+                }
             }
         }
 

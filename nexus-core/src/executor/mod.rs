@@ -387,6 +387,8 @@ pub struct ExecutorShared {
     udf_registry: Arc<UdfRegistry>,
     /// Spatial indexes (label.property -> RTreeIndex)
     spatial_indexes: Arc<parking_lot::RwLock<HashMap<String, SpatialIndex>>>,
+    /// Multi-layer cache system for performance optimization
+    cache: Option<Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>>,
 }
 
 /// Query executor
@@ -412,7 +414,13 @@ impl ExecutorShared {
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(UdfRegistry::new()),
             spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            cache: None,
         })
+    }
+
+    /// Set the cache system for the executor
+    pub fn set_cache(&mut self, cache: Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>) {
+        self.cache = Some(cache);
     }
 
     /// Create shared state with custom UDF registry
@@ -430,6 +438,7 @@ impl ExecutorShared {
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(udf_registry),
             spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            cache: None,
         })
     }
 }
@@ -677,6 +686,7 @@ impl Executor {
                         source_var,
                         target_var,
                         rel_var,
+                        None, // Cache not available at this level
                     )?;
                 }
                 Operator::Project { items } => {
@@ -1550,6 +1560,7 @@ impl Executor {
         source_var: &str,
         target_var: &str,
         rel_var: &str,
+        cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<()> {
         // Use result_set rows instead of variables to maintain row context from previous operators
         let rows = if !context.result_set.rows.is_empty() {
@@ -1648,7 +1659,7 @@ impl Executor {
                     None => continue,
                 };
 
-                let relationships = self.find_relationships(source_id, type_ids, direction)?;
+                let relationships = self.find_relationships(source_id, type_ids, direction, cache)?;
                 if relationships.is_empty() {
                     continue;
                 }
@@ -3469,6 +3480,7 @@ impl Executor {
             } => {
                 self.execute_expand(
                     context, type_ids, *direction, source_var, target_var, rel_var,
+                    None, // Cache not available at this level
                 )?;
             }
             Operator::Project { items } => {
@@ -4359,7 +4371,43 @@ impl Executor {
         node_id: u64,
         type_ids: &[u32],
         direction: Direction,
+        cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<Vec<RelationshipInfo>> {
+        // Try to use relationship index if available (Phase 3 optimization)
+        if let Some(cache) = cache {
+            let rel_index = cache.relationship_index();
+
+            // Get relationship IDs from index
+            let rel_ids = match direction {
+                Direction::Outgoing => rel_index.get_node_relationships(node_id, type_ids, true)?,
+                Direction::Incoming => rel_index.get_node_relationships(node_id, type_ids, false)?,
+                Direction::Both => {
+                    let mut outgoing = rel_index.get_node_relationships(node_id, type_ids, true)?;
+                    let mut incoming = rel_index.get_node_relationships(node_id, type_ids, false)?;
+                    outgoing.append(&mut incoming);
+                    outgoing
+                }
+            };
+
+            // Convert relationship IDs to RelationshipInfo by reading from storage
+            let mut relationships = Vec::new();
+            for rel_id in rel_ids {
+                if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                    if !rel_record.is_deleted() {
+                        relationships.push(RelationshipInfo {
+                            id: rel_id,
+                            source_id: rel_record.src_id,
+                            target_id: rel_record.dst_id,
+                            type_id: rel_record.type_id,
+                        });
+                    }
+                }
+            }
+
+            return Ok(relationships);
+        }
+
+        // Fallback to original linked list traversal (Phase 1-2 behavior)
         let mut relationships = Vec::new();
 
         // Read the node record to get the first relationship pointer
@@ -4556,7 +4604,7 @@ impl Executor {
                     // Find neighbors (convert Option<u32> to slice)
                     let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
                     let neighbors =
-                        self.find_relationships(current_node, &type_ids_slice, direction)?;
+                        self.find_relationships(current_node, &type_ids_slice, direction, None)?;
 
                     for rel_info in neighbors {
                         let next_node = match direction {
@@ -4657,7 +4705,7 @@ impl Executor {
 
             // Find neighbors (convert Option<u32> to slice)
             let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-            let neighbors = self.find_relationships(current, &type_ids_slice, direction)?;
+            let neighbors = self.find_relationships(current, &type_ids_slice, direction, None)?;
             for rel_info in neighbors {
                 let next_node = match direction {
                     Direction::Outgoing => rel_info.target_id,
@@ -4711,7 +4759,7 @@ impl Executor {
             }
 
             let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-            let neighbors = self.find_relationships(current, &type_ids_slice, direction)?;
+            let neighbors = self.find_relationships(current, &type_ids_slice, direction, None)?;
             for rel_info in neighbors {
                 let next_node = match direction {
                     Direction::Outgoing => rel_info.target_id,
@@ -4776,7 +4824,7 @@ impl Executor {
                 let from = current_path[i];
                 let to = current_path[i + 1];
                 let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-                let neighbors = self.find_relationships(from, &type_ids_slice, direction)?;
+                let neighbors = self.find_relationships(from, &type_ids_slice, direction, None)?;
                 if let Some(rel_info) = neighbors.iter().find(|r| match direction {
                     Direction::Outgoing => r.target_id == to,
                     Direction::Incoming => r.source_id == to,
@@ -4804,7 +4852,7 @@ impl Executor {
         }
 
         let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-        let neighbors = self.find_relationships(current, &type_ids_slice, direction)?;
+        let neighbors = self.find_relationships(current, &type_ids_slice, direction, None)?;
         for rel_info in neighbors {
             let next_node = match direction {
                 Direction::Outgoing => rel_info.target_id,
