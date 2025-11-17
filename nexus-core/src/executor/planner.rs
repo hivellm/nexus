@@ -1035,12 +1035,88 @@ impl<'a> QueryPlanner<'a> {
                                 }
                             }
                             _ => {
-                                // Not an aggregate function, treat as regular column for GROUP BY
-                                let alias = item.alias.clone().unwrap_or_else(|| {
-                                    self.expression_to_string(&item.expression)
-                                        .unwrap_or_default()
-                                });
-                                non_aggregate_aliases.push(alias);
+                                // Not an aggregate function, but might contain nested aggregations
+                                // Check if any argument contains an aggregation
+                                let mut has_nested_agg = false;
+                                let mut temp_agg_alias: Option<String> = None;
+
+                                for arg in args {
+                                    if self.contains_aggregation(arg) {
+                                        has_nested_agg = true;
+                                        // Extract nested aggregation (e.g., collect() inside head())
+                                        if let Expression::FunctionCall {
+                                            name: nested_name,
+                                            args: nested_args,
+                                        } = arg
+                                        {
+                                            let nested_func = nested_name.to_lowercase();
+                                            if nested_func == "collect" {
+                                                let distinct =
+                                                    nested_args.first().is_some_and(|arg| {
+                                                        if let Expression::Variable(v) = arg {
+                                                            v == "__DISTINCT__"
+                                                        } else {
+                                                            false
+                                                        }
+                                                    });
+
+                                                let actual_arg =
+                                                    if distinct && nested_args.len() > 1 {
+                                                        Some(&nested_args[1])
+                                                    } else if !distinct && !nested_args.is_empty() {
+                                                        Some(&nested_args[0])
+                                                    } else {
+                                                        None
+                                                    };
+
+                                                if let Some(arg) = actual_arg {
+                                                    let column = match arg {
+                                                        Expression::Variable(var) => var.clone(),
+                                                        Expression::PropertyAccess {
+                                                            variable,
+                                                            property,
+                                                        } => {
+                                                            format!("{}.{}", variable, property)
+                                                        }
+                                                        Expression::Literal(_) => {
+                                                            let alias = format!(
+                                                                "__collect_arg_{}",
+                                                                aggregations.len()
+                                                            );
+                                                            projection_items.push(ProjectionItem {
+                                                                alias: alias.clone(),
+                                                                expression: arg.clone(),
+                                                            });
+                                                            alias
+                                                        }
+                                                        _ => continue,
+                                                    };
+                                                    // Create temporary alias for the aggregation result
+                                                    let temp_alias =
+                                                        format!("__agg_{}", aggregations.len());
+                                                    temp_agg_alias = Some(temp_alias.clone());
+                                                    aggregations.push(Aggregation::Collect {
+                                                        column,
+                                                        alias: temp_alias,
+                                                        distinct,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if has_nested_agg {
+                                    // Don't add to non_aggregate_aliases - we'll handle this in post-aggregation projection
+                                    // The nested aggregation will be extracted and handled separately
+                                } else {
+                                    // Not an aggregate function and no nested aggregations, treat as regular column for GROUP BY
+                                    let alias = item.alias.clone().unwrap_or_else(|| {
+                                        self.expression_to_string(&item.expression)
+                                            .unwrap_or_default()
+                                    });
+                                    non_aggregate_aliases.push(alias);
+                                }
                             }
                         }
                     }
@@ -1100,14 +1176,18 @@ impl<'a> QueryPlanner<'a> {
                                     }
                                 }
                                 _ => {
-                                    let alias = item.alias.clone().unwrap_or_else(|| {
-                                        self.expression_to_string(&item.expression)
-                                            .unwrap_or_default()
-                                    });
-                                    projection_items.push(ProjectionItem {
-                                        alias,
-                                        expression: item.expression.clone(),
-                                    });
+                                    // Check if this function contains nested aggregations
+                                    // If so, don't add to projection_items here - it will be handled in post-aggregation projection
+                                    if !self.contains_aggregation(&item.expression) {
+                                        let alias = item.alias.clone().unwrap_or_else(|| {
+                                            self.expression_to_string(&item.expression)
+                                                .unwrap_or_default()
+                                        });
+                                        projection_items.push(ProjectionItem {
+                                            alias,
+                                            expression: item.expression.clone(),
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -1158,6 +1238,7 @@ impl<'a> QueryPlanner<'a> {
                     operators.push(op.clone());
                 }
 
+                let aggregations_clone = aggregations.clone();
                 operators.push(Operator::Aggregate {
                     group_by: group_by_columns,
                     aggregations,
@@ -1167,6 +1248,38 @@ impl<'a> QueryPlanner<'a> {
                         Some(projection_items)
                     },
                 });
+
+                // After aggregation, apply any non-aggregate functions that wrap aggregations
+                // (e.g., head(collect(...)), tail(collect(...)), reverse(collect(...)))
+                let mut post_agg_projection_items = Vec::new();
+                for item in return_items {
+                    if let Expression::FunctionCall { name, .. } = &item.expression {
+                        let func_name = name.to_lowercase();
+                        // Check if this is a non-aggregate function that contains nested aggregations
+                        if !matches!(
+                            func_name.as_str(),
+                            "count" | "sum" | "avg" | "min" | "max" | "collect"
+                        ) && self.contains_aggregation(&item.expression)
+                        {
+                            // Replace nested aggregations with variable references
+                            let modified_expr = self
+                                .replace_nested_aggregations(&item.expression, &aggregations_clone);
+                            post_agg_projection_items.push(ProjectionItem {
+                                alias: item.alias.clone().unwrap_or_else(|| {
+                                    self.expression_to_string(&item.expression)
+                                        .unwrap_or_default()
+                                }),
+                                expression: modified_expr,
+                            });
+                        }
+                    }
+                }
+
+                if !post_agg_projection_items.is_empty() {
+                    operators.push(Operator::Project {
+                        items: post_agg_projection_items,
+                    });
+                }
             } else {
                 // Insert UNWIND operators before final projection
                 for op in unwind_operators {
@@ -1469,6 +1582,63 @@ impl<'a> QueryPlanner<'a> {
                 self.contains_aggregation(base) || self.contains_aggregation(index)
             }
             _ => false,
+        }
+    }
+
+    /// Replace nested aggregations in an expression with variable references
+    fn replace_nested_aggregations(
+        &self,
+        expr: &Expression,
+        aggregations: &[Aggregation],
+    ) -> Expression {
+        match expr {
+            Expression::FunctionCall { name, args } => {
+                let func_name = name.to_lowercase();
+                // Check if this is a nested aggregation function
+                if func_name == "collect" {
+                    // Find matching aggregation by checking if the arguments match
+                    for (idx, agg) in aggregations.iter().enumerate() {
+                        if let Aggregation::Collect { column, .. } = agg {
+                            // Check if this collect() matches the aggregation
+                            if let Some(arg) = args.first() {
+                                let matches = match arg {
+                                    Expression::Variable(var) => var == column,
+                                    Expression::PropertyAccess { variable, property } => {
+                                        format!("{}.{}", variable, property) == *column
+                                    }
+                                    _ => false,
+                                };
+                                if matches {
+                                    // Replace with variable reference to aggregation result
+                                    let temp_alias = format!("__agg_{}", idx);
+                                    return Expression::Variable(temp_alias);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Recursively replace nested aggregations in arguments
+                let new_args: Vec<Expression> = args
+                    .iter()
+                    .map(|arg| self.replace_nested_aggregations(arg, aggregations))
+                    .collect();
+
+                Expression::FunctionCall {
+                    name: name.clone(),
+                    args: new_args,
+                }
+            }
+            Expression::BinaryOp { left, right, op } => Expression::BinaryOp {
+                left: Box::new(self.replace_nested_aggregations(left, aggregations)),
+                right: Box::new(self.replace_nested_aggregations(right, aggregations)),
+                op: *op,
+            },
+            Expression::UnaryOp { op, operand } => Expression::UnaryOp {
+                op: *op,
+                operand: Box::new(self.replace_nested_aggregations(operand, aggregations)),
+            },
+            _ => expr.clone(),
         }
     }
 
