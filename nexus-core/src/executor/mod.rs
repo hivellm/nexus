@@ -1180,6 +1180,40 @@ impl Executor {
         let mut label_count_updates: std::collections::HashMap<u32, u32> =
             std::collections::HashMap::new();
 
+        // Phase 1.5.2: Pre-allocate label/type IDs in batches
+        // Collect all unique labels and types from the pattern first
+        let mut all_labels = std::collections::HashSet::new();
+        let mut all_types = std::collections::HashSet::new();
+
+        for element in &pattern.elements {
+            match element {
+                parser::PatternElement::Node(node) => {
+                    for label in &node.labels {
+                        all_labels.insert(label.as_str());
+                    }
+                }
+                parser::PatternElement::Relationship(rel) => {
+                    for rel_type in &rel.types {
+                        all_types.insert(rel_type.as_str());
+                    }
+                }
+            }
+        }
+
+        // Batch allocate all labels in a single transaction
+        if !all_labels.is_empty() {
+            let labels_vec: Vec<&str> = all_labels.iter().copied().collect();
+            let batch_results = self.catalog().batch_get_or_create_labels(&labels_vec)?;
+            label_cache.extend(batch_results);
+        }
+
+        // Batch allocate all types in a single transaction
+        if !all_types.is_empty() {
+            let types_vec: Vec<&str> = all_types.iter().copied().collect();
+            let batch_results = self.catalog().batch_get_or_create_types(&types_vec)?;
+            label_cache.extend(batch_results); // Reuse label_cache for types too
+        }
+
         // Use the passed-in created_nodes HashMap (don't create a new one)
         let mut last_node_id: Option<u64> = None;
         let mut skip_next_node = false; // Flag to skip node already created in relationship
@@ -1195,14 +1229,17 @@ impl Executor {
                         continue;
                     }
 
-                    // Phase 1 Optimization: Build label bitmap with cached lookups
+                    // Phase 1.5.2: Build label bitmap with pre-allocated IDs
+                    // All labels should already be in label_cache from batch allocation
                     let mut label_bits = 0u64;
                     let mut label_ids_for_update = Vec::new();
                     for label in &node.labels {
-                        // Use cache if available, otherwise lookup and cache
-                        let label_id = if let Some(&cached_id) = label_cache.get(label) {
-                            cached_id
+                        // Labels should already be in cache from batch allocation
+                        // Fallback to individual lookup if not found (shouldn't happen, but be safe)
+                        let label_id = if let Some(&id) = label_cache.get(label) {
+                            id
                         } else {
+                            // Fallback: individual lookup (shouldn't happen with batch allocation)
                             let id = self.catalog().get_or_create_label(label)?;
                             label_cache.insert(label.clone(), id);
                             id
@@ -1333,12 +1370,15 @@ impl Executor {
                         Error::CypherExecution("Relationship must have a type".to_string())
                     })?;
 
-                    // Phase 1 Optimization: Cache type lookups
-                    let type_id = if let Some(&cached_id) = label_cache.get(rel_type) {
-                        cached_id
+                    // Phase 1.5.2: Use pre-allocated type ID
+                    // Type should already be in cache from batch allocation
+                    // Fallback to individual lookup if not found (shouldn't happen, but be safe)
+                    let type_id = if let Some(&id) = label_cache.get(rel_type) {
+                        id
                     } else {
+                        // Fallback: individual lookup (shouldn't happen with batch allocation)
                         let id = self.catalog().get_or_create_type(rel_type)?;
-                        label_cache.insert(rel_type.clone(), id);
+                        label_cache.insert(rel_type.to_string(), id);
                         id
                     };
 

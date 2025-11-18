@@ -341,6 +341,67 @@ impl Catalog {
         Ok(id)
     }
 
+    /// Phase 1.5.2: Batch get or create multiple labels in a single transaction
+    /// This reduces I/O overhead when creating multiple labels at once
+    pub fn batch_get_or_create_labels(
+        &self,
+        labels: &[&str],
+    ) -> Result<std::collections::HashMap<String, LabelId>> {
+        let mut result = std::collections::HashMap::new();
+
+        if labels.is_empty() {
+            return Ok(result);
+        }
+
+        // First pass: check cache for existing labels
+        let mut labels_to_create = Vec::new();
+        for label in labels {
+            if let Some(id) = self.label_name_cache.get(*label) {
+                result.insert(label.to_string(), *id);
+            } else {
+                labels_to_create.push(*label);
+            }
+        }
+
+        if labels_to_create.is_empty() {
+            return Ok(result);
+        }
+
+        // Second pass: create missing labels in a single transaction
+        let mut wtxn = self.env.write_txn()?;
+
+        for label in &labels_to_create {
+            // Double-check in case another thread created it
+            if let Some(id) = self.label_name_to_id.get(&wtxn, *label)? {
+                // Update cache
+                self.label_name_cache.insert(label.to_string(), id);
+                self.label_id_cache.insert(id, label.to_string());
+                result.insert(label.to_string(), id);
+            } else {
+                // Allocate new ID
+                let id = {
+                    let mut next_id = self.next_label_id.write();
+                    let id = *next_id;
+                    *next_id += 1;
+                    id
+                };
+
+                // Insert bidirectional mappings
+                self.label_name_to_id.put(&mut wtxn, *label, &id)?;
+                self.label_id_to_name.put(&mut wtxn, &id, *label)?;
+
+                // Update cache
+                self.label_name_cache.insert(label.to_string(), id);
+                self.label_id_cache.insert(id, label.to_string());
+                result.insert(label.to_string(), id);
+            }
+        }
+
+        wtxn.commit()?;
+
+        Ok(result)
+    }
+
     /// Get label name by ID
     pub fn get_label_name(&self, id: LabelId) -> Result<Option<String>> {
         // Try cache first (lock-free)
@@ -397,6 +458,67 @@ impl Catalog {
         self.type_id_cache.insert(id, type_name.to_string());
 
         Ok(id)
+    }
+
+    /// Phase 1.5.2: Batch get or create multiple types in a single transaction
+    /// This reduces I/O overhead when creating multiple types at once
+    pub fn batch_get_or_create_types(
+        &self,
+        types: &[&str],
+    ) -> Result<std::collections::HashMap<String, TypeId>> {
+        let mut result = std::collections::HashMap::new();
+
+        if types.is_empty() {
+            return Ok(result);
+        }
+
+        // First pass: check cache for existing types
+        let mut types_to_create = Vec::new();
+        for type_name in types {
+            if let Some(id) = self.type_name_cache.get(*type_name) {
+                result.insert(type_name.to_string(), *id);
+            } else {
+                types_to_create.push(*type_name);
+            }
+        }
+
+        if types_to_create.is_empty() {
+            return Ok(result);
+        }
+
+        // Second pass: create missing types in a single transaction
+        let mut wtxn = self.env.write_txn()?;
+
+        for type_name in &types_to_create {
+            // Double-check in case another thread created it
+            if let Some(id) = self.type_name_to_id.get(&wtxn, *type_name)? {
+                // Update cache
+                self.type_name_cache.insert(type_name.to_string(), id);
+                self.type_id_cache.insert(id, type_name.to_string());
+                result.insert(type_name.to_string(), id);
+            } else {
+                // Allocate new ID
+                let id = {
+                    let mut next_id = self.next_type_id.write();
+                    let id = *next_id;
+                    *next_id += 1;
+                    id
+                };
+
+                // Insert bidirectional mappings
+                self.type_name_to_id.put(&mut wtxn, *type_name, &id)?;
+                self.type_id_to_name.put(&mut wtxn, &id, *type_name)?;
+
+                // Update cache
+                self.type_name_cache.insert(type_name.to_string(), id);
+                self.type_id_cache.insert(id, type_name.to_string());
+                result.insert(type_name.to_string(), id);
+            }
+        }
+
+        wtxn.commit()?;
+
+        Ok(result)
     }
 
     /// Get type name by ID

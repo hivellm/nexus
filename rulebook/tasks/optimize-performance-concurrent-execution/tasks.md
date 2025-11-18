@@ -121,7 +121,11 @@
 
 - [x] 1.5 Optimize catalog access
   - [x] 1.5.1 Use lock-free HashMap (dashmap) for catalog (Implemented in-memory caches with DashMap)
-  - [ ] 1.5.2 Pre-allocate label/type IDs in batches (Future optimization)
+  - [x] 1.5.2 Pre-allocate label/type IDs in batches ✅ **IMPLEMENTED**
+    - [x] Added `batch_get_or_create_labels()` method - creates multiple labels in single LMDB transaction
+    - [x] Added `batch_get_or_create_types()` method - creates multiple types in single LMDB transaction
+    - [x] Updated `execute_create_pattern_internal` to collect all labels/types first, then batch allocate
+    - [x] Reduces I/O overhead from N transactions to 1 transaction per CREATE operation
   - [x] 1.5.3 Cache catalog lookups in transaction (Cache warming on startup, cache updates on writes)
   - [x] 1.5.4 Measure lock contention reduction (Benchmark created: benchmark_lock_contention.rs with 5 tests measuring contention reduction)
 
