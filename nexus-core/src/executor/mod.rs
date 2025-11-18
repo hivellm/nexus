@@ -6034,7 +6034,7 @@ impl Executor {
         }
         // Also include variables from context (for compatibility)
         columns.extend(context.variables.keys().cloned());
-        
+
         let mut columns: Vec<String> = columns.into_iter().collect();
         columns.sort();
 
@@ -8188,7 +8188,12 @@ impl Executor {
             // This handles relationships where properties are stored directly in the object
             if let Some(value) = obj.get(property) {
                 // Skip internal properties that shouldn't be exposed
-                if property != "_nexus_id" && property != "_nexus_type" && property != "_source" && property != "_target" && property != "_element_id" {
+                if property != "_nexus_id"
+                    && property != "_nexus_type"
+                    && property != "_source"
+                    && property != "_target"
+                    && property != "_element_id"
+                {
                     return value.clone();
                 }
             }
