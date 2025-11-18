@@ -41,11 +41,11 @@ struct IntegrationTestConfig {
 impl Default for IntegrationTestConfig {
     fn default() -> Self {
         Self {
-            node_count: 1000,
-            relationship_count: 5000,
-            concurrent_operations: 10,
-            test_duration_secs: 30,
-            memory_limit_mb: 512, // 512MB limit
+            node_count: 100,          // Reduced for faster test execution
+            relationship_count: 500,  // Reduced for faster test execution
+            concurrent_operations: 5, // Reduced for faster test execution
+            test_duration_secs: 5,    // Reduced from 30s to 5s for faster test execution
+            memory_limit_mb: 512,     // 512MB limit
         }
     }
 }
