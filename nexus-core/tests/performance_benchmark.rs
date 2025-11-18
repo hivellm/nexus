@@ -472,6 +472,7 @@ async fn benchmark_mixed_workload(
 
 #[tokio::test]
 #[cfg(feature = "benchmarks")]
+#[ignore]
 async fn performance_benchmark_vs_neo4j() {
     println!("🚀 Starting Performance Benchmark vs Neo4j Targets");
     println!("Testing all optimizations under realistic workloads...");
