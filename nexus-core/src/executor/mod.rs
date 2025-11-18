@@ -5479,7 +5479,25 @@ impl Executor {
         // Note: file:/// means absolute path (preserve leading slash), file:// means relative path
         let file_path_str = if url.starts_with("file:///") {
             // Absolute path: file:///path -> /path (preserve leading slash)
-            &url[7..]
+            let path = &url[7..];
+            // On Windows, if path starts with /C:/, remove the leading / to get C:/
+            // This handles file:///C:/path correctly
+            #[cfg(windows)]
+            {
+                if path.len() >= 3
+                    && path.chars().nth(0) == Some('/')
+                    && path.chars().nth(1).map(|c| c.is_ascii_alphabetic()) == Some(true)
+                    && path.chars().nth(2) == Some(':')
+                {
+                    &path[1..]
+                } else {
+                    path
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                path
+            }
         } else if let Some(stripped) = url.strip_prefix("file://") {
             // Relative path: file://path -> path
             stripped

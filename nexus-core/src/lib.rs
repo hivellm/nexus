@@ -2199,7 +2199,24 @@ impl Engine {
             if let executor::parser::Clause::LoadCsv(load_csv) = clause {
                 // Extract file path from URL (support file:///path/to/file.csv)
                 let file_path = if load_csv.url.starts_with("file:///") {
-                    &load_csv.url[8..] // Remove "file:///"
+                    let path = &load_csv.url[8..]; // Remove "file:///"
+                    // On Windows, if path starts with /C:/, remove the leading / to get C:/
+                    #[cfg(windows)]
+                    {
+                        if path.len() >= 3
+                            && path.chars().nth(0) == Some('/')
+                            && path.chars().nth(1).map(|c| c.is_ascii_alphabetic()) == Some(true)
+                            && path.chars().nth(2) == Some(':')
+                        {
+                            &path[1..]
+                        } else {
+                            path
+                        }
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        path
+                    }
                 } else if load_csv.url.starts_with("file://") {
                     &load_csv.url[7..] // Remove "file://"
                 } else {

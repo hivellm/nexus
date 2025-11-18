@@ -90,10 +90,18 @@ fn test_load_csv_execution() {
 
     // Execute LOAD CSV
     // Canonicalize path to ensure absolute path
+    // On Windows, canonicalize() returns paths with \\?\ prefix which need to be normalized
     let csv_path_abs = csv_path.canonicalize().unwrap_or_else(|_| csv_path.clone());
+    let path_str = csv_path_abs.to_string_lossy();
+    // Remove Windows extended path prefix (\\?\) if present and normalize separators
+    let normalized_path = if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+        stripped.replace('\\', "/")
+    } else {
+        path_str.replace('\\', "/")
+    };
     let query = format!(
-        "LOAD CSV FROM 'file://{}' AS row RETURN row",
-        csv_path_abs.to_string_lossy()
+        "LOAD CSV FROM 'file:///{}' AS row RETURN row",
+        normalized_path
     );
     let result = engine.execute_cypher(&query).unwrap();
 
@@ -139,10 +147,18 @@ fn test_load_csv_with_headers_execution() {
 
     // Execute LOAD CSV WITH HEADERS
     // Canonicalize path to ensure absolute path
+    // On Windows, canonicalize() returns paths with \\?\ prefix which need to be normalized
     let csv_path_abs = csv_path.canonicalize().unwrap_or_else(|_| csv_path.clone());
+    let path_str = csv_path_abs.to_string_lossy();
+    // Remove Windows extended path prefix (\\?\) if present and normalize separators
+    let normalized_path = if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+        stripped.replace('\\', "/")
+    } else {
+        path_str.replace('\\', "/")
+    };
     let query = format!(
-        "LOAD CSV FROM 'file://{}' WITH HEADERS AS row RETURN row",
-        csv_path_abs.to_string_lossy()
+        "LOAD CSV FROM 'file:///{}' WITH HEADERS AS row RETURN row",
+        normalized_path
     );
     let result = engine.execute_cypher(&query).unwrap();
 
