@@ -76,7 +76,8 @@ fn test_substring_negative_index_large() {
     let result = executor.execute(&query).unwrap();
 
     assert_eq!(result.rows.len(), 1);
-    // -10 from 'hello' = position 0 (clamped), take 3 chars = first 3 chars of 'hello'
+    // -10 from 'hello' = position 0 (clamped), take 3 chars = first 3 chars
+    // codespell:ignore hel - this is part of "hello" string literal
     assert_eq!(result.rows[0].values[0], Value::String("hel".to_string()));
 }
 
