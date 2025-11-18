@@ -3480,9 +3480,43 @@ impl Executor {
         }
 
         // Combine results from both sides
+        // Ensure results are in result_set.rows (some operators may store in variables)
+        // Convert variable-based results to rows if needed
+        if left_context.result_set.rows.is_empty() {
+            let row_maps = self.result_set_as_rows(&left_context);
+            left_context.result_set.rows = row_maps
+                .into_iter()
+                .map(|map| {
+                    let values: Vec<serde_json::Value> = left_context
+                        .result_set
+                        .columns
+                        .iter()
+                        .map(|col| map.get(col).cloned().unwrap_or(serde_json::Value::Null))
+                        .collect();
+                    Row { values }
+                })
+                .collect();
+        }
+
+        if right_context.result_set.rows.is_empty() {
+            let row_maps = self.result_set_as_rows(&right_context);
+            right_context.result_set.rows = row_maps
+                .into_iter()
+                .map(|map| {
+                    let values: Vec<serde_json::Value> = right_context
+                        .result_set
+                        .columns
+                        .iter()
+                        .map(|col| map.get(col).cloned().unwrap_or(serde_json::Value::Null))
+                        .collect();
+                    Row { values }
+                })
+                .collect();
+        }
+
         let mut combined_rows = Vec::new();
-        combined_rows.extend(left_context.result_set.rows);
-        combined_rows.extend(right_context.result_set.rows);
+        combined_rows.extend(left_context.result_set.rows.clone());
+        combined_rows.extend(right_context.result_set.rows.clone());
 
         // If UNION (not UNION ALL), deduplicate results
         if distinct {
@@ -3491,6 +3525,7 @@ impl Executor {
 
             for row in combined_rows {
                 // Serialize row values to a string for comparison
+                // Use a canonical JSON representation to ensure consistent comparison
                 let row_key = serde_json::to_string(&row.values).unwrap_or_default();
                 if seen.insert(row_key) {
                     deduped_rows.push(row);

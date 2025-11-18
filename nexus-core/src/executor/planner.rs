@@ -433,52 +433,80 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Try to get cached plan first
+        // Check if query contains UNION - if so, split and plan separately
+        // NOTE: This check must come BEFORE cache lookup, as UNION queries need to be split
+        // and each side planned separately (they may have different labels/variables)
+        // Also, UNION sub-queries should not use cache to avoid conflicts
+        let has_union = query.clauses.iter().any(|c| matches!(c, Clause::Union(_)));
+
         let query_hash = self.hash_query(query);
+
+        if has_union {
+            if let Some(union_idx) = query
+                .clauses
+                .iter()
+                .position(|c| matches!(c, Clause::Union(_)))
+            {
+                // Extract the UnionClause to get union_type
+                let distinct =
+                    if let Some(Clause::Union(union_clause)) = query.clauses.get(union_idx) {
+                        union_clause.union_type == super::parser::UnionType::Distinct
+                    } else {
+                        true // Default to UNION (distinct)
+                    };
+
+                // Split query into left and right parts
+                let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
+                let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..].to_vec();
+
+                // Create separate queries for left and right
+                let left_query = CypherQuery {
+                    clauses: left_clauses,
+                    params: query.params.clone(),
+                };
+                let right_query = CypherQuery {
+                    clauses: right_clauses,
+                    params: query.params.clone(),
+                };
+
+                // Plan both sides recursively
+                // For UNION sub-queries, we need to ensure each side is planned independently
+                // Temporarily disable cache to prevent sub-queries from reusing cached plans
+                // This is important because the left and right sides may have different labels/variables
+                // but could hash to the same value if only the query structure is considered
+                let mut temp_planner = QueryPlanner {
+                    catalog: self.catalog,
+                    label_index: self.label_index,
+                    knn_index: self.knn_index,
+                    plan_cache: QueryPlanCache::new(0, std::time::Duration::from_secs(0)), // Empty cache
+                    aggregation_cache: AggregationCache::new(
+                        100,
+                        std::time::Duration::from_secs(3600),
+                    ),
+                };
+                let left_operators = temp_planner.plan_query(&left_query)?;
+                let right_operators = temp_planner.plan_query(&right_query)?;
+
+                // Create UNION operator with complete operator pipelines for each side
+                let operators = vec![Operator::Union {
+                    left: left_operators,
+                    right: right_operators,
+                    distinct,
+                }];
+
+                // Cache the UNION plan
+                let estimated_cost = 100.0; // Placeholder cost
+                self.plan_cache
+                    .put(query_hash, operators.clone(), estimated_cost);
+
+                return Ok(operators);
+            }
+        }
+
+        // Try to get cached plan first (for non-UNION queries)
         if let Some(cached_plan) = self.plan_cache.get(query_hash) {
             // Return cached operators (clone them since they're cached)
             return Ok(cached_plan.operators.clone());
-        }
-
-        // Check if query contains UNION - if so, split and plan separately
-        if let Some(union_idx) = query
-            .clauses
-            .iter()
-            .position(|c| matches!(c, Clause::Union(_)))
-        {
-            // Extract the UnionClause to get union_type
-            let distinct = if let Some(Clause::Union(union_clause)) = query.clauses.get(union_idx) {
-                union_clause.union_type == super::parser::UnionType::Distinct
-            } else {
-                true // Default to UNION (distinct)
-            };
-
-            // Split query into left and right parts
-            let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
-            let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..].to_vec();
-
-            // Create separate queries for left and right
-            let left_query = CypherQuery {
-                clauses: left_clauses,
-                params: query.params.clone(),
-            };
-            let right_query = CypherQuery {
-                clauses: right_clauses,
-                params: query.params.clone(),
-            };
-
-            // Plan both sides recursively
-            let left_operators = self.plan_query(&left_query)?;
-            let right_operators = self.plan_query(&right_query)?;
-
-            // Create UNION operator with complete operator pipelines for each side
-            let operators = vec![Operator::Union {
-                left: left_operators,
-                right: right_operators,
-                distinct,
-            }];
-
-            return Ok(operators);
         }
 
         let mut operators = Vec::new();
