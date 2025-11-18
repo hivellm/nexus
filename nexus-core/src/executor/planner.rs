@@ -2,7 +2,8 @@ use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement, QueryHint,
     RelationshipDirection, ReturnItem, SortDirection, UnaryOperator,
 };
-use super::{Aggregation, Direction, Operator, ProjectionItem};
+use super::{Aggregation, Direction, JoinType, Operator, ProjectionItem};
+use crate::cache::relationship_index::RelationshipTraversalStats;
 use crate::catalog::Catalog;
 use crate::index::{KnnIndex, LabelIndex};
 use crate::{Error, Result};
@@ -2157,79 +2158,224 @@ impl<'a> QueryPlanner<'a> {
     }
 
     /// Estimate the total cost of an operator plan
+    /// Advanced cost estimation with cardinality and I/O modeling
     pub fn estimate_plan_cost(&self, operators: &[Operator]) -> Result<f64> {
         let mut total_cost = 0.0;
+        let mut current_cardinality = 1.0; // Estimated number of rows at current point
 
         for operator in operators {
-            match operator {
-                Operator::NodeByLabel { label_id, .. } => {
-                    // Estimate cost based on label selectivity
-                    let selectivity = self.estimate_label_selectivity(*label_id)?;
-                    // Cost is proportional to nodes scanned
-                    total_cost += 1000.0 * selectivity;
-                }
-                Operator::AllNodesScan { .. } => {
-                    // Scanning all nodes is expensive
-                    total_cost += 2000.0;
-                }
-                Operator::Filter { .. } => {
-                    // Filter operations are relatively cheap
-                    total_cost += 10.0;
-                }
-                Operator::Expand { .. } => {
-                    // Relationship traversal cost depends on fan-out
-                    total_cost += 500.0;
-                }
-                Operator::Join { left, right, .. } => {
-                    // Join cost depends on the join type and sizes
-                    let left_cost = self.estimate_plan_cost(&[*left.clone()])?;
-                    let right_cost = self.estimate_plan_cost(&[*right.clone()])?;
-                    total_cost += left_cost + right_cost + 200.0; // Base join cost
-                }
-                Operator::Union { left, right, .. } => {
-                    // Union cost is sum of both sides
-                    let left_cost = self.estimate_plan_cost(left)?;
-                    let right_cost = self.estimate_plan_cost(right)?;
-                    total_cost += left_cost + right_cost;
-                }
-                Operator::Project { .. } => {
-                    // Projection is cheap
-                    total_cost += 5.0;
-                }
-                Operator::Sort { .. } => {
-                    // Sorting can be expensive depending on data size
-                    total_cost += 1000.0;
-                }
-                Operator::Limit { .. } => {
-                    // Limit reduces cost
-                    total_cost += 1.0;
-                }
-                Operator::Aggregate { .. } => {
-                    // Aggregation can be expensive
-                    total_cost += 500.0;
-                }
-                Operator::Create { .. } => {
-                    // Write operations have different cost characteristics
-                    total_cost += 100.0;
-                }
-                Operator::Delete { .. } => {
-                    total_cost += 100.0;
-                }
-                Operator::DetachDelete { .. } => {
-                    total_cost += 150.0;
-                }
-                Operator::IndexScan { .. } => {
-                    // Index scans are generally efficient
-                    total_cost += 50.0;
-                }
-                _ => {
-                    // Default cost for other operators
-                    total_cost += 50.0;
-                }
-            }
+            let (operator_cost, output_cardinality) =
+                self.estimate_operator_cost(operator, current_cardinality)?;
+            total_cost += operator_cost;
+            current_cardinality = output_cardinality;
         }
 
         Ok(total_cost)
+    }
+
+    /// Estimate cost for a single operator with cardinality modeling
+    fn estimate_operator_cost(
+        &self,
+        operator: &Operator,
+        input_cardinality: f64,
+    ) -> Result<(f64, f64)> {
+        match operator {
+            Operator::NodeByLabel { label_id, .. } => {
+                // Get label statistics from catalog
+                let label_stats = self.label_index.get_stats();
+                let total_nodes = label_stats.total_nodes as f64;
+
+                // Use average nodes per label as selectivity estimate
+                let label_selectivity = if total_nodes > 0.0 {
+                    label_stats.avg_nodes_per_label / total_nodes as f64
+                } else {
+                    1.0
+                };
+
+                let output_cardinality = total_nodes * label_selectivity;
+                let io_cost = output_cardinality * 10.0; // I/O cost per node read
+                let cpu_cost = output_cardinality * 2.0; // CPU cost per node processing
+
+                Ok((io_cost + cpu_cost, output_cardinality))
+            }
+
+            Operator::AllNodesScan { .. } => {
+                let label_stats = self.label_index.get_stats();
+                let total_nodes = label_stats.total_nodes as f64;
+                let io_cost = total_nodes * 15.0; // More expensive than indexed scan
+                let cpu_cost = total_nodes * 1.0;
+
+                Ok((io_cost + cpu_cost, total_nodes))
+            }
+
+            Operator::Filter { predicate, .. } => {
+                // Estimate filter selectivity based on predicate type
+                // For now, use a simple heuristic since predicate is a String
+                let selectivity = 0.5; // Default 50% selectivity for filters
+                let output_cardinality = input_cardinality * selectivity;
+
+                // Filter is mostly CPU-bound
+                let cpu_cost = input_cardinality * 5.0; // CPU cost per row filtered
+
+                Ok((cpu_cost, output_cardinality))
+            }
+
+            Operator::Expand {
+                type_ids,
+                direction,
+                ..
+            } => {
+                // Estimate relationship expansion cost
+                let rel_stats = self.estimate_relationship_stats(&Some(type_ids.clone()))?;
+                let avg_relationships_per_node = rel_stats.avg_relationships_per_node;
+
+                let output_cardinality = input_cardinality * avg_relationships_per_node;
+
+                // Relationship traversal involves both I/O and CPU
+                let io_cost = input_cardinality * 20.0; // Reading relationship data
+                let cpu_cost = output_cardinality * 3.0; // Processing each relationship
+
+                Ok((io_cost + cpu_cost, output_cardinality))
+            }
+
+            Operator::Join {
+                left,
+                right,
+                join_type,
+                ..
+            } => {
+                let left_cardinality = self.estimate_plan_cost(&[*left.clone()])?;
+                let right_cardinality = self.estimate_plan_cost(&[*right.clone()])?;
+
+                let (join_cost, output_cardinality) = match join_type {
+                    JoinType::Inner => {
+                        // Estimate join selectivity (simplified)
+                        let selectivity = 0.1; // Assume 10% of cartesian product
+                        let cartesian = left_cardinality * right_cardinality;
+                        let output_card = cartesian * selectivity;
+
+                        // Hash join cost model
+                        let build_cost = left_cardinality * 5.0; // Building hash table
+                        let probe_cost = right_cardinality * 3.0; // Probing hash table
+
+                        (build_cost + probe_cost, output_card)
+                    }
+                    JoinType::LeftOuter => {
+                        // Left outer join preserves left side
+                        let output_card = left_cardinality;
+                        let cost = left_cardinality * 10.0 + right_cardinality * 5.0;
+                        (cost, output_card)
+                    }
+                    _ => {
+                        // Default to cartesian product cost
+                        let output_card = left_cardinality * right_cardinality;
+                        let cost = output_card * 2.0;
+                        (cost, output_card)
+                    }
+                };
+
+                Ok((join_cost, output_cardinality))
+            }
+
+            Operator::Union { left, right, .. } => {
+                let left_cost = self.estimate_plan_cost(left)?;
+                let right_cost = self.estimate_plan_cost(right)?;
+                let left_card = self.estimate_operator_cardinality(left)?;
+                let right_card = self.estimate_operator_cardinality(right)?;
+
+                // Union cost is sum of both sides
+                let total_cost = left_cost + right_cost;
+                let output_cardinality = left_card + right_card; // Union removes duplicates conceptually
+
+                Ok((total_cost, output_cardinality))
+            }
+
+            Operator::Project { .. } => {
+                // Projection is mostly CPU-bound
+                let cpu_cost = input_cardinality * 1.0;
+                Ok((cpu_cost, input_cardinality)) // Cardinality unchanged
+            }
+
+            Operator::Sort { .. } => {
+                // Sort cost using n*log(n) model
+                let sort_cost = input_cardinality * (input_cardinality.log2()).max(1.0) * 2.0;
+                Ok((sort_cost, input_cardinality))
+            }
+
+            Operator::Limit { count, .. } => {
+                // Limit reduces both cost and cardinality
+                let limit_cost = 1.0;
+                let output_cardinality = (*count as f64).min(input_cardinality);
+                Ok((limit_cost, output_cardinality))
+            }
+
+            Operator::Aggregate {
+                source,
+                aggregations,
+                group_by,
+                ..
+            } => {
+                let group_count = if group_by.is_empty() {
+                    1.0 // No grouping
+                } else {
+                    // Estimate number of groups (simplified)
+                    (input_cardinality * 0.1).max(1.0)
+                };
+
+                let agg_cost = input_cardinality * 3.0 + group_count * 5.0; // Processing + grouping
+                Ok((agg_cost, group_count))
+            }
+
+            // Default case for unhandled operators
+            _ => {
+                let default_cost = input_cardinality * 10.0; // Conservative estimate
+                Ok((default_cost, input_cardinality))
+            }
+        }
+    }
+
+    /// Estimate cardinality (number of output rows) for an operator
+    fn estimate_operator_cardinality(&self, operators: &[Operator]) -> Result<f64> {
+        let mut cardinality = 1.0;
+        for operator in operators {
+            let (_, output_card) = self.estimate_operator_cost(operator, cardinality)?;
+            cardinality = output_card;
+        }
+        Ok(cardinality)
+    }
+
+    /// Estimate filter selectivity based on predicate type
+    fn estimate_filter_selectivity(&self, predicate: &str) -> Result<f64> {
+        // Simple heuristic based on predicate content
+        if predicate.contains('=') && !predicate.contains('!') {
+            // Equality filters are selective
+            Ok(0.1) // 10% selectivity for equality
+        } else if predicate.contains("CONTAINS") || predicate.contains("STARTS WITH") {
+            // String matching is moderately selective
+            Ok(0.3) // 30% selectivity
+        } else if predicate.contains('>') || predicate.contains('<') {
+            // Range filters have medium selectivity
+            Ok(0.4) // 40% selectivity for ranges
+        } else {
+            // Default selectivity for complex predicates
+            Ok(0.5) // 50% selectivity
+        }
+    }
+
+    /// Estimate relationship traversal statistics
+    fn estimate_relationship_stats(
+        &self,
+        type_filter: &Option<Vec<u32>>,
+    ) -> Result<RelationshipTraversalStats> {
+        // For now, return default stats. In production, this would query actual relationship statistics
+        Ok(RelationshipTraversalStats {
+            total_relationships: 1000,
+            total_nodes: 500,
+            high_degree_nodes: 10,
+            avg_relationships_per_node: 2.0,
+            path_cache_hit_rate: 0.8,
+            index_hit_rate: 0.9,
+        })
     }
 
     /// Get query plan cache statistics

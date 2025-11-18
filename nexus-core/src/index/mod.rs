@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 pub mod btree;
 pub mod fulltext;
+pub mod pending_updates;
 
 /// Type alias for property index trees
 type PropertyIndexTree = BTreeMap<PropertyValue, RoaringBitmap>;

@@ -1,5 +1,4 @@
 <!-- AGENT_AUTOMATION:START -->
-
 # Agent Automation Rules
 
 **CRITICAL**: Mandatory workflow that AI agents MUST execute after EVERY implementation.
@@ -23,12 +22,11 @@ Run these checks in order - ALL must pass:
 **Language-specific commands**: See your language template (TYPESCRIPT, RUST, PYTHON, etc.) for exact commands.
 
 **IF ANY CHECK FAILS:**
-
-- STOP immediately
-- DO NOT proceed
-- DO NOT commit
-- Fix the issue first
-- Re-run ALL checks
+- ❌ STOP immediately
+- ❌ DO NOT proceed
+- ❌ DO NOT commit
+- ✅ Fix the issue first
+- ✅ Re-run ALL checks
 
 ### Step 2: Security & Dependency Audits
 
@@ -41,11 +39,10 @@ Run these checks in order - ALL must pass:
 **Language-specific commands**: See your language template for audit commands.
 
 **IF VULNERABILITIES FOUND:**
-
-- Attempt automatic fix
-- Document if auto-fix fails
-- Include in Step 5 report
-- Never ignore critical/high vulnerabilities without user approval
+- ✅ Attempt automatic fix
+- ✅ Document if auto-fix fails
+- ✅ Include in Step 5 report
+- ❌ Never ignore critical/high vulnerabilities without user approval
 
 ### Step 3: Update OpenSpec Tasks
 
@@ -72,7 +69,7 @@ If `openspec/` directory exists:
 
 **ONLY after ALL above steps pass:**
 
-**CRITICAL: All commit messages MUST be in English**
+**⚠️ CRITICAL: All commit messages MUST be in English**
 
 ```bash
 git add .
@@ -93,34 +90,34 @@ Closes #<issue> (if applicable)"
 ### Step 6: Report to User
 
 ```
-Implementation Complete
+✅ Implementation Complete
 
-Changes:
+📝 Changes:
 - [List main changes]
 
-Quality Checks:
-- Type check: Passed
-- Linting: Passed (0 warnings)
-- Formatting: Applied
-- Tests: X/X passed (100%)
-- Coverage: X% (threshold: 95%)
+🧪 Quality Checks:
+- ✅ Type check: Passed
+- ✅ Linting: Passed (0 warnings)
+- ✅ Formatting: Applied
+- ✅ Tests: X/X passed (100%)
+- ✅ Coverage: X% (threshold: 95%)
 
-Security:
-- No vulnerabilities
+🔒 Security:
+- ✅ No vulnerabilities
 
-OpenSpec:
-- Tasks updated
-- Progress: X% → Y%
+📊 OpenSpec:
+- ✅ Tasks updated
+- ✅ Progress: X% → Y%
 
-Documentation:
-- CHANGELOG.md updated
-- [other docs updated]
+📚 Documentation:
+- ✅ CHANGELOG.md updated
+- ✅ [other docs updated]
 
-Git:
-- Committed: <commit message>
-- Hash: <commit hash>
+💾 Git:
+- ✅ Committed: <commit message>
+- ✅ Hash: <commit hash>
 
-Next Steps:
+📋 Next Steps:
 - [ ] Review changes
 - [ ] Push to remote (if ready)
 ```
@@ -130,12 +127,10 @@ Next Steps:
 Skip steps ONLY when:
 
 1. **Exploratory Code**: User says "experimental", "draft", "try"
-
    - Still run quality checks
    - Don't commit
 
 2. **User Explicitly Requests**: User says "skip tests", "no commit"
-
    - Only skip requested step
    - Warn about skipped steps
 
@@ -159,7 +154,6 @@ If workflow fails 3+ times:
 ## Best Practices
 
 ### DO's ✅
-
 - ALWAYS run complete workflow
 - ALWAYS update OpenSpec and documentation
 - ALWAYS use conventional commits
@@ -167,7 +161,6 @@ If workflow fails 3+ times:
 - ASK before skipping steps
 
 ### DON'Ts ❌
-
 - NEVER skip quality checks without permission
 - NEVER commit failing tests
 - NEVER commit linting errors

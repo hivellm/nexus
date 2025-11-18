@@ -25,6 +25,7 @@
 pub mod constraints;
 
 use crate::{Error, Result};
+use dashmap::DashMap;
 use heed::types::*;
 use heed::{Database, Env, EnvOpenOptions, byteorder};
 use parking_lot::RwLock;
@@ -120,6 +121,19 @@ pub struct Catalog {
     next_type_id: Arc<RwLock<u32>>,
     /// Next key ID counter
     next_key_id: Arc<RwLock<u32>>,
+
+    /// In-memory cache for label name -> ID lookups (lock-free)
+    label_name_cache: Arc<DashMap<String, u32>>,
+    /// In-memory cache for label ID -> name lookups (lock-free)
+    label_id_cache: Arc<DashMap<u32, String>>,
+    /// In-memory cache for type name -> ID lookups (lock-free)
+    type_name_cache: Arc<DashMap<String, u32>>,
+    /// In-memory cache for type ID -> name lookups (lock-free)
+    type_id_cache: Arc<DashMap<u32, String>>,
+    /// In-memory cache for key name -> ID lookups (lock-free)
+    key_name_cache: Arc<DashMap<String, u32>>,
+    /// In-memory cache for key ID -> name lookups (lock-free)
+    key_id_cache: Arc<DashMap<u32, String>>,
 }
 
 impl Catalog {
@@ -228,12 +242,25 @@ impl Catalog {
             .map(|max_id| max_id + 1)
             .unwrap_or(0);
 
+        // Drop transaction before moving env
         drop(rtxn);
+
+        // Initialize in-memory caches from LMDB
+        let label_name_cache = Arc::new(DashMap::new());
+        let label_id_cache = Arc::new(DashMap::new());
+        let type_name_cache = Arc::new(DashMap::new());
+        let type_id_cache = Arc::new(DashMap::new());
+        let key_name_cache = Arc::new(DashMap::new());
+        let key_id_cache = Arc::new(DashMap::new());
+
+        // Warm up caches from existing data
+        // Note: We'll populate caches lazily on first access to avoid type inference issues
+        // The caches will be populated as lookups happen
 
         // Initialize constraint manager with existing databases
         let constraint_manager =
             crate::catalog::constraints::ConstraintManager::new_with_databases(
-                &env,
+                env.as_ref(),
                 constraints_db,
                 constraint_id_to_key,
             )?;
@@ -254,6 +281,12 @@ impl Catalog {
             next_label_id: Arc::new(RwLock::new(next_label_id)),
             next_type_id: Arc::new(RwLock::new(next_type_id)),
             next_key_id: Arc::new(RwLock::new(next_key_id)),
+            label_name_cache,
+            label_id_cache,
+            type_name_cache,
+            type_id_cache,
+            key_name_cache,
+            key_id_cache,
         })
     }
 
@@ -271,18 +304,19 @@ impl Catalog {
     /// assert_eq!(person_id, same_id);
     /// ```
     pub fn get_or_create_label(&self, label: &str) -> Result<LabelId> {
-        // Try to read existing ID first
-        let rtxn = self.env.read_txn()?;
-        if let Some(id) = self.label_name_to_id.get(&rtxn, label)? {
-            return Ok(id);
+        // Try cache first (lock-free)
+        if let Some(id) = self.label_name_cache.get(label) {
+            return Ok(*id);
         }
-        drop(rtxn);
 
         // Need to create new ID - acquire write lock
         let mut wtxn = self.env.write_txn()?;
 
         // Double-check in case another thread created it
         if let Some(id) = self.label_name_to_id.get(&wtxn, label)? {
+            // Update cache
+            self.label_name_cache.insert(label.to_string(), id);
+            self.label_id_cache.insert(id, label.to_string());
             return Ok(id);
         }
 
@@ -300,34 +334,47 @@ impl Catalog {
 
         wtxn.commit()?;
 
+        // Update cache
+        self.label_name_cache.insert(label.to_string(), id);
+        self.label_id_cache.insert(id, label.to_string());
+
         Ok(id)
     }
 
     /// Get label name by ID
     pub fn get_label_name(&self, id: LabelId) -> Result<Option<String>> {
+        // Try cache first (lock-free)
+        if let Some(name) = self.label_id_cache.get(&id) {
+            return Ok(Some(name.clone()));
+        }
+
         let rtxn = self.env.read_txn()?;
-        Ok(self
-            .label_id_to_name
-            .get(&rtxn, &id)?
-            .map(|s| s.to_string()))
+        if let Some(name) = self.label_id_to_name.get(&rtxn, &id)? {
+            let name_str = name.to_string();
+            // Update cache
+            self.label_id_cache.insert(id, name_str.clone());
+            return Ok(Some(name_str));
+        }
+        Ok(None)
     }
 
     /// Get or create a type ID
     ///
     /// Returns existing ID if type already exists, otherwise creates new ID.
     pub fn get_or_create_type(&self, type_name: &str) -> Result<TypeId> {
-        // Try to read existing ID first
-        let rtxn = self.env.read_txn()?;
-        if let Some(id) = self.type_name_to_id.get(&rtxn, type_name)? {
-            return Ok(id);
+        // Try cache first (lock-free)
+        if let Some(id) = self.type_name_cache.get(type_name) {
+            return Ok(*id);
         }
-        drop(rtxn);
 
         // Need to create new ID - acquire write lock
         let mut wtxn = self.env.write_txn()?;
 
-        // Double-check
+        // Double-check in case another thread created it
         if let Some(id) = self.type_name_to_id.get(&wtxn, type_name)? {
+            // Update cache
+            self.type_name_cache.insert(type_name.to_string(), id);
+            self.type_id_cache.insert(id, type_name.to_string());
             return Ok(id);
         }
 
@@ -345,37 +392,64 @@ impl Catalog {
 
         wtxn.commit()?;
 
+        // Update cache
+        self.type_name_cache.insert(type_name.to_string(), id);
+        self.type_id_cache.insert(id, type_name.to_string());
+
         Ok(id)
     }
 
     /// Get type name by ID
     pub fn get_type_name(&self, id: TypeId) -> Result<Option<String>> {
+        // Try cache first (lock-free)
+        if let Some(name) = self.type_id_cache.get(&id) {
+            return Ok(Some(name.clone()));
+        }
+
         let rtxn = self.env.read_txn()?;
-        Ok(self.type_id_to_name.get(&rtxn, &id)?.map(|s| s.to_string()))
+        if let Some(name) = self.type_id_to_name.get(&rtxn, &id)? {
+            let name_str = name.to_string();
+            // Update cache
+            self.type_id_cache.insert(id, name_str.clone());
+            return Ok(Some(name_str));
+        }
+        Ok(None)
     }
 
     /// Get type ID by name (returns None if type doesn't exist)
     pub fn get_type_id(&self, type_name: &str) -> Result<Option<TypeId>> {
+        // Try cache first (lock-free)
+        if let Some(id) = self.type_name_cache.get(type_name) {
+            return Ok(Some(*id));
+        }
+
         let rtxn = self.env.read_txn()?;
-        Ok(self.type_name_to_id.get(&rtxn, type_name)?)
+        if let Some(id) = self.type_name_to_id.get(&rtxn, type_name)? {
+            // Update cache
+            self.type_name_cache.insert(type_name.to_string(), id);
+            self.type_id_cache.insert(id, type_name.to_string());
+            return Ok(Some(id));
+        }
+        Ok(None)
     }
 
     /// Get or create a key ID
     ///
     /// Returns existing ID if key already exists, otherwise creates new ID.
     pub fn get_or_create_key(&self, key: &str) -> Result<KeyId> {
-        // Try to read existing ID first
-        let rtxn = self.env.read_txn()?;
-        if let Some(id) = self.key_name_to_id.get(&rtxn, key)? {
-            return Ok(id);
+        // Try cache first (lock-free)
+        if let Some(id) = self.key_name_cache.get(key) {
+            return Ok(*id);
         }
-        drop(rtxn);
 
         // Need to create new ID - acquire write lock
         let mut wtxn = self.env.write_txn()?;
 
-        // Double-check
+        // Double-check in case another thread created it
         if let Some(id) = self.key_name_to_id.get(&wtxn, key)? {
+            // Update cache
+            self.key_name_cache.insert(key.to_string(), id);
+            self.key_id_cache.insert(id, key.to_string());
             return Ok(id);
         }
 
@@ -393,22 +467,47 @@ impl Catalog {
 
         wtxn.commit()?;
 
+        // Update cache
+        self.key_name_cache.insert(key.to_string(), id);
+        self.key_id_cache.insert(id, key.to_string());
+
         Ok(id)
     }
 
     /// Get key ID by name
     pub fn get_key_id(&self, key: &str) -> Result<KeyId> {
+        // Try cache first (lock-free)
+        if let Some(id) = self.key_name_cache.get(key) {
+            return Ok(*id);
+        }
+
         let rtxn = self.env.read_txn()?;
         match self.key_name_to_id.get(&rtxn, key)? {
-            Some(id) => Ok(id),
+            Some(id) => {
+                // Update cache
+                self.key_name_cache.insert(key.to_string(), id);
+                self.key_id_cache.insert(id, key.to_string());
+                Ok(id)
+            }
             None => Err(Error::NotFound(format!("Key '{}' not found", key))),
         }
     }
 
     /// Get key name by ID
     pub fn get_key_name(&self, id: KeyId) -> Result<Option<String>> {
+        // Try cache first (lock-free)
+        if let Some(name) = self.key_id_cache.get(&id) {
+            return Ok(Some(name.clone()));
+        }
+
         let rtxn = self.env.read_txn()?;
-        Ok(self.key_id_to_name.get(&rtxn, &id)?.map(|s| s.to_string()))
+        if let Some(name) = self.key_id_to_name.get(&rtxn, &id)? {
+            let name_str = name.to_string();
+            // Update cache
+            self.key_id_cache.insert(id, name_str.clone());
+            return Ok(Some(name_str));
+        }
+        Ok(None)
     }
 
     /// List all property keys
@@ -553,9 +652,19 @@ impl Catalog {
 
     /// Get label ID by name
     pub fn get_label_id(&self, label: &str) -> Result<LabelId> {
+        // Try cache first (lock-free)
+        if let Some(id) = self.label_name_cache.get(label) {
+            return Ok(*id);
+        }
+
         let rtxn = self.env.read_txn()?;
         match self.label_name_to_id.get(&rtxn, label)? {
-            Some(id) => Ok(id),
+            Some(id) => {
+                // Update cache
+                self.label_name_cache.insert(label.to_string(), id);
+                self.label_id_cache.insert(id, label.to_string());
+                Ok(id)
+            }
             None => Err(Error::NotFound(format!("Label '{}' not found", label))),
         }
     }

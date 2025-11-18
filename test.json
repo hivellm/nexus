@@ -1,2 +1,0 @@
-{"query": "CREATE (n:TestNode {id: 1, name: 
-\Test\'})"}

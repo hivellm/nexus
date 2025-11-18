@@ -27,6 +27,8 @@ pub struct Session {
     pub created_nodes: Vec<u64>,
     /// Relationships created during this transaction (for rollback)
     pub created_relationships: Vec<u64>,
+    /// Pending index updates to be applied on commit
+    pub pending_index_updates: crate::index::pending_updates::PendingIndexUpdates,
     /// Last activity timestamp
     pub last_activity: Instant,
     /// Session timeout (default: 30 minutes)
@@ -42,6 +44,7 @@ impl Session {
             transaction_manager,
             created_nodes: Vec::new(),
             created_relationships: Vec::new(),
+            pending_index_updates: crate::index::pending_updates::PendingIndexUpdates::new(),
             last_activity: Instant::now(),
             timeout: Duration::from_secs(30 * 60), // 30 minutes
         }
@@ -70,6 +73,7 @@ impl Session {
         // Clear tracking for new transaction
         self.created_nodes.clear();
         self.created_relationships.clear();
+        self.pending_index_updates.clear();
         self.last_activity = Instant::now();
 
         Ok(())
@@ -175,6 +179,7 @@ impl SessionManager {
                 transaction_manager: session.transaction_manager.clone(),
                 created_nodes: session.created_nodes.clone(),
                 created_relationships: session.created_relationships.clone(),
+                pending_index_updates: session.pending_index_updates.clone(),
                 last_activity: Instant::now(),
                 timeout: session.timeout,
             };

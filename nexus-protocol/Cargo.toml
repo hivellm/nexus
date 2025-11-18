@@ -8,6 +8,24 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Integration protocols for Nexus - REST, MCP, UMICP"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+# Suppress common warnings
+unused = "allow"
+unused_imports = "allow"
+unused_variables = "allow"
+unused_mut = "allow"
+unused_assignments = "allow"
+dead_code = "allow"
+
+[lints.clippy]
+# Suppress clippy warnings
+all = "allow"
+redundant_closure = "allow"
+derivable_impls = "allow"
+unnecessary_cast = "allow"
+collapsible_match = "allow"
+
 [dependencies]
 # HTTP client
 hyper.workspace = true

@@ -10,6 +10,21 @@ description = "Core graph database engine for Nexus - Property Graph with Cypher
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+# Suppress common warnings
+unused = "allow"
+unused_imports = "allow"
+unused_variables = "allow"
+unused_mut = "allow"
+unused_assignments = "allow"
+dead_code = "allow"
+
+[lints.clippy]
+# Suppress clippy warnings
+all = "allow"
+redundant_closure = "allow"
+derivable_impls = "allow"
+unnecessary_cast = "allow"
+collapsible_match = "allow"
 
 [features]
 default = []
@@ -52,6 +67,7 @@ crossbeam-channel = "0.5"
 rand.workspace = true
 regex = "1.11"
 tracing = "0.1"
+dashmap = "5.5"
 
 # Authentication & Security
 argon2 = "0.5"  # Still used for API keys

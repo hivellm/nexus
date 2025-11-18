@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub mod property_store;
+pub mod write_buffer;
 
 /// Size of a node record in bytes (32 bytes)
 pub const NODE_RECORD_SIZE: usize = 32;

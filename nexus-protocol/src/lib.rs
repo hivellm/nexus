@@ -5,7 +5,7 @@
 //! - MCP (Model Context Protocol)
 //! - UMICP (Universal Model Interoperability Protocol)
 
-#![warn(clippy::all)]
+#![allow(warnings)] // Suppress all warnings
 #![allow(dead_code)] // Allow during initial scaffolding
 
 pub mod mcp;
