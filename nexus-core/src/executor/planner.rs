@@ -3237,14 +3237,14 @@ mod tests {
                 Operator::Aggregate {
                     aggregations,
                     group_by,
-                    source,
+                    ref source,
                     ..
                 } => {
                     // Check if we can push aggregation down to reduce data volume earlier
                     if let Some(source_op) = source.as_ref() {
                         // Convert group_by from Vec<String> to Vec<Expression> for the check
                         // For now, we'll just check if we can push down (simplified)
-                        let can_push = match source_op {
+                        let can_push = match source_op.as_ref() {
                             Operator::Filter { .. } | Operator::Project { .. } => true,
                             _ => false,
                         };
@@ -3264,7 +3264,7 @@ mod tests {
                     }
 
                     // Use streaming aggregation if beneficial
-                    if Self::can_use_streaming_aggregation(&[operator.clone()]) {
+                    if can_use_streaming_aggregation(&[operator.clone()]) {
                         let streaming_agg = Operator::Aggregate {
                             aggregations,
                             group_by,
@@ -3311,7 +3311,7 @@ mod tests {
             }
             _ => {
                 // Other operators - check if they produce data we need for aggregation
-                return Self::source_supports_aggregation(source_op, aggregations, group_by);
+                return source_supports_aggregation(source_op, aggregations, group_by);
             }
         }
     }
@@ -3355,7 +3355,7 @@ mod tests {
                         match agg {
                             Aggregation::Count { column: None, .. } => {
                                 // Optimize COUNT(*) operations
-                                if Self::can_optimize_count_star(&source) {
+                                if can_optimize_count_star(&source) {
                                     optimized_aggregations.push(Aggregation::CountStarOptimized {
                                         alias: "count".to_string(), // Default alias
                                     });
