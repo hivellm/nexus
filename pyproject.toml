@@ -1,6 +1,6 @@
 [tool.codespell]
-skip = "*.lock,*.json,target,node_modules,.git,Cargo.lock,tests/RESUMO_TESTES.md"
-ignore-words-list = "crate,ser,deser,fof"
+skip = "*.lock,*.json,target,node_modules,.git,Cargo.lock,tests/RESUMO_TESTES.md,*.log"
+ignore-words-list = "crate,ser,deser,fof,hel"
 
 [build-system]
 requires = ["setuptools>=61.0"]
