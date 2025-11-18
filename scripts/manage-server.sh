@@ -5,7 +5,7 @@
 
 echo "🛑 Parando todos os processos nexus-server..."
 
-# Mata todos os processos nexus-server
+# Kill all nexus-server processes
 pkill -9 -f nexus-server 2>/dev/null || true
 
 # Espera um pouco para garantir que todos foram fechados
@@ -26,7 +26,7 @@ fi
 
 echo "✅ Todos os processos nexus-server foram parados."
 
-# Vai para o diretório do projeto
+# Go to project directory
 cd /mnt/f/Node/hivellm/nexus
 
 echo "🚀 Iniciando novo servidor..."
@@ -54,7 +54,7 @@ else
     exit 1
 fi
 
-# Mantém o script rodando para não matar o servidor
+# Keep script running to avoid killing the server
 echo "🔄 Servidor rodando em background. Pressione Ctrl+C para parar."
 trap "echo '🛑 Parando servidor...'; kill $SERVER_PID 2>/dev/null || true; exit 0" INT
 while true; do
