@@ -1504,6 +1504,14 @@ impl Engine {
                     // Remove nodes from index and mark as deleted in storage BEFORE rollback
                     // This ensures we clean up nodes that were written to storage (mmap writes immediately)
                     for node_id in &nodes_to_delete {
+                        // First, mark as deleted in storage (this prevents reads from returning the node)
+                        if let Err(e) = self.storage.delete_node(*node_id) {
+                            eprintln!(
+                                "[WARN] Failed to delete node {} from storage: {}",
+                                node_id, e
+                            );
+                        }
+
                         // Read node properties before deletion to remove from property index
                         if let Ok(Some(properties)) = self.storage.load_node_properties(*node_id) {
                             if let serde_json::Value::Object(props) = properties {
@@ -1519,17 +1527,11 @@ impl Engine {
                             }
                         }
 
-                        // Remove from label index
+                        // Remove from label index AFTER marking as deleted
+                        // remove_node removes the node from all label bitmaps
                         if let Err(e) = self.indexes.label_index.remove_node(*node_id) {
                             eprintln!(
                                 "[WARN] Failed to remove node {} from label index: {}",
-                                node_id, e
-                            );
-                        }
-                        // Mark as deleted in storage
-                        if let Err(e) = self.storage.delete_node(*node_id) {
-                            eprintln!(
-                                "[WARN] Failed to delete node {} from storage: {}",
                                 node_id, e
                             );
                         }
@@ -1559,14 +1561,15 @@ impl Engine {
                     // Clear pending index updates (they should not be applied on rollback)
                     session.pending_index_updates.clear();
 
+                    // Update session in manager BEFORE refreshing executor
+                    // This ensures the session state is saved before executor refresh
+                    self.session_manager.update_session(session);
+
                     // Refresh executor to see the updated indexes
                     // Note: We don't rebuild indexes here because we've already removed
                     // nodes from indexes manually above. Rebuilding would be redundant and
                     // could potentially reintroduce deleted nodes if there's a timing issue.
                     self.refresh_executor()?;
-
-                    // Update session in manager
-                    self.session_manager.update_session(session);
                 }
                 _ => {}
             }
