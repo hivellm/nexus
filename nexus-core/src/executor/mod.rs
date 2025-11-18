@@ -6027,7 +6027,15 @@ impl Executor {
         context: &mut ExecutionContext,
         rows: &[HashMap<String, Value>],
     ) {
-        let mut columns: Vec<String> = context.variables.keys().cloned().collect();
+        // Collect all unique column names from the rows
+        let mut columns: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for row in rows {
+            columns.extend(row.keys().cloned());
+        }
+        // Also include variables from context (for compatibility)
+        columns.extend(context.variables.keys().cloned());
+        
+        let mut columns: Vec<String> = columns.into_iter().collect();
         columns.sort();
 
         context.result_set.columns = columns.clone();
@@ -6136,9 +6144,20 @@ impl Executor {
                     }
                 }
 
-                Ok(row
-                    .get(variable)
-                    .map(|entity| Self::extract_property(entity, property))
+                // First try to get the entity from the row
+                let entity = row.get(variable).cloned().or_else(|| {
+                    // If not in row, try to get from context variables (for single values, not arrays)
+                    context.get_variable(variable).and_then(|v| {
+                        // If it's an array, take the first element (for compatibility)
+                        match v {
+                            Value::Array(arr) => arr.first().cloned(),
+                            _ => Some(v.clone()),
+                        }
+                    })
+                });
+
+                Ok(entity
+                    .map(|e| Self::extract_property(&e, property))
                     .unwrap_or(Value::Null))
             }
             parser::Expression::ArrayIndex { base, index } => {
@@ -8156,10 +8175,20 @@ impl Executor {
 
     fn extract_property(entity: &Value, property: &str) -> Value {
         if let Value::Object(obj) = entity {
+            // First check if there's a nested "properties" object (for nodes)
             if let Some(Value::Object(props)) = obj.get("properties") {
-                return props.get(property).cloned().unwrap_or(Value::Null);
+                if let Some(value) = props.get(property) {
+                    return value.clone();
+                }
             }
-            return obj.get(property).cloned().unwrap_or(Value::Null);
+            // Then check directly in the object (for relationships and nodes with flat properties)
+            // This handles relationships where properties are stored directly in the object
+            if let Some(value) = obj.get(property) {
+                // Skip internal properties that shouldn't be exposed
+                if property != "_nexus_id" && property != "_nexus_type" && property != "_source" && property != "_target" && property != "_element_id" {
+                    return value.clone();
+                }
+            }
         }
         Value::Null
     }
