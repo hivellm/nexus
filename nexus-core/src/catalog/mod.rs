@@ -564,6 +564,20 @@ impl Catalog {
         self.update_statistics(&stats)
     }
 
+    /// Phase 1 Optimization: Batch increment node counts (reduces I/O)
+    /// Updates multiple label counts in a single transaction
+    pub fn batch_increment_node_counts(&self, updates: &[(LabelId, u32)]) -> Result<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        let mut stats = self.get_statistics()?;
+        for (label_id, count) in updates {
+            *stats.node_counts.entry(*label_id).or_insert(0) += *count as u64;
+        }
+        self.update_statistics(&stats)
+    }
+
     /// Decrement node count for a label
     pub fn decrement_node_count(&self, label_id: LabelId) -> Result<()> {
         let mut stats = self.get_statistics()?;
@@ -587,6 +601,32 @@ impl Catalog {
             *count = count.saturating_sub(1);
         }
         self.update_statistics(&stats)
+    }
+
+    /// Get total node count across all labels
+    /// This is used for optimizing COUNT(*) queries
+    pub fn get_total_node_count(&self) -> Result<u64> {
+        let stats = self.get_statistics()?;
+        Ok(stats.node_counts.values().sum())
+    }
+
+    /// Get total relationship count across all types
+    /// This is used for optimizing COUNT(*) queries on relationships
+    pub fn get_total_rel_count(&self) -> Result<u64> {
+        let stats = self.get_statistics()?;
+        Ok(stats.rel_counts.values().sum())
+    }
+
+    /// Get node count for a specific label
+    pub fn get_node_count(&self, label_id: LabelId) -> Result<u64> {
+        let stats = self.get_statistics()?;
+        Ok(*stats.node_counts.get(&label_id).unwrap_or(&0))
+    }
+
+    /// Get relationship count for a specific type
+    pub fn get_rel_count(&self, type_id: TypeId) -> Result<u64> {
+        let stats = self.get_statistics()?;
+        Ok(*stats.rel_counts.get(&type_id).unwrap_or(&0))
     }
 
     /// Sync environment to disk (fsync)
