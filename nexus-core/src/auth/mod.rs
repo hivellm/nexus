@@ -316,17 +316,18 @@ impl AuthManager {
 
         // Try to find the key by verifying against all stored keys
         // This is less efficient but necessary since we hash the full key
-        let keys = {
+        // Optimize by filtering valid keys first to avoid expensive Argon2 verification on invalid keys
+        let keys: Vec<_> = {
             let keys_guard = self.api_keys.read();
-            keys_guard.values().cloned().collect::<Vec<_>>()
+            keys_guard
+                .values()
+                .filter(|k| k.is_valid()) // Filter valid keys first
+                .cloned()
+                .collect()
         };
 
+        // Only verify against valid keys (much faster)
         for mut api_key in keys {
-            // Check if key is valid (active, not revoked, not expired)
-            if !api_key.is_valid() {
-                continue;
-            }
-
             // Verify the key
             let password_hash = PasswordHash::new(&api_key.hashed_key)
                 .map_err(|e| anyhow::anyhow!("Invalid password hash: {}", e))?;
