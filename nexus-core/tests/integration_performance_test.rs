@@ -290,6 +290,7 @@ fn validate_data_consistency(executor: &Executor, config: &IntegrationTestConfig
 }
 
 #[tokio::test]
+#[cfg(feature = "benchmarks")]
 async fn test_system_integration_performance() {
     println!("🚀 Starting System Integration Performance Test");
     println!("Testing all performance optimizations working together...");

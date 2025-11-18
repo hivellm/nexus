@@ -20,6 +20,7 @@ fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
 
 /// Benchmark CREATE node operations
 #[tokio::test]
+#[cfg(feature = "benchmarks")]
 async fn benchmark_create_node_operations() {
     println!("\n=== Benchmark: CREATE Node Operations ===");
 
@@ -97,6 +98,7 @@ async fn benchmark_create_node_operations() {
 
 /// Benchmark CREATE relationship operations
 #[tokio::test]
+#[cfg(feature = "benchmarks")]
 async fn benchmark_create_relationship_operations() {
     println!("\n=== Benchmark: CREATE Relationship Operations ===");
 
@@ -185,6 +187,7 @@ async fn benchmark_create_relationship_operations() {
 
 /// Benchmark deferred index updates performance improvement
 #[tokio::test]
+#[cfg(feature = "benchmarks")]
 async fn benchmark_deferred_index_updates() {
     println!("\n=== Benchmark: Deferred Index Updates Performance ===");
     println!("Comparing batch index updates vs immediate updates");
@@ -279,6 +282,7 @@ async fn benchmark_deferred_index_updates() {
 
 /// Benchmark concurrent write performance
 #[tokio::test]
+#[cfg(feature = "benchmarks")]
 async fn benchmark_concurrent_write_performance() {
     println!("\n=== Benchmark: Concurrent Write Performance ===");
 

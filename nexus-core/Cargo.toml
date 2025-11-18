@@ -30,6 +30,7 @@ collapsible_match = "allow"
 default = []
 s2s = []
 slow-tests = []
+benchmarks = []
 
 [dependencies]
 # Storage
