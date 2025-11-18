@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_property_index_manager() {
-        let manager = PropertyIndexManager::new(10 * 1024 * 1024, Duration::from_secs(3600));
+        let mut manager = PropertyIndexManager::new(10 * 1024 * 1024, Duration::from_secs(3600));
 
         // Create index
         manager.create_index("age".to_string()).unwrap();

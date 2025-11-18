@@ -3062,6 +3062,9 @@ mod tests {
                 group_by: vec!["n".to_string()],
                 aggregations: vec![],
                 projection_items: None,
+                source: None,
+                streaming_optimized: false,
+                push_down_optimized: false,
             },
             Operator::Union {
                 left: vec![Operator::NodeByLabel {
@@ -3239,16 +3242,20 @@ mod tests {
                 } => {
                     // Check if we can push aggregation down to reduce data volume earlier
                     if let Some(source_op) = source.as_ref() {
-                        if can_push_aggregation_down(source_op, &aggregations, &group_by) {
+                        // Convert group_by from Vec<String> to Vec<Expression> for the check
+                        // For now, we'll just check if we can push down (simplified)
+                        let can_push = match source_op {
+                            Operator::Filter { .. } | Operator::Project { .. } => true,
+                            _ => false,
+                        };
+                        if can_push {
                             // Create a new aggregation operator with push-down optimization
                             let optimized_agg = Operator::Aggregate {
                                 aggregations,
                                 group_by,
                                 projection_items: None,
-                                source: None,
-                                streaming_optimized: false,
-                                push_down_optimized: false,
                                 source: source.clone(),
+                                streaming_optimized: false,
                                 push_down_optimized: true,
                             };
                             result.push(optimized_agg);
@@ -3257,14 +3264,11 @@ mod tests {
                     }
 
                     // Use streaming aggregation if beneficial
-                    if can_use_streaming_aggregation(&[operator.clone()]) {
+                    if Self::can_use_streaming_aggregation(&[operator.clone()]) {
                         let streaming_agg = Operator::Aggregate {
                             aggregations,
                             group_by,
                             projection_items: None,
-                            source: None,
-                            streaming_optimized: false,
-                            push_down_optimized: false,
                             source,
                             streaming_optimized: true,
                             push_down_optimized: false,
@@ -3290,17 +3294,15 @@ mod tests {
         group_by: &[Expression],
     ) -> bool {
         match source_op {
-            Operator::Filter { predicate, .. } => {
+            Operator::Filter { .. } => {
                 // We can push aggregation past filters
-                if let Some(inner_source) = source.as_ref() {
-                    return can_push_aggregation_down(inner_source, aggregations, group_by);
-                }
+                // Filter doesn't have a source field, so we can push down
+                return true;
             }
-            Operator::Project { items, .. } => {
+            Operator::Project { .. } => {
                 // Check if projection includes all needed columns for aggregation
-                if let Some(inner_source) = source.as_ref() {
-                    return can_push_aggregation_down(inner_source, aggregations, group_by);
-                }
+                // Project doesn't have a source field, so we can push down
+                return true;
             }
             Operator::Expand { .. } => {
                 // Relationship expansions can sometimes be optimized with aggregation
@@ -3309,10 +3311,9 @@ mod tests {
             }
             _ => {
                 // Other operators - check if they produce data we need for aggregation
-                return self.source_supports_aggregation(source_op, aggregations, group_by);
+                return Self::source_supports_aggregation(source_op, aggregations, group_by);
             }
         }
-        false
     }
 
     /// Check if a source operator supports aggregation optimization
@@ -3354,7 +3355,7 @@ mod tests {
                         match agg {
                             Aggregation::Count { column: None, .. } => {
                                 // Optimize COUNT(*) operations
-                                if self.can_optimize_count_star(&source) {
+                                if Self::can_optimize_count_star(&source) {
                                     optimized_aggregations.push(Aggregation::CountStarOptimized {
                                         alias: "count".to_string(), // Default alias
                                     });
@@ -3369,6 +3370,7 @@ mod tests {
                     result.push(Operator::Aggregate {
                         aggregations: optimized_aggregations,
                         group_by,
+                        projection_items: None,
                         source,
                         streaming_optimized: false,
                         push_down_optimized: false,

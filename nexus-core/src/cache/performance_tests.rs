@@ -324,6 +324,7 @@ mod tests {
                 enable_warming: true,
                 stats_interval: Duration::from_secs(1),
                 max_total_memory: 50 * 1024 * 1024,
+                warming: CacheWarmingConfig::default(),
             },
             ..Default::default()
         };
@@ -345,7 +346,7 @@ mod tests {
             (catalog_result, storage_result, indexes_result)
         {
             // Warm up the cache
-            let warming_result = cache.warm_cache(&catalog, &storage, &indexes);
+            let warming_result = cache.warm_cache();
 
             if warming_result.is_ok() {
                 // Force stats update and verify warming populated some data

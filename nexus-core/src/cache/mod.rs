@@ -217,6 +217,17 @@ pub struct CacheWarmingConfig {
     pub max_warm_items: usize,
 }
 
+impl Default for CacheWarmingConfig {
+    fn default() -> Self {
+        Self {
+            enable_auto_warming: false,
+            max_warm_time_secs: 60,
+            min_access_count: 10,
+            max_warm_items: 1000,
+        }
+    }
+}
+
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {

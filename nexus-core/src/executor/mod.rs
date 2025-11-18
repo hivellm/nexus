@@ -8477,7 +8477,7 @@ mod tests {
     #[test]
     fn project_node_property_returns_alias() {
         let (executor, _dir) = create_executor();
-        let mut context = ExecutionContext::new(HashMap::new());
+        let mut context = ExecutionContext::new(HashMap::new(), None);
         context.set_variable("n", Value::Array(vec![build_node(1, "Alice", 30)]));
 
         let item = ProjectionItem {
@@ -8497,7 +8497,7 @@ mod tests {
     #[test]
     fn filter_removes_non_matching_rows() {
         let (executor, _dir) = create_executor();
-        let mut context = ExecutionContext::new(HashMap::new());
+        let mut context = ExecutionContext::new(HashMap::new(), None);
         context.set_variable(
             "n",
             Value::Array(vec![build_node(1, "Alice", 30), build_node(2, "Bob", 20)]),
