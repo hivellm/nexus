@@ -43,7 +43,7 @@ jobs:
       run: cargo build --tests --workspace
     
     - name: Run tests
-      run: cargo nextest run --workspace
+      run: cargo nextest run --workspace --no-default-features
     
     - name: Upload test report
       uses: actions/upload-artifact@v4
