@@ -2,18 +2,14 @@
 
 **⚡ High-performance property graph database with native vector search**
 
-<div align="center">
-
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Status](https://img.shields.io/badge/status-v0.11.0%20%7C%20All%20Tests%20Passing-success.svg)
-![Tests](https://img.shields.io/badge/tests-974%20passing-success.svg)
+![Tests](https://img.shields.io/badge/tests-2209%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
-
-</div>
 
 ---
 
@@ -27,22 +23,35 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 
 **Production Ready!** 🚀
 
-- ✅ **~44% Neo4j Compatibility** - Phases 1-4 complete (AllNodesScan, Aggregations, WHERE, ORDER BY, Array Indexing)
-  - Phase 1: Aggregation Functions ✅ (min, max, collect, sum, avg without MATCH)
-  - Phase 2: WHERE Clause Fixes ✅ (IN operator, empty IN list)
-  - Phase 3: ORDER BY Fixes ✅ (DESC, multiple columns, with WHERE, with aggregation)
-  - Phase 4: Property Access ✅ (array indexing `n.tags[0]`, size() function)
-  - Phase 5: Nested Aggregations ⏸️ (paused - requires refactoring)
-  - Phases 6-9: In Progress (relationships, math operators, string functions, test environment)
-  - Tests: 21/21 passing for completed phases
-- ✅ **AllNodesScan Operator** - Dedicated operator for `MATCH (n)` without label filter
+- ✅ **~55% openCypher Compatibility** - Core Cypher clauses and ~60 functions (of ~110 core openCypher functions)
+  - ✅ **Core Cypher Features**: MATCH, CREATE, MERGE, SET, DELETE, REMOVE, WHERE, RETURN, ORDER BY, LIMIT, SKIP, UNION, UNION ALL, WITH, UNWIND, FOREACH
+  - ✅ **Pattern Matching**: Multiple labels (`MATCH (n:Person:Employee)`), relationships, bidirectional patterns, variable-length paths
+  - ✅ **Query Clauses**: WHERE filtering, RETURN projections, RETURN DISTINCT, ORDER BY, LIMIT, SKIP, UNION operations
+  - ✅ **~60 Cypher Functions** (55% of core openCypher functions):
+    - **Graph Functions (100%)**: `labels()`, `type()`, `keys()`, `id()`
+    - **String Functions (67%)**: `toLower()`, `toUpper()`, `substring()`, `trim()`, `ltrim()`, `rtrim()`, `replace()`, `split()`
+    - **Math Functions (60%)**: `abs()`, `ceil()`, `floor()`, `round()`, `sqrt()`, `pow()`, `sin()`, `cos()`, `tan()`
+    - **Temporal Functions (50%)**: `date()`, `datetime()`, `time()`, `timestamp()`, `duration()`
+    - **List Functions (53%)**: `size()`, `head()`, `tail()`, `last()`, `range()`, `reverse()`, `reduce()`, `extract()`
+    - **Path Functions (63%)**: `nodes()`, `relationships()`, `length()`, `shortestPath()`, `allShortestPaths()`
+    - **Predicate Functions (57%)**: `all()`, `any()`, `none()`, `single()`
+    - **Aggregation Functions (67%)**: `count()`, `sum()`, `avg()`, `min()`, `max()`, `collect()`, `percentileCont()`, `percentileDisc()`, `stDev()`, `stDevP()`
+    - **Type Conversion (50%)**: `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`, `toDate()`
+    - **Geospatial (10%)**: `distance()` (point creation and advanced spatial operations not yet supported)
+  - ✅ **Variable-Length Paths**: Fixed-length, ranges, unbounded, shortest path functions
+  - ✅ **Relationship Properties**: Full property access and traversal
+  - ✅ **AllNodesScan Operator**: Dedicated operator for `MATCH (n)` without label filter
+  - ⚠️ **Not Yet Supported**: Advanced procedures (CALL), Constraints (UNIQUE, EXISTS), Advanced indexes (FULL-TEXT, POINT), Complete geospatial support, APOC procedures
+  - ⚠️ **Known Limitations**: Multi-label + relationship duplication (workaround: use DISTINCT), MATCH...CREATE via Engine API
+  - 📊 **Test Results**: 96.5% test pass rate (112/116 compatibility tests) + 100% direct server comparison (221+ tests comparing Nexus and Neo4j results)
+  - See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complete test details
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting (129 unit tests)
-- ✅ **Variable-Length Paths** - Fixed-length, ranges, unbounded, shortest path functions
-- ✅ **55+ Built-in Functions** - String, math, temporal, list, aggregation, path functions
+- ✅ **~60 Built-in Functions** - String, math, temporal, list, aggregation, path functions (~55% of openCypher core functions)
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
 - ✅ **Official SDKs** - Rust, Python, and TypeScript SDKs available
-- ✅ **2000+ Tests Passing** - 100% success rate, 70%+ coverage
+- ✅ **2209+ Tests Passing** - 100% success rate, 70%+ coverage
 - ✅ **42,000+ Lines** - Production-grade Rust codebase
+- ✅ **v0.11.0 Improvements** - Windows path fixes, AsyncWalWriter improvements, cache performance optimizations
 
 ## 🌟 **Key Features**
 
@@ -902,8 +911,10 @@ curl -X POST http://replica:15475/replication/promote \
 
 ### **Requirements**
 
-- ✅ **2000+ tests passing** (100% success rate)
-- ✅ **82% Neo4j compatibility** (166/199+ comprehensive compatibility tests)
+- ✅ **2209+ tests passing** (100% success rate)
+- ✅ **96.5% test pass rate** (112/116 compatibility tests)
+- ✅ **100% direct server comparison** (221+ tests comparing Nexus and Neo4j results side-by-side)
+- ✅ **~55% openCypher function coverage** (~60 of ~110 core Cypher functions)
 - ✅ **70%+ coverage overall** (95%+ in core modules)
 - ✅ Unit, integration, and E2E tests
 - ✅ Cross-compatibility validation with live Neo4j instance
@@ -1066,7 +1077,7 @@ See [LICENSE](LICENSE) for details.
 
 - **[Neo4j](https://neo4j.com/)**: Inspiration for record store architecture and Cypher language
 - **[HNSW](https://arxiv.org/abs/1603.09320)**: Efficient approximate nearest neighbor algorithm
-- **[OpenCypher](https://opencypher.org/)**: Cypher query language specification
+- **[OpenCypher](https://opencypher.org/)**: Cypher query language specification ([GitHub](https://github.com/opencypher/openCypher))
 - **[Rust Community](https://www.rust-lang.org/)**: Amazing ecosystem of high-performance crates
 
 ## 📞 **Contact & Support**
