@@ -588,7 +588,7 @@ mod tests {
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
 
         let database_manager =
             nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
@@ -625,7 +625,7 @@ mod tests {
 
         // Test that the server can be created
         let server_arc = Arc::new(server);
-        let _executor_guard = server_arc.executor.read().await;
+        // Executor is Arc<Executor>, no need to lock
         let _engine_guard = server_arc.engine.read().await;
 
         // If we get here, the locks were acquired successfully
@@ -638,7 +638,7 @@ mod tests {
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
 
         let database_manager =
             nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
@@ -692,7 +692,7 @@ mod tests {
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
 
         let database_manager =
             nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
@@ -827,7 +827,7 @@ mod tests {
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
 
         let database_manager =
             nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
@@ -879,7 +879,7 @@ mod tests {
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
 
         let database_manager =
             nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();

@@ -21,7 +21,7 @@ mod tests {
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
 
         let db_path = temp_dir.path().join("databases");
         std::fs::create_dir_all(&db_path).unwrap();

@@ -247,7 +247,7 @@ mod tests {
             &engine.indexes.knn_index,
         )
         .unwrap();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
 
         let engine_arc = Arc::new(RwLock::new(engine));
 

@@ -23,7 +23,7 @@ async fn create_test_server_with_auth() -> (Arc<NexusServer>, Arc<AuthManager>) 
 
     // Initialize executor
     let executor = Executor::default();
-    let executor_arc = Arc::new(RwLock::new(executor));
+    let executor_arc = Arc::new(executor);
 
     // Initialize DatabaseManager
     let database_manager = DatabaseManager::new(data_dir.clone()).unwrap();

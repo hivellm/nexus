@@ -432,7 +432,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Verify state is properly initialized
-        let engine = state.engine.read().await;
+        let mut engine = state.engine.write().await;
         let stats = engine.stats().unwrap();
         assert_eq!(stats.nodes, 0);
     }

@@ -461,7 +461,7 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
     let engine_arc = Arc::new(RwLock::new(engine));
 
     let executor = Executor::default();
-    let executor_arc = Arc::new(RwLock::new(executor));
+    let executor_arc = Arc::new(executor);
 
     let database_manager =
         nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();

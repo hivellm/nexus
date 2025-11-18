@@ -2362,7 +2362,7 @@ mod tests {
         let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
         let executor = nexus_core::executor::Executor::default();
-        let executor_arc = Arc::new(RwLock::new(executor));
+        let executor_arc = Arc::new(executor);
         let database_manager = DatabaseManager::new(temp_dir.path().join("databases")).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = RoleBasedAccessControl::new();

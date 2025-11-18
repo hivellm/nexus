@@ -3235,8 +3235,8 @@ mod tests {
         for operator in operators {
             match operator {
                 Operator::Aggregate {
-                    aggregations,
-                    group_by,
+                    ref aggregations,
+                    ref group_by,
                     ref source,
                     ..
                 } => {
@@ -3251,8 +3251,8 @@ mod tests {
                         if can_push {
                             // Create a new aggregation operator with push-down optimization
                             let optimized_agg = Operator::Aggregate {
-                                aggregations,
-                                group_by,
+                                aggregations: aggregations.clone(),
+                                group_by: group_by.clone(),
                                 projection_items: None,
                                 source: source.clone(),
                                 streaming_optimized: false,
@@ -3266,8 +3266,8 @@ mod tests {
                     // Use streaming aggregation if beneficial
                     if can_use_streaming_aggregation(&[operator.clone()]) {
                         let streaming_agg = Operator::Aggregate {
-                            aggregations,
-                            group_by,
+                            aggregations: aggregations.clone(),
+                            group_by: group_by.clone(),
                             projection_items: None,
                             source: source.clone(),
                             streaming_optimized: true,
