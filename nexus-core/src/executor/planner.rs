@@ -3269,7 +3269,7 @@ mod tests {
                             aggregations,
                             group_by,
                             projection_items: None,
-                            source,
+                            source: source.clone(),
                             streaming_optimized: true,
                             push_down_optimized: false,
                         };
