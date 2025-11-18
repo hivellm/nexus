@@ -6145,7 +6145,9 @@ impl Executor {
                 }
 
                 // First try to get the entity from the row
-                let entity = row.get(variable).cloned().or_else(|| {
+                let entity_opt = if let Some(e) = row.get(variable) {
+                    Some(e.clone())
+                } else {
                     // If not in row, try to get from context variables (for single values, not arrays)
                     context.get_variable(variable).and_then(|v| {
                         // If it's an array, take the first element (for compatibility)
@@ -6154,10 +6156,11 @@ impl Executor {
                             _ => Some(v.clone()),
                         }
                     })
-                });
+                };
 
-                Ok(entity
-                    .map(|e| Self::extract_property(&e, property))
+                Ok(entity_opt
+                    .as_ref()
+                    .map(|e| Self::extract_property(e, property))
                     .unwrap_or(Value::Null))
             }
             parser::Expression::ArrayIndex { base, index } => {

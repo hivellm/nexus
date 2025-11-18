@@ -2533,11 +2533,13 @@ impl<'a> QueryPlanner<'a> {
             optimized_joins.push(join);
         }
 
-        // Combine in optimal order: scans -> filters -> expansions -> joins -> others
+        // Combine in optimal order: scans -> expansions -> filters -> joins -> others
+        // Expansions must come before filters because filters may depend on relationship variables
+        // created by expansions (e.g., WHERE r.role = 'Developer')
         let mut result = Vec::new();
         result.extend(optimized_scans);
-        result.extend(filters);
         result.extend(expansions);
+        result.extend(filters);
         result.extend(optimized_joins);
         result.extend(others);
 
