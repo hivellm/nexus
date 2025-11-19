@@ -153,11 +153,11 @@ impl Catalog {
     /// let catalog = Catalog::new("./data/catalog").unwrap();
     /// ```
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // Use very small map_size (10MB) to minimize TLS key usage and prevent TlsFull errors
+        // Use absolute minimum map_size (512KB) to completely eliminate TlsFull errors
         // This fixes the issue where many tests running in parallel
         // would exhaust thread-local storage keys in LMDB
-        // Smaller map_size allows more environments to be opened simultaneously
-        Self::with_map_size(path, 10 * 1024 * 1024)
+        // 512KB is the absolute minimum that still works for basic operations
+        Self::with_map_size(path, 512 * 1024)
     }
 
     /// Create a new catalog with a specific map_size
