@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tracing;
 
 /// Benchmark configuration
 #[derive(Debug, Clone)]
@@ -92,9 +93,10 @@ fn create_benchmark_environment(_config: &BenchmarkConfig) -> (Executor, MultiLa
 
 /// Generate benchmark dataset
 async fn generate_benchmark_dataset(executor: &mut Executor, config: &BenchmarkConfig) {
-    println!(
+    tracing::info!(
         "Generating benchmark dataset: {} nodes, {} relationships...",
-        config.node_count, config.relationship_count
+        config.node_count,
+        config.relationship_count
     );
 
     // Create nodes in larger batches for performance
@@ -142,7 +144,7 @@ async fn generate_benchmark_dataset(executor: &mut Executor, config: &BenchmarkC
         executor.execute(&query).unwrap();
     }
 
-    println!("Benchmark dataset generation complete");
+    tracing::info!("Benchmark dataset generation complete");
 }
 
 /// Run CREATE benchmark (Neo4j target: <5ms per operation)
@@ -150,7 +152,7 @@ async fn benchmark_create_operations(
     executor: &Executor,
     config: &BenchmarkConfig,
 ) -> (f64, Duration, Duration, Duration) {
-    println!("Running CREATE operations benchmark...");
+    tracing::info!("Running CREATE operations benchmark...");
 
     let mut latencies = Vec::new();
     let start_time = Instant::now();
@@ -207,7 +209,7 @@ async fn benchmark_read_operations(
     executor: &Executor,
     config: &BenchmarkConfig,
 ) -> (f64, Duration, Duration, Duration) {
-    println!("Running READ operations benchmark...");
+    tracing::info!("Running READ operations benchmark...");
 
     let mut latencies = Vec::new();
     let start_time = Instant::now();
@@ -294,7 +296,7 @@ async fn benchmark_mixed_workload(
     executor: &Executor,
     config: &BenchmarkConfig,
 ) -> (f64, Duration, Duration, Duration) {
-    println!("Running mixed workload benchmark...");
+    tracing::info!("Running mixed workload benchmark...");
 
     let mut handles = Vec::new();
     let results = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -474,18 +476,18 @@ async fn benchmark_mixed_workload(
 #[cfg(feature = "benchmarks")]
 #[ignore]
 async fn performance_benchmark_vs_neo4j() {
-    println!("🚀 Starting Performance Benchmark vs Neo4j Targets");
-    println!("Testing all optimizations under realistic workloads...");
+    tracing::info!("🚀 Starting Performance Benchmark vs Neo4j Targets");
+    tracing::info!("Testing all optimizations under realistic workloads...");
 
     let config = BenchmarkConfig::default();
     let (mut executor, _cache, _dir) = create_benchmark_environment(&config);
 
     // Phase 1: Generate dataset
-    println!("\n📊 Phase 1: Generating benchmark dataset");
+    tracing::info!("\n📊 Phase 1: Generating benchmark dataset");
     generate_benchmark_dataset(&mut executor, &config).await;
 
     // Phase 2: Warmup
-    println!("\n🔥 Phase 2: Warming up system ({}s)", config.warmup_secs);
+    tracing::info!("\n🔥 Phase 2: Warming up system ({}s)", config.warmup_secs);
     let warmup_start = Instant::now();
     while warmup_start.elapsed() < Duration::from_secs(config.warmup_secs) {
         let query = Query {
@@ -497,29 +499,29 @@ async fn performance_benchmark_vs_neo4j() {
     }
 
     // Phase 3: CREATE benchmark
-    println!("\n⚡ Phase 3: CREATE operations benchmark");
+    tracing::info!("\n⚡ Phase 3: CREATE operations benchmark");
     let (create_throughput, create_avg, create_p95, create_p99) =
         benchmark_create_operations(&executor, &config).await;
 
     // Phase 4: READ benchmark
-    println!("\n📖 Phase 4: READ operations benchmark");
+    tracing::info!("\n📖 Phase 4: READ operations benchmark");
     let (read_throughput, read_avg, read_p95, read_p99) =
         benchmark_read_operations(&executor, &config).await;
 
     // Phase 5: Mixed workload benchmark
-    println!("\n🔄 Phase 5: Mixed workload benchmark");
+    tracing::info!("\n🔄 Phase 5: Mixed workload benchmark");
     let (mixed_throughput, mixed_avg, mixed_p95, mixed_p99) =
         benchmark_mixed_workload(&executor, &config).await;
 
     // Phase 6: Results and validation
-    println!("\n📈 Phase 6: Benchmark Results vs Neo4j Targets");
+    tracing::info!("\n📈 Phase 6: Benchmark Results vs Neo4j Targets");
 
-    println!("CREATE Operations:");
-    println!("  Throughput: {:.2} ops/sec", create_throughput);
-    println!("  Avg Latency: {:.2}ms", create_avg.as_millis());
-    println!("  P95 Latency: {:.2}ms", create_p95.as_millis());
-    println!("  P99 Latency: {:.2}ms", create_p99.as_millis());
-    println!(
+    tracing::info!("CREATE Operations:");
+    tracing::info!("  Throughput: {:.2} ops/sec", create_throughput);
+    tracing::info!("  Avg Latency: {:.2}ms", create_avg.as_millis());
+    tracing::info!("  P95 Latency: {:.2}ms", create_p95.as_millis());
+    tracing::info!("  P99 Latency: {:.2}ms", create_p99.as_millis());
+    tracing::info!(
         "  Target: <5ms avg latency - {}",
         if create_avg < Duration::from_millis(5) {
             "✅ PASS"
@@ -528,12 +530,12 @@ async fn performance_benchmark_vs_neo4j() {
         }
     );
 
-    println!("\nREAD Operations:");
-    println!("  Throughput: {:.2} ops/sec", read_throughput);
-    println!("  Avg Latency: {:.2}ms", read_avg.as_millis());
-    println!("  P95 Latency: {:.2}ms", read_p95.as_millis());
-    println!("  P99 Latency: {:.2}ms", read_p99.as_millis());
-    println!(
+    tracing::info!("\nREAD Operations:");
+    tracing::info!("  Throughput: {:.2} ops/sec", read_throughput);
+    tracing::info!("  Avg Latency: {:.2}ms", read_avg.as_millis());
+    tracing::info!("  P95 Latency: {:.2}ms", read_p95.as_millis());
+    tracing::info!("  P99 Latency: {:.2}ms", read_p99.as_millis());
+    tracing::info!(
         "  Target: <3ms avg latency - {}",
         if read_avg < Duration::from_millis(3) {
             "✅ PASS"
@@ -542,12 +544,12 @@ async fn performance_benchmark_vs_neo4j() {
         }
     );
 
-    println!("\nMixed Workload:");
-    println!("  Throughput: {:.2} ops/sec", mixed_throughput);
-    println!("  Avg Latency: {:.2}ms", mixed_avg.as_millis());
-    println!("  P95 Latency: {:.2}ms", mixed_p95.as_millis());
-    println!("  P99 Latency: {:.2}ms", mixed_p99.as_millis());
-    println!(
+    tracing::info!("\nMixed Workload:");
+    tracing::info!("  Throughput: {:.2} ops/sec", mixed_throughput);
+    tracing::info!("  Avg Latency: {:.2}ms", mixed_avg.as_millis());
+    tracing::info!("  P95 Latency: {:.2}ms", mixed_p95.as_millis());
+    tracing::info!("  P99 Latency: {:.2}ms", mixed_p99.as_millis());
+    tracing::info!(
         "  Target: >500 ops/sec - {}",
         if mixed_throughput > 500.0 {
             "✅ PASS"
@@ -563,8 +565,8 @@ async fn performance_benchmark_vs_neo4j() {
 
     let overall_success = create_target_met && read_target_met && throughput_target_met;
 
-    println!("\n🏆 Overall Performance Assessment:");
-    println!(
+    tracing::info!("\n🏆 Overall Performance Assessment:");
+    tracing::info!(
         "CREATE Target (<5ms): {}",
         if create_target_met {
             "✅ MET"
@@ -572,7 +574,7 @@ async fn performance_benchmark_vs_neo4j() {
             "❌ NOT MET"
         }
     );
-    println!(
+    tracing::info!(
         "READ Target (<3ms): {}",
         if read_target_met {
             "✅ MET"
@@ -580,7 +582,7 @@ async fn performance_benchmark_vs_neo4j() {
             "❌ NOT MET"
         }
     );
-    println!(
+    tracing::info!(
         "Throughput Target (>500 ops/sec): {}",
         if throughput_target_met {
             "✅ MET"
@@ -588,7 +590,7 @@ async fn performance_benchmark_vs_neo4j() {
             "❌ NOT MET"
         }
     );
-    println!(
+    tracing::info!(
         "Overall: {}",
         if overall_success {
             "✅ ALL TARGETS MET - Neo4j parity achieved!"
@@ -603,5 +605,5 @@ async fn performance_benchmark_vs_neo4j() {
         "Performance targets not met - Neo4j parity not achieved"
     );
 
-    println!("\n✅ Performance Benchmark Complete - Nexus achieves Neo4j-level performance!");
+    tracing::info!("\n✅ Performance Benchmark Complete - Nexus achieves Neo4j-level performance!");
 }
