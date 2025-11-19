@@ -37,8 +37,11 @@ pub fn init_executor() -> anyhow::Result<Arc<Executor>> {
         max_ttl: std::time::Duration::from_secs(3600), // 1 hour
     };
     executor.enable_query_cache_with_config(cache_config.clone())?;
-    tracing::info!("Query cache enabled with config: max_entries={}, max_memory={}MB",
-        cache_config.max_entries, cache_config.max_memory_bytes / (1024 * 1024));
+    tracing::info!(
+        "Query cache enabled with config: max_entries={}, max_memory={}MB",
+        cache_config.max_entries,
+        cache_config.max_memory_bytes / (1024 * 1024)
+    );
 
     let executor_arc = Arc::new(executor);
     EXECUTOR
@@ -79,8 +82,11 @@ pub fn init_engine_with_executor(engine: Arc<RwLock<nexus_core::Engine>>) -> any
         max_ttl: std::time::Duration::from_secs(3600), // 1 hour
     };
     executor.enable_query_cache_with_config(cache_config.clone())?;
-    tracing::info!("Query cache enabled with config: max_entries={}, max_memory={}MB",
-        cache_config.max_entries, cache_config.max_memory_bytes / (1024 * 1024));
+    tracing::info!(
+        "Query cache enabled with config: max_entries={}, max_memory={}MB",
+        cache_config.max_entries,
+        cache_config.max_memory_bytes / (1024 * 1024)
+    );
 
     let executor_arc = Arc::new(executor);
     EXECUTOR
