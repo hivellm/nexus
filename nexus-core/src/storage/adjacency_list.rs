@@ -730,7 +730,7 @@ impl AdjacencyListStore {
             self.incoming_file_size = new_size;
 
             // Remap the memory-mapped file
-            self.incoming_mmap = unsafe { MmapOptions::new().map_mut(&self.incoming_file)? };
+            self.incoming_mmap = unsafe { MmapOptions::new().map_mut(&*self.incoming_file)? };
         }
         Ok(())
     }
@@ -745,7 +745,7 @@ impl AdjacencyListStore {
             let new_size = calculated_size.max(min_growth).max(required_size as usize);
 
             self.outgoing_file.set_len(new_size as u64)?;
-            self.outgoing_mmap = unsafe { MmapOptions::new().map_mut(&self.outgoing_file)? };
+            self.outgoing_mmap = unsafe { MmapOptions::new().map_mut(&*self.outgoing_file)? };
             self.outgoing_file_size = new_size;
         }
         Ok(())

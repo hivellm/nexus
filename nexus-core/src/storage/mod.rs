@@ -442,7 +442,7 @@ impl RecordStore {
         self.nodes_file.set_len(new_size as u64)?;
 
         // Recreate the memory mapping
-        self.nodes_mmap = unsafe { MmapOptions::new().map_mut(&self.nodes_file)? };
+        self.nodes_mmap = unsafe { MmapOptions::new().map_mut(&*self.nodes_file)? };
 
         self.nodes_file_size = new_size;
         Ok(())
@@ -461,7 +461,7 @@ impl RecordStore {
         self.rels_file.set_len(new_size as u64)?;
 
         // Recreate the memory mapping
-        self.rels_mmap = unsafe { MmapOptions::new().map_mut(&self.rels_file)? };
+        self.rels_mmap = unsafe { MmapOptions::new().map_mut(&*self.rels_file)? };
 
         self.rels_file_size = new_size;
         Ok(())
@@ -806,8 +806,8 @@ impl RecordStore {
         self.rels_file_size = INITIAL_RELS_FILE_SIZE;
 
         // Recreate memory mappings
-        self.nodes_mmap = unsafe { MmapOptions::new().map_mut(&self.nodes_file)? };
-        self.rels_mmap = unsafe { MmapOptions::new().map_mut(&self.rels_file)? };
+        self.nodes_mmap = unsafe { MmapOptions::new().map_mut(&*self.nodes_file)? };
+        self.rels_mmap = unsafe { MmapOptions::new().map_mut(&*self.rels_file)? };
 
         Ok(())
     }
