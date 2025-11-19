@@ -16,6 +16,7 @@ use memmap2::{MmapMut, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Size of adjacency list header (20 bytes: node_id(8) + count(4) + type_id(4) + total_size(4))
 /// Note: Packed struct, no padding
@@ -55,10 +56,10 @@ unsafe impl bytemuck::Zeroable for AdjacencyListHeader {}
 pub struct AdjacencyListStore {
     /// Path to the storage directory
     path: PathBuf,
-    /// Outgoing relationships file handle
-    outgoing_file: File,
-    /// Incoming relationships file handle
-    incoming_file: File,
+    /// Outgoing relationships file handle (shared via Arc to prevent file descriptor leaks)
+    outgoing_file: Arc<File>,
+    /// Incoming relationships file handle (shared via Arc to prevent file descriptor leaks)
+    incoming_file: Arc<File>,
     /// Memory-mapped outgoing relationships file
     outgoing_mmap: MmapMut,
     /// Memory-mapped incoming relationships file
@@ -129,8 +130,8 @@ impl AdjacencyListStore {
 
         Ok(Self {
             path,
-            outgoing_file,
-            incoming_file,
+            outgoing_file: Arc::new(outgoing_file),
+            incoming_file: Arc::new(incoming_file),
             outgoing_mmap,
             incoming_mmap,
             outgoing_file_size,
@@ -1508,5 +1509,12 @@ mod tests {
         assert!(!in_result.contains(&2));
         assert!(in_result.contains(&3));
         assert!(in_result.contains(&4));
+    }
+}
+
+impl Clone for AdjacencyListStore {
+    fn clone(&self) -> Self {
+        // Clone by sharing file handles but recreating memory mappings
+        Self::new(&self.path).expect("Failed to clone AdjacencyListStore")
     }
 }

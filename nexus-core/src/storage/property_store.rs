@@ -695,3 +695,10 @@ mod tests {
         assert_eq!(loaded_rel, rel_props);
     }
 }
+
+impl Clone for PropertyStore {
+    fn clone(&self) -> Self {
+        // Clone by recreating from path (safe since property store is read-only for clones)
+        Self::new(self.path.clone()).expect("Failed to clone PropertyStore")
+    }
+}

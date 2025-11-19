@@ -24,6 +24,7 @@ use crc32fast::Hasher;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub mod async_wal;
 pub use async_wal::{AsyncWalConfig, AsyncWalStats, AsyncWalWriter};
@@ -188,8 +189,8 @@ pub struct Wal {
     /// WAL file path
     path: PathBuf,
 
-    /// WAL file handle
-    file: File,
+    /// WAL file handle (shared via Arc to prevent file descriptor leaks)
+    file: Arc<File>,
 
     /// Current offset in file
     offset: u64,
@@ -234,7 +235,7 @@ impl Wal {
 
         Ok(Self {
             path,
-            file,
+            file: Arc::new(file),
             offset,
             stats: WalStats {
                 file_size: offset,
@@ -305,7 +306,7 @@ impl Wal {
 
         // Update offset to current file size
         self.offset = current_size;
-        self.file = file;
+        self.file = Arc::new(file);
 
         Ok(())
     }
@@ -439,16 +440,11 @@ impl Wal {
 
 impl Clone for Wal {
     fn clone(&self) -> Self {
-        // Re-open the file for reading (for recovery operations)
-        // This is safe because we only clone for AsyncWalWriter which needs read access
-        let file = OpenOptions::new()
-            .read(true)
-            .open(&self.path)
-            .expect("Failed to clone WAL file handle");
-
+        // Clone the WAL by sharing file handle via Arc
+        // This prevents file descriptor leaks during testing
         Self {
             path: self.path.clone(),
-            file,
+            file: Arc::clone(&self.file),
             offset: self.offset,
             stats: self.stats.clone(),
         }
