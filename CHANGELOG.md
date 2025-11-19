@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - File Descriptor Leak in Tests (2025-11-19) 🔧
+
+- **Critical Fix**: Resolved "Too many open files" errors during concurrent test execution
+- **Root Cause**: Clone implementations for RecordStore, WAL, and AdjacencyListStore were opening new file handles instead of sharing existing ones
+- **Solution**: Implemented Arc<File> for shared file handle access and thread-safe resource sharing in test infrastructure
+- **Impact**: All 255 tests now pass consistently with concurrent execution (previously 8 tests failing)
+- **Components Modified**:
+  - RecordStore: Shared file handles via Arc to prevent descriptor leaks
+  - WAL (Write-Ahead Log): Shared file handles in clone operations
+  - AdjacencyListStore: Shared file handles with proper Clone implementation
+  - PropertyStore: Added Clone implementation
+  - Test Infrastructure: Executor::default() and TestServer::new() now use shared resources via Mutex
+
 ### Added - Neo4j 100% Compatibility Progress (2025-11-16) 🚀
 
 - **Phase 1-4 Complete**: Aggregation Functions, WHERE Clause, ORDER BY, Property Access
