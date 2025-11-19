@@ -8,6 +8,7 @@ use crate::execution::jit::{
     AstNode, Condition, Direction, Expression, NodePattern, Pattern, RelationshipPattern,
     ReturnItem, WhereClause,
 };
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Code generator for Cypher queries
@@ -202,14 +203,20 @@ impl CodeGenerator {
             Condition::Equal { left, right } => {
                 let left_expr = self.generate_expression(left)?;
                 let right_expr = self.generate_expression(right)?;
-                self.add_line(&format!("// Filter: {} == {}", left_expr, right_expr));
-                self.add_line("// TODO: Generate SIMD-accelerated equality check");
+                self.add_line(&format!(
+                    "// SIMD-accelerated equality filter: {} == {}",
+                    left_expr, right_expr
+                ));
+                self.generate_simd_equality_filter(left, right)?;
             }
             Condition::Greater { left, right } => {
                 let left_expr = self.generate_expression(left)?;
                 let right_expr = self.generate_expression(right)?;
-                self.add_line(&format!("// Filter: {} > {}", left_expr, right_expr));
-                self.add_line("// TODO: Generate SIMD-accelerated greater-than check");
+                self.add_line(&format!(
+                    "// SIMD-accelerated greater-than filter: {} > {}",
+                    left_expr, right_expr
+                ));
+                self.generate_simd_greater_filter(left, right)?;
             }
             Condition::And { left, right } => {
                 self.add_line("// AND condition");
@@ -313,7 +320,8 @@ impl CodeGenerator {
             serde_json::Value::Number(n) => n.to_string(),
             serde_json::Value::Bool(b) => b.to_string(),
             serde_json::Value::Null => "Value::Null".to_string(),
-            _ => "Value::Null".to_string(), // TODO: Handle arrays and objects
+            serde_json::Value::Array(arr) => format!("vec!{:?}", arr),
+            serde_json::Value::Object(obj) => format!("serde_json::json!({:?})", obj),
         }
     }
 
@@ -331,6 +339,92 @@ impl CodeGenerator {
         let var_name = format!("{}_{}", prefix, self.var_counter);
         self.var_counter += 1;
         var_name
+    }
+
+    /// Generate SIMD-accelerated equality filter
+    fn generate_simd_equality_filter(
+        &mut self,
+        left: &Expression,
+        right: &Expression,
+    ) -> Result<()> {
+        match (left, right) {
+            (Expression::Property { variable, property }, Expression::Literal(value)) => {
+                // Generate SIMD equality check for property == literal
+                self.add_line(&format!(
+                    "// SIMD equality check: {}.{} == {:?}",
+                    variable, property, value
+                ));
+                self.add_line("let property_values = column.get_property_column(&format!(\"{}\", property_id))?;");
+
+                match value {
+                    Value::String(_) => {
+                        self.add_line(
+                            "let filter_mask = property_values.string_eq_simd(&filter_value)?;",
+                        );
+                    }
+                    Value::Number(_) => {
+                        self.add_line(
+                            "let filter_mask = property_values.numeric_eq_simd(&filter_value)?;",
+                        );
+                    }
+                    Value::Bool(_) => {
+                        self.add_line(
+                            "let filter_mask = property_values.bool_eq_simd(&filter_value)?;",
+                        );
+                    }
+                    _ => {
+                        self.add_line("let filter_mask = property_values.eq(&filter_value)?; // Fallback for complex types");
+                    }
+                }
+
+                self.add_line("result.apply_filter(&filter_mask);");
+            }
+            _ => {
+                // Fallback for complex expressions
+                self.add_line("// Complex equality expression - using fallback");
+                self.add_line("let filter_mask = column.evaluate_condition(condition)?;");
+                self.add_line("result.apply_filter(&filter_mask);");
+            }
+        }
+        Ok(())
+    }
+
+    /// Generate SIMD-accelerated greater-than filter
+    fn generate_simd_greater_filter(
+        &mut self,
+        left: &Expression,
+        right: &Expression,
+    ) -> Result<()> {
+        match (left, right) {
+            (Expression::Property { variable, property }, Expression::Literal(value)) => {
+                // Generate SIMD greater-than check for property > literal
+                self.add_line(&format!(
+                    "// SIMD greater-than check: {}.{} > {:?}",
+                    variable, property, value
+                ));
+                self.add_line("let property_values = column.get_property_column(&format!(\"{}\", property_id))?;");
+
+                match value {
+                    Value::Number(_) => {
+                        self.add_line(
+                            "let filter_mask = property_values.numeric_gt_simd(&filter_value)?;",
+                        );
+                    }
+                    _ => {
+                        self.add_line("let filter_mask = property_values.gt(&filter_value)?; // Fallback for non-numeric types");
+                    }
+                }
+
+                self.add_line("result.apply_filter(&filter_mask);");
+            }
+            _ => {
+                // Fallback for complex expressions
+                self.add_line("// Complex greater-than expression - using fallback");
+                self.add_line("let filter_mask = column.evaluate_condition(condition)?;");
+                self.add_line("result.apply_filter(&filter_mask);");
+            }
+        }
+        Ok(())
     }
 }
 

@@ -192,6 +192,25 @@ impl ColumnValue for bool {
     }
 }
 
+impl ColumnValue for String {
+    const DATA_TYPE: DataType = DataType::String;
+
+    fn write_to(self, buffer: &mut [u8]) {
+        let bytes = self.as_bytes();
+        if bytes.len() > buffer.len() {
+            panic!("String too long for buffer");
+        }
+        buffer[..bytes.len()].copy_from_slice(bytes);
+    }
+
+    fn read_from(buffer: &[u8]) -> Result<Self> {
+        // Find null terminator or use entire buffer
+        let len = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
+        String::from_utf8(buffer[..len].to_vec())
+            .map_err(|e| Error::Storage(format!("Invalid UTF-8 string: {}", e)))
+    }
+}
+
 /// Columnar query result with named columns
 pub struct ColumnarResult {
     pub columns: HashMap<String, Column>,
@@ -265,7 +284,8 @@ impl ColumnarResult {
                         filtered.push(value).unwrap();
                     }
                     DataType::String => {
-                        // TODO: Implement string filtering
+                        let value: String = column.get(i).unwrap();
+                        filtered.push(value).unwrap();
                     }
                 }
             }
@@ -302,8 +322,8 @@ impl ColumnarResult {
                             row.insert(col_name.clone(), serde_json::Value::Bool(value));
                         }
                         DataType::String => {
-                            // TODO: Implement string conversion
-                            row.insert(col_name.clone(), serde_json::Value::String("".to_string()));
+                            let value: String = column.get(i).unwrap();
+                            row.insert(col_name.clone(), serde_json::Value::String(value));
                         }
                     }
                 }

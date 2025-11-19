@@ -20,6 +20,7 @@ use crate::catalog::Catalog;
 use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
 use crate::graph::{algorithms::Graph, procedures::ProcedureRegistry};
 use crate::index::{KnnIndex, LabelIndex};
+use crate::query_cache::{IntelligentQueryCache, QueryCacheConfig};
 use crate::storage::{
     RecordStore,
     row_lock::{RowLockGuard, RowLockManager},
@@ -403,6 +404,8 @@ pub struct ExecutorShared {
     spatial_indexes: Arc<parking_lot::RwLock<HashMap<String, SpatialIndex>>>,
     /// Multi-layer cache system for performance optimization
     cache: Option<Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>>,
+    /// Intelligent query cache for Cypher query results
+    query_cache: Option<Arc<RwLock<IntelligentQueryCache>>>,
     /// Row-level lock manager for fine-grained concurrency control
     row_lock_manager: Arc<RowLockManager>,
 }
@@ -431,6 +434,7 @@ impl ExecutorShared {
             udf_registry: Arc::new(UdfRegistry::new()),
             spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             cache: None,
+            query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),
         })
     }
@@ -438,6 +442,25 @@ impl ExecutorShared {
     /// Set the cache system for the executor
     pub fn set_cache(&mut self, cache: Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>) {
         self.cache = Some(cache);
+    }
+
+    /// Set the intelligent query cache for the executor
+    pub fn set_query_cache(&mut self, query_cache: Arc<RwLock<IntelligentQueryCache>>) {
+        self.query_cache = Some(query_cache);
+    }
+
+    /// Enable intelligent query caching with default configuration
+    pub fn enable_query_cache(&mut self) -> Result<()> {
+        let cache = Arc::new(RwLock::new(IntelligentQueryCache::new_default()));
+        self.set_query_cache(cache);
+        Ok(())
+    }
+
+    /// Enable intelligent query caching with custom configuration
+    pub fn enable_query_cache_with_config(&mut self, config: QueryCacheConfig) -> Result<()> {
+        let cache = Arc::new(RwLock::new(IntelligentQueryCache::new(config)));
+        self.set_query_cache(cache);
+        Ok(())
     }
 
     /// Create shared state with custom UDF registry
@@ -456,6 +479,7 @@ impl ExecutorShared {
             udf_registry: Arc::new(udf_registry),
             spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             cache: None,
+            query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),
         })
     }
@@ -626,6 +650,31 @@ impl Executor {
     pub fn execute(&self, query: &Query) -> Result<ResultSet> {
         // Parse the query into operators
         let operators = self.parse_and_plan(&query.cypher)?;
+
+        // Check if this is a write query - don't cache write operations
+        let is_write_query = operators.iter().any(|op| {
+            matches!(
+                op,
+                Operator::Create { .. } | Operator::Delete { .. } | Operator::DetachDelete { .. }
+            )
+        });
+
+        // Check query cache for read operations
+        if !is_write_query {
+            if let Some(ref cache) = self.shared.query_cache {
+                let query_hash = IntelligentQueryCache::generate_query_hash(&query.cypher, &query.params);
+                tracing::debug!("Checking query cache for: {} (hash: {})", &query.cypher, query_hash);
+                if let Some(cached_result) = cache.read().get(query_hash) {
+                    // Cache hit - return cached result
+                    tracing::info!("Query cache HIT for query: {} (hash: {})", &query.cypher, query_hash);
+                    return Ok(cached_result.as_ref().clone());
+                } else {
+                    tracing::debug!("Query cache MISS for query: {} (hash: {})", &query.cypher, query_hash);
+                }
+            } else {
+                tracing::debug!("Query cache not available for query: {}", &query.cypher);
+            }
+        }
 
         // Execute the plan
         let mut context = ExecutionContext::new(query.params.clone(), self.shared.cache.clone());
@@ -1009,10 +1058,80 @@ impl Executor {
             vec![]
         };
 
-        Ok(ResultSet {
+        let result_set = ResultSet {
             columns: final_columns,
             rows: final_rows,
-        })
+        };
+
+        // Cache the result for read operations
+        if !is_write_query {
+            if let Some(ref cache) = self.shared.query_cache {
+                // Calculate execution time for cache TTL calculation
+                let execution_time_ms = 10; // TODO: Measure actual execution time
+
+                let cache_result = cache.write().put(
+                    &query.cypher,
+                    &query.params,
+                    result_set.clone(),
+                    execution_time_ms
+                );
+
+                match cache_result {
+                    Ok(_) => tracing::info!("Query cached successfully: {} (hash: {})",
+                        &query.cypher,
+                        IntelligentQueryCache::generate_query_hash(&query.cypher, &query.params)),
+                    Err(e) => tracing::warn!("Failed to cache query: {}", e),
+                }
+            }
+        }
+
+        Ok(result_set)
+    }
+
+    /// Enable intelligent query caching with default configuration
+    pub fn enable_query_cache(&mut self) -> Result<()> {
+        self.shared.enable_query_cache()
+    }
+
+    /// Enable intelligent query caching with custom configuration
+    pub fn enable_query_cache_with_config(&mut self, config: QueryCacheConfig) -> Result<()> {
+        self.shared.enable_query_cache_with_config(config)
+    }
+
+    /// Disable query caching
+    pub fn disable_query_cache(&mut self) {
+        self.shared.query_cache = None;
+    }
+
+    /// Clear all cached query results
+    pub fn clear_query_cache(&self) {
+        if let Some(ref cache) = self.shared.query_cache {
+            cache.write().clear();
+        }
+    }
+
+    /// Get query cache statistics
+    pub fn get_query_cache_stats(&self) -> Option<crate::query_cache::QueryCacheStats> {
+        self.shared
+            .query_cache
+            .as_ref()
+            .map(|cache| cache.read().stats())
+    }
+
+    /// Invalidate cache entries based on affected data
+    pub fn invalidate_query_cache(&self, affected_labels: &[&str], affected_properties: &[&str]) {
+        if let Some(ref cache) = self.shared.query_cache {
+            cache
+                .write()
+                .invalidate_by_pattern(affected_labels, affected_properties);
+        }
+    }
+
+    /// Clean expired cache entries
+    pub fn clean_query_cache(&self) {
+        if let Some(ref cache) = self.shared.query_cache {
+            cache.write().clean_expired();
+        }
     }
 
     /// Parse Cypher into physical plan

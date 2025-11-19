@@ -25,7 +25,21 @@ static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync:
 
 /// Initialize the executor (deprecated - use init_engine_with_executor instead)
 pub fn init_executor() -> anyhow::Result<Arc<Executor>> {
-    let executor = Executor::default();
+    let mut executor = Executor::default();
+
+    // Enable intelligent query cache with default configuration
+    let cache_config = nexus_core::query_cache::QueryCacheConfig {
+        max_entries: 10000,
+        max_memory_bytes: 512 * 1024 * 1024, // 512MB
+        default_ttl: std::time::Duration::from_secs(3600), // 1 hour
+        adaptive_ttl: true,
+        min_ttl: std::time::Duration::from_secs(30), // 30 seconds
+        max_ttl: std::time::Duration::from_secs(3600), // 1 hour
+    };
+    executor.enable_query_cache_with_config(cache_config.clone())?;
+    tracing::info!("Query cache enabled with config: max_entries={}, max_memory={}MB",
+        cache_config.max_entries, cache_config.max_memory_bytes / (1024 * 1024));
+
     let executor_arc = Arc::new(executor);
     EXECUTOR
         .set(executor_arc.clone())
@@ -53,7 +67,21 @@ pub fn init_engine_with_executor(engine: Arc<RwLock<nexus_core::Engine>>) -> any
     // For now, we'll still use a dummy executor for non-CREATE queries
     // The real solution is to make CREATE and MATCH both use the engine
     // Executor is Clone and contains only Arc internally, so no RwLock needed
-    let executor = Executor::default();
+    let mut executor = Executor::default();
+
+    // Enable intelligent query cache with default configuration
+    let cache_config = nexus_core::query_cache::QueryCacheConfig {
+        max_entries: 10000,
+        max_memory_bytes: 512 * 1024 * 1024, // 512MB
+        default_ttl: std::time::Duration::from_secs(3600), // 1 hour
+        adaptive_ttl: true,
+        min_ttl: std::time::Duration::from_secs(30), // 30 seconds
+        max_ttl: std::time::Duration::from_secs(3600), // 1 hour
+    };
+    executor.enable_query_cache_with_config(cache_config.clone())?;
+    tracing::info!("Query cache enabled with config: max_entries={}, max_memory={}MB",
+        cache_config.max_entries, cache_config.max_memory_bytes / (1024 * 1024));
+
     let executor_arc = Arc::new(executor);
     EXECUTOR
         .set(executor_arc)
@@ -65,6 +93,29 @@ pub fn init_engine_with_executor(engine: Arc<RwLock<nexus_core::Engine>>) -> any
 /// Get the executor instance
 pub fn get_executor() -> Arc<Executor> {
     EXECUTOR.get().expect("Executor not initialized").clone()
+}
+
+/// Get query cache statistics
+pub async fn get_cache_stats() -> impl axum::response::IntoResponse {
+    let executor = get_executor();
+    if let Some(stats) = executor.get_query_cache_stats() {
+        axum::Json(serde_json::json!({
+            "cache_enabled": true,
+            "lookups": stats.lookups,
+            "hits": stats.hits,
+            "misses": stats.misses,
+            "hit_rate": stats.hit_rate,
+            "memory_usage_bytes": stats.memory_usage_bytes,
+            "ttl_evictions": stats.ttl_evictions,
+            "size_evictions": stats.size_evictions,
+            "avg_time_saved_ms": stats.avg_time_saved_ms
+        }))
+    } else {
+        axum::Json(serde_json::json!({
+            "cache_enabled": false,
+            "message": "Query cache is not enabled"
+        }))
+    }
 }
 
 /// Helper function to convert Expression to JSON Value

@@ -397,6 +397,7 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         .route("/data/relationships", post(api::data::create_rel))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
+        .route("/cache/stats", get(api::cypher::get_cache_stats))
         // Performance monitoring endpoints
         .route(
             "/performance/statistics",

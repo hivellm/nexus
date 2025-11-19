@@ -58,6 +58,7 @@ pub mod monitoring;
 pub mod page_cache;
 pub mod performance;
 pub mod plugin;
+pub mod query_cache;
 pub mod relationship;
 pub mod retry;
 pub mod security;
