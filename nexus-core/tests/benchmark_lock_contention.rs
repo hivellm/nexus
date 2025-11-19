@@ -55,6 +55,7 @@ fn use_row_locks(manager: &RowLockManager, tx_id: u64, resource_ids: &[u64]) -> 
 }
 
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn test_lock_contention_comparison() {
     let manager = Arc::new(RowLockManager::default());
     let num_resources = 100;
@@ -130,6 +131,7 @@ fn test_lock_contention_comparison() {
 }
 
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn test_concurrent_writes_different_resources() {
     let manager = Arc::new(RowLockManager::default());
     let num_threads = 20;
@@ -169,6 +171,7 @@ fn test_concurrent_writes_different_resources() {
 }
 
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn test_concurrent_writes_same_resources() {
     let manager = Arc::new(RowLockManager::default());
     let num_threads = 20;
@@ -222,6 +225,7 @@ fn test_concurrent_writes_same_resources() {
 }
 
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn test_lock_contention_metrics() {
     let manager = Arc::new(RowLockManager::default());
     let num_operations = 100;
@@ -293,6 +297,7 @@ fn test_lock_contention_metrics() {
 }
 
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn test_row_lock_vs_table_lock_throughput() {
     let manager = Arc::new(RowLockManager::default());
     let num_threads = 10;

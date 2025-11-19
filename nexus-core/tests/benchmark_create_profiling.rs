@@ -8,6 +8,7 @@ mod tests {
     use tracing;
 
     #[test]
+    #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
     fn profile_create_node_breakdown() {
         let mut engine = Engine::new().unwrap();
 
@@ -73,6 +74,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
     fn profile_create_relationship_breakdown() {
         let mut engine = Engine::new().unwrap();
 
@@ -117,6 +119,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
     fn profile_property_serialization() {
         use serde_json::Value;
         use std::collections::HashMap;

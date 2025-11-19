@@ -15,6 +15,7 @@ fn execute_cypher(engine: &mut Engine, query: &str) -> nexus_core::executor::Res
 
 /// Benchmark COUNT(*) performance
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_count_star() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -55,6 +56,7 @@ fn benchmark_count_star() {
 
 /// Benchmark GROUP BY performance
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_group_by() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -103,6 +105,7 @@ fn benchmark_group_by() {
 
 /// Benchmark COLLECT performance
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_collect() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -146,6 +149,7 @@ fn benchmark_collect() {
 
 /// Benchmark MIN/MAX performance
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_min_max() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -209,6 +213,7 @@ fn benchmark_min_max() {
 
 /// Benchmark aggregation with WHERE filter
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_aggregation_with_filter() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -252,6 +257,7 @@ fn benchmark_aggregation_with_filter() {
 /// Phase 2.5.4: Benchmark parallel aggregation speedup with large datasets
 /// Tests parallel aggregation performance vs sequential for datasets > 1000 rows
 #[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_parallel_aggregation_speedup() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();

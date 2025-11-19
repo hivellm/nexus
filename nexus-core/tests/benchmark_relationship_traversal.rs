@@ -13,6 +13,7 @@ mod tests {
     use tracing;
 
     #[test]
+    #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
     fn benchmark_relationship_traversal() {
         tracing::info!("=== Phase 3: Relationship Traversal Benchmark ===\n");
 
