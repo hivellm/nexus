@@ -779,6 +779,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Creates multiple Engines which can cause Too many open files error"]
     async fn test_check_components() {
         let components = check_components().await;
 
