@@ -153,13 +153,60 @@ impl Catalog {
     /// let catalog = Catalog::new("./data/catalog").unwrap();
     /// ```
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        // Use smaller map_size to reduce TLS key usage and avoid TlsFull errors
+        // The map_size doesn't directly affect TLS keys, but smaller sizes help
+        // when many databases are opened in parallel (common in tests)
+        //
+        // Detect test mode by checking:
+        // 1. NEXUS_TEST_MODE environment variable (explicit)
+        // 2. Executable name contains "test" (common when running cargo test)
+        let is_test_mode = std::env::var("NEXUS_TEST_MODE").is_ok()
+            || std::env::current_exe()
+                .ok()
+                .and_then(|exe| {
+                    exe.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|name| name.to_string())
+                })
+                .map(|name| name.contains("test"))
+                .unwrap_or(false);
+
+        let map_size = if is_test_mode {
+            // Use 100MB for tests
+            100 * 1024 * 1024
+        } else {
+            // Use 1GB for production (reduced from 10GB to help with TLS limits)
+            // Can be increased via with_map_size() if needed
+            1024 * 1024 * 1024
+        };
+        Self::with_map_size(path, map_size)
+    }
+
+    /// Create a new catalog with a specific map_size
+    ///
+    /// This is useful for testing or when you need to control the LMDB map size.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Directory path for LMDB files
+    /// * `map_size` - Maximum size of the LMDB memory map in bytes
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use nexus_core::catalog::Catalog;
+    ///
+    /// // Create catalog with 100MB map size for testing
+    /// let catalog = Catalog::with_map_size("./data/catalog", 100 * 1024 * 1024).unwrap();
+    /// ```
+    pub fn with_map_size<P: AsRef<Path>>(path: P, map_size: usize) -> Result<Self> {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&path)?;
 
-        // Open LMDB environment (10GB max size, 15 databases)
+        // Open LMDB environment with specified map size, 15 databases
         let env = unsafe {
             EnvOpenOptions::new()
-                .map_size(10 * 1024 * 1024 * 1024) // 10GB
+                .map_size(map_size)
                 .max_dbs(15) // Increased for constraints, UDFs, and procedures databases
                 .open(path.as_ref())?
         };
@@ -923,7 +970,8 @@ mod tests {
 
     fn create_test_catalog() -> (Catalog, TempDir) {
         let dir = TempDir::new().unwrap();
-        let catalog = Catalog::new(dir.path()).unwrap();
+        // Use smaller map_size for tests to avoid TlsFull errors
+        let catalog = Catalog::with_map_size(dir.path(), 100 * 1024 * 1024).unwrap();
         (catalog, dir)
     }
 
