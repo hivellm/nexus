@@ -342,7 +342,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_csv_empty() {
-        let (server, _temp_dir) = create_test_server().await;
+        use crate::api::graph_correlation_mcp_tests::TestServer;
+        let test_server = TestServer::new();
+        let server = test_server.server();
         let params = ExportRequest {
             format: "csv".to_string(),
             query: "MATCH (n) RETURN n".to_string(),
@@ -357,7 +359,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_csv_with_data() {
-        let (server, _temp_dir) = create_test_server().await;
+        use crate::api::graph_correlation_mcp_tests::TestServer;
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         // Create some test data
         let mut engine = server.engine.write().await;

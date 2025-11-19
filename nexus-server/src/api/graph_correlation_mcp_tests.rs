@@ -27,13 +27,13 @@ use tokio::sync::RwLock;
 use tracing;
 
 /// Test server wrapper that keeps TempDir alive
-struct TestServer {
+pub struct TestServer {
     _temp_dir: TempDir, // Keep temp_dir alive
     server: Arc<NexusServer>,
 }
 
 impl TestServer {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let temp_dir = TempDir::new().unwrap();
         let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
@@ -80,7 +80,7 @@ impl TestServer {
         }
     }
 
-    fn server(&self) -> Arc<NexusServer> {
+    pub fn server(&self) -> Arc<NexusServer> {
         self.server.clone()
     }
 }
@@ -218,7 +218,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_dataflow_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let mut files = serde_json::Map::new();
         files.insert(
@@ -291,7 +292,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_invalid_graph_type() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_generate".into(),
@@ -312,7 +314,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_missing_files() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_generate".into(),
@@ -416,7 +419,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_statistics() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let nodes = json!([
             {"id": "node1", "node_type": "Function", "label": "func1", "metadata": {}, "position": null, "size": null, "color": null},
@@ -550,7 +554,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_missing_analysis_type() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let graph = json!({
             "name": "Test",
@@ -578,7 +583,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_invalid_analysis_type() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let graph = json!({
             "name": "Test",
@@ -608,7 +614,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_empty_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let graph = json!({
             "name": "Empty Graph",
@@ -671,7 +678,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_json() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let nodes = json!([
             {"id": "n1", "node_type": "Function", "label": "func", "metadata": {}, "position": null, "size": null, "color": null}
@@ -734,7 +742,8 @@ mod tests {
     #[tokio::test]
     #[ignore] // TODO: Fix LMDB BadRslot error - likely due to concurrent access issues
     async fn test_export_gexf() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let nodes = json!([
             {"id": "n1", "node_type": "Function", "label": "func", "metadata": {}, "position": null, "size": null, "color": null}
@@ -869,7 +878,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_invalid_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_export".into(),
@@ -919,7 +929,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_types_with_descriptions() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_types".into(),
@@ -967,7 +978,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_then_analyze() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         // First generate a graph
         let mut files = serde_json::Map::new();
