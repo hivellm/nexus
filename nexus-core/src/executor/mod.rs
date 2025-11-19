@@ -9156,12 +9156,23 @@ impl ExecutionContext {
 
 impl Default for Executor {
     fn default() -> Self {
-        // Create default components for testing
+        use std::sync::{Arc, Mutex, Once};
+
+        // Use a shared record store for tests to prevent file descriptor leaks
+        static INIT: Once = Once::new();
+        static SHARED_STORE: Mutex<Option<RecordStore>> = Mutex::new(None);
+
+        let mut store_guard = SHARED_STORE.lock().unwrap();
+        if store_guard.is_none() {
+            let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+            let store = RecordStore::new(temp_dir.path()).expect("Failed to create record store");
+            // Keep temp_dir alive by leaking it (acceptable for testing)
+            std::mem::forget(temp_dir);
+            *store_guard = Some(store);
+        }
+
+        let store = store_guard.as_ref().unwrap().clone();
         let catalog = Catalog::default();
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
-        let store = RecordStore::new(temp_dir.path()).expect("Failed to create record store");
-        // Keep temp_dir alive by leaking it (acceptable for testing)
-        std::mem::forget(temp_dir);
         let label_index = LabelIndex::default();
         let knn_index = KnnIndex::new_default(128).expect("Failed to create default KNN index");
 

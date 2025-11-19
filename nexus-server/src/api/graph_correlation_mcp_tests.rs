@@ -34,15 +34,61 @@ pub struct TestServer {
 
 impl TestServer {
     pub fn new() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
-        let engine_arc = Arc::new(RwLock::new(engine));
+        use std::sync::{Arc, Mutex, Once};
+        use tokio::sync::RwLock;
 
-        let executor = Executor::default();
+        // Use shared components to prevent file descriptor leaks during concurrent tests
+        static INIT: Once = Once::new();
+        static SHARED_ENGINE: Mutex<Option<Arc<RwLock<nexus_core::Engine>>>> = Mutex::new(None);
+        static SHARED_EXECUTOR: Mutex<Option<nexus_core::executor::Executor>> = Mutex::new(None);
+        static SHARED_DATABASE_MANAGER: Mutex<Option<Arc<RwLock<DatabaseManager>>>> =
+            Mutex::new(None);
+
+        let mut engine_guard = SHARED_ENGINE.lock().unwrap();
+        let mut executor_guard = SHARED_EXECUTOR.lock().unwrap();
+        let mut db_manager_guard = SHARED_DATABASE_MANAGER.lock().unwrap();
+
+        if engine_guard.is_none() {
+            let temp_dir = TempDir::new().unwrap();
+            let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+            let engine_arc = Arc::new(RwLock::new(engine));
+
+            let executor = Executor::default();
+
+            let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
+            let database_manager_arc = Arc::new(RwLock::new(database_manager));
+
+            // Keep temp_dir alive by leaking it (acceptable for testing)
+            std::mem::forget(temp_dir);
+
+            *engine_guard = Some(engine_arc);
+            *executor_guard = Some(executor);
+            *db_manager_guard = Some(database_manager_arc);
+        }
+
+        let engine_arc = engine_guard.as_ref().unwrap().clone();
+        let executor = executor_guard.as_ref().unwrap().clone();
         let executor_arc = Arc::new(executor);
+        let database_manager_arc = db_manager_guard.as_ref().unwrap().clone();
 
-        let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
-        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let rbac = RoleBasedAccessControl::new();
+        let rbac_arc = Arc::new(RwLock::new(rbac));
+
+        let auth_config = AuthConfig::default();
+        let auth_manager = Arc::new(AuthManager::new(auth_config));
+
+        let jwt_config = JwtConfig::default();
+        let jwt_manager = Arc::new(JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            AuditLogger::new(AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
 
         let rbac = RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
@@ -74,8 +120,11 @@ impl TestServer {
             RootUserConfig::default(),
         ));
 
+        // Create a dummy temp dir for the struct (won't be used since we use shared resources)
+        let dummy_temp_dir = TempDir::new().unwrap();
+
         Self {
-            _temp_dir: temp_dir,
+            _temp_dir: dummy_temp_dir,
             server,
         }
     }
