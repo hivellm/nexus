@@ -960,7 +960,19 @@ impl Catalog {
 
 impl Default for Catalog {
     fn default() -> Self {
-        Self::new("./data/catalog").expect("Failed to create default catalog")
+        use std::sync::{Once, Mutex};
+
+        // Use a shared catalog for tests to prevent file descriptor leaks
+        static INIT: Once = Once::new();
+        static SHARED_CATALOG: Mutex<Option<Catalog>> = Mutex::new(None);
+
+        let mut catalog_guard = SHARED_CATALOG.lock().unwrap();
+        if catalog_guard.is_none() {
+            let catalog = Self::new("./data/catalog").expect("Failed to create default catalog");
+            *catalog_guard = Some(catalog);
+        }
+
+        catalog_guard.as_ref().unwrap().clone()
     }
 }
 
