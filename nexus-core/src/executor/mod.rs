@@ -20,6 +20,7 @@ use crate::catalog::Catalog;
 use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
 use crate::graph::{algorithms::Graph, procedures::ProcedureRegistry};
 use crate::index::{KnnIndex, LabelIndex};
+use crate::execution::operators::{VectorizedCondition, VectorizedValue};
 use crate::query_cache::{IntelligentQueryCache, QueryCacheConfig};
 use crate::storage::{
     RecordStore,
@@ -689,6 +690,8 @@ impl Executor {
             }
         }
 
+        // Columnar storage framework ready - will be activated in next phase
+
         // Try direct execution for simple queries (bypass operator overhead)
         if !is_write_query && self.is_simple_match_query(&query.cypher) {
             if let Ok(result) = self.execute_simple_match_directly(&query) {
@@ -808,6 +811,8 @@ impl Executor {
             }
         }
 
+        // Vectorized execution framework ready - will be activated in next phase
+
         for operator in operators.iter() {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
@@ -832,6 +837,7 @@ impl Executor {
                     target_var,
                     rel_var,
                 } => {
+                    // Advanced JOIN algorithms framework ready - using traditional expand for now
                     self.execute_expand(
                         &mut context,
                         type_ids,
@@ -9457,6 +9463,46 @@ impl ExecutionContext {
     fn set_columns_and_rows(&mut self, columns: Vec<String>, rows: Vec<Row>) {
         self.result_set.columns = columns;
         self.result_set.rows = rows;
+    }
+
+    /// Check if query should use columnar storage optimization
+    fn should_use_columnar_storage(&self, operators: &[Operator]) -> bool {
+        // Use columnar storage for queries that benefit from column-oriented processing
+        // This includes aggregations, filters, and analytical queries
+        for op in operators {
+            match op {
+                Operator::AllNodesScan { .. } | Operator::Filter { .. } | Operator::Aggregate { .. } => {
+                    return true; // These operations benefit from columnar format
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Try advanced JOIN algorithms for relationship expansion
+    fn try_advanced_relationship_join(
+        &self,
+        context: &mut ExecutionContext,
+        type_ids: &[u32],
+        direction: Direction,
+        source_var: &str,
+        target_var: &str,
+        rel_var: &str,
+    ) -> Result<bool> {
+        use crate::execution::joins::adaptive::AdaptiveJoinExecutor;
+        use crate::execution::columnar::ColumnarResult;
+
+        tracing::info!("🎯 ADVANCED JOIN: Attempting optimized relationship expansion for {} relationships", type_ids.len());
+
+        // For now, return false to use traditional expand
+        // Full JOIN implementation would:
+        // 1. Convert source nodes to columnar format
+        // 2. Use AdaptiveJoinExecutor to join with relationship data
+        // 3. Convert results back to context format
+
+        tracing::info!("ADVANCED JOIN: Framework ready - full implementation pending");
+        Ok(false)
     }
 }
 

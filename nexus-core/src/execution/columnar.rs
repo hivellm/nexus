@@ -294,6 +294,47 @@ impl ColumnarResult {
         filtered
     }
 
+    /// Apply LIMIT operation to columnar result
+    pub fn limit(self, limit: usize) -> ColumnarResult {
+        if self.row_count <= limit {
+            return self; // No need to limit
+        }
+
+        let mut result = ColumnarResult::new();
+        let actual_limit = limit.min(self.row_count);
+
+        for (name, column) in &self.columns {
+            let mut limited_column = Column::with_capacity(column.data_type, actual_limit);
+
+            // Copy only the first 'limit' elements
+            for i in 0..actual_limit {
+                match column.data_type {
+                    DataType::Int64 => {
+                        let value: i64 = column.get(i).unwrap();
+                        limited_column.push(value).unwrap();
+                    }
+                    DataType::Float64 => {
+                        let value: f64 = column.get(i).unwrap();
+                        limited_column.push(value).unwrap();
+                    }
+                    DataType::String => {
+                        let value: String = column.get(i).unwrap();
+                        limited_column.push(value).unwrap();
+                    }
+                    DataType::Bool => {
+                        let value: bool = column.get(i).unwrap();
+                        limited_column.push(value).unwrap();
+                    }
+                }
+            }
+
+            result.columns.insert(name.clone(), limited_column);
+        }
+
+        result.row_count = actual_limit;
+        result
+    }
+
     /// Convert to traditional row-based format (for compatibility)
     pub fn to_rows(&self) -> Vec<HashMap<String, serde_json::Value>> {
         let mut rows = Vec::with_capacity(self.row_count);
