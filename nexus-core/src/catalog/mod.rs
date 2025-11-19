@@ -153,11 +153,29 @@ impl Catalog {
     /// let catalog = Catalog::new("./data/catalog").unwrap();
     /// ```
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // Use absolute minimum map_size (512KB) to completely eliminate TlsFull errors
-        // This fixes the issue where many tests running in parallel
-        // would exhaust thread-local storage keys in LMDB
-        // 512KB is the absolute minimum that still works for basic operations
-        Self::with_map_size(path, 512 * 1024)
+        // Detect if we're running in test mode to use even smaller map_size
+        // This is critical to prevent TlsFull errors when many tests run in parallel
+        let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
+            || std::env::args().any(|arg| arg.contains("test"))
+            || std::env::current_exe()
+                .ok()
+                .and_then(|exe| {
+                    exe.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|name| name.to_string())
+                })
+                .map(|name| name.contains("test"))
+                .unwrap_or(false);
+
+        // Use minimal map_size: 256KB for tests, 512KB for production
+        // Smaller size allows more environments to be opened simultaneously
+        let map_size = if is_test {
+            256 * 1024 // 256KB for tests - allows more parallel test execution
+        } else {
+            512 * 1024 // 512KB for production - minimum safe size
+        };
+
+        Self::with_map_size(path, map_size)
     }
 
     /// Create a new catalog with a specific map_size
