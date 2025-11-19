@@ -6,6 +6,7 @@
 use nexus_core::Engine;
 use std::time::Instant;
 use tempfile::TempDir;
+use tracing;
 
 /// Helper function to execute a Cypher query
 fn execute_cypher(engine: &mut Engine, query: &str) -> nexus_core::executor::ResultSet {
@@ -19,14 +20,14 @@ fn benchmark_count_star() {
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
 
     // Create test data
-    println!("Creating test data for COUNT(*) benchmark...");
+    tracing::info!("Creating test data for COUNT(*) benchmark...");
     for i in 0..1000 {
         let query = format!("CREATE (n:Person {{id: {}, age: {}}})", i, 20 + (i % 50));
         execute_cypher(&mut engine, &query);
     }
 
     // Benchmark COUNT(*)
-    println!("Benchmarking COUNT(*)...");
+    tracing::info!("Benchmarking COUNT(*)...");
     let start = Instant::now();
     let iterations = 100;
 
@@ -38,11 +39,11 @@ fn benchmark_count_star() {
     let elapsed = start.elapsed();
     let avg_time = elapsed.as_millis() as f64 / iterations as f64;
 
-    println!("COUNT(*) benchmark:");
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed);
-    println!("  Average time: {:.2}ms", avg_time);
-    println!("  Target: ≤ 2ms average");
+    tracing::info!("COUNT(*) benchmark:");
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed);
+    tracing::info!("  Average time: {:.2}ms", avg_time);
+    tracing::info!("  Target: ≤ 2ms average");
 
     // Verify result
     let result = execute_cypher(&mut engine, "MATCH (n) RETURN count(*) as total");
@@ -59,7 +60,7 @@ fn benchmark_group_by() {
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
 
     // Create test data with different labels
-    println!("Creating test data for GROUP BY benchmark...");
+    tracing::info!("Creating test data for GROUP BY benchmark...");
     for i in 0..500 {
         let query = format!("CREATE (n:Person {{id: {}, age: {}}})", i, 20 + (i % 50));
         execute_cypher(&mut engine, &query);
@@ -74,7 +75,7 @@ fn benchmark_group_by() {
     }
 
     // Benchmark GROUP BY
-    println!("Benchmarking GROUP BY...");
+    tracing::info!("Benchmarking GROUP BY...");
     let start = Instant::now();
     let iterations = 50;
 
@@ -86,11 +87,11 @@ fn benchmark_group_by() {
     let elapsed = start.elapsed();
     let avg_time = elapsed.as_millis() as f64 / iterations as f64;
 
-    println!("GROUP BY benchmark:");
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed);
-    println!("  Average time: {:.2}ms", avg_time);
-    println!("  Target: ≤ 3ms average");
+    tracing::info!("GROUP BY benchmark:");
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed);
+    tracing::info!("  Average time: {:.2}ms", avg_time);
+    tracing::info!("  Target: ≤ 3ms average");
 
     // Verify result
     let result = execute_cypher(
@@ -107,14 +108,14 @@ fn benchmark_collect() {
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
 
     // Create test data
-    println!("Creating test data for COLLECT benchmark...");
+    tracing::info!("Creating test data for COLLECT benchmark...");
     for i in 0..500 {
         let query = format!("CREATE (n:Person {{id: {}, age: {}}})", i, 20 + (i % 50));
         execute_cypher(&mut engine, &query);
     }
 
     // Benchmark COLLECT
-    println!("Benchmarking COLLECT...");
+    tracing::info!("Benchmarking COLLECT...");
     let start = Instant::now();
     let iterations = 50;
 
@@ -126,11 +127,11 @@ fn benchmark_collect() {
     let elapsed = start.elapsed();
     let avg_time = elapsed.as_millis() as f64 / iterations as f64;
 
-    println!("COLLECT benchmark:");
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed);
-    println!("  Average time: {:.2}ms", avg_time);
-    println!("  Target: ≤ 3ms average");
+    tracing::info!("COLLECT benchmark:");
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed);
+    tracing::info!("  Average time: {:.2}ms", avg_time);
+    tracing::info!("  Target: ≤ 3ms average");
 
     // Verify result
     let result = execute_cypher(
@@ -150,14 +151,14 @@ fn benchmark_min_max() {
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
 
     // Create test data
-    println!("Creating test data for MIN/MAX benchmark...");
+    tracing::info!("Creating test data for MIN/MAX benchmark...");
     for i in 0..1000 {
         let query = format!("CREATE (n:Person {{id: {}, age: {}}})", i, 20 + (i % 50));
         execute_cypher(&mut engine, &query);
     }
 
     // Benchmark MIN
-    println!("Benchmarking MIN...");
+    tracing::info!("Benchmarking MIN...");
     let start = Instant::now();
     let iterations = 100;
 
@@ -169,13 +170,13 @@ fn benchmark_min_max() {
     let elapsed = start.elapsed();
     let avg_time = elapsed.as_millis() as f64 / iterations as f64;
 
-    println!("MIN benchmark:");
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed);
-    println!("  Average time: {:.2}ms", avg_time);
+    tracing::info!("MIN benchmark:");
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed);
+    tracing::info!("  Average time: {:.2}ms", avg_time);
 
     // Benchmark MAX
-    println!("Benchmarking MAX...");
+    tracing::info!("Benchmarking MAX...");
     let start = Instant::now();
 
     for _ in 0..iterations {
@@ -186,10 +187,10 @@ fn benchmark_min_max() {
     let elapsed = start.elapsed();
     let avg_time = elapsed.as_millis() as f64 / iterations as f64;
 
-    println!("MAX benchmark:");
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed);
-    println!("  Average time: {:.2}ms", avg_time);
+    tracing::info!("MAX benchmark:");
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed);
+    tracing::info!("  Average time: {:.2}ms", avg_time);
 
     // Verify results
     let min_result = execute_cypher(&mut engine, "MATCH (n:Person) RETURN min(n.age) as min_age");
@@ -213,14 +214,14 @@ fn benchmark_aggregation_with_filter() {
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
 
     // Create test data
-    println!("Creating test data for filtered aggregation benchmark...");
+    tracing::info!("Creating test data for filtered aggregation benchmark...");
     for i in 0..1000 {
         let query = format!("CREATE (n:Person {{id: {}, age: {}}})", i, 20 + (i % 50));
         execute_cypher(&mut engine, &query);
     }
 
     // Benchmark COUNT with WHERE
-    println!("Benchmarking COUNT with WHERE filter...");
+    tracing::info!("Benchmarking COUNT with WHERE filter...");
     let start = Instant::now();
     let iterations = 100;
 
@@ -232,10 +233,10 @@ fn benchmark_aggregation_with_filter() {
     let elapsed = start.elapsed();
     let avg_time = elapsed.as_millis() as f64 / iterations as f64;
 
-    println!("COUNT with WHERE benchmark:");
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed);
-    println!("  Average time: {:.2}ms", avg_time);
+    tracing::info!("COUNT with WHERE benchmark:");
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed);
+    tracing::info!("  Average time: {:.2}ms", avg_time);
 
     // Verify result
     let result = execute_cypher(
@@ -257,7 +258,7 @@ fn benchmark_parallel_aggregation_speedup() {
 
     // Create large dataset (5000 nodes to trigger parallel aggregation)
     // Parallel threshold is 1000 rows, so 5000 should definitely trigger it
-    println!("Creating large dataset for parallel aggregation benchmark (5000 nodes)...");
+    tracing::info!("Creating large dataset for parallel aggregation benchmark (5000 nodes)...");
     for i in 0..5000 {
         let query = format!(
             "CREATE (n:Person {{id: {}, age: {}, salary: {}}})",
@@ -268,12 +269,12 @@ fn benchmark_parallel_aggregation_speedup() {
         execute_cypher(&mut engine, &query);
     }
 
-    println!("\n=== Parallel Aggregation Speedup Benchmark ===");
-    println!("Dataset size: 5000 nodes");
-    println!("Parallel threshold: 1000 rows (should trigger parallel processing)");
+    tracing::info!("\n=== Parallel Aggregation Speedup Benchmark ===");
+    tracing::info!("Dataset size: 5000 nodes");
+    tracing::info!("Parallel threshold: 1000 rows (should trigger parallel processing)");
 
     // Benchmark COUNT(*) - should use parallel aggregation
-    println!("\n1. Benchmarking COUNT(*) (parallel)...");
+    tracing::info!("\n1. Benchmarking COUNT(*) (parallel)...");
     let start = Instant::now();
     let iterations = 50;
 
@@ -285,12 +286,12 @@ fn benchmark_parallel_aggregation_speedup() {
     let elapsed_parallel_count = start.elapsed();
     let avg_parallel_count = elapsed_parallel_count.as_millis() as f64 / iterations as f64;
 
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed_parallel_count);
-    println!("  Average time: {:.2}ms", avg_parallel_count);
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed_parallel_count);
+    tracing::info!("  Average time: {:.2}ms", avg_parallel_count);
 
     // Benchmark SUM - should use parallel aggregation
-    println!("\n2. Benchmarking SUM (parallel)...");
+    tracing::info!("\n2. Benchmarking SUM (parallel)...");
     let start = Instant::now();
 
     for _ in 0..iterations {
@@ -301,12 +302,12 @@ fn benchmark_parallel_aggregation_speedup() {
     let elapsed_parallel_sum = start.elapsed();
     let avg_parallel_sum = elapsed_parallel_sum.as_millis() as f64 / iterations as f64;
 
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed_parallel_sum);
-    println!("  Average time: {:.2}ms", avg_parallel_sum);
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed_parallel_sum);
+    tracing::info!("  Average time: {:.2}ms", avg_parallel_sum);
 
     // Benchmark MIN - should use parallel aggregation
-    println!("\n3. Benchmarking MIN (parallel)...");
+    tracing::info!("\n3. Benchmarking MIN (parallel)...");
     let start = Instant::now();
 
     for _ in 0..iterations {
@@ -317,12 +318,12 @@ fn benchmark_parallel_aggregation_speedup() {
     let elapsed_parallel_min = start.elapsed();
     let avg_parallel_min = elapsed_parallel_min.as_millis() as f64 / iterations as f64;
 
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed_parallel_min);
-    println!("  Average time: {:.2}ms", avg_parallel_min);
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed_parallel_min);
+    tracing::info!("  Average time: {:.2}ms", avg_parallel_min);
 
     // Benchmark MAX - should use parallel aggregation
-    println!("\n4. Benchmarking MAX (parallel)...");
+    tracing::info!("\n4. Benchmarking MAX (parallel)...");
     let start = Instant::now();
 
     for _ in 0..iterations {
@@ -333,12 +334,12 @@ fn benchmark_parallel_aggregation_speedup() {
     let elapsed_parallel_max = start.elapsed();
     let avg_parallel_max = elapsed_parallel_max.as_millis() as f64 / iterations as f64;
 
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed_parallel_max);
-    println!("  Average time: {:.2}ms", avg_parallel_max);
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed_parallel_max);
+    tracing::info!("  Average time: {:.2}ms", avg_parallel_max);
 
     // Benchmark AVG - should use parallel aggregation
-    println!("\n5. Benchmarking AVG (parallel)...");
+    tracing::info!("\n5. Benchmarking AVG (parallel)...");
     let start = Instant::now();
 
     for _ in 0..iterations {
@@ -349,31 +350,36 @@ fn benchmark_parallel_aggregation_speedup() {
     let elapsed_parallel_avg = start.elapsed();
     let avg_parallel_avg = elapsed_parallel_avg.as_millis() as f64 / iterations as f64;
 
-    println!("  Iterations: {}", iterations);
-    println!("  Total time: {:?}", elapsed_parallel_avg);
-    println!("  Average time: {:.2}ms", avg_parallel_avg);
+    tracing::info!("  Iterations: {}", iterations);
+    tracing::info!("  Total time: {:?}", elapsed_parallel_avg);
+    tracing::info!("  Average time: {:.2}ms", avg_parallel_avg);
 
     // Summary
-    println!("\n=== Parallel Aggregation Summary ===");
-    println!(
+    tracing::info!("\n=== Parallel Aggregation Summary ===");
+    tracing::info!(
         "COUNT(*):  {:.2}ms average ({} iterations)",
-        avg_parallel_count, iterations
+        avg_parallel_count,
+        iterations
     );
-    println!(
+    tracing::info!(
         "SUM:       {:.2}ms average ({} iterations)",
-        avg_parallel_sum, iterations
+        avg_parallel_sum,
+        iterations
     );
-    println!(
+    tracing::info!(
         "MIN:       {:.2}ms average ({} iterations)",
-        avg_parallel_min, iterations
+        avg_parallel_min,
+        iterations
     );
-    println!(
+    tracing::info!(
         "MAX:       {:.2}ms average ({} iterations)",
-        avg_parallel_max, iterations
+        avg_parallel_max,
+        iterations
     );
-    println!(
+    tracing::info!(
         "AVG:       {:.2}ms average ({} iterations)",
-        avg_parallel_avg, iterations
+        avg_parallel_avg,
+        iterations
     );
 
     // Verify results are correct
@@ -383,7 +389,7 @@ fn benchmark_parallel_aggregation_speedup() {
         assert_eq!(count, 5000, "Should count 5000 nodes");
     }
 
-    println!("\n✅ All parallel aggregation benchmarks completed successfully!");
-    println!("   Dataset size: 5000 nodes (above 1000 threshold for parallel processing)");
-    println!("   All aggregations should have used parallel processing");
+    tracing::info!("\n✅ All parallel aggregation benchmarks completed successfully!");
+    tracing::info!("   Dataset size: 5000 nodes (above 1000 threshold for parallel processing)");
+    tracing::info!("   All aggregations should have used parallel processing");
 }

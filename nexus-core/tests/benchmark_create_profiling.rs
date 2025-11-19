@@ -5,6 +5,7 @@
 mod tests {
     use nexus_core::Engine;
     use std::time::{Duration, Instant};
+    use tracing;
 
     #[test]
     fn profile_create_node_breakdown() {
@@ -49,23 +50,23 @@ mod tests {
             }
         }
 
-        println!(
+        tracing::info!(
             "\n=== CREATE Node Profiling ({} iterations) ===",
             iterations
         );
-        println!(
+        tracing::info!(
             "Average parse time: {:.2}μs",
             total_parse.as_micros() as f64 / iterations as f64
         );
-        println!(
+        tracing::info!(
             "Average execute time: {:.2}ms",
             total_execute.as_millis() as f64 / iterations as f64
         );
-        println!(
+        tracing::info!(
             "Average commit/flush overhead: {:.2}μs",
             total_commit.as_micros() as f64 / iterations as f64
         );
-        println!(
+        tracing::info!(
             "Total average: {:.2}ms",
             (total_parse + total_execute + total_commit).as_millis() as f64 / iterations as f64
         );
@@ -108,11 +109,11 @@ mod tests {
         }
 
         let avg = total_time.as_millis() as f64 / iterations as f64;
-        println!(
+        tracing::info!(
             "\n=== CREATE Relationship Profiling ({} iterations) ===",
             iterations
         );
-        println!("Average time: {:.2}ms", avg);
+        tracing::info!("Average time: {:.2}ms", avg);
     }
 
     #[test]
@@ -149,19 +150,19 @@ mod tests {
             total_to_writer += start.elapsed();
         }
 
-        println!(
+        tracing::info!(
             "\n=== Property Serialization Profiling ({} iterations) ===",
             iterations
         );
-        println!(
+        tracing::info!(
             "Average to_vec: {:.2}μs",
             total_to_vec.as_micros() as f64 / iterations as f64
         );
-        println!(
+        tracing::info!(
             "Average to_string: {:.2}μs",
             total_to_string.as_micros() as f64 / iterations as f64
         );
-        println!(
+        tracing::info!(
             "Average to_writer: {:.2}μs",
             total_to_writer.as_micros() as f64 / iterations as f64
         );

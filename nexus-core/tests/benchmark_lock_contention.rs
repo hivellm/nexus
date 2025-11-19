@@ -10,6 +10,7 @@ use nexus_core::storage::row_lock::{ResourceId, RowLockManager};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tracing;
 
 /// Simulate table-level locking by acquiring locks on all resources
 fn simulate_table_lock(manager: &RowLockManager, tx_id: u64, num_resources: usize) -> Duration {
@@ -108,16 +109,18 @@ fn test_lock_contention_comparison() {
         0.0
     };
 
-    println!("Lock Contention Benchmark Results:");
-    println!(
+    tracing::info!("Lock Contention Benchmark Results:");
+    tracing::info!(
         "  Table-level (simulated): {:?} total, {:?} elapsed",
-        total_table_time, elapsed_table
+        total_table_time,
+        elapsed_table
     );
-    println!(
+    tracing::info!(
         "  Row-level: {:?} total, {:?} elapsed",
-        total_row_time, elapsed_row
+        total_row_time,
+        elapsed_row
     );
-    println!("  Improvement: {:.2}%", improvement);
+    tracing::info!("  Improvement: {:.2}%", improvement);
 
     // Row-level should be faster when resources don't overlap
     assert!(
@@ -158,7 +161,7 @@ fn test_concurrent_writes_different_resources() {
 
     // With row-level locking, all threads should complete quickly
     // since they're accessing different resources
-    println!("Concurrent writes to different resources: {:?}", elapsed);
+    tracing::info!("Concurrent writes to different resources: {:?}", elapsed);
     assert!(
         elapsed < Duration::from_millis(500),
         "Should complete quickly with row-level locking"
@@ -204,9 +207,10 @@ fn test_concurrent_writes_same_resources() {
 
     let elapsed = start.elapsed();
 
-    println!(
+    tracing::info!(
         "Concurrent writes to same resource: {:?}, {} successes",
-        elapsed, successes
+        elapsed,
+        successes
     );
 
     // With high contention, not all will succeed
@@ -264,16 +268,19 @@ fn test_lock_contention_metrics() {
     }
     let high_contention_time = start.elapsed();
 
-    println!("Lock Contention Metrics:");
-    println!(
+    tracing::info!("Lock Contention Metrics:");
+    tracing::info!(
         "  Low contention ({} operations): {:?}",
-        num_operations, low_contention_time
+        num_operations,
+        low_contention_time
     );
-    println!(
+    tracing::info!(
         "  High contention ({} operations, {} successes): {:?}",
-        num_operations, successes, high_contention_time
+        num_operations,
+        successes,
+        high_contention_time
     );
-    println!(
+    tracing::info!(
         "  Success rate: {:.2}%",
         (successes as f64 / num_operations as f64) * 100.0
     );
@@ -322,10 +329,10 @@ fn test_row_lock_vs_table_lock_throughput() {
 
     let throughput = total_operations as f64 / elapsed.as_secs_f64();
 
-    println!("Row-level Lock Throughput:");
-    println!("  Total operations: {}", total_operations);
-    println!("  Time: {:?}", elapsed);
-    println!("  Throughput: {:.2} ops/sec", throughput);
+    tracing::info!("Row-level Lock Throughput:");
+    tracing::info!("  Total operations: {}", total_operations);
+    tracing::info!("  Time: {:?}", elapsed);
+    tracing::info!("  Throughput: {:.2} ops/sec", throughput);
 
     assert!(total_operations > 0, "Should complete some operations");
     assert!(throughput > 10.0, "Should achieve reasonable throughput");

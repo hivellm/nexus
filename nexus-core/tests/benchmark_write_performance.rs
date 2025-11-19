@@ -7,6 +7,7 @@
 use nexus_core::Engine;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use tracing;
 
 /// Helper to extract count from result
 fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
@@ -22,7 +23,7 @@ fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
 #[tokio::test]
 #[cfg(feature = "benchmarks")]
 async fn benchmark_create_node_operations() {
-    println!("\n=== Benchmark: CREATE Node Operations ===");
+    tracing::info!("\n=== Benchmark: CREATE Node Operations ===");
 
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -30,7 +31,7 @@ async fn benchmark_create_node_operations() {
     let num_operations = 1000;
     let mut latencies = Vec::new();
 
-    println!("Creating {} nodes...", num_operations);
+    tracing::info!("Creating {} nodes...", num_operations);
 
     for i in 0..num_operations {
         let start = Instant::now();
@@ -49,7 +50,7 @@ async fn benchmark_create_node_operations() {
         latencies.push(latency);
 
         if (i + 1) % 100 == 0 {
-            println!("  Created {} nodes...", i + 1);
+            tracing::info!("  Created {} nodes...", i + 1);
         }
     }
 
@@ -63,16 +64,16 @@ async fn benchmark_create_node_operations() {
     let min = latencies[0];
     let max = latencies[latencies.len() - 1];
 
-    println!("\nResults:");
-    println!("  Total operations: {}", num_operations);
-    println!("  Total time: {:.2}ms", total.as_secs_f64() * 1000.0);
-    println!("  Average latency: {:.2}ms", avg.as_secs_f64() * 1000.0);
-    println!("  P50 latency: {:.2}ms", p50.as_secs_f64() * 1000.0);
-    println!("  P95 latency: {:.2}ms", p95.as_secs_f64() * 1000.0);
-    println!("  P99 latency: {:.2}ms", p99.as_secs_f64() * 1000.0);
-    println!("  Min latency: {:.2}ms", min.as_secs_f64() * 1000.0);
-    println!("  Max latency: {:.2}ms", max.as_secs_f64() * 1000.0);
-    println!(
+    tracing::info!("\nResults:");
+    tracing::info!("  Total operations: {}", num_operations);
+    tracing::info!("  Total time: {:.2}ms", total.as_secs_f64() * 1000.0);
+    tracing::info!("  Average latency: {:.2}ms", avg.as_secs_f64() * 1000.0);
+    tracing::info!("  P50 latency: {:.2}ms", p50.as_secs_f64() * 1000.0);
+    tracing::info!("  P95 latency: {:.2}ms", p95.as_secs_f64() * 1000.0);
+    tracing::info!("  P99 latency: {:.2}ms", p99.as_secs_f64() * 1000.0);
+    tracing::info!("  Min latency: {:.2}ms", min.as_secs_f64() * 1000.0);
+    tracing::info!("  Max latency: {:.2}ms", max.as_secs_f64() * 1000.0);
+    tracing::info!(
         "  Throughput: {:.2} ops/sec",
         num_operations as f64 / total.as_secs_f64()
     );
@@ -85,8 +86,8 @@ async fn benchmark_create_node_operations() {
     assert_eq!(count, num_operations as u64, "All nodes should be created");
 
     // Phase 1 target: ≤ 8ms average
-    println!("\nTarget: ≤ 8ms average");
-    println!(
+    tracing::info!("\nTarget: ≤ 8ms average");
+    tracing::info!(
         "Status: {}",
         if avg.as_millis() <= 8 {
             "✅ PASS"
@@ -100,13 +101,13 @@ async fn benchmark_create_node_operations() {
 #[tokio::test]
 #[cfg(feature = "benchmarks")]
 async fn benchmark_create_relationship_operations() {
-    println!("\n=== Benchmark: CREATE Relationship Operations ===");
+    tracing::info!("\n=== Benchmark: CREATE Relationship Operations ===");
 
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
 
     // Create base nodes first
-    println!("Creating base nodes...");
+    tracing::info!("Creating base nodes...");
     for i in 0..100 {
         let query = format!("CREATE (n:Person {{id: {}, name: 'Person{}'}})", i, i);
         engine.execute_cypher(&query).unwrap();
@@ -115,7 +116,7 @@ async fn benchmark_create_relationship_operations() {
     let num_operations = 1000;
     let mut latencies = Vec::new();
 
-    println!("Creating {} relationships...", num_operations);
+    tracing::info!("Creating {} relationships...", num_operations);
 
     for i in 0..num_operations {
         let start = Instant::now();
@@ -135,7 +136,7 @@ async fn benchmark_create_relationship_operations() {
         latencies.push(latency);
 
         if (i + 1) % 100 == 0 {
-            println!("  Created {} relationships...", i + 1);
+            tracing::info!("  Created {} relationships...", i + 1);
         }
     }
 
@@ -149,16 +150,16 @@ async fn benchmark_create_relationship_operations() {
     let min = latencies[0];
     let max = latencies[latencies.len() - 1];
 
-    println!("\nResults:");
-    println!("  Total operations: {}", num_operations);
-    println!("  Total time: {:.2}ms", total.as_secs_f64() * 1000.0);
-    println!("  Average latency: {:.2}ms", avg.as_secs_f64() * 1000.0);
-    println!("  P50 latency: {:.2}ms", p50.as_secs_f64() * 1000.0);
-    println!("  P95 latency: {:.2}ms", p95.as_secs_f64() * 1000.0);
-    println!("  P99 latency: {:.2}ms", p99.as_secs_f64() * 1000.0);
-    println!("  Min latency: {:.2}ms", min.as_secs_f64() * 1000.0);
-    println!("  Max latency: {:.2}ms", max.as_secs_f64() * 1000.0);
-    println!(
+    tracing::info!("\nResults:");
+    tracing::info!("  Total operations: {}", num_operations);
+    tracing::info!("  Total time: {:.2}ms", total.as_secs_f64() * 1000.0);
+    tracing::info!("  Average latency: {:.2}ms", avg.as_secs_f64() * 1000.0);
+    tracing::info!("  P50 latency: {:.2}ms", p50.as_secs_f64() * 1000.0);
+    tracing::info!("  P95 latency: {:.2}ms", p95.as_secs_f64() * 1000.0);
+    tracing::info!("  P99 latency: {:.2}ms", p99.as_secs_f64() * 1000.0);
+    tracing::info!("  Min latency: {:.2}ms", min.as_secs_f64() * 1000.0);
+    tracing::info!("  Max latency: {:.2}ms", max.as_secs_f64() * 1000.0);
+    tracing::info!(
         "  Throughput: {:.2} ops/sec",
         num_operations as f64 / total.as_secs_f64()
     );
@@ -174,8 +175,8 @@ async fn benchmark_create_relationship_operations() {
     );
 
     // Phase 1 target: ≤ 12ms average
-    println!("\nTarget: ≤ 12ms average");
-    println!(
+    tracing::info!("\nTarget: ≤ 12ms average");
+    tracing::info!(
         "Status: {}",
         if avg.as_millis() <= 12 {
             "✅ PASS"
@@ -189,8 +190,8 @@ async fn benchmark_create_relationship_operations() {
 #[tokio::test]
 #[cfg(feature = "benchmarks")]
 async fn benchmark_deferred_index_updates() {
-    println!("\n=== Benchmark: Deferred Index Updates Performance ===");
-    println!("Comparing batch index updates vs immediate updates");
+    tracing::info!("\n=== Benchmark: Deferred Index Updates Performance ===");
+    tracing::info!("Comparing batch index updates vs immediate updates");
 
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -198,7 +199,7 @@ async fn benchmark_deferred_index_updates() {
     let num_nodes = 500;
     let mut latencies_with_batching = Vec::new();
 
-    println!("Testing with deferred index updates (current implementation)...");
+    tracing::info!("Testing with deferred index updates (current implementation)...");
 
     // Test with transactions (deferred index updates)
     engine.execute_cypher("BEGIN TRANSACTION").unwrap();
@@ -230,26 +231,26 @@ async fn benchmark_deferred_index_updates() {
     let total_including_commit = total_with_batching + commit_time;
     let avg_including_commit = total_including_commit / (num_nodes + 1) as u32;
 
-    println!("\nResults (with deferred index updates):");
-    println!("  Total operations: {}", num_nodes);
-    println!(
+    tracing::info!("\nResults (with deferred index updates):");
+    tracing::info!("  Total operations: {}", num_nodes);
+    tracing::info!(
         "  Total time (creates): {:.2}ms",
         total_with_batching.as_secs_f64() * 1000.0
     );
-    println!("  Commit time: {:.2}ms", commit_time.as_secs_f64() * 1000.0);
-    println!(
+    tracing::info!("  Commit time: {:.2}ms", commit_time.as_secs_f64() * 1000.0);
+    tracing::info!(
         "  Total time (including commit): {:.2}ms",
         total_including_commit.as_secs_f64() * 1000.0
     );
-    println!(
+    tracing::info!(
         "  Average latency (creates only): {:.2}ms",
         avg_with_batching.as_secs_f64() * 1000.0
     );
-    println!(
+    tracing::info!(
         "  Average latency (including commit): {:.2}ms",
         avg_including_commit.as_secs_f64() * 1000.0
     );
-    println!(
+    tracing::info!(
         "  Throughput: {:.2} ops/sec",
         num_nodes as f64 / total_including_commit.as_secs_f64()
     );
@@ -274,17 +275,17 @@ async fn benchmark_deferred_index_updates() {
         "All Employee nodes should be indexed"
     );
 
-    println!("\nIndex consistency check:");
-    println!("  Person nodes indexed: {}", person_count);
-    println!("  Employee nodes indexed: {}", employee_count);
-    println!("  Status: ✅ PASS");
+    tracing::info!("\nIndex consistency check:");
+    tracing::info!("  Person nodes indexed: {}", person_count);
+    tracing::info!("  Employee nodes indexed: {}", employee_count);
+    tracing::info!("  Status: ✅ PASS");
 }
 
 /// Benchmark concurrent write performance
 #[tokio::test]
 #[cfg(feature = "benchmarks")]
 async fn benchmark_concurrent_write_performance() {
-    println!("\n=== Benchmark: Concurrent Write Performance ===");
+    tracing::info!("\n=== Benchmark: Concurrent Write Performance ===");
 
     let dir = TempDir::new().unwrap();
     let engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -294,9 +295,10 @@ async fn benchmark_concurrent_write_performance() {
     let operations_per_thread = 100;
     let total_operations = num_threads * operations_per_thread;
 
-    println!(
+    tracing::info!(
         "Running {} concurrent threads, {} operations each...",
-        num_threads, operations_per_thread
+        num_threads,
+        operations_per_thread
     );
 
     let start = Instant::now();
@@ -342,19 +344,19 @@ async fn benchmark_concurrent_write_performance() {
     let p95 = all_latencies[(all_latencies.len() * 95) / 100];
     let p99 = all_latencies[(all_latencies.len() * 99) / 100];
 
-    println!("\nResults:");
-    println!("  Total operations: {}", total_operations);
-    println!(
+    tracing::info!("\nResults:");
+    tracing::info!("  Total operations: {}", total_operations);
+    tracing::info!(
         "  Total wall-clock time: {:.2}ms",
         total_time.as_secs_f64() * 1000.0
     );
-    println!(
+    tracing::info!(
         "  Average latency per operation: {:.2}ms",
         avg.as_secs_f64() * 1000.0
     );
-    println!("  P95 latency: {:.2}ms", p95.as_secs_f64() * 1000.0);
-    println!("  P99 latency: {:.2}ms", p99.as_secs_f64() * 1000.0);
-    println!(
+    tracing::info!("  P95 latency: {:.2}ms", p95.as_secs_f64() * 1000.0);
+    tracing::info!("  P99 latency: {:.2}ms", p99.as_secs_f64() * 1000.0);
+    tracing::info!(
         "  Throughput: {:.2} ops/sec",
         total_operations as f64 / total_time.as_secs_f64()
     );
@@ -370,6 +372,6 @@ async fn benchmark_concurrent_write_performance() {
         "All nodes should be created"
     );
 
-    println!("  Nodes created: {}", count);
-    println!("  Status: ✅ PASS");
+    tracing::info!("  Nodes created: {}", count);
+    tracing::info!("  Status: ✅ PASS");
 }

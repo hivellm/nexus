@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::time::sleep;
+use tracing;
 
 /// Performance test configuration
 #[derive(Debug, Clone)]
@@ -94,9 +95,10 @@ fn create_optimized_test_environment(
 
 /// Generate test data: nodes and relationships
 async fn generate_test_data(executor: &mut Executor, config: &IntegrationTestConfig) {
-    println!(
+    tracing::info!(
         "Generating {} nodes and {} relationships...",
-        config.node_count, config.relationship_count
+        config.node_count,
+        config.relationship_count
     );
 
     // Create nodes in batches
@@ -140,7 +142,7 @@ async fn generate_test_data(executor: &mut Executor, config: &IntegrationTestCon
         executor.execute(&query).unwrap();
     }
 
-    println!("Test data generation complete");
+    tracing::info!("Test data generation complete");
 }
 
 /// Run concurrent workload test
@@ -281,10 +283,10 @@ fn validate_data_consistency(executor: &Executor, config: &IntegrationTestConfig
 
     if let Ok(_result) = executor.execute(&simple_query) {
         // If we get here without panic, basic functionality works
-        println!("✅ Basic data consistency validated (system operational)");
+        tracing::info!("✅ Basic data consistency validated (system operational)");
         true
     } else {
-        println!("❌ Failed to execute basic query - system error");
+        tracing::error!("❌ Failed to execute basic query - system error");
         false
     }
 }
@@ -292,18 +294,18 @@ fn validate_data_consistency(executor: &Executor, config: &IntegrationTestConfig
 #[tokio::test]
 #[cfg(feature = "benchmarks")]
 async fn test_system_integration_performance() {
-    println!("🚀 Starting System Integration Performance Test");
-    println!("Testing all performance optimizations working together...");
+    tracing::info!("🚀 Starting System Integration Performance Test");
+    tracing::info!("Testing all performance optimizations working together...");
 
     let config = IntegrationTestConfig::default();
     let (mut executor, _cache, _dir) = create_optimized_test_environment(&config);
 
     // Phase 1: Generate test data
-    println!("\n📝 Phase 1: Generating test data");
+    tracing::info!("\n📝 Phase 1: Generating test data");
     generate_test_data(&mut executor, &config).await;
 
     // Phase 2: Run concurrent workload
-    println!(
+    tracing::info!(
         "\n⚡ Phase 2: Running concurrent workload test ({}s)",
         config.test_duration_secs
     );
@@ -312,31 +314,31 @@ async fn test_system_integration_performance() {
         .unwrap();
 
     // Phase 3: Validate data consistency
-    println!("\n🔍 Phase 3: Validating data consistency");
+    tracing::info!("\n🔍 Phase 3: Validating data consistency");
     let data_consistent = validate_data_consistency(&executor, &config);
 
     // Phase 4: Report results
-    println!("\n📊 Phase 4: Test Results");
-    println!("Duration: {:.2}s", test_results.duration.as_secs_f64());
-    println!("Throughput: {:.2} ops/sec", test_results.throughput);
-    println!(
+    tracing::info!("\n📊 Phase 4: Test Results");
+    tracing::info!("Duration: {:.2}s", test_results.duration.as_secs_f64());
+    tracing::info!("Throughput: {:.2} ops/sec", test_results.throughput);
+    tracing::info!(
         "Average Latency: {:.2}ms",
         test_results.avg_latency.as_millis()
     );
-    println!(
+    tracing::info!(
         "Cache Hit Rate: {:.2}%",
         test_results.cache_hit_rate * 100.0
     );
-    println!(
+    tracing::info!(
         "Plan Cache Hit Rate: {:.2}%",
         test_results.plan_cache_hit_rate * 100.0
     );
-    println!("Memory Usage: {:.2}MB", test_results.memory_usage_mb);
-    println!(
+    tracing::info!("Memory Usage: {:.2}MB", test_results.memory_usage_mb);
+    tracing::info!(
         "WAL Queue Depth Avg: {:.2}",
         test_results.wal_queue_depth_avg
     );
-    println!(
+    tracing::info!(
         "Data Consistency: {}",
         if data_consistent {
             "✅ PASS"
@@ -344,7 +346,7 @@ async fn test_system_integration_performance() {
             "❌ FAIL"
         }
     );
-    println!(
+    tracing::info!(
         "Performance Targets Met: {}",
         if test_results.targets_met {
             "✅ PASS"
@@ -367,6 +369,6 @@ async fn test_system_integration_performance() {
         "Should have measured latency"
     );
 
-    println!("\n✅ System Integration Performance Test PASSED");
-    println!("All performance optimizations are working correctly together!");
+    tracing::info!("\n✅ System Integration Performance Test PASSED");
+    tracing::info!("All performance optimizations are working correctly together!");
 }
