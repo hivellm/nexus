@@ -153,33 +153,11 @@ impl Catalog {
     /// let catalog = Catalog::new("./data/catalog").unwrap();
     /// ```
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // Use smaller map_size to reduce TLS key usage and avoid TlsFull errors
-        // The map_size doesn't directly affect TLS keys, but smaller sizes help
-        // when many databases are opened in parallel (common in tests)
-        //
-        // Detect test mode by checking:
-        // 1. NEXUS_TEST_MODE environment variable (explicit)
-        // 2. Executable name contains "test" (common when running cargo test)
-        let is_test_mode = std::env::var("NEXUS_TEST_MODE").is_ok()
-            || std::env::current_exe()
-                .ok()
-                .and_then(|exe| {
-                    exe.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|name| name.to_string())
-                })
-                .map(|name| name.contains("test"))
-                .unwrap_or(false);
-
-        let map_size = if is_test_mode {
-            // Use 100MB for tests
-            100 * 1024 * 1024
-        } else {
-            // Use 1GB for production (reduced from 10GB to help with TLS limits)
-            // Can be increased via with_map_size() if needed
-            1024 * 1024 * 1024
-        };
-        Self::with_map_size(path, map_size)
+        // Use very small map_size (10MB) to minimize TLS key usage and prevent TlsFull errors
+        // This fixes the issue where many tests running in parallel
+        // would exhaust thread-local storage keys in LMDB
+        // Smaller map_size allows more environments to be opened simultaneously
+        Self::with_map_size(path, 10 * 1024 * 1024)
     }
 
     /// Create a new catalog with a specific map_size
