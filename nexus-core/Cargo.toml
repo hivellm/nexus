@@ -69,6 +69,7 @@ rand.workspace = true
 regex = "1.11"
 tracing = "0.1"
 dashmap = "5.5"
+rayon = "1.8"
 
 # Authentication & Security
 argon2 = "0.5"  # Still used for API keys

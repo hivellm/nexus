@@ -253,7 +253,7 @@ pub struct ProjectionItem {
 }
 
 /// Relationship direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     /// Outgoing edges
     Outgoing,
@@ -9105,11 +9105,11 @@ impl Executor {
 
 /// Relationship information for expansion
 #[derive(Debug, Clone)]
-struct RelationshipInfo {
-    id: u64,
-    source_id: u64,
-    target_id: u64,
-    type_id: u32,
+pub struct RelationshipInfo {
+    pub id: u64,
+    pub source_id: u64,
+    pub target_id: u64,
+    pub type_id: u32,
 }
 
 /// Execution context for query processing

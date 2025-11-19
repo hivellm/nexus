@@ -41,11 +41,15 @@ pub mod object_cache;
 pub mod performance_tests;
 pub mod property_index;
 pub mod query_cache;
+pub mod relationship_cache;
 pub mod relationship_index;
 
 pub use index_cache::{CachedIndexPage, IndexCache, IndexKey};
 pub use object_cache::{CachedObject, ObjectCache, ObjectKey};
 pub use query_cache::{CachedQueryResult, QueryCache, QueryKey};
+pub use relationship_cache::{
+    RelationshipCache, RelationshipCacheConfig, RelationshipCacheKey, RelationshipCacheStats,
+};
 pub use relationship_index::RelationshipIndex;
 
 /// Statistics for the object cache
@@ -75,6 +79,7 @@ pub enum CacheLayer {
     Index,
     Query,
     Relationship,
+    RelationshipQuery,
 }
 
 /// Cache operation types
@@ -149,6 +154,8 @@ pub struct CacheConfig {
     pub query_cache: QueryCacheConfig,
     /// Index cache configuration
     pub index_cache: IndexCacheConfig,
+    /// Relationship cache configuration
+    pub relationship_cache: RelationshipCacheConfig,
     /// Global cache settings
     pub global: GlobalCacheConfig,
 }
@@ -252,6 +259,7 @@ impl Default for CacheConfig {
                 max_memory: 100 * 1024 * 1024, // 100MB
                 ttl: Duration::from_secs(600), // 10 minutes
             },
+            relationship_cache: RelationshipCacheConfig::default(),
             global: GlobalCacheConfig {
                 enable_warming: false,
                 stats_interval: Duration::from_secs(60),
@@ -299,6 +307,8 @@ pub struct MultiLayerCache {
     index_cache: IndexCache,
     /// Relationship index (relationship query acceleration layer)
     relationship_index: RelationshipIndex,
+    /// Relationship query cache (relationship result caching layer)
+    relationship_cache: RelationshipCache,
     /// Property index manager (WHERE clause acceleration layer)
     property_index_manager: PropertyIndexManager,
     /// Configuration
@@ -321,6 +331,7 @@ impl MultiLayerCache {
         let query_cache = QueryCache::new(config.query_cache.clone());
         let index_cache = IndexCache::new(config.index_cache.clone());
         let relationship_index = RelationshipIndex::new();
+        let relationship_cache = RelationshipCache::new(config.relationship_cache.clone());
         let property_index_manager = PropertyIndexManager::new(
             config.global.max_total_memory / 4, // Use 1/4 of total cache memory
             Duration::from_secs(3600),          // 1 hour TTL
@@ -332,6 +343,7 @@ impl MultiLayerCache {
             query_cache,
             index_cache,
             relationship_index,
+            relationship_cache,
             property_index_manager,
             config,
             stats: CacheStats::default(),
@@ -488,6 +500,11 @@ impl MultiLayerCache {
         &self.relationship_index
     }
 
+    /// Get relationship cache
+    pub fn relationship_cache(&self) -> &RelationshipCache {
+        &self.relationship_cache
+    }
+
     /// Clear all caches
     pub fn clear(&mut self) {
         let _ = self.page_cache.clear();
@@ -495,6 +512,7 @@ impl MultiLayerCache {
         self.query_cache.clear();
         self.index_cache.clear();
         let _ = self.relationship_index.clear();
+        self.relationship_cache.clear();
     }
 
     /// Prefetch pages around the given page ID
@@ -561,6 +579,13 @@ impl MultiLayerCache {
         );
         self.stats
             .update_memory(CacheLayer::Relationship, rel_stats.memory_usage);
+
+        // Update relationship cache stats
+        let rel_cache_stats = self.relationship_cache.stats();
+        self.stats
+            .update_size(CacheLayer::RelationshipQuery, rel_cache_stats.entries);
+        self.stats
+            .update_memory(CacheLayer::RelationshipQuery, rel_cache_stats.memory_usage);
 
         // Calculate hit rates
         for &layer in &[

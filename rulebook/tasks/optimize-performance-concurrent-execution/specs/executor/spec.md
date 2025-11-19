@@ -300,3 +300,219 @@ impl Catalog {
 - Thread-safety tests with ThreadSanitizer
 - Deadlock detection tests
 
+---
+
+## FUTURE OPTIMIZATIONS REQUIREMENTS (Phase 6-10)
+
+### ADDED Requirements - Phase 6: Storage Engine Overhaul
+
+#### Requirement: Custom Graph Storage Engine
+The system SHALL implement a custom storage engine optimized for graph workloads that replaces LMDB.
+
+##### Scenario: Graph-Native Storage Format
+Given a graph database with nodes and relationships
+When data is stored using the custom engine
+Then relationships SHALL be stored contiguously with their source nodes
+And relationship types SHALL be clustered for efficient filtering
+And memory-mapped I/O SHALL be used for optimal performance
+And compression SHALL be applied to adjacency lists for high-degree nodes
+
+##### Scenario: Direct I/O Optimization
+Given SSD storage devices
+When data is written to disk
+Then O_DIRECT SHALL be used to bypass OS page cache
+And page alignment SHALL be optimized for SSD block sizes
+And prefetching SHALL be implemented for sequential access patterns
+And NVMe-specific optimizations SHALL be applied when available
+
+#### Requirement: Advanced Relationship Indexing
+The system SHALL implement specialized indexing for relationship traversal and filtering.
+
+##### Scenario: Compressed Adjacency Lists
+Given nodes with thousands of relationships
+When adjacency lists are stored
+Then lists SHALL be compressed using graph-specific algorithms
+And skip-lists SHALL enable fast traversal to specific relationship types
+And bloom filters SHALL provide fast existence checks
+And memory usage SHALL be optimized for dense relationship graphs
+
+### ADDED Requirements - Phase 7: Query Execution Engine Rewrite
+
+#### Requirement: Vectorized Query Execution
+The system SHALL implement SIMD-accelerated query execution for optimal performance.
+
+##### Scenario: SIMD Aggregation Operations
+Given aggregation queries with large datasets
+When aggregations are executed
+Then SIMD instructions SHALL be used for parallel computation
+And memory access patterns SHALL be optimized for CPU cache locality
+And vectorized filtering SHALL reduce branch mispredictions
+And CPU cache-aware algorithms SHALL minimize cache misses
+
+##### Scenario: JIT Query Compilation
+Given frequently executed Cypher queries
+When queries are processed
+Then queries SHALL be compiled to native code using JIT
+And query plans SHALL be cached for reuse
+And expression evaluation SHALL be optimized at compile time
+And runtime query optimization SHALL adapt to data characteristics
+
+### ADDED Requirements - Phase 8: Relationship Processing Optimization
+
+#### Requirement: Specialized Relationship Storage
+The system SHALL implement dedicated storage structures for relationship data.
+
+##### Scenario: Relationship File Separation
+Given a graph database with many relationships
+When data is stored
+Then relationships SHALL be stored in separate files from nodes
+And relationship-specific page layouts SHALL be used
+And batch loading SHALL optimize sequential access
+And cache locality SHALL be optimized for relationship traversal
+
+##### Scenario: Advanced Traversal Algorithms
+Given complex relationship traversal queries
+When paths are computed
+Then BFS/DFS SHALL use SIMD acceleration
+And shortest path algorithms SHALL be optimized for graph structure
+And parallel relationship expansion SHALL utilize multiple cores
+And path finding SHALL use heuristic optimizations
+
+### ADDED Requirements - Phase 9: Memory and Concurrency Optimization
+
+#### Requirement: NUMA-Aware Memory Allocation
+The system SHALL optimize memory allocation for multi-socket architectures.
+
+##### Scenario: NUMA Thread Scheduling
+Given a multi-socket server with NUMA architecture
+When queries are executed
+Then threads SHALL be scheduled on the same NUMA node as their data
+And memory allocation SHALL have affinity to specific NUMA nodes
+And cross-NUMA communication SHALL be minimized
+And cache coherence SHALL be optimized for NUMA boundaries
+
+##### Scenario: Lock-Free Data Structures
+Given concurrent access to shared data structures
+When multiple threads access catalogs and indexes
+Then lock-free alternatives SHALL replace RwLock where possible
+And atomic operations SHALL be used for counters
+And wait-free algorithms SHALL be implemented for critical paths
+And memory barriers SHALL be optimized for performance
+
+### ADDED Requirements - Phase 10: Advanced Features and Polish
+
+#### Requirement: Query Result Caching
+The system SHALL implement intelligent caching of query results.
+
+##### Scenario: Result Set Caching
+Given frequently executed queries with stable results
+When queries are executed
+Then result sets SHALL be cached with appropriate invalidation
+And compression SHALL reduce memory usage for large results
+And cache warming SHALL pre-populate frequently used results
+And invalidation strategies SHALL maintain data consistency
+
+##### Scenario: Observability and Monitoring
+Given a production deployment
+When the system is monitored
+Then detailed performance metrics SHALL be collected
+And query profiling SHALL identify bottlenecks
+And system health SHALL be continuously monitored
+And automated regression detection SHALL prevent performance degradation
+
+## Performance Success Criteria
+
+### Phase 6 Success Criteria
+- [ ] Single-hop relationship queries: ≤ 1.0ms average
+- [ ] CREATE relationship operations: ≤ 5.0ms average
+- [ ] Storage I/O overhead: ≤ 50% of current levels
+- [ ] Memory efficiency: ≤ 200MB for 1M relationships
+
+### Phase 7 Success Criteria
+- [ ] Complex JOIN queries: ≤ 3.0ms average
+- [ ] Aggregation performance: ≤ 2.0ms for 100K nodes
+- [ ] Query compilation overhead: ≤ 1ms per query
+- [ ] Concurrent throughput: ≥ 500 queries/second
+
+### Phase 8 Success Criteria
+- [ ] Path finding (length 3): ≤ 2.0ms average
+- [ ] High-degree node traversal: ≤ 5.0ms for 10K relationships
+- [ ] Relationship property queries: ≤ 1.5ms average
+- [ ] Memory per relationship: ≤ 50 bytes
+
+### Overall Performance Targets
+- [ ] **50% of Neo4j Performance**: After Phase 6 completion
+- [ ] **75% of Neo4j Performance**: After Phase 6-8 completion
+- [ ] **90% of Neo4j Performance**: After Phase 6-9 completion
+- [ ] **95% of Neo4j Performance**: After all phases + fine-tuning
+
+## Implementation Notes - Future Phases
+
+### Storage Engine Architecture
+```rust
+// Phase 6: Custom Graph Storage Engine
+struct GraphStorageEngine {
+    node_store: MemoryMappedNodeStore,
+    relationship_store: MemoryMappedRelationshipStore,
+    adjacency_store: CompressedAdjacencyStore,
+    index_manager: AdvancedIndexManager,
+}
+
+// Key components:
+// - Memory-mapped storage with direct I/O
+// - Relationship-centric data layout
+// - Compression for adjacency lists
+// - SSD-aware allocation strategies
+```
+
+### Query Execution Pipeline
+```rust
+// Phase 7: Vectorized Query Execution
+struct VectorizedExecutor {
+    vector_processor: SimdProcessor,
+    jit_compiler: QueryCompiler,
+    plan_cache: PlanCache,
+    result_cache: ResultCache,
+}
+
+// Key features:
+// - SIMD operations for aggregations
+// - JIT compilation of Cypher queries
+// - Vectorized filtering and projection
+// - Advanced join algorithms (hash, merge)
+```
+
+### Relationship Processing
+```rust
+// Phase 8: Advanced Relationship Processing
+struct RelationshipProcessor {
+    storage_engine: SpecializedRelationshipStore,
+    traversal_engine: SimdTraversalEngine,
+    path_finder: OptimizedPathFinder,
+    cache_manager: RelationshipCacheManager,
+}
+
+// Key optimizations:
+// - Separate relationship files
+// - SIMD-accelerated BFS/DFS
+// - Parallel relationship expansion
+// - Specialized property indexing
+```
+
+### NUMA and Concurrency
+```rust
+// Phase 9: NUMA-Aware Execution
+struct NumaAwareExecutor {
+    scheduler: NumaScheduler,
+    allocator: NumaAllocator,
+    lock_free_catalog: LockFreeCatalog,
+    cache_partitioner: CachePartitioner,
+}
+
+// Key optimizations:
+// - NUMA-aware thread scheduling
+// - Memory allocation affinity
+// - Lock-free data structures
+// - Cache partitioning by NUMA node
+```
+

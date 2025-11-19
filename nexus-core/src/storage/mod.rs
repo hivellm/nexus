@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod adjacency_list;
+pub mod graph_engine;
 pub mod property_store;
 pub mod row_lock;
 pub mod write_buffer;

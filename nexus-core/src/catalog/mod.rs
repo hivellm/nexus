@@ -960,7 +960,7 @@ impl Catalog {
 
 impl Default for Catalog {
     fn default() -> Self {
-        use std::sync::{Once, Mutex};
+        use std::sync::{Mutex, Once};
 
         // Use a shared catalog for tests to prevent file descriptor leaks
         static INIT: Once = Once::new();

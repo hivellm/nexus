@@ -47,6 +47,7 @@ pub mod catalog;
 pub mod concurrent_access;
 pub mod database;
 pub mod error;
+pub mod execution;
 pub mod executor;
 pub mod geospatial;
 pub mod graph; // Unified graph module with submodules
@@ -57,6 +58,7 @@ pub mod monitoring;
 pub mod page_cache;
 pub mod performance;
 pub mod plugin;
+pub mod relationship;
 pub mod retry;
 pub mod security;
 pub mod session;
