@@ -155,8 +155,10 @@ impl Catalog {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Detect if we're running in test mode to use even smaller map_size
         // This is critical to prevent TlsFull errors when many tests run in parallel
+        // Windows/PowerShell may have different environment, so we check multiple indicators
         let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
-            || std::env::args().any(|arg| arg.contains("test"))
+            || std::env::var("CARGO").is_ok() // Cargo is always set when running cargo test
+            || std::env::args().any(|arg| arg.contains("test") || arg.contains("cargo"))
             || std::env::current_exe()
                 .ok()
                 .and_then(|exe| {
@@ -164,15 +166,18 @@ impl Catalog {
                         .and_then(|n| n.to_str())
                         .map(|name| name.to_string())
                 })
-                .map(|name| name.contains("test"))
+                .map(|name| name.contains("test") || name.contains("cargo"))
                 .unwrap_or(false);
 
-        // Use minimal map_size: 256KB for tests, 512KB for production
-        // Smaller size allows more environments to be opened simultaneously
+        // Use minimal map_size: 128KB for tests (especially on Windows/PowerShell), 512KB for production
+        // Windows has stricter TLS key limits, so we need even smaller size for tests
         let map_size = if is_test {
-            256 * 1024 // 256KB for tests - allows more parallel test execution
+            // Use 128KB for tests - Windows/PowerShell has stricter TLS limits
+            // This allows maximum number of parallel test execution
+            128 * 1024
         } else {
-            512 * 1024 // 512KB for production - minimum safe size
+            // 512KB for production - minimum safe size
+            512 * 1024
         };
 
         Self::with_map_size(path, map_size)
