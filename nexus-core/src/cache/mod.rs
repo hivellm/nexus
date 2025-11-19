@@ -31,6 +31,7 @@ use crate::page_cache::{Page, PageCache};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing;
 
 // Re-export property index types
 pub use property_index::{PropertyIndexManager, PropertyIndexStats};
@@ -606,29 +607,26 @@ impl MultiLayerCache {
         let _max_warm_time =
             std::time::Duration::from_secs(self.config.global.warming.max_warm_time_secs);
 
-        println!("🔥 Starting cache warming...");
+        tracing::info!("Starting cache warming...");
 
         // Warm page cache - prefetch frequently accessed pages
         let page_warm_count = self.warm_page_cache()?;
-        println!("  📄 Warmed {} pages", page_warm_count);
+        tracing::info!("Warmed {} pages", page_warm_count);
 
         // Warm object cache - preload frequently accessed objects
         let object_warm_count = self.warm_object_cache()?;
-        println!("  📦 Warmed {} objects", object_warm_count);
+        tracing::info!("Warmed {} objects", object_warm_count);
 
         // Warm index cache - preload frequently used indexes
         let index_warm_count = self.warm_index_cache()?;
-        println!("  🏷️ Warmed {} index entries", index_warm_count);
+        tracing::info!("Warmed {} index entries", index_warm_count);
 
         // Warm query cache - preload frequent query patterns
         let query_warm_count = self.warm_query_cache()?;
-        println!("  🔍 Warmed {} query patterns", query_warm_count);
+        tracing::info!("Warmed {} query patterns", query_warm_count);
 
         let elapsed = start_time.elapsed();
-        println!(
-            "✅ Cache warming completed in {:.2}s",
-            elapsed.as_secs_f64()
-        );
+        tracing::info!("Cache warming completed in {:.2}s", elapsed.as_secs_f64());
 
         Ok(())
     }

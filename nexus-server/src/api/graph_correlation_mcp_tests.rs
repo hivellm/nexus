@@ -24,48 +24,76 @@ use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+use tracing;
+
+/// Test server wrapper that keeps TempDir alive
+struct TestServer {
+    _temp_dir: TempDir, // Keep temp_dir alive
+    server: Arc<NexusServer>,
+}
+
+impl TestServer {
+    fn new() -> Self {
+        let temp_dir = TempDir::new().unwrap();
+        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let engine_arc = Arc::new(RwLock::new(engine));
+
+        let executor = Executor::default();
+        let executor_arc = Arc::new(executor);
+
+        let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+
+        let rbac = RoleBasedAccessControl::new();
+        let rbac_arc = Arc::new(RwLock::new(rbac));
+
+        let auth_config = AuthConfig::default();
+        let auth_manager = Arc::new(AuthManager::new(auth_config));
+
+        let jwt_config = JwtConfig::default();
+        let jwt_manager = Arc::new(JwtManager::new(jwt_config));
+
+        let audit_logger = Arc::new(
+            AuditLogger::new(AuditConfig {
+                enabled: false,
+                log_dir: std::path::PathBuf::from("./logs"),
+                retention_days: 30,
+                compress_logs: false,
+            })
+            .unwrap(),
+        );
+
+        let server = Arc::new(NexusServer::new(
+            executor_arc,
+            engine_arc,
+            database_manager_arc,
+            rbac_arc,
+            auth_manager,
+            jwt_manager,
+            audit_logger,
+            RootUserConfig::default(),
+        ));
+
+        Self {
+            _temp_dir: temp_dir,
+            server,
+        }
+    }
+
+    fn server(&self) -> Arc<NexusServer> {
+        self.server.clone()
+    }
+}
 
 /// Helper function to create a test server with all required components
+/// Note: This function creates a TestServer internally but only returns the server.
+/// For tests that may have resource issues, use TestServer::new() directly to keep TempDir alive.
 fn create_test_server() -> Arc<NexusServer> {
-    let temp_dir = TempDir::new().unwrap();
-    let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
-    let engine_arc = Arc::new(RwLock::new(engine));
-
-    let executor = Executor::default();
-    let executor_arc = Arc::new(executor);
-
-    let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
-    let database_manager_arc = Arc::new(RwLock::new(database_manager));
-
-    let rbac = RoleBasedAccessControl::new();
-    let rbac_arc = Arc::new(RwLock::new(rbac));
-
-    let auth_config = AuthConfig::default();
-    let auth_manager = Arc::new(AuthManager::new(auth_config));
-
-    let jwt_config = JwtConfig::default();
-    let jwt_manager = Arc::new(JwtManager::new(jwt_config));
-
-    let audit_logger = Arc::new(
-        AuditLogger::new(AuditConfig {
-            enabled: false,
-            log_dir: std::path::PathBuf::from("./logs"),
-            retention_days: 30,
-            compress_logs: false,
-        })
-        .unwrap(),
-    );
-
-    Arc::new(NexusServer::new(
-        executor_arc,
-        engine_arc,
-        database_manager_arc,
-        rbac_arc,
-        auth_manager,
-        jwt_manager,
-        audit_logger,
-        RootUserConfig::default(),
-    ))
+    // Use a static/thread-local approach would be better, but for now we'll use TestServer
+    // The TempDir will be dropped when the function returns, but the server should work
+    // as long as the files are already opened. However, this can cause "too many open files"
+    // when many tests run in parallel. Tests that fail should use TestServer::new() directly.
+    TestServer::new().server()
 }
 
 #[cfg(test)]
@@ -125,7 +153,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_call_graph_basic() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let mut files = serde_json::Map::new();
         files.insert(
@@ -163,7 +192,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_dependency_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let mut files = serde_json::Map::new();
         files.insert("mod_a.rs".to_string(), json!("use mod_b;"));
@@ -215,7 +245,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_component_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let mut files = serde_json::Map::new();
         files.insert("component.rs".to_string(), json!("struct Component { }"));
@@ -239,7 +270,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_missing_graph_type() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_generate".into(),
@@ -301,7 +333,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_with_functions() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let mut files = serde_json::Map::new();
         files.insert("file.rs".to_string(), json!("fn test() {}"));
@@ -329,7 +362,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_with_imports() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let mut files = serde_json::Map::new();
         files.insert("mod_a.rs".to_string(), json!("use mod_b;"));
@@ -357,7 +391,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_empty_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_generate".into(),
@@ -415,7 +450,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_patterns() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let nodes = json!([
             {"id": "stage1", "node_type": "Function", "label": "input", "metadata": {}, "position": null, "size": null, "color": null},
@@ -453,7 +489,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_all() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let graph = json!({
             "name": "Full Graph",
@@ -491,7 +528,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_missing_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_analyze".into(),
@@ -599,7 +637,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_analyze_partial_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         // Test graph normalization - partial graph without all fields
         let graph = json!({
@@ -666,7 +705,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_graphml() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let nodes = json!([
             {"id": "mod1", "node_type": "Module", "label": "module1", "metadata": {}, "position": null, "size": null, "color": null}
@@ -721,7 +761,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_dot() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let nodes = json!([
             {"id": "n1", "node_type": "Function", "label": "func", "metadata": {}, "position": null, "size": null, "color": null}
@@ -748,7 +789,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_invalid_format() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let graph = json!({
             "name": "Test",
@@ -777,7 +819,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_missing_format() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let graph = json!({
             "name": "Test",
@@ -805,7 +848,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_missing_graph() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_export".into(),
@@ -848,7 +892,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_types_basic() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_types".into(),
@@ -898,7 +943,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_types_ignores_arguments() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         let request = CallToolRequestParam {
             name: "graph_correlation_types".into(),
@@ -971,14 +1017,15 @@ mod tests {
         // The important part is that the function handles the request appropriately
         if let Err(e) = &analyze_result {
             // If it fails, verify it's a reasonable error (not a panic)
-            eprintln!("Analysis failed (acceptable): {:?}", e);
+            tracing::debug!("Analysis failed (acceptable): {:?}", e);
         }
         // Test passes regardless of success/failure - both are valid behaviors
     }
 
     #[tokio::test]
     async fn test_generate_then_export() {
-        let server = create_test_server();
+        let test_server = TestServer::new();
+        let server = test_server.server();
 
         // First generate a graph
         let mut files = serde_json::Map::new();
@@ -1027,7 +1074,7 @@ mod tests {
         // Export may fail if graph is invalid or empty - accept both cases
         // The important part is that the function handles the request appropriately
         if let Err(e) = &export_result {
-            eprintln!("Export failed (acceptable): {:?}", e);
+            tracing::debug!("Export failed (acceptable): {:?}", e);
         }
         // Test passes regardless of success/failure - both are valid behaviors
     }

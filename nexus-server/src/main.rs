@@ -21,6 +21,7 @@ use axum::{
     middleware::Next,
     routing::{any, delete, get, post, put},
 };
+use clap::Parser;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::RwLock;
@@ -38,7 +39,20 @@ use nexus_server::{
     middleware::{RateLimiter, create_auth_middleware, mcp_auth_middleware_handler},
 };
 
+/// Nexus Server CLI arguments
+#[derive(Parser, Debug)]
+#[command(name = "nexus-server")]
+#[command(about = "Nexus Graph Database HTTP Server", long_about = None)]
+struct Args {
+    /// Enable verbose logging (prints debug information to stdout/stderr)
+    #[arg(long, short = 'v')]
+    verbose: bool,
+}
+
 fn main() -> anyhow::Result<()> {
+    // Parse CLI arguments
+    let args = Args::parse();
+
     // Configure Tokio runtime for high concurrency
     // Use CPU count * 2 for worker threads, minimum 8, maximum 32
     let worker_threads = (thread::available_parallelism()
@@ -64,23 +78,35 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
 
-    eprintln!(
-        "[RUNTIME] Configured Tokio runtime: {} worker threads, {} blocking threads",
-        worker_threads, blocking_threads
-    );
+    // Initialize tracing early (before async_main) to capture runtime logs
+    let verbose = args.verbose;
+    let filter = if verbose {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "nexus_server=debug,tower_http=debug".into())
+    } else {
+        // Only show errors and warnings when not verbose
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "nexus_server=error,tower_http=error".into())
+    };
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    if verbose {
+        tracing::info!(
+            "Configured Tokio runtime: {} worker threads, {} blocking threads",
+            worker_threads,
+            blocking_threads
+        );
+    }
 
     rt.block_on(async_main(worker_threads))
 }
 
 async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "nexus_server=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Tracing already initialized in main()
 
     // Load configuration (from env vars and/or config/auth.toml)
     let config = config::Config::from_env();
@@ -270,12 +296,12 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         .route("/metrics", get(api::health::metrics))
         .route("/test", get(|| async { "Test endpoint working" }))
         .route("/cypher-debug", post(|body: String| async move {
-            println!("[DEBUG] Raw body received on /cypher-debug: {}", body);
+            tracing::debug!("Raw body received on /cypher-debug: {}", body);
             Json(serde_json::json!({"message": "Debug endpoint received", "body": body}))
         }))
         .route("/cypher", post(api::cypher::execute_cypher))
         .route("/test-handler", get(|| async {
-            println!("[TEST] Handler called!");
+            tracing::debug!("Handler called!");
             "Handler called successfully"
         }))
         // Always insert None auth context for endpoints when auth is disabled
@@ -499,7 +525,7 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&config.addr).await?;
     info!("Nexus Server listening on {}", config.addr);
 
-    eprintln!("[SERVER] Starting optimized Axum server with high concurrency settings");
+    tracing::debug!("Starting optimized Axum server with high concurrency settings");
 
     // Start server
     axum::serve(listener, app).await?;

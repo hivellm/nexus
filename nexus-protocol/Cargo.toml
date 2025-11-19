@@ -40,6 +40,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 
+# Observability
+tracing.workspace = true
+
 # MCP protocol
 rmcp = { version = "0.8.1", features = ["client", "macros"] }
 

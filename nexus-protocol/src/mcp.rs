@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing;
 
 /// MCP client for communicating with AI services
 pub struct McpClient {
@@ -251,9 +252,9 @@ mod tests {
         // The request might fail due to network or MCP protocol, but it shouldn't panic
         match result {
             Ok(response) => {
-                println!("MCP call succeeded: {:?}", response);
+                tracing::debug!("MCP call succeeded: {:?}", response);
             }
-            Err(e) => println!("MCP call failed as expected: {}", e),
+            Err(e) => tracing::debug!("MCP call failed as expected: {}", e),
         }
     }
 
@@ -284,9 +285,9 @@ mod tests {
         // The request might fail due to network or MCP protocol, but it shouldn't panic
         match result {
             Ok(tools) => {
-                println!("List tools succeeded: {:?}", tools);
+                tracing::debug!("List tools succeeded: {:?}", tools);
             }
-            Err(e) => println!("List tools failed as expected: {}", e),
+            Err(e) => tracing::debug!("List tools failed as expected: {}", e),
         }
     }
 }

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use tracing;
 
 /// Commands sent to the WAL writer thread
 #[derive(Debug)]
@@ -293,7 +294,7 @@ impl AsyncWalWriter {
                     Ok(_) => success_count += 1,
                     Err(e) => {
                         last_error = Some(e);
-                        eprintln!(
+                        tracing::error!(
                             "Failed to append WAL entry (attempt {}): {}",
                             retry_count + 1,
                             last_error.as_ref().unwrap()
@@ -303,15 +304,15 @@ impl AsyncWalWriter {
                         if let Error::Io(io_err) = last_error.as_ref().unwrap() {
                             if io_err.raw_os_error() == Some(5) {
                                 // ERROR_ACCESS_DENIED
-                                eprintln!(
+                                tracing::warn!(
                                     "Permission denied error detected, attempting WAL recovery..."
                                 );
 
                                 // Try to reopen WAL file
                                 if let Err(recovery_err) = wal.reopen() {
-                                    eprintln!("WAL recovery failed: {}", recovery_err);
+                                    tracing::error!("WAL recovery failed: {}", recovery_err);
                                 } else {
-                                    eprintln!("WAL recovery successful, retrying batch...");
+                                    tracing::info!("WAL recovery successful, retrying batch...");
                                     break;
                                 }
                             }
@@ -342,7 +343,7 @@ impl AsyncWalWriter {
                         }
 
                         if retry_count > 0 {
-                            eprintln!(
+                            tracing::info!(
                                 "WAL batch flushed successfully after {} retries",
                                 retry_count
                             );
@@ -351,7 +352,7 @@ impl AsyncWalWriter {
                     }
                     Err(e) => {
                         last_error = Some(e);
-                        eprintln!(
+                        tracing::error!(
                             "Failed to flush WAL (attempt {}): {}",
                             retry_count + 1,
                             last_error.as_ref().unwrap()
@@ -365,7 +366,7 @@ impl AsyncWalWriter {
             // Wait before retry with exponential backoff
             if retry_count < MAX_RETRIES {
                 let wait_time = Duration::from_millis(100 * (1 << retry_count)); // 200ms, 400ms, 800ms
-                eprintln!("Retrying WAL flush in {:?}", wait_time);
+                tracing::debug!("Retrying WAL flush in {:?}", wait_time);
                 thread::sleep(wait_time);
             }
         }
@@ -374,7 +375,7 @@ impl AsyncWalWriter {
         let current_stats = unsafe { &mut *(Arc::as_ptr(stats) as *mut AsyncWalStats) };
         current_stats.wal_errors += batch.len() as u64;
 
-        eprintln!(
+        tracing::error!(
             "CRITICAL: Failed to flush WAL batch after {} retries. {} entries lost!",
             MAX_RETRIES,
             batch.len()
@@ -401,10 +402,10 @@ impl AsyncWalWriter {
                     }
                 }
                 let _ = file.flush();
-                eprintln!("Emergency WAL batch saved to: {}", backup_path);
+                tracing::warn!("Emergency WAL batch saved to: {}", backup_path);
             }
             Err(e) => {
-                eprintln!("CRITICAL: Even emergency WAL save failed: {}", e);
+                tracing::error!("CRITICAL: Even emergency WAL save failed: {}", e);
             }
         }
     }

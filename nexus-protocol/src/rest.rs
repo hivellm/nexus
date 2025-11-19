@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing;
 
 /// REST client for external service integration
 pub struct RestClient {
@@ -170,7 +171,7 @@ impl RestClient {
 
         // For now, we just verify the connection is established
         // In a full implementation, this would handle SSE parsing
-        println!("SSE connection established to: {}", url);
+        tracing::debug!("SSE connection established to: {}", url);
 
         Ok(())
     }
@@ -241,10 +242,10 @@ mod tests {
         // The request might fail due to network, but it shouldn't panic
         match result {
             Ok(response) => {
-                println!("POST request succeeded: {:?}", response);
+                tracing::debug!("POST request succeeded: {:?}", response);
                 assert!(response.get("json").is_some());
             }
-            Err(e) => println!("POST request failed as expected: {}", e),
+            Err(e) => tracing::debug!("POST request failed as expected: {}", e),
         }
     }
 
@@ -271,10 +272,10 @@ mod tests {
         // The request might fail due to network, but it shouldn't panic
         match result {
             Ok(response) => {
-                println!("GET request succeeded: {:?}", response);
+                tracing::debug!("GET request succeeded: {:?}", response);
                 assert!(response.get("url").is_some());
             }
-            Err(e) => println!("GET request failed as expected: {}", e),
+            Err(e) => tracing::debug!("GET request failed as expected: {}", e),
         }
     }
 
@@ -287,8 +288,8 @@ mod tests {
 
         // The request might fail due to network, but it shouldn't panic
         match result {
-            Ok(_) => println!("Stream request succeeded"),
-            Err(e) => println!("Stream request failed as expected: {}", e),
+            Ok(_) => tracing::debug!("Stream request succeeded"),
+            Err(e) => tracing::debug!("Stream request failed as expected: {}", e),
         }
     }
 }

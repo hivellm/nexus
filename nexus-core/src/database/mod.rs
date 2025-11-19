@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing;
 
 /// Database metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,13 +148,13 @@ impl DatabaseManager {
                             // The important part is that the database is removed from the manager
                             #[cfg(target_os = "windows")]
                             {
-                                eprintln!(
-                                    "Warning: Could not delete directory '{}' after {} attempts: {}",
+                                tracing::warn!(
+                                    "Could not delete directory '{}' after {} attempts: {}",
                                     db_path.display(),
                                     max_attempts,
                                     e
                                 );
-                                eprintln!(
+                                tracing::warn!(
                                     "Database removed from manager but directory may persist."
                                 );
                                 break;

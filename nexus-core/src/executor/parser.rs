@@ -7,6 +7,7 @@
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing;
 
 /// Abstract Syntax Tree for Cypher queries
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5188,7 +5189,7 @@ mod tests {
 
         // Debug: print remaining input after WHEN
         let remaining = &parser.input[parser.pos..];
-        println!("Remaining after WHEN: '{}'", remaining);
+        tracing::debug!("Remaining after WHEN: '{}'", remaining);
 
         // Test parsing the condition
         let condition = parser.parse_expression().unwrap();
@@ -5205,10 +5206,10 @@ mod tests {
 
         // Debug: print remaining input after condition
         let remaining = &parser.input[parser.pos..];
-        println!("Remaining after condition: '{}'", remaining);
+        tracing::debug!("Remaining after condition: '{}'", remaining);
 
         // Debug: test peek_keyword for THEN
-        println!("peek_keyword('THEN'): {}", parser.peek_keyword("THEN"));
+        tracing::debug!("peek_keyword('THEN'): {}", parser.peek_keyword("THEN"));
 
         // Test parsing THEN keyword
         assert!(parser.peek_keyword("THEN"));

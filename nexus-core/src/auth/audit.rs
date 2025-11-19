@@ -198,7 +198,7 @@ impl AuditLogger {
             writer.flush()?;
         } else {
             // Fallback: write to stderr if file is not available
-            eprintln!("AUDIT LOG: {}", json);
+            tracing::error!("AUDIT LOG: {}", json);
         }
 
         Ok(())

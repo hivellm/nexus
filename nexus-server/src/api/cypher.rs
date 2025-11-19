@@ -88,20 +88,16 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
             variable: _,
             property: _,
         } => {
-            eprintln!(
-                "WARNING: expression_to_json_value: Property expression not supported in CREATE"
-            );
+            tracing::warn!("expression_to_json_value: Property expression not supported in CREATE");
             serde_json::Value::Null
         }
         nexus_core::executor::parser::Expression::Variable(_) => {
-            eprintln!(
-                "WARNING: expression_to_json_value: Variable expression not supported in CREATE"
-            );
+            tracing::warn!("expression_to_json_value: Variable expression not supported in CREATE");
             serde_json::Value::Null
         }
         nexus_core::executor::parser::Expression::Parameter(_) => {
-            eprintln!(
-                "WARNING: expression_to_json_value: Parameter expression not supported in CREATE"
+            tracing::warn!(
+                "expression_to_json_value: Parameter expression not supported in CREATE"
             );
             serde_json::Value::Null
         }
@@ -114,8 +110,8 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
             serde_json::Value::Object(result)
         }
         _ => {
-            eprintln!(
-                "WARNING: expression_to_json_value: Unsupported expression type: {:?}",
+            tracing::warn!(
+                "expression_to_json_value: Unsupported expression type: {:?}",
                 expr
             );
             serde_json::Value::Null
@@ -375,7 +371,7 @@ pub async fn execute_cypher(
     auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CypherRequest>,
 ) -> Json<CypherResponse> {
-    println!("[CYCHER-API] Received query: {}", request.query);
+    tracing::debug!("[CYPHER-API] Received query: {}", request.query);
     let auth_context = auth_context.and_then(|e| e.0);
     let start_time = std::time::Instant::now();
     let query_for_tracking = request.query.clone();
@@ -746,7 +742,7 @@ pub async fn execute_cypher(
 
                             // If no matching node found, create new one
                             if !found_node {
-                                eprintln!(
+                                tracing::debug!(
                                     "🔍 MERGE creating node with {} properties: {:?}",
                                     props.len(),
                                     props.keys().collect::<Vec<_>>()
@@ -1457,35 +1453,17 @@ pub async fn execute_cypher(
 
     // Debug: Log thread info before spawning
     let thread_id_before = std::thread::current().id();
-    println!(
-        "[DEBUG] Spawning blocking task from thread {:?}",
-        thread_id_before
-    );
-    eprintln!(
-        "[DEBUG] Spawning blocking task from thread {:?}",
-        thread_id_before
-    );
-    tracing::info!("Spawning blocking task from thread {:?}", thread_id_before);
+    tracing::debug!("Spawning blocking task from thread {:?}", thread_id_before);
 
     // Execute in blocking thread pool for true parallel execution
     // This allows multiple queries to run concurrently across CPU cores
     // Tokio's blocking thread pool automatically scales with CPU count
     let execution_result = match tokio::task::spawn_blocking(move || {
         let thread_id_after = std::thread::current().id();
-        println!("[DEBUG] Executing in blocking thread {:?}", thread_id_after);
-        eprintln!("[DEBUG] Executing in blocking thread {:?}", thread_id_after);
-        tracing::info!("Executing in blocking thread {:?}", thread_id_after);
+        tracing::debug!("Executing in blocking thread {:?}", thread_id_after);
 
         let result = executor_clone.execute(&query_clone);
-        println!(
-            "[DEBUG] Query executed successfully in blocking thread {:?}",
-            thread_id_after
-        );
-        eprintln!(
-            "[DEBUG] Query executed successfully in blocking thread {:?}",
-            thread_id_after
-        );
-        tracing::info!(
+        tracing::debug!(
             "Query executed successfully in blocking thread {:?}",
             thread_id_after
         );

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing;
 
 /// UMICP client for universal model communication
 pub struct UmicpClient {
@@ -234,8 +235,8 @@ mod tests {
         // The request might fail due to network, but it shouldn't panic
         // We just verify it doesn't panic with todo! macro
         match result {
-            Ok(_) => println!("Request succeeded"),
-            Err(e) => println!("Request failed as expected: {}", e),
+            Ok(_) => tracing::debug!("Request succeeded"),
+            Err(e) => tracing::debug!("Request failed as expected: {}", e),
         }
     }
 

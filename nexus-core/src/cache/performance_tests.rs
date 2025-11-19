@@ -7,6 +7,7 @@
 
 use super::*;
 use std::time::{Duration, Instant};
+use tracing;
 
 #[cfg(test)]
 mod tests {
@@ -83,7 +84,7 @@ mod tests {
         }
 
         let hit_rate = hits as f64 / total_accesses as f64;
-        println!(
+        tracing::debug!(
             "Cache hit rate: {:.2}% ({} hits / {} accesses)",
             hit_rate * 100.0,
             hits,
@@ -161,10 +162,11 @@ mod tests {
         let avg_time = total_time / num_iterations as u32;
         let slow_read_percentage = (slow_reads as f64 / num_iterations as f64) * 100.0;
 
-        println!("Average cached read time: {:?}", avg_time);
-        println!(
+        tracing::debug!("Average cached read time: {:?}", avg_time);
+        tracing::debug!(
             "Slow reads (> 3ms): {} ({:.2}%)",
-            slow_reads, slow_read_percentage
+            slow_reads,
+            slow_read_percentage
         );
 
         // Assert average read time < 3ms
@@ -226,7 +228,7 @@ mod tests {
             }
         }
 
-        println!("Inserted {} objects before eviction", inserted);
+        tracing::debug!("Inserted {} objects before eviction", inserted);
 
         // Force stats update and verify cache stats
         cache.update_stats();
@@ -236,7 +238,7 @@ mod tests {
             .get(&CacheLayer::Object)
             .copied()
             .unwrap_or(0);
-        println!("Final memory usage: {} bytes", memory_usage);
+        tracing::debug!("Final memory usage: {} bytes", memory_usage);
 
         // Memory usage should be close to but not exceed limit
         assert!(
@@ -312,7 +314,7 @@ mod tests {
         let elapsed = start_time.elapsed();
         let ops_per_sec = operations as f64 / elapsed.as_secs_f64();
 
-        println!("Multi-layer cache performance: {:.0} ops/sec", ops_per_sec);
+        tracing::debug!("Multi-layer cache performance: {:.0} ops/sec", ops_per_sec);
 
         // Should handle at least 1000 ops/sec under normal load
         assert!(
@@ -376,20 +378,20 @@ mod tests {
                 // Index cache size
                 let index_cache_size = stats.sizes.get(&CacheLayer::Index).copied().unwrap_or(0);
 
-                println!("Cache warming completed successfully");
-                println!("Page cache size: {}", page_cache_size);
-                println!("Query cache size: {}", query_cache_size);
-                println!("Index cache size: {}", index_cache_size);
+                tracing::debug!("Cache warming completed successfully");
+                tracing::debug!("Page cache size: {}", page_cache_size);
+                tracing::debug!("Query cache size: {}", query_cache_size);
+                tracing::debug!("Index cache size: {}", index_cache_size);
 
                 // Verify that warming completed without errors
                 // The warming process itself is what we're testing, not the cache contents
                 // It's acceptable for caches to be empty in a test environment with no real data
                 // The important thing is that warm_cache() completed successfully
             } else {
-                println!("Cache warming skipped due to component initialization issues");
+                tracing::debug!("Cache warming skipped due to component initialization issues");
             }
         } else {
-            println!("Skipping cache warming test due to component creation issues");
+            tracing::debug!("Skipping cache warming test due to component creation issues");
         }
 
         // Cleanup with error handling
@@ -465,10 +467,10 @@ mod tests {
         let total_operations = total_hits + total_misses;
         let hit_rate = total_hits as f64 / total_operations as f64;
 
-        println!("Concurrent cache test results:");
-        println!("Total operations: {}", total_operations);
-        println!("Hits: {}, Misses: {}", total_hits, total_misses);
-        println!("Hit rate: {:.2}%", hit_rate * 100.0);
+        tracing::debug!("Concurrent cache test results:");
+        tracing::debug!("Total operations: {}", total_operations);
+        tracing::debug!("Hits: {}, Misses: {}", total_hits, total_misses);
+        tracing::debug!("Hit rate: {:.2}%", hit_rate * 100.0);
 
         // Should maintain reasonable hit rate even under concurrent load
         // Note: Concurrent access patterns may have lower hit rates due to thread contention
@@ -503,9 +505,10 @@ mod tests {
                 .unwrap();
         }
 
-        println!(
+        tracing::debug!(
             "Created relationship index with {} nodes and {} relationships",
-            num_nodes, num_relationships
+            num_nodes,
+            num_relationships
         );
 
         // Test query performance for different scenarios
@@ -530,7 +533,7 @@ mod tests {
             total_index_time += elapsed;
             total_results += results.len();
 
-            println!(
+            tracing::debug!(
                 "Indexed query for node {} (outgoing: {}, types: {:?}): {} results in {:?}",
                 node_id,
                 outgoing,
@@ -541,8 +544,8 @@ mod tests {
         }
 
         let avg_index_time = total_index_time / test_queries.len() as u32;
-        println!("Average indexed query time: {:?}", avg_index_time);
-        println!("Total results found: {}", total_results);
+        tracing::debug!("Average indexed query time: {:?}", avg_index_time);
+        tracing::debug!("Total results found: {}", total_results);
 
         // The indexed queries should be very fast (< 1ms each on average)
         assert!(
@@ -559,7 +562,7 @@ mod tests {
             let results = index.get_relationships_by_types(type_ids).unwrap();
             let elapsed = start.elapsed();
 
-            println!(
+            tracing::debug!(
                 "Type query for types {:?}: {} results in {:?}",
                 type_ids,
                 results.len(),
@@ -581,9 +584,11 @@ mod tests {
         assert!(stats.total_nodes > 0);
         assert!(stats.memory_usage > 0);
 
-        println!(
+        tracing::debug!(
             "Index stats: {} relationships, {} nodes, {} bytes memory",
-            stats.total_relationships, stats.total_nodes, stats.memory_usage
+            stats.total_relationships,
+            stats.total_nodes,
+            stats.memory_usage
         );
 
         // Health check should pass

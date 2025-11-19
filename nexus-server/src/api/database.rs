@@ -163,12 +163,35 @@ mod tests {
     use nexus_core::database::DatabaseManager;
     use tempfile::TempDir;
 
-    async fn create_test_state() -> DatabaseState {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
-        DatabaseState {
-            manager: Arc::new(RwLock::new(manager)),
+    // Test state wrapper that keeps TempDir alive
+    struct TestState {
+        _temp_dir: TempDir, // Keep temp_dir alive
+        state: DatabaseState,
+    }
+
+    impl TestState {
+        fn new() -> Self {
+            let dir = TempDir::new().unwrap();
+            let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+            let state = DatabaseState {
+                manager: Arc::new(RwLock::new(manager)),
+            };
+            Self {
+                _temp_dir: dir,
+                state,
+            }
         }
+
+        fn state(&self) -> DatabaseState {
+            DatabaseState {
+                manager: self.state.manager.clone(),
+            }
+        }
+    }
+
+    async fn create_test_state() -> DatabaseState {
+        // For backward compatibility, but tests should use TestState::new() directly
+        TestState::new().state()
     }
 
     #[tokio::test]
@@ -284,7 +307,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_databases_after_creating_multiple() {
-        let state = create_test_state().await;
+        let test_state = TestState::new();
+        let state = test_state.state();
 
         // Create multiple databases
         let manager = state.manager.read().await;

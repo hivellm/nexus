@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 use tokio::sync::RwLock;
+use tracing;
 
 /// Performance benchmark suite for Nexus
 pub struct PerformanceBenchmark {
@@ -38,7 +39,7 @@ impl PerformanceBenchmark {
     
     /// Benchmark point reads (simple MATCH queries)
     pub async fn benchmark_point_reads(&self) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
-        println!("Benchmarking point reads...");
+        tracing::info!("Benchmarking point reads...");
         
         // Setup test data
         self.setup_test_data().await?;
@@ -93,16 +94,16 @@ impl PerformanceBenchmark {
             target_qps: 100000.0,
         };
         
-        println!("  QPS: {:.0} (target: 100K+)", qps);
-        println!("  Avg time: {:.3}ms", avg_time_ms);
-        println!("  Success rate: {:.1}%", success_count as f64 / iterations as f64 * 100.0);
+        tracing::info!("  QPS: {:.0} (target: 100K+)", qps);
+        tracing::info!("  Avg time: {:.3}ms", avg_time_ms);
+        tracing::info!("  Success rate: {:.1}%", success_count as f64 / iterations as f64 * 100.0);
         
         Ok(result)
     }
     
     /// Benchmark KNN queries
     pub async fn benchmark_knn_queries(&self) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
-        println!("Benchmarking KNN queries...");
+        tracing::info!("Benchmarking KNN queries...");
         
         // Setup test data with vectors
         self.setup_vector_data().await?;
@@ -157,16 +158,16 @@ impl PerformanceBenchmark {
             target_qps: 10000.0,
         };
         
-        println!("  QPS: {:.0} (target: 10K+)", qps);
-        println!("  Avg time: {:.3}ms", avg_time_ms);
-        println!("  Success rate: {:.1}%", success_count as f64 / iterations as f64 * 100.0);
+        tracing::info!("  QPS: {:.0} (target: 10K+)", qps);
+        tracing::info!("  Avg time: {:.3}ms", avg_time_ms);
+        tracing::info!("  Success rate: {:.1}%", success_count as f64 / iterations as f64 * 100.0);
         
         Ok(result)
     }
     
     /// Benchmark pattern traversal
     pub async fn benchmark_pattern_traversal(&self) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
-        println!("Benchmarking pattern traversal...");
+        tracing::info!("Benchmarking pattern traversal...");
         
         // Setup test data with relationships
         self.setup_relationship_data().await?;
@@ -221,16 +222,16 @@ impl PerformanceBenchmark {
             target_qps: 1000.0,
         };
         
-        println!("  QPS: {:.0} (target: 1K+)", qps);
-        println!("  Avg time: {:.3}ms", avg_time_ms);
-        println!("  Success rate: {:.1}%", success_count as f64 / iterations as f64 * 100.0);
+        tracing::info!("  QPS: {:.0} (target: 1K+)", qps);
+        tracing::info!("  Avg time: {:.3}ms", avg_time_ms);
+        tracing::info!("  Success rate: {:.1}%", success_count as f64 / iterations as f64 * 100.0);
         
         Ok(result)
     }
     
     /// Benchmark bulk ingest
     pub async fn benchmark_bulk_ingest(&self) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
-        println!("Benchmarking bulk ingest...");
+        tracing::info!("Benchmarking bulk ingest...");
         
         let batch_size = 1000;
         let num_batches = 100;
@@ -303,9 +304,9 @@ impl PerformanceBenchmark {
             target_qps: 100000.0,
         };
         
-        println!("  Nodes/sec: {:.0} (target: 100K+)", nodes_per_sec);
-        println!("  Total nodes: {}", total_nodes);
-        println!("  Total time: {:?}", total_benchmark_time);
+        tracing::info!("  Nodes/sec: {:.0} (target: 100K+)", nodes_per_sec);
+        tracing::info!("  Total nodes: {}", total_nodes);
+        tracing::info!("  Total time: {:?}", total_benchmark_time);
         
         Ok(result)
     }
@@ -387,7 +388,7 @@ impl PerformanceBenchmark {
     
     /// Run all benchmarks
     pub async fn run_all_benchmarks(&self) -> Result<Vec<BenchmarkResult>, Box<dyn std::error::Error>> {
-        println!("=== Performance Benchmark Suite ===");
+        tracing::info!("=== Performance Benchmark Suite ===");
         
         let mut results = Vec::new();
         
@@ -403,23 +404,23 @@ impl PerformanceBenchmark {
     
     /// Print benchmark summary
     fn print_summary(&self, results: &[BenchmarkResult]) {
-        println!("\n=== Benchmark Summary ===");
-        println!("{:<20} {:<12} {:<12} {:<12} {:<12}", 
+        tracing::info!("\n=== Benchmark Summary ===");
+        tracing::info!("{:<20} {:<12} {:<12} {:<12} {:<12}", 
                 "Operation", "QPS", "Target", "Avg Time", "Success Rate");
-        println!("{}", "-".repeat(80));
+        tracing::info!("{}", "-".repeat(80));
         
         for result in results {
             let success_rate = result.success_count as f64 / result.iterations as f64 * 100.0;
-            println!("{:<20} {:<12.0} {:<12.0} {:<12.3} {:<12.1}%", 
+            tracing::info!("{:<20} {:<12.0} {:<12.0} {:<12.3} {:<12.1}%", 
                     result.name, result.qps, result.target_qps, result.avg_time_ms, success_rate);
         }
         
         // Check if targets are met
-        println!("\n=== Target Analysis ===");
+        tracing::info!("\n=== Target Analysis ===");
         for result in results {
             let target_met = result.qps >= result.target_qps;
             let status = if target_met { "✅ PASS" } else { "❌ FAIL" };
-            println!("{} {}: {:.0} QPS (target: {:.0})", 
+            tracing::info!("{} {}: {:.0} QPS (target: {:.0})", 
                     status, result.name, result.qps, result.target_qps);
         }
     }
@@ -480,9 +481,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() > 1 && args[1] == "memory" {
-        println!("Running memory usage benchmarks...");
+        tracing::info!("Running memory usage benchmarks...");
         let monitor = MemoryMonitor::new()?;
-        println!("Initial memory: {} MB", monitor.initial_memory / 1024 / 1024);
+        tracing::info!("Initial memory: {} MB", monitor.initial_memory / 1024 / 1024);
         
         let benchmark = PerformanceBenchmark::new()?;
         let _results = benchmark.run_all_benchmarks().await?;
@@ -490,10 +491,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let final_memory = monitor.get_memory_usage()?;
         let memory_increase = monitor.get_memory_increase()?;
         
-        println!("Final memory: {} MB", final_memory / 1024 / 1024);
-        println!("Memory increase: {} MB", memory_increase / 1024 / 1024);
+        tracing::info!("Final memory: {} MB", final_memory / 1024 / 1024);
+        tracing::info!("Memory increase: {} MB", memory_increase / 1024 / 1024);
     } else {
-        println!("Running performance benchmarks...");
+        tracing::info!("Running performance benchmarks...");
         let benchmark = PerformanceBenchmark::new()?;
         let _results = benchmark.run_all_benchmarks().await?;
     }

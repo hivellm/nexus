@@ -39,6 +39,7 @@
 
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+use tracing;
 
 pub mod auth;
 pub mod cache;
@@ -1506,10 +1507,7 @@ impl Engine {
                     for node_id in &nodes_to_delete {
                         // First, mark as deleted in storage (this prevents reads from returning the node)
                         if let Err(e) = self.storage.delete_node(*node_id) {
-                            eprintln!(
-                                "[WARN] Failed to delete node {} from storage: {}",
-                                node_id, e
-                            );
+                            tracing::warn!("Failed to delete node {} from storage: {}", node_id, e);
                         }
 
                         // Read node properties before deletion to remove from property index
@@ -1530,9 +1528,10 @@ impl Engine {
                         // Remove from label index AFTER marking as deleted
                         // remove_node removes the node from all label bitmaps
                         if let Err(e) = self.indexes.label_index.remove_node(*node_id) {
-                            eprintln!(
-                                "[WARN] Failed to remove node {} from label index: {}",
-                                node_id, e
+                            tracing::warn!(
+                                "Failed to remove node {} from label index: {}",
+                                node_id,
+                                e
                             );
                         }
                     }
@@ -1540,16 +1539,17 @@ impl Engine {
                     // Mark all relationships created during this transaction as deleted
                     for rel_id in &rels_to_delete {
                         if let Err(e) = self.storage.delete_rel(*rel_id) {
-                            eprintln!(
-                                "[WARN] Failed to delete relationship {} from storage: {}",
-                                rel_id, e
+                            tracing::warn!(
+                                "Failed to delete relationship {} from storage: {}",
+                                rel_id,
+                                e
                             );
                         }
                     }
 
                     // Flush storage to ensure consistency (must be done before rollback)
                     if let Err(e) = self.storage.flush() {
-                        eprintln!("[WARN] Failed to flush storage: {}", e);
+                        tracing::warn!("Failed to flush storage: {}", e);
                     }
 
                     // Rollback transaction (abort the transaction)
@@ -3143,7 +3143,7 @@ impl Engine {
             .relationship_index()
             .add_relationship(rel_id, from, to, type_id)
         {
-            eprintln!("[WARN] Failed to update relationship index: {}", e);
+            tracing::warn!("Failed to update relationship index: {}", e);
             // Don't fail the operation, just log the warning
         }
 
@@ -3304,10 +3304,7 @@ impl Engine {
                     rel_record.dst_id,
                     rel_record.type_id,
                 ) {
-                    eprintln!(
-                        "[WARN] Failed to update relationship index on deletion: {}",
-                        e
-                    );
+                    tracing::warn!("Failed to update relationship index on deletion: {}", e);
                     // Don't fail the operation, just log the warning
                 }
             }
@@ -3684,9 +3681,11 @@ impl Engine {
                     property_index.insert_property(prop_name.clone(), node_id, value_str)
                 {
                     // Log error but don't fail the operation
-                    eprintln!(
-                        "Warning: Failed to index property {} for node {}: {}",
-                        prop_name, node_id, e
+                    tracing::warn!(
+                        "Failed to index property {} for node {}: {}",
+                        prop_name,
+                        node_id,
+                        e
                     );
                 }
             }
@@ -3737,7 +3736,7 @@ impl Engine {
                         .relationship_index()
                         .add_relationship(rel_id, source_id, target_id, type_id)
                     {
-                        eprintln!("[WARN] Failed to update relationship index: {}", e);
+                        tracing::warn!("Failed to update relationship index: {}", e);
                     }
                 }
                 IndexUpdate::RemoveRelationship {
@@ -3751,7 +3750,7 @@ impl Engine {
                         .relationship_index()
                         .remove_relationship(rel_id, source_id, target_id, type_id)
                     {
-                        eprintln!("[WARN] Failed to remove from relationship index: {}", e);
+                        tracing::warn!("Failed to remove from relationship index: {}", e);
                     }
                 }
             }
@@ -3801,7 +3800,7 @@ impl Drop for Engine {
         // Ensure async WAL writer is properly shut down
         if let Some(ref mut writer) = self.async_wal_writer {
             if let Err(e) = writer.shutdown() {
-                eprintln!("Warning: Failed to shutdown async WAL writer: {}", e);
+                tracing::warn!("Failed to shutdown async WAL writer: {}", e);
             }
         }
     }

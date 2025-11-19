@@ -124,16 +124,23 @@ async fn check_database() -> ComponentStatus {
     // Check actual database connectivity
     match timeout(Duration::from_secs(5), async {
         // Try to create a test engine instance to verify database connectivity
-        match nexus_core::Engine::new() {
-            Ok(engine) => {
+        // Use tempfile to keep directory alive during check
+        let temp_dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => return Err(format!("Failed to create temp directory: {}", e)),
+        };
+        match nexus_core::Engine::with_data_dir(temp_dir.path()) {
+            Ok(mut engine) => {
                 // Test basic operations
-                let mut engine = engine; // Make mutable
                 let _stats = engine
                     .stats()
                     .map_err(|e| format!("Stats check failed: {}", e))?;
                 let _health = engine
                     .health_check()
                     .map_err(|e| format!("Health check failed: {}", e))?;
+                // Keep temp_dir alive until here
+                drop(engine);
+                drop(temp_dir);
                 Ok::<(), String>(())
             }
             Err(e) => Err(format!("Database initialization failed: {}", e)),
