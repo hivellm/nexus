@@ -35,7 +35,7 @@ hnsw_rs = "0.3"
 tokio = { version = "1.40", features = ["full"] }
 axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "compression-gzip", "compression-br"] }
 hyper = "1.5"
 hyper-util = "0.1"
 

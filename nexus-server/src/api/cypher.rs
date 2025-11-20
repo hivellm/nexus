@@ -124,6 +124,54 @@ pub async fn get_cache_stats() -> impl axum::response::IntoResponse {
     }
 }
 
+/// Clear query cache
+#[derive(Deserialize)]
+pub struct ClearCacheRequest {
+    #[serde(default)]
+    pub affected_labels: Vec<String>,
+    #[serde(default)]
+    pub affected_properties: Vec<String>,
+}
+
+/// Clear query cache endpoint
+pub async fn clear_cache(
+    Json(request): Json<ClearCacheRequest>,
+) -> impl axum::response::IntoResponse {
+    let executor = get_executor();
+
+    if request.affected_labels.is_empty() && request.affected_properties.is_empty() {
+        // Clear entire cache
+        executor.clear_query_cache();
+        axum::Json(serde_json::json!({
+            "success": true,
+            "message": "Query cache cleared successfully"
+        }))
+    } else {
+        // Invalidate by pattern
+        let labels: Vec<&str> = request.affected_labels.iter().map(|s| s.as_str()).collect();
+        let properties: Vec<&str> = request
+            .affected_properties
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        executor.invalidate_query_cache(&labels, &properties);
+        axum::Json(serde_json::json!({
+            "success": true,
+            "message": format!("Cache invalidated for labels: {:?}, properties: {:?}", labels, properties)
+        }))
+    }
+}
+
+/// Clean expired cache entries
+pub async fn clean_cache() -> impl axum::response::IntoResponse {
+    let executor = get_executor();
+    executor.clean_query_cache();
+    axum::Json(serde_json::json!({
+        "success": true,
+        "message": "Expired cache entries cleaned successfully"
+    }))
+}
+
 /// Helper function to convert Expression to JSON Value
 fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> serde_json::Value {
     match expr {
@@ -320,6 +368,18 @@ fn record_query_execution(
         None,
         None,
     );
+}
+
+/// Record Prometheus metrics for query execution
+fn record_prometheus_metrics(execution_time_ms: u64, success: bool, cache_hit: bool) {
+    if let Some(metrics) = crate::api::prometheus::METRICS.get() {
+        metrics.record_query(success, execution_time_ms);
+        if cache_hit {
+            metrics.record_cache_hit();
+        } else {
+            metrics.record_cache_miss();
+        }
+    }
 }
 
 /// Helper function to record query execution with additional metrics
@@ -1574,6 +1634,10 @@ pub async fn execute_cypher(
                 Some(cache_misses),
             );
 
+            // Record Prometheus metrics
+            let cache_hit = cache_hits > 0;
+            record_prometheus_metrics(execution_time_ms, true, cache_hit);
+
             // Mark query as completed
             mark_query_completed(&query_id);
 
@@ -1608,6 +1672,10 @@ pub async fn execute_cypher(
                 Some(cache_hits),
                 Some(cache_misses),
             );
+
+            // Record Prometheus metrics
+            let cache_hit = cache_hits > 0;
+            record_prometheus_metrics(execution_time_ms, false, cache_hit);
 
             // Mark query as completed
             mark_query_completed(&query_id);

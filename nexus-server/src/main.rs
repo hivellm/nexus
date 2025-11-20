@@ -25,7 +25,7 @@ use clap::Parser;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::RwLock;
-use tower_http::trace::TraceLayer;
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -247,6 +247,9 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
     // Initialize health check system
     api::health::init();
 
+    // Initialize Prometheus metrics
+    api::prometheus::init();
+
     // Initialize comparison service with dummy graphs
     // In a real implementation, these would be actual graph instances
     let temp_dir_a = tempfile::tempdir()?;
@@ -294,6 +297,7 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         .route("/", get(api::health::health_check))
         .route("/health", get(api::health::health_check))
         .route("/metrics", get(api::health::metrics))
+        .route("/prometheus", get(api::prometheus::prometheus_metrics))
         .route("/test", get(|| async { "Test endpoint working" }))
         .route("/cypher-debug", post(|body: String| async move {
             tracing::debug!("Raw body received on /cypher-debug: {}", body);
@@ -398,6 +402,8 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
         .route("/cache/stats", get(api::cypher::get_cache_stats))
+        .route("/cache/clear", post(api::cypher::clear_cache))
+        .route("/cache/clean", post(api::cypher::clean_cache))
         // Performance monitoring endpoints
         .route(
             "/performance/statistics",
@@ -519,8 +525,14 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         ));
     }
 
-    // Apply tracing layer
-    let app = app.layer(TraceLayer::new_for_http());
+    // Apply middleware layers
+    let app = app
+        // Compression for responses (gzip, deflate, br)
+        .layer(CompressionLayer::new())
+        // CORS support
+        .layer(CorsLayer::permissive())
+        // Request/response tracing
+        .layer(TraceLayer::new_for_http());
 
     // Start server with optimized configuration for high concurrency
     let listener = TcpListener::bind(&config.addr).await?;

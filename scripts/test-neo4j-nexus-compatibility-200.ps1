@@ -394,17 +394,17 @@ Run-Test -Name "7.01 MATCH relationship" -Query "MATCH (a)-[r]->(b) RETURN count
 Run-Test -Name "7.02 MATCH specific rel type" -Query "MATCH (a)-[r:KNOWS]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.03 MATCH multiple rel types" -Query "MATCH (a)-[r:KNOWS|WORKS_AT]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.04 MATCH bidirectional" -Query "MATCH (a)-[r]-(b) RETURN count(r) AS cnt"
-Run-Test -Name "7.05 Return relationship type" -Query "MATCH ()-[r]->() RETURN type(r) AS rel_type LIMIT 1"
-Run-Test -Name "7.06 Return relationship property" -Query "MATCH ()-[r:WORKS_AT]->() RETURN r.since AS year LIMIT 1"
-Run-Test -Name "7.07 Count relationships by type" -Query "MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS cnt ORDER BY t"
+Run-Test -Name "7.05 Return relationship type" -Query 'MATCH ()-[r]->() RETURN type(r) AS rel_type LIMIT 1'
+Run-Test -Name "7.06 Return relationship property" -Query 'MATCH ()-[r:WORKS_AT]->() RETURN r.since AS year LIMIT 1'
+Run-Test -Name "7.07 Count relationships by type" -Query 'MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS cnt ORDER BY t'
 Run-Test -Name "7.08 WHERE on relationship property" -Query 'MATCH ()-[r:WORKS_AT]->() WHERE r.since > 2020 RETURN count(r) AS cnt'
 Run-Test -Name "7.09 MATCH with node labels" -Query "MATCH (a:Person)-[r]->(b:Company) RETURN count(r) AS cnt"
 Run-Test -Name "7.10 MATCH with node properties" -Query "MATCH (a:Person {name: 'Alice'})-[r]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.11 Return source node" -Query "MATCH (a)-[r:KNOWS]->(b) RETURN a.name AS source"
 Run-Test -Name "7.12 Return target node" -Query "MATCH (a)-[r:KNOWS]->(b) RETURN b.name AS target"
 Run-Test -Name "7.13 Return both nodes" -Query "MATCH (a)-[r:KNOWS]->(b) RETURN a.name AS src, b.name AS dst"
-Run-Test -Name "7.14 Relationship with ORDER BY" -Query "MATCH ()-[r:WORKS_AT]->() RETURN r.since AS year ORDER BY year"
-Run-Test -Name "7.15 Relationship with LIMIT" -Query "MATCH ()-[r]->() RETURN type(r) AS t LIMIT 2"
+Run-Test -Name "7.14 Relationship with ORDER BY" -Query 'MATCH ()-[r:WORKS_AT]->() RETURN r.since AS year ORDER BY year'
+Run-Test -Name "7.15 Relationship with LIMIT" -Query 'MATCH ()-[r]->() RETURN type(r) AS t LIMIT 2'
 Run-Test -Name "7.16 MATCH no relationships" -Query "MATCH (a:Person {name: 'Charlie'})-[r]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.17 Count outgoing rels" -Query "MATCH (a:Person {name: 'Alice'})-[r]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.18 Count incoming rels" -Query "MATCH (a)-[r]->(b:Company) RETURN count(r) AS cnt"

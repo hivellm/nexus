@@ -22,6 +22,7 @@ pub mod knn;
 pub mod mcp_performance;
 pub mod openapi;
 pub mod performance;
+pub mod prometheus;
 pub mod property_keys;
 pub mod schema;
 pub mod stats;
