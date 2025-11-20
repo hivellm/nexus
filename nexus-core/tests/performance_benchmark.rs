@@ -303,7 +303,7 @@ async fn benchmark_mixed_workload(
 
     // Spawn worker threads
     for worker_id in 0..config.concurrent_clients {
-        let executor_clone = executor.clone();
+        let executor_arc = Arc::new(executor.clone());
         let results_clone = results.clone();
         let config_clone = config.clone();
 
@@ -511,7 +511,7 @@ async fn performance_benchmark_vs_neo4j() {
     // Phase 5: Mixed workload benchmark
     tracing::info!("\n🔄 Phase 5: Mixed workload benchmark");
     let (mixed_throughput, mixed_avg, mixed_p95, mixed_p99) =
-        benchmark_mixed_workload(&executor, &config).await;
+        benchmark_mixed_workload(executor.clone(), &config).await;
 
     // Phase 6: Results and validation
     tracing::info!("\n📈 Phase 6: Benchmark Results vs Neo4j Targets");

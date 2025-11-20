@@ -69,7 +69,10 @@ rand.workspace = true
 regex = "1.11"
 tracing = "0.1"
 dashmap = "5.5"
+# Temporarily disabled - focus on core optimizations first
 rayon = "1.8"
+# cranelift = "0.101"
+# num_cpus = "1.16"
 
 # Authentication & Security
 argon2 = "0.5"  # Still used for API keys
@@ -103,3 +106,4 @@ path = "../examples/hierarchical_call_graph_example.rs"
 [[example]]
 name = "call_graph_filtering_example"
 path = "../examples/call_graph_filtering_example.rs"
+num_cpus = "1.16"

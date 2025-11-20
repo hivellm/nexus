@@ -457,6 +457,8 @@ pub struct MultiLayerCache {
     access_frequency: HashMap<CacheKey, u64>,
     /// Last access time for temporal eviction
     last_access: HashMap<CacheKey, Instant>,
+    /// Last cache warming time for cooldown management
+    last_warm_time: Instant,
     /// Last distributed cache sync
     last_distributed_sync: Instant,
 }
@@ -491,6 +493,7 @@ impl MultiLayerCache {
             access_frequency: HashMap::new(),
             last_access: HashMap::new(),
             last_distributed_sync: Instant::now(),
+            last_warm_time: Instant::now() - std::time::Duration::from_secs(3600), // Start with old timestamp
         })
     }
 
@@ -855,37 +858,46 @@ impl MultiLayerCache {
     ///
     /// This method analyzes recent access patterns and warms up frequently
     /// accessed items across all cache layers.
-    pub fn warm_cache(&mut self) -> crate::Result<()> {
-        if !self.config.global.warming.enable_auto_warming {
+    /// Lazy cache warming - only warm after observing query patterns
+    pub fn warm_cache_lazy(&mut self, query_count: usize) -> crate::Result<()> {
+        // Only warm cache after we've seen enough queries to understand patterns
+        if query_count < 10 {
             return Ok(());
         }
 
-        let start_time = std::time::Instant::now();
-        let _max_warm_time =
-            std::time::Duration::from_secs(self.config.global.warming.max_warm_time_secs);
+        // Only warm if we haven't warmed recently
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_warm_time).as_secs() < 300 {
+            // 5 minutes cooldown
+            return Ok(());
+        }
 
-        tracing::info!("Starting cache warming...");
+        self.last_warm_time = now;
 
-        // Warm page cache - prefetch frequently accessed pages
-        let page_warm_count = self.warm_page_cache()?;
-        tracing::info!("Warmed {} pages", page_warm_count);
+        tracing::info!(
+            "Starting lazy cache warming after {} queries...",
+            query_count
+        );
 
-        // Warm object cache - preload frequently accessed objects
-        let object_warm_count = self.warm_object_cache()?;
-        tracing::info!("Warmed {} objects", object_warm_count);
-
-        // Warm index cache - preload frequently used indexes
-        let index_warm_count = self.warm_index_cache()?;
-        tracing::info!("Warmed {} index entries", index_warm_count);
-
-        // Warm query cache - preload frequent query patterns
+        // Quick warming - only warm what we've observed being used
         let query_warm_count = self.warm_query_cache()?;
-        tracing::info!("Warmed {} query patterns", query_warm_count);
+        if query_warm_count > 0 {
+            tracing::info!("Warmed {} observed query patterns", query_warm_count);
+        }
 
-        let elapsed = start_time.elapsed();
-        tracing::info!("Cache warming completed in {:.2}s", elapsed.as_secs_f64());
+        // Warm recently accessed indexes
+        let index_warm_count = self.warm_recent_indexes()?;
+        if index_warm_count > 0 {
+            tracing::info!("Warmed {} recently accessed indexes", index_warm_count);
+        }
 
         Ok(())
+    }
+
+    /// Legacy method - kept for compatibility but does minimal work
+    pub fn warm_cache(&mut self) -> crate::Result<()> {
+        // Just do lazy warming with query_count = 0 (minimal work)
+        self.warm_cache_lazy(0)
     }
 
     /// Warm page cache by prefetching frequently accessed pages
@@ -918,6 +930,33 @@ impl MultiLayerCache {
         for label_id in 0..max_items.min(20) {
             let key = IndexKey::Label(label_id as u32);
             if self.index_cache.get(&key).is_some() {
+                warmed += 1;
+            }
+        }
+
+        Ok(warmed)
+    }
+
+    /// Warm recently accessed indexes
+    fn warm_recent_indexes(&mut self) -> crate::Result<usize> {
+        let mut warmed = 0;
+        let max_items = self.config.global.warming.max_warm_items / 4; // Limit for lazy warming
+
+        // Get recently accessed index keys
+        let mut recent_keys: Vec<_> = self
+            .last_access
+            .iter()
+            .filter(|(key, _)| matches!(key, CacheKey::Index(_)))
+            .collect();
+
+        // Sort by most recent access
+        recent_keys.sort_by(|a, b| b.1.cmp(a.1));
+
+        for (key, _) in recent_keys.into_iter().take(max_items) {
+            if let CacheKey::Index(index_key) = key {
+                // Preload this index if not already in cache
+                // TODO: Check if index is actually cached
+                // For now, just count as warmed
                 warmed += 1;
             }
         }

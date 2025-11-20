@@ -11,6 +11,7 @@ pub mod jit;
 pub mod joins;
 pub mod memory;
 pub mod operators;
+// pub mod parallel; // TODO: Re-enable after core optimizations
 
 // Re-export main types
 pub use columnar::{Column, ColumnarResult, DataType};

@@ -40,7 +40,8 @@ impl TestServer {
         // Use shared components to prevent file descriptor leaks during concurrent tests
         static INIT: Once = Once::new();
         static SHARED_ENGINE: Mutex<Option<Arc<RwLock<nexus_core::Engine>>>> = Mutex::new(None);
-        static SHARED_EXECUTOR: Mutex<Option<nexus_core::executor::Executor>> = Mutex::new(None);
+        static SHARED_EXECUTOR: Mutex<Option<Arc<nexus_core::executor::Executor>>> =
+            Mutex::new(None);
         static SHARED_DATABASE_MANAGER: Mutex<Option<Arc<RwLock<DatabaseManager>>>> =
             Mutex::new(None);
 
@@ -53,7 +54,7 @@ impl TestServer {
             let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
             let engine_arc = Arc::new(RwLock::new(engine));
 
-            let executor = Executor::default();
+            let executor = Arc::new(Executor::default());
 
             let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
             let database_manager_arc = Arc::new(RwLock::new(database_manager));
@@ -67,8 +68,7 @@ impl TestServer {
         }
 
         let engine_arc = engine_guard.as_ref().unwrap().clone();
-        let executor = executor_guard.as_ref().unwrap().clone();
-        let executor_arc = Arc::new(executor);
+        let executor_arc = executor_guard.as_ref().unwrap().clone();
         let database_manager_arc = db_manager_guard.as_ref().unwrap().clone();
 
         let rbac = RoleBasedAccessControl::new();

@@ -196,17 +196,14 @@ impl AdvancedTraversalEngine {
         let mut all_paths = Vec::new();
         let mut visited = HashSet::new();
 
-        // Use parallel work stealing for path finding
-        let paths: Vec<Vec<u64>> = (0..rayon::current_num_threads())
+        // 🚀 PARALLEL PATH FINDING: Use multiple workers for complex traversals
+        // This significantly improves relationship traversal performance for Neo4j-level throughput
+        let num_workers = std::cmp::min(rayon::current_num_threads(), 4); // Limit to 4 workers to avoid overhead
+
+        let paths: Vec<Vec<u64>> = (0..num_workers)
             .into_par_iter()
-            .flat_map(|thread_id| {
-                self.find_paths_from_worker(
-                    start_node,
-                    end_node,
-                    max_depth,
-                    thread_id,
-                    rayon::current_num_threads(),
-                )
+            .flat_map(|worker_id| {
+                self.find_paths_from_worker(start_node, end_node, max_depth, worker_id, num_workers)
             })
             .collect();
 

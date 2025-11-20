@@ -5,10 +5,12 @@
 
 pub mod codegen;
 pub mod runtime;
+// pub mod cranelift_jit; // TODO: Re-enable after core optimizations
 
 // Re-export main types
 pub use codegen::CodeGenerator;
 pub use runtime::{JitRuntime, QueryHints};
+// pub use cranelift_jit::CraneliftJitCompiler; // TODO: Re-enable after core optimizations
 
 use crate::error::{Error, Result};
 use crate::execution::compiled::{CompiledQuery, CompiledQueryImpl};

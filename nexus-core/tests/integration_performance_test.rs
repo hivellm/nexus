@@ -147,7 +147,7 @@ async fn generate_test_data(executor: &mut Executor, config: &IntegrationTestCon
 
 /// Run concurrent workload test
 async fn run_concurrent_workload_test(
-    executor: &Executor,
+    executor: Arc<Executor>,
     config: &IntegrationTestConfig,
 ) -> Result<IntegrationTestResults, Box<dyn std::error::Error>> {
     let start_time = Instant::now();
@@ -309,7 +309,7 @@ async fn test_system_integration_performance() {
         "\n⚡ Phase 2: Running concurrent workload test ({}s)",
         config.test_duration_secs
     );
-    let test_results = run_concurrent_workload_test(&executor, &config)
+    let test_results = run_concurrent_workload_test(executor.clone(), &config)
         .await
         .unwrap();
 
