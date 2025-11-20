@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - Neo4j Compatibility Errors (2025-11-20) 🔧
+
+- **Phase 1: MATCH Property Filter Issues** ✅ COMPLETED (4/4 fixes)
+  - Fixed string literal handling in filter predicates - changed from double quotes to single quotes in planner
+  - Fixed `MATCH (n:Person {name: 'Alice'}) RETURN n.name` - now returns 1 row (was 0)
+  - Fixed `MATCH (n:Person {name: 'Alice'}) RETURN n.name, n.age` - now returns 1 row (was 0)
+  - Fixed `MATCH (n:Person) WHERE n.name = 'Bob' RETURN n.name` - now returns 1 row (was 0)
+  - Fixed `MATCH (n:Person) WHERE n.age = 30 RETURN n.name` - now returns 1 row (was 0)
+  - Root cause: Planner was generating predicates with double quotes (`"Alice"`) but executor expected single quotes (`'Alice'`)
+  - Solution: Modified `expression_to_string()` in planner to use single quotes, updated `parse_equality_filter()` and `parse_range_filter()` to accept both quote styles
+  - Files: `nexus-core/src/executor/planner.rs`, `nexus-core/src/executor/mod.rs`
+
+- **Phase 2: GROUP BY Aggregation Issues** ✅ COMPLETED (5/5 fixes)
+  - Fixed GROUP BY aggregation queries returning incorrect row counts
+  - Fixed `MATCH (n:Person) RETURN n.city AS city, count(n) AS cnt ORDER BY city` - now returns 2 rows (was 1)
+  - Fixed `MATCH (n:Person) RETURN n.city AS city, sum(n.age) AS total ORDER BY city` - now returns 2 rows (was 1)
+  - Fixed `MATCH (n:Person) RETURN n.city AS city, avg(n.age) AS avg_age ORDER BY city` - now returns 2 rows (was 1)
+  - Fixed aggregation with ORDER BY and LIMIT clauses
+  - Root cause: Project operator was not creating columns for all GROUP BY columns before Aggregate operator executed
+  - Solution: Added projection items for all GROUP BY columns in planner to ensure Project creates columns with correct aliases before Aggregate groups by them
+  - Files: `nexus-core/src/executor/planner.rs`
+
+- **Progress**: 9/23 compatibility issues fixed (39.1% complete)
+  - Phase 1 (MATCH Property Filters): 4/4 (100%) ✅
+  - Phase 2 (GROUP BY Aggregation): 5/5 (100%) ✅
+  - Remaining: UNION queries (4), DISTINCT (1), Function calls (3), Relationship queries (3), Property access (2), Array operations (1)
+
 ### Fixed - File Descriptor Leak in Tests (2025-11-19) 🔧
 
 - **Critical Fix**: Resolved "Too many open files" errors during concurrent test execution

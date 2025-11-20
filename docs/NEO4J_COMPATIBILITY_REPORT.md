@@ -1,8 +1,9 @@
 # Neo4j Compatibility Report
 
 **Version**: 0.11.0  
-**Date**: 2025-11-16  
-**Status**: 96.5% Compatibility (112/116 core tests) + 100% Direct Comparison (20/20) ✅
+**Date**: 2025-11-20  
+**Status**: 96.5% Compatibility (112/116 core tests) + 100% Direct Comparison (20/20) ✅  
+**Recent Fixes**: 9/23 critical compatibility issues fixed (39.1% progress) 🔧
 
 ---
 
@@ -107,9 +108,56 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 | Advanced          | 84       | 68      | 80.95%  | ⚠️ In Progress     |
 | **Total**         | **199+** | **166** | **82%** | ⚠️ **In Progress** |
 
+### Recent Compatibility Fixes (2025-11-20)
+
+**Progress**: 9/23 critical compatibility issues fixed (39.1%)
+
+#### ✅ Phase 1: MATCH Property Filter Issues (4/4 - 100% Complete)
+
+All MATCH property filter issues have been resolved:
+
+- **Fixed**: `MATCH (n:Person {name: 'Alice'}) RETURN n.name` - Now returns 1 row (was 0)
+- **Fixed**: `MATCH (n:Person {name: 'Alice'}) RETURN n.name, n.age` - Now returns 1 row (was 0)
+- **Fixed**: `MATCH (n:Person) WHERE n.name = 'Bob' RETURN n.name` - Now returns 1 row (was 0)
+- **Fixed**: `MATCH (n:Person) WHERE n.age = 30 RETURN n.name` - Now returns 1 row (was 0)
+
+**Root Cause**: Planner was generating filter predicates with double quotes (`"Alice"`) but executor expected single quotes (`'Alice'`)
+
+**Solution**: 
+- Modified `expression_to_string()` in planner to use single quotes for string literals
+- Updated `parse_equality_filter()` and `parse_range_filter()` to accept both single and double quotes
+
+**Files Modified**: `nexus-core/src/executor/planner.rs`, `nexus-core/src/executor/mod.rs`
+
+#### ✅ Phase 2: GROUP BY Aggregation Issues (5/5 - 100% Complete)
+
+All GROUP BY aggregation issues have been resolved:
+
+- **Fixed**: `MATCH (n:Person) RETURN n.city AS city, count(n) AS cnt ORDER BY city` - Now returns 2 rows (was 1)
+- **Fixed**: `MATCH (n:Person) RETURN n.city AS city, sum(n.age) AS total ORDER BY city` - Now returns 2 rows (was 1)
+- **Fixed**: `MATCH (n:Person) RETURN n.city AS city, avg(n.age) AS avg_age ORDER BY city` - Now returns 2 rows (was 1)
+- **Fixed**: Aggregation with ORDER BY and LIMIT clauses
+
+**Root Cause**: Project operator was not creating columns for all GROUP BY columns before Aggregate operator executed
+
+**Solution**: Added projection items for all GROUP BY columns in planner to ensure Project creates columns with correct aliases before Aggregate groups by them
+
+**Files Modified**: `nexus-core/src/executor/planner.rs`
+
+#### Remaining Issues (14/23 - 60.9%)
+
+- **Phase 3**: UNION Query Issues (4 tests) - HIGH PRIORITY
+- **Phase 4**: DISTINCT Operation Issues (1 test) - MEDIUM PRIORITY
+- **Phase 5**: Function Call Issues (3 tests) - MEDIUM PRIORITY
+- **Phase 6**: Relationship Query Issues (3 tests) - MEDIUM PRIORITY
+- **Phase 7**: Property Access Issues (2 tests) - MEDIUM PRIORITY
+- **Phase 8**: Array Operation Issues (1 test) - LOW PRIORITY
+
+See `rulebook/tasks/fix-neo4j-compatibility-errors/tasks.md` for complete list of remaining issues.
+
 ### Known Issues Requiring Fixes
 
-See `rulebook/tasks/achieve-100-percent-neo4j-compatibility/tasks.md` for complete list of 33 identified issues requiring fixes to achieve 100% compatibility.
+See `rulebook/tasks/fix-neo4j-compatibility-errors/tasks.md` for complete list of 23 identified issues (9 fixed, 14 remaining).
 
 ### Legacy Neo4j Compatibility Tests (6/7 passing - 86%)
 
@@ -417,6 +465,7 @@ The single known issue (multi-label + relationship duplication) affects only a s
 
 ---
 
-**Generated**: 2025-10-31  
-**Nexus Version**: 0.9.7  
-**Test Suite**: 751+ tests passing
+**Generated**: 2025-11-20  
+**Nexus Version**: 0.11.0  
+**Test Suite**: 2209+ tests passing  
+**Recent Updates**: Phase 1 (MATCH Property Filters) and Phase 2 (GROUP BY Aggregation) completed

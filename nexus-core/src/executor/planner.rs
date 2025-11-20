@@ -1575,6 +1575,52 @@ impl<'a> QueryPlanner<'a> {
                     }
                 }
 
+                // CRITICAL FIX: Add projection items for all GROUP BY columns
+                // This ensures that Project operator creates columns with correct aliases
+                // before Aggregate tries to group by them
+                for col in &group_by_columns {
+                    // Check if this column is already in projection_items
+                    if !projection_items.iter().any(|item| item.alias == *col) {
+                        // Try to find the corresponding return item to get the expression
+                        let mut found = false;
+                        for item in return_items {
+                            let alias = item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            });
+                            if alias == *col {
+                                // Found the matching return item, add it to projection_items
+                                projection_items.push(ProjectionItem {
+                                    alias: col.clone(),
+                                    expression: item.expression.clone(),
+                                });
+                                found = true;
+                                break;
+                            }
+                        }
+                        // If not found in return_items, create a projection item from the column name
+                        if !found {
+                            let expression = if col.contains('.') {
+                                let parts: Vec<&str> = col.split('.').collect();
+                                if parts.len() == 2 {
+                                    Expression::PropertyAccess {
+                                        variable: parts[0].to_string(),
+                                        property: parts[1].to_string(),
+                                    }
+                                } else {
+                                    Expression::Variable(col.clone())
+                                }
+                            } else {
+                                Expression::Variable(col.clone())
+                            };
+                            projection_items.push(ProjectionItem {
+                                alias: col.clone(),
+                                expression,
+                            });
+                        }
+                    }
+                }
+
                 for item in return_items {
                     match &item.expression {
                         Expression::FunctionCall { name, args } => {
