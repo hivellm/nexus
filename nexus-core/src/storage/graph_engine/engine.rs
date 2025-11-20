@@ -174,7 +174,7 @@ impl GraphStorageEngine {
             .map_err(|e| Error::Storage(format!("Failed to read node: {}", e)))
     }
 
-    /// Read a relationship by type and ID
+    /// Read a relationship by type and ID with optimized sequential access
     pub fn read_relationship(&self, type_id: TypeId, rel_id: u64) -> Result<RelationshipRecord> {
         let segment =
             self.layout.relationships.get(&type_id).ok_or_else(|| {
@@ -190,12 +190,45 @@ impl GraphStorageEngine {
             )));
         }
 
+        // Optimized sequential read with prefetch hint
         let start = offset as usize;
         let end = start + RelationshipRecord::SIZE;
+
+        // Prefetch adjacent relationships for sequential access patterns
+        self.prefetch_relationships(type_id, rel_id);
+
         let bytes = &self.mmap[start..end];
 
         RelationshipRecord::from_bytes(bytes)
             .map_err(|e| Error::Storage(format!("Failed to read relationship: {}", e)))
+    }
+
+    /// Prefetch adjacent relationships for sequential access optimization
+    fn prefetch_relationships(&self, type_id: TypeId, current_rel_id: u64) {
+        if let Some(segment) = self.layout.relationships.get(&type_id) {
+            // Prefetch next 4 relationships (64KB ahead if relationship size is 64 bytes)
+            let prefetch_count = 4;
+            for i in 1..=prefetch_count {
+                let prefetch_rel_id = current_rel_id + i;
+                let prefetch_offset =
+                    segment.data_range.start + prefetch_rel_id * RelationshipRecord::SIZE as u64;
+
+                if prefetch_offset + RelationshipRecord::SIZE as u64 <= segment.data_range.end {
+                    // Use prefetch intrinsic if available (helps with sequential scans)
+                    #[cfg(target_arch = "x86_64")]
+                    unsafe {
+                        use std::arch::x86_64::*;
+                        // Prefetch data into L1 cache with high locality
+                        _mm_prefetch(
+                            self.mmap.as_ptr().add(prefetch_offset as usize) as *const i8,
+                            _MM_HINT_T0,
+                        );
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     /// Flush all pending changes to disk
@@ -250,7 +283,66 @@ impl GraphStorageEngine {
         Ok(())
     }
 
-    /// Get outgoing relationships for a node
+    /// Read multiple relationships sequentially with optimized access
+    pub fn read_relationships_sequential(
+        &self,
+        type_id: TypeId,
+        start_rel_id: u64,
+        count: usize,
+    ) -> Result<Vec<RelationshipRecord>> {
+        let segment =
+            self.layout.relationships.get(&type_id).ok_or_else(|| {
+                Error::NotFound(format!("Relationship type {} not found", type_id))
+            })?;
+
+        let mut results = Vec::with_capacity(count);
+
+        // Bulk prefetch for sequential access
+        let prefetch_ahead = 16; // Prefetch 16 relationships ahead
+        for i in 0..std::cmp::min(
+            count + prefetch_ahead,
+            (segment.data_range.end - segment.data_range.start) as usize / RelationshipRecord::SIZE,
+        ) {
+            let rel_id = start_rel_id + i as u64;
+            let offset = segment.data_range.start + rel_id * RelationshipRecord::SIZE as u64;
+
+            if offset + RelationshipRecord::SIZE as u64 > segment.data_range.end {
+                break;
+            }
+
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                use std::arch::x86_64::*;
+                // Prefetch with medium temporal locality for sequential scans
+                _mm_prefetch(
+                    self.mmap.as_ptr().add(offset as usize) as *const i8,
+                    _MM_HINT_T1,
+                );
+            }
+        }
+
+        // Sequential read with optimized memory access
+        for i in 0..count {
+            let rel_id = start_rel_id + i as u64;
+            let offset = segment.data_range.start + rel_id * RelationshipRecord::SIZE as u64;
+
+            if offset + RelationshipRecord::SIZE as u64 > segment.data_range.end {
+                break;
+            }
+
+            let start = offset as usize;
+            let end = start + RelationshipRecord::SIZE;
+            let bytes = &self.mmap[start..end];
+
+            if let Ok(rel) = RelationshipRecord::from_bytes(bytes) {
+                results.push(rel);
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Get outgoing relationships for a node with optimized access
     pub fn get_outgoing_relationships(
         &self,
         node_id: NodeId,
@@ -261,22 +353,135 @@ impl GraphStorageEngine {
         if let Some(segment) = self.layout.relationships.get(&type_id) {
             // Use the adjacency index for fast lookup
             if let Some(index_entry) = segment.outgoing_index.get_entry(node_id) {
-                // TODO: Decompress adjacency list from mmap
-                // For now, we still need to scan because we haven't implemented
-                // the compressed list storage yet
-
-                // Fallback: scan relationships but use index count as hint
-                let max_scan = std::cmp::min(
-                    self.next_rel_id.load(Ordering::SeqCst),
-                    segment.count + 1000, // Some buffer
-                );
-
-                for rel_id in 0..max_scan {
-                    if let Ok(rel) = self.read_relationship(type_id, rel_id) {
-                        if rel.from_node == node_id && rel.type_id == type_id {
-                            results.push(rel);
+                // Decompress adjacency list from mmap
+                if index_entry.list_offset > 0 && index_entry.count > 0 {
+                    // Calculate the size of compressed data (estimate based on compression type)
+                    let max_compressed_size = match segment.compression {
+                        CompressionType::None => {
+                            index_entry.count as usize * std::mem::size_of::<AdjacencyEntry>()
                         }
+                        CompressionType::VarInt | CompressionType::Delta => {
+                            // VarInt/Delta: average 3-5 bytes per entry, use 10 for safety
+                            index_entry.count as usize * 10
+                        }
+                        CompressionType::Dictionary => {
+                            // Dictionary: estimate 4 bytes per entry
+                            index_entry.count as usize * 4
+                        }
+                        CompressionType::LZ4 => {
+                            // LZ4: typically 50-80% of original size
+                            (index_entry.count as usize * std::mem::size_of::<AdjacencyEntry>() * 3)
+                                / 4
+                        }
+                        CompressionType::Zstd => {
+                            // Zstd: typically 30-60% of original size
+                            (index_entry.count as usize * std::mem::size_of::<AdjacencyEntry>() * 2)
+                                / 5
+                        }
+                        CompressionType::Adaptive | CompressionType::SimdRLE => {
+                            // Adaptive/SIMD RLE: variable compression, use conservative estimate
+                            index_entry.count as usize * 6
+                        }
+                    };
+
+                    // Read compressed data from mmap
+                    let offset = index_entry.list_offset as usize;
+                    let end = std::cmp::min(
+                        offset + max_compressed_size,
+                        segment.adjacency_data_range.end as usize,
+                    );
+
+                    if offset < self.mmap.len() && end <= self.mmap.len() {
+                        let compressed_data = &self.mmap[offset..end];
+
+                        // Decompress the adjacency list
+                        match self.compressor.decompress_adjacency_list(
+                            compressed_data,
+                            segment.compression,
+                            index_entry.count as usize,
+                        ) {
+                            Ok(adjacency_entries) => {
+                                // Optimize sequential access for multiple relationships
+                                if adjacency_entries.len() > 3 {
+                                    // Check if relationships are mostly sequential
+                                    let mut sorted_entries = adjacency_entries.clone();
+                                    sorted_entries.sort_by_key(|e| e.rel_id);
+
+                                    let mut sequential_count = 1;
+                                    for i in 1..sorted_entries.len() {
+                                        if sorted_entries[i].rel_id
+                                            == sorted_entries[i - 1].rel_id + 1
+                                        {
+                                            sequential_count += 1;
+                                        }
+                                    }
+
+                                    if sequential_count > sorted_entries.len() / 2 {
+                                        // Mostly sequential - use optimized sequential read
+                                        if let Ok(seq_rels) = self.read_relationships_sequential(
+                                            type_id,
+                                            sorted_entries[0].rel_id,
+                                            sorted_entries.len(),
+                                        ) {
+                                            // Filter to only include requested relationships
+                                            let requested_ids: std::collections::HashSet<u64> =
+                                                adjacency_entries
+                                                    .iter()
+                                                    .map(|e| e.rel_id)
+                                                    .collect();
+                                            for rel in seq_rels {
+                                                if requested_ids.contains(&rel.id) {
+                                                    results.push(rel);
+                                                }
+                                            }
+                                        } else {
+                                            // Fallback to individual reads
+                                            for entry in adjacency_entries {
+                                                if let Ok(rel) =
+                                                    self.read_relationship(type_id, entry.rel_id)
+                                                {
+                                                    results.push(rel);
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Not sequential - read individually with prefetch
+                                        for entry in adjacency_entries {
+                                            if let Ok(rel) =
+                                                self.read_relationship(type_id, entry.rel_id)
+                                            {
+                                                results.push(rel);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Small number - read individually
+                                    for entry in adjacency_entries {
+                                        if let Ok(rel) =
+                                            self.read_relationship(type_id, entry.rel_id)
+                                        {
+                                            results.push(rel);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                // If decompression fails, fall back to scan for safety
+                                tracing::warn!(
+                                    "Failed to decompress adjacency list for node {}: {}. Falling back to scan.",
+                                    node_id,
+                                    e
+                                );
+                                return self.get_outgoing_relationships_fallback(node_id, type_id);
+                            }
+                        }
+                    } else {
+                        // Invalid offset/size, fall back to scan
+                        return self.get_outgoing_relationships_fallback(node_id, type_id);
                     }
+                } else {
+                    // No compressed list stored yet, fall back to scan
+                    return self.get_outgoing_relationships_fallback(node_id, type_id);
                 }
             }
         }
@@ -295,21 +500,129 @@ impl GraphStorageEngine {
         if let Some(segment) = self.layout.relationships.get(&type_id) {
             // Use the adjacency index for fast lookup
             if let Some(index_entry) = segment.incoming_index.get_entry(node_id) {
-                // TODO: Decompress adjacency list from mmap
-                // For now, we still need to scan because we haven't implemented
-                // the compressed list storage yet
-
-                // Fallback: scan relationships but use index count as hint
-                let max_scan = std::cmp::min(
-                    self.next_rel_id.load(Ordering::SeqCst),
-                    segment.count + 1000, // Some buffer
-                );
-
-                for rel_id in 0..max_scan {
-                    if let Ok(rel) = self.read_relationship(type_id, rel_id) {
-                        if rel.to_node == node_id && rel.type_id == type_id {
-                            results.push(rel);
+                // Decompress adjacency list from mmap
+                if index_entry.list_offset > 0 && index_entry.count > 0 {
+                    // Calculate the size of compressed data (estimate based on compression type)
+                    let max_compressed_size = match segment.compression {
+                        CompressionType::None => {
+                            index_entry.count as usize * std::mem::size_of::<AdjacencyEntry>()
                         }
+                        CompressionType::VarInt | CompressionType::Delta => {
+                            // VarInt/Delta: average 3-5 bytes per entry, use 10 for safety
+                            index_entry.count as usize * 10
+                        }
+                        CompressionType::Dictionary => {
+                            // Dictionary: estimate 4 bytes per entry
+                            index_entry.count as usize * 4
+                        }
+                        CompressionType::LZ4 => {
+                            // LZ4: typically 50-80% of original size
+                            (index_entry.count as usize * std::mem::size_of::<AdjacencyEntry>() * 3)
+                                / 4
+                        }
+                        CompressionType::Zstd => {
+                            // Zstd: typically 30-60% of original size
+                            (index_entry.count as usize * std::mem::size_of::<AdjacencyEntry>() * 2)
+                                / 5
+                        }
+                        CompressionType::Adaptive | CompressionType::SimdRLE => {
+                            // Adaptive/SIMD RLE: variable compression, use conservative estimate
+                            index_entry.count as usize * 6
+                        }
+                    };
+
+                    // Read compressed data from mmap
+                    let offset = index_entry.list_offset as usize;
+                    let end = std::cmp::min(
+                        offset + max_compressed_size,
+                        segment.adjacency_data_range.end as usize,
+                    );
+
+                    if offset < self.mmap.len() && end <= self.mmap.len() {
+                        let compressed_data = &self.mmap[offset..end];
+
+                        // Decompress the adjacency list
+                        match self.compressor.decompress_adjacency_list(
+                            compressed_data,
+                            segment.compression,
+                            index_entry.count as usize,
+                        ) {
+                            Ok(adjacency_entries) => {
+                                // Read each relationship record directly
+                                for entry in adjacency_entries {
+                                    if let Ok(rel) = self.read_relationship(type_id, entry.rel_id) {
+                                        results.push(rel);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                // If decompression fails, fall back to scan for safety
+                                tracing::warn!(
+                                    "Failed to decompress adjacency list for node {}: {}. Falling back to scan.",
+                                    node_id,
+                                    e
+                                );
+                                return self.get_incoming_relationships_fallback(node_id, type_id);
+                            }
+                        }
+                    } else {
+                        // Invalid offset/size, fall back to scan
+                        return self.get_incoming_relationships_fallback(node_id, type_id);
+                    }
+                } else {
+                    // No compressed list stored yet, fall back to scan
+                    return self.get_incoming_relationships_fallback(node_id, type_id);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Fallback: Get outgoing relationships by scanning (used when decompression fails)
+    fn get_outgoing_relationships_fallback(
+        &self,
+        node_id: NodeId,
+        type_id: TypeId,
+    ) -> Result<Vec<RelationshipRecord>> {
+        let mut results = Vec::new();
+
+        if let Some(segment) = self.layout.relationships.get(&type_id) {
+            let max_scan = std::cmp::min(
+                self.next_rel_id.load(Ordering::SeqCst),
+                segment.count + 1000,
+            );
+
+            for rel_id in 0..max_scan {
+                if let Ok(rel) = self.read_relationship(type_id, rel_id) {
+                    if rel.from_node == node_id && rel.type_id == type_id {
+                        results.push(rel);
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Fallback: Get incoming relationships by scanning (used when decompression fails)
+    fn get_incoming_relationships_fallback(
+        &self,
+        node_id: NodeId,
+        type_id: TypeId,
+    ) -> Result<Vec<RelationshipRecord>> {
+        let mut results = Vec::new();
+
+        if let Some(segment) = self.layout.relationships.get(&type_id) {
+            let max_scan = std::cmp::min(
+                self.next_rel_id.load(Ordering::SeqCst),
+                segment.count + 1000,
+            );
+
+            for rel_id in 0..max_scan {
+                if let Ok(rel) = self.read_relationship(type_id, rel_id) {
+                    if rel.to_node == node_id && rel.type_id == type_id {
+                        results.push(rel);
                     }
                 }
             }
@@ -516,13 +829,124 @@ impl GraphStorageEngine {
         // Update outgoing adjacency index
         segment.outgoing_index.add_relationship(from_node, rel_id);
 
-        // Update incoming adjacency index
+        // Update incoming adjacency  index
         segment.incoming_index.add_relationship(to_node, rel_id);
 
-        // TODO: Store compressed adjacency lists in mmap
-        // For now, we maintain the indices in memory
-
         segment.count += 1;
+
+        // Store compressed adjacency lists in mmap periodically
+        // For performance, we batch compress/store every 100 relationships
+        if segment.count % 100 == 0 {
+            self.compress_and_store_adjacency_lists(type_id)?;
+        }
+
+        Ok(())
+    }
+
+    /// Compress and store adjacency lists for a relationship type
+    fn compress_and_store_adjacency_lists(&mut self, type_id: TypeId) -> Result<()> {
+        // Collect all data we need before mutable borrows
+        let (node_ids, compression_type, initial_offset, adjacency_range_end) = {
+            let segment = self.layout.relationships.get(&type_id).ok_or_else(|| {
+                Error::Storage(format!(
+                    "Relationship segment not found for type {}",
+                    type_id
+                ))
+            })?;
+
+            let node_ids: Vec<(NodeId, Vec<u64>)> = segment
+                .outgoing_index
+                .entries
+                .keys()
+                .filter_map(|&node_id| {
+                    segment
+                        .outgoing_index
+                        .get_rel_ids(node_id)
+                        .map(|ids| (node_id, ids.clone()))
+                })
+                .collect();
+
+            (
+                node_ids,
+                segment.compression,
+                segment.adjacency_data_range.start,
+                segment.adjacency_data_range.end,
+            )
+        };
+
+        let mut current_offset = initial_offset;
+
+        for (node_id, mut rel_ids) in node_ids {
+            if rel_ids.is_empty() {
+                continue;
+            }
+
+            // Sort for better compression
+            rel_ids.sort_unstable();
+
+            // Convert to adjacency entries
+            let adjacency_entries: Vec<AdjacencyEntry> = rel_ids
+                .iter()
+                .map(|&rel_id| AdjacencyEntry { rel_id })
+                .collect();
+
+            // Compress
+            let compressed = self
+                .compressor
+                .compress_adjacency_list(&adjacency_entries, compression_type)?;
+
+            // Check if we need to grow
+            let required_size = current_offset + compressed.len() as u64;
+            if required_size > adjacency_range_end {
+                self.grow_adjacency_data_range(type_id, required_size)?;
+                // Reset offset after growth
+                current_offset = self
+                    .layout
+                    .relationships
+                    .get(&type_id)
+                    .unwrap()
+                    .adjacency_data_range
+                    .start;
+            }
+
+            // Store in mmap
+            let start = current_offset as usize;
+            let end = start + compressed.len();
+            if end <= self.mmap.len() {
+                self.mmap[start..end].copy_from_slice(&compressed);
+
+                // Update index entry with offset
+                if let Some(segment) = self.layout.relationships.get_mut(&type_id) {
+                    if let Some(entry) = segment.outgoing_index.entries.get_mut(&node_id) {
+                        entry.list_offset = current_offset;
+                    }
+                }
+                current_offset += compressed.len() as u64;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Grow the adjacency data range for a relationship type
+    fn grow_adjacency_data_range(&mut self, type_id: TypeId, required_size: u64) -> Result<()> {
+        let segment = self.layout.relationships.get_mut(&type_id).ok_or_else(|| {
+            Error::Storage(format!(
+                "Relationship segment not found for type {}",
+                type_id
+            ))
+        })?;
+
+        let current_size = segment.adjacency_data_range.end - segment.adjacency_data_range.start;
+        let growth_size = (required_size as f64 * FILE_GROWTH_FACTOR) as u64;
+        let new_end = segment.adjacency_data_range.start + growth_size.max(current_size * 2);
+
+        segment.adjacency_data_range.end = new_end;
+
+        // Grow file and remap if necessary
+        if new_end > self.mmap.len() as u64 {
+            self.grow_file_and_remap(new_end)?;
+        }
 
         Ok(())
     }

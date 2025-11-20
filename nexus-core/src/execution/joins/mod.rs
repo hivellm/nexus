@@ -149,23 +149,30 @@ impl JoinSelector {
     pub fn select_algorithm(&self) -> JoinAlgorithm {
         let stats = &self.statistics;
 
-        // Merge join for sorted data (lowest cost)
+        // Priority order: MergeJoin (for sorted data) > NestedLoop (for very small data) > HashJoin
+
+        // Merge join is optimal for already sorted data
         if stats.left_sorted && stats.right_sorted {
-            return JoinAlgorithm::MergeJoin;
+            // Only use merge join for reasonably sized datasets to avoid sorting overhead
+            if stats.left_cardinality >= 100 && stats.right_cardinality >= 100 {
+                return JoinAlgorithm::MergeJoin;
+            }
         }
 
-        // Hash join for large datasets with sufficient memory
+        // Nested loop is better for very small datasets (avoids hash table overhead)
+        if stats.left_cardinality <= 50 && stats.right_cardinality <= 50 {
+            return JoinAlgorithm::NestedLoop;
+        }
+
+        // Hash join for medium to large datasets with sufficient memory
         let hash_memory_mb = stats.estimate_hash_join_memory();
-        if stats.left_cardinality > 1000
-            && stats.right_cardinality > 1000
-            && hash_memory_mb < stats.available_memory_mb
-        {
+        if hash_memory_mb < stats.available_memory_mb {
             return JoinAlgorithm::HashJoin {
                 use_bloom_filter: stats.join_key_selectivity < 0.5,
             };
         }
 
-        // Nested loop as fallback
+        // Nested loop as fallback for memory-constrained datasets
         JoinAlgorithm::NestedLoop
     }
 

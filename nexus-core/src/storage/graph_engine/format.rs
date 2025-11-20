@@ -393,6 +393,8 @@ impl StorageRecord for AdjacencyIndexEntry {
 pub struct AdjacencyIndex {
     /// Index entries keyed by node ID
     pub entries: std::collections::HashMap<NodeId, AdjacencyIndexEntry>,
+    /// Temporary relationship ID lists (used before compression)
+    pub rel_id_lists: std::collections::HashMap<NodeId, Vec<u64>>,
     /// Base offset for this index in the file
     pub base_offset: u64,
     /// Total size of the index
@@ -403,6 +405,7 @@ impl AdjacencyIndex {
     pub fn new(base_offset: u64) -> Self {
         Self {
             entries: std::collections::HashMap::new(),
+            rel_id_lists: std::collections::HashMap::new(),
             base_offset,
             size: 0,
         }
@@ -421,11 +424,22 @@ impl AdjacencyIndex {
                 reserved: [0; 3],
             });
         entry.count += 1;
+
+        // Also track the actual relationship ID
+        self.rel_id_lists
+            .entry(node_id)
+            .or_insert_with(Vec::new)
+            .push(rel_id);
     }
 
     /// Get the adjacency entry for a node
     pub fn get_entry(&self, node_id: NodeId) -> Option<&AdjacencyIndexEntry> {
         self.entries.get(&node_id)
+    }
+
+    /// Get the relationship ID list for a node (temporary, before compression)
+    pub fn get_rel_ids(&self, node_id: NodeId) -> Option<&Vec<u64>> {
+        self.rel_id_lists.get(&node_id)
     }
 
     /// Get all node IDs in this index
@@ -544,7 +558,7 @@ pub struct RelationshipSegment {
     pub compression: CompressionType,
 }
 
-/// Compression types for relationship data
+/// Advanced compression types for relationship data
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CompressionType {
     /// No compression
@@ -555,6 +569,14 @@ pub enum CompressionType {
     Delta,
     /// Dictionary-based compression
     Dictionary,
+    /// LZ4 fast compression
+    LZ4,
+    /// Zstandard compression (configurable level)
+    Zstd,
+    /// Adaptive compression (chooses best algorithm automatically)
+    Adaptive,
+    /// SIMD-accelerated run-length encoding
+    SimdRLE,
 }
 
 /// File growth constants

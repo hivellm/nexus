@@ -74,12 +74,13 @@ pub struct QueryCacheStats {
 /// Cache layer types for metrics and monitoring
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum CacheLayer {
-    Page,
-    Object,
-    Index,
-    Query,
-    Relationship,
-    RelationshipQuery,
+    Page,              // L1: Fast memory-mapped pages
+    Object,            // L2: Deserialized objects
+    Index,             // L2: Index lookups
+    Query,             // L2: Query results and plans
+    Relationship,      // L2: Relationship index
+    RelationshipQuery, // L2: Relationship query results
+    Distributed,       // L3: Distributed/shared cache
 }
 
 /// Cache operation types
@@ -89,6 +90,9 @@ pub enum CacheOperation {
     Miss,
     Eviction,
     Invalidation,
+    RemoteHit,   // Hit from distributed cache
+    RemoteMiss,  // Miss from distributed cache
+    PrefetchHit, // Hit from prefetching
 }
 
 /// Cache statistics for monitoring
@@ -156,6 +160,8 @@ pub struct CacheConfig {
     pub index_cache: IndexCacheConfig,
     /// Relationship cache configuration
     pub relationship_cache: RelationshipCacheConfig,
+    /// Distributed cache configuration
+    pub distributed_cache: DistributedCacheConfig,
     /// Global cache settings
     pub global: GlobalCacheConfig,
 }
@@ -225,6 +231,25 @@ pub struct CacheWarmingConfig {
     pub max_warm_items: usize,
 }
 
+/// Distributed cache configuration (L3 cache)
+#[derive(Debug, Clone)]
+pub struct DistributedCacheConfig {
+    /// Enable distributed caching
+    pub enabled: bool,
+    /// Redis connection URL (if using Redis)
+    pub redis_url: Option<String>,
+    /// Maximum memory usage for distributed cache (bytes)
+    pub max_memory: usize,
+    /// Default TTL for distributed cache entries
+    pub default_ttl: Duration,
+    /// Sync interval for local to distributed cache
+    pub sync_interval: Duration,
+    /// Enable compression for network transfer
+    pub enable_compression: bool,
+    /// Cluster mode (for Redis Cluster)
+    pub cluster_mode: bool,
+}
+
 impl Default for CacheWarmingConfig {
     fn default() -> Self {
         Self {
@@ -232,6 +257,20 @@ impl Default for CacheWarmingConfig {
             max_warm_time_secs: 60,
             min_access_count: 10,
             max_warm_items: 1000,
+        }
+    }
+}
+
+impl Default for DistributedCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            redis_url: None,
+            max_memory: 500 * 1024 * 1024,          // 500MB
+            default_ttl: Duration::from_secs(1800), // 30 minutes
+            sync_interval: Duration::from_secs(30), // Sync every 30 seconds
+            enable_compression: true,
+            cluster_mode: false,
         }
     }
 }
@@ -260,6 +299,7 @@ impl Default for CacheConfig {
                 ttl: Duration::from_secs(600), // 10 minutes
             },
             relationship_cache: RelationshipCacheConfig::default(),
+            distributed_cache: DistributedCacheConfig::default(),
             global: GlobalCacheConfig {
                 enable_warming: false,
                 stats_interval: Duration::from_secs(60),
@@ -295,22 +335,118 @@ pub struct PropertyIndexKey {
     pub node_id: u64,
 }
 
-/// Multi-layer cache manager
+/// Distributed cache implementation (L3 cache)
+#[derive(Debug)]
+pub struct DistributedCache {
+    /// In-memory fallback for distributed cache (simulates Redis/file-based storage)
+    local_fallback: HashMap<String, (serde_json::Value, Instant)>,
+    /// Configuration
+    config: DistributedCacheConfig,
+    /// Cache statistics
+    stats: DistributedCacheStats,
+}
+
+#[derive(Debug, Default)]
+pub struct DistributedCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub sets: u64,
+    pub evictions: u64,
+}
+
+impl DistributedCache {
+    pub fn new(config: DistributedCacheConfig) -> Self {
+        Self {
+            local_fallback: HashMap::new(),
+            config,
+            stats: DistributedCacheStats::default(),
+        }
+    }
+
+    /// Get value from distributed cache
+    pub fn get(&mut self, key: &str) -> Option<serde_json::Value> {
+        if !self.config.enabled {
+            return None;
+        }
+
+        match self.local_fallback.get(key) {
+            Some((value, expiry)) if *expiry > Instant::now() => {
+                self.stats.hits += 1;
+                Some(value.clone())
+            }
+            Some(_) => {
+                // Expired entry
+                self.local_fallback.remove(key);
+                self.stats.misses += 1;
+                None
+            }
+            None => {
+                self.stats.misses += 1;
+                None
+            }
+        }
+    }
+
+    /// Set value in distributed cache
+    pub fn set(&mut self, key: String, value: serde_json::Value) {
+        if !self.config.enabled {
+            return;
+        }
+
+        let expiry = Instant::now() + self.config.default_ttl;
+        self.local_fallback.insert(key, (value, expiry));
+        self.stats.sets += 1;
+
+        // Simple size-based eviction
+        while self.memory_usage() > self.config.max_memory {
+            if let Some(key_to_remove) = self.local_fallback.keys().next().cloned() {
+                self.local_fallback.remove(&key_to_remove);
+                self.stats.evictions += 1;
+            }
+        }
+    }
+
+    /// Get cache statistics
+    pub fn stats(&self) -> &DistributedCacheStats {
+        &self.stats
+    }
+
+    /// Estimate memory usage
+    fn memory_usage(&self) -> usize {
+        // Rough estimate: key size + value size + overhead
+        self.local_fallback
+            .iter()
+            .map(|(k, (v, _))| {
+                k.len() + v.to_string().len() + 64 // Overhead
+            })
+            .sum()
+    }
+
+    /// Clear expired entries
+    pub fn cleanup_expired(&mut self) {
+        let now = Instant::now();
+        self.local_fallback.retain(|_, (_, expiry)| *expiry > now);
+    }
+}
+
+/// Multi-layer cache manager with hierarchical caching (L1/L2/L3)
 pub struct MultiLayerCache {
-    /// Page cache (foundation layer)
+    /// Page cache (L1: foundation layer - memory-mapped pages)
     page_cache: PageCache,
-    /// Object cache (deserialization layer)
+    /// Object cache (L2: deserialization layer)
     object_cache: ObjectCache,
-    /// Query cache (execution layer)
+    /// Query cache (L2: execution layer)
     query_cache: QueryCache,
-    /// Index cache (lookup acceleration layer)
+    /// Index cache (L2: lookup acceleration layer)
     index_cache: IndexCache,
-    /// Relationship index (relationship query acceleration layer)
+    /// Relationship index (L2: relationship query acceleration layer)
     relationship_index: RelationshipIndex,
-    /// Relationship query cache (relationship result caching layer)
+    /// Relationship query cache (L2: relationship result caching layer)
     relationship_cache: RelationshipCache,
-    /// Property index manager (WHERE clause acceleration layer)
+    /// Property index manager (L2: WHERE clause acceleration layer)
     property_index_manager: PropertyIndexManager,
+    /// Distributed cache (L3: shared cache across instances)
+    distributed_cache: DistributedCache,
     /// Configuration
     config: CacheConfig,
     /// Statistics
@@ -321,10 +457,12 @@ pub struct MultiLayerCache {
     access_frequency: HashMap<CacheKey, u64>,
     /// Last access time for temporal eviction
     last_access: HashMap<CacheKey, Instant>,
+    /// Last distributed cache sync
+    last_distributed_sync: Instant,
 }
 
 impl MultiLayerCache {
-    /// Create a new multi-layer cache system
+    /// Create a new multi-layer cache system with hierarchical caching
     pub fn new(config: CacheConfig) -> Result<Self> {
         let page_cache = PageCache::new(config.page_cache.max_pages)?;
         let object_cache = ObjectCache::new(config.object_cache.clone());
@@ -336,6 +474,7 @@ impl MultiLayerCache {
             config.global.max_total_memory / 4, // Use 1/4 of total cache memory
             Duration::from_secs(3600),          // 1 hour TTL
         );
+        let distributed_cache = DistributedCache::new(config.distributed_cache.clone());
 
         Ok(Self {
             page_cache,
@@ -345,11 +484,13 @@ impl MultiLayerCache {
             relationship_index,
             relationship_cache,
             property_index_manager,
+            distributed_cache,
             config,
             stats: CacheStats::default(),
             last_stats_update: Instant::now(),
             access_frequency: HashMap::new(),
             last_access: HashMap::new(),
+            last_distributed_sync: Instant::now(),
         })
     }
 
@@ -460,33 +601,60 @@ impl MultiLayerCache {
         }
     }
 
-    /// Get cached query plan
+    /// Get cached query plan with hierarchical lookup (L1 -> L2 -> L3)
     pub fn get_query_plan(&mut self, query_hash: &str) -> Option<serde_json::Value> {
-        // For now, retrieve query plans from the index cache
-        // TODO: Implement proper plan caching in QueryCache
+        // L1: Try local index cache first
         let hash = query_hash
             .as_bytes()
             .iter()
             .fold(0u64, |acc, &b| acc.wrapping_add(b as u64));
-        self.index_cache
-            .get(&IndexKey::FullText(hash))
-            .map(|page| page.data)
+
+        if let Some(page) = self.index_cache.get(&IndexKey::FullText(hash)) {
+            self.stats
+                .record_operation(CacheLayer::Index, CacheOperation::Hit);
+            return Some(page.data);
+        }
+
+        // L2: Try distributed cache
+        let dist_key = format!("query_plan:{}", query_hash);
+        if let Some(plan) = self.distributed_cache.get(&dist_key) {
+            self.stats
+                .record_operation(CacheLayer::Distributed, CacheOperation::RemoteHit);
+            // Promote to L1 cache
+            self.index_cache.put(
+                IndexKey::FullText(hash),
+                plan.clone(),
+                index_cache::IndexType::FullText,
+            );
+            return Some(plan);
+        }
+
+        self.stats
+            .record_operation(CacheLayer::Index, CacheOperation::Miss);
+        self.stats
+            .record_operation(CacheLayer::Distributed, CacheOperation::RemoteMiss);
+        None
     }
 
-    /// Cache query plan
+    /// Cache query plan with hierarchical storage (L1 -> L3)
     pub fn put_query_plan(&mut self, query_hash: String, plan: serde_json::Value) {
-        // For now, store query plans in the index cache as a placeholder
-        // TODO: Implement proper query plan caching in QueryCache
+        let hash = query_hash
+            .as_bytes()
+            .iter()
+            .fold(0u64, |acc, &b| acc.wrapping_add(b as u64));
+
+        // L1: Store in local index cache
         self.index_cache.put(
-            IndexKey::FullText(
-                query_hash
-                    .as_bytes()
-                    .iter()
-                    .fold(0u64, |acc, &b| acc.wrapping_add(b as u64)),
-            ),
-            plan,
+            IndexKey::FullText(hash),
+            plan.clone(),
             index_cache::IndexType::FullText,
         );
+
+        // L3: Sync to distributed cache
+        if self.config.distributed_cache.enabled {
+            let dist_key = format!("query_plan:{}", query_hash);
+            self.distributed_cache.set(dist_key, plan);
+        }
     }
 
     /// Get cache statistics
@@ -503,6 +671,16 @@ impl MultiLayerCache {
     /// Get relationship cache
     pub fn relationship_cache(&self) -> &RelationshipCache {
         &self.relationship_cache
+    }
+
+    /// Get distributed cache
+    pub fn distributed_cache(&self) -> &DistributedCache {
+        &self.distributed_cache
+    }
+
+    /// Get distributed cache statistics
+    pub fn distributed_stats(&self) -> &DistributedCacheStats {
+        self.distributed_cache.stats()
     }
 
     /// Clear all caches
@@ -536,12 +714,53 @@ impl MultiLayerCache {
         }
     }
 
-    /// Update cache statistics if needed
+    /// Update cache statistics and perform maintenance if needed
     fn update_stats_if_needed(&mut self) {
-        if self.last_stats_update.elapsed() >= self.config.global.stats_interval {
+        let now = Instant::now();
+
+        if now.duration_since(self.last_stats_update) >= self.config.global.stats_interval {
             self.update_stats();
-            self.last_stats_update = Instant::now();
+            self.last_stats_update = now;
         }
+
+        // Sync with distributed cache if needed
+        if self.config.distributed_cache.enabled
+            && now.duration_since(self.last_distributed_sync)
+                >= self.config.distributed_cache.sync_interval
+        {
+            self.sync_with_distributed_cache();
+            self.last_distributed_sync = now;
+        }
+
+        // Cleanup expired entries in distributed cache
+        self.distributed_cache.cleanup_expired();
+    }
+
+    /// Sync frequently accessed items with distributed cache
+    fn sync_with_distributed_cache(&mut self) {
+        if !self.config.distributed_cache.enabled {
+            return;
+        }
+
+        tracing::debug!("Syncing frequently accessed items to distributed cache");
+
+        // In a real implementation, this would track access patterns and sync
+        // the most frequently accessed items. For now, we'll sync cache statistics
+        // and configuration to demonstrate the hierarchical concept.
+
+        let local_stats = serde_json::json!({
+            "layers": {
+                "page_cache_size": self.page_cache.stats().cache_size,
+                "object_cache_size": self.object_cache.size(),
+                "query_cache_size": self.query_cache.size(),
+                "index_cache_size": self.index_cache.size(),
+            },
+            "total_operations": self.stats.total_operations(),
+            "last_sync": chrono::Utc::now().timestamp(),
+        });
+
+        self.distributed_cache
+            .set("nexus:cache_stats".to_string(), local_stats);
     }
 
     /// Force update of all cache statistics
@@ -587,13 +806,26 @@ impl MultiLayerCache {
         self.stats
             .update_memory(CacheLayer::RelationshipQuery, rel_cache_stats.memory_usage);
 
-        // Calculate hit rates
+        // Update distributed cache stats
+        let dist_stats = self.distributed_cache.stats();
+        self.stats.update_size(
+            CacheLayer::Distributed,
+            self.distributed_cache.local_fallback.len(),
+        );
+        self.stats.update_memory(
+            CacheLayer::Distributed,
+            self.distributed_cache.memory_usage(),
+        );
+
+        // Calculate hit rates for all layers
         for &layer in &[
             CacheLayer::Page,
             CacheLayer::Object,
             CacheLayer::Query,
             CacheLayer::Index,
             CacheLayer::Relationship,
+            CacheLayer::RelationshipQuery,
+            CacheLayer::Distributed,
         ] {
             self.stats.calculate_hit_rate(layer);
         }

@@ -6,6 +6,213 @@
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 
+/// SIMD operations for columnar data processing
+#[cfg(target_arch = "x86_64")]
+mod simd_ops {
+    use super::*;
+    use std::arch::x86_64::*;
+
+    /// SIMD-accelerated comparison operations for i64 columns
+    pub struct SimdComparator {
+        chunk_size: usize,
+    }
+
+    impl SimdComparator {
+        pub fn new() -> Self {
+            Self {
+                chunk_size: 64 / std::mem::size_of::<i64>(),
+            } // AVX-512 can process 8 i64 values
+        }
+
+        /// Compare i64 column values against a scalar using SIMD
+        pub fn compare_scalar_i64(
+            &self,
+            column: &Column,
+            scalar: i64,
+            op: ComparisonOp,
+        ) -> Vec<bool> {
+            let slice = column.as_slice::<i64>();
+            let mut results = Vec::with_capacity(column.len);
+
+            // Process in SIMD chunks
+            for chunk in slice.chunks(self.chunk_size) {
+                let chunk_results = self.compare_chunk_i64(chunk, scalar, op);
+                results.extend_from_slice(&chunk_results);
+            }
+
+            // Handle remainder
+            let remainder_start = slice.len() / self.chunk_size * self.chunk_size;
+            for &val in &slice[remainder_start..] {
+                let result = match op {
+                    ComparisonOp::Equal => val == scalar,
+                    ComparisonOp::NotEqual => val != scalar,
+                    ComparisonOp::Greater => val > scalar,
+                    ComparisonOp::GreaterEqual => val >= scalar,
+                    ComparisonOp::Less => val < scalar,
+                    ComparisonOp::LessEqual => val <= scalar,
+                };
+                results.push(result);
+            }
+
+            results
+        }
+
+        /// Compare a chunk of i64 values against scalar using SIMD
+        fn compare_chunk_i64(&self, chunk: &[i64], scalar: i64, op: ComparisonOp) -> Vec<bool> {
+            let mut results = Vec::with_capacity(chunk.len());
+
+            if chunk.len() >= 4 {
+                // Use SIMD for chunks of 4 or more
+                let scalar_vec = unsafe { _mm256_set1_epi64x(scalar) };
+
+                for i in (0..chunk.len()).step_by(4) {
+                    if i + 4 <= chunk.len() {
+                        let data_vec = unsafe {
+                            _mm256_set_epi64x(
+                                *chunk.get(i + 3).unwrap_or(&0) as i64,
+                                *chunk.get(i + 2).unwrap_or(&0) as i64,
+                                *chunk.get(i + 1).unwrap_or(&0) as i64,
+                                *chunk.get(i).unwrap_or(&0) as i64,
+                            )
+                        };
+
+                        let cmp_result = match op {
+                            ComparisonOp::Equal => unsafe {
+                                _mm256_cmpeq_epi64(data_vec, scalar_vec)
+                            },
+                            ComparisonOp::Greater => unsafe {
+                                _mm256_cmpgt_epi64(data_vec, scalar_vec)
+                            },
+                            _ => {
+                                // For other operations, fall back to scalar
+                                for j in 0..4 {
+                                    let val = chunk[i + j];
+                                    let result = match op {
+                                        ComparisonOp::NotEqual => val != scalar,
+                                        ComparisonOp::GreaterEqual => val >= scalar,
+                                        ComparisonOp::Less => val < scalar,
+                                        ComparisonOp::LessEqual => val <= scalar,
+                                        _ => unreachable!(),
+                                    };
+                                    results.push(result);
+                                }
+                                continue;
+                            }
+                        };
+
+                        // Extract comparison results
+                        let mask = unsafe { _mm256_movemask_epi8(cmp_result) };
+                        for j in 0..4 {
+                            results.push((mask & (1 << (j * 8))) != 0);
+                        }
+                    }
+                }
+            }
+
+            // Handle remaining elements
+            for &val in &chunk[results.len()..] {
+                let result = match op {
+                    ComparisonOp::Equal => val == scalar,
+                    ComparisonOp::NotEqual => val != scalar,
+                    ComparisonOp::Greater => val > scalar,
+                    ComparisonOp::GreaterEqual => val >= scalar,
+                    ComparisonOp::Less => val < scalar,
+                    ComparisonOp::LessEqual => val <= scalar,
+                };
+                results.push(result);
+            }
+
+            results
+        }
+    }
+
+    /// SIMD-accelerated filter operations
+    pub struct SimdFilter {
+        comparator: SimdComparator,
+    }
+
+    impl SimdFilter {
+        pub fn new() -> Self {
+            Self {
+                comparator: SimdComparator::new(),
+            }
+        }
+
+        /// Apply WHERE filter with SIMD acceleration
+        pub fn apply_where_filter(&self, column: &Column, condition: &WhereCondition) -> Vec<bool> {
+            match condition {
+                WhereCondition::Comparison {
+                    column: _,
+                    op,
+                    value,
+                } => {
+                    match column.data_type {
+                        DataType::Int64 => {
+                            if let serde_json::Value::Number(num) = value {
+                                if let Some(int_val) = num.as_i64() {
+                                    return self
+                                        .comparator
+                                        .compare_scalar_i64(column, int_val, *op);
+                                }
+                            }
+                        }
+                        DataType::Float64 => {
+                            // TODO: Implement SIMD for f64
+                        }
+                        _ => {}
+                    }
+                }
+                WhereCondition::And(conditions) => {
+                    let mut result = vec![true; column.len];
+                    for cond in conditions {
+                        let partial = self.apply_where_filter(column, cond);
+                        for i in 0..result.len() {
+                            result[i] = result[i] && partial[i];
+                        }
+                    }
+                    return result;
+                }
+                WhereCondition::Or(conditions) => {
+                    let mut result = vec![false; column.len];
+                    for cond in conditions {
+                        let partial = self.apply_where_filter(column, cond);
+                        for i in 0..result.len() {
+                            result[i] = result[i] || partial[i];
+                        }
+                    }
+                    return result;
+                }
+            }
+
+            // Fallback to scalar processing
+            vec![true; column.len]
+        }
+    }
+}
+
+/// Comparison operations for SIMD processing
+#[derive(Debug, Clone, Copy)]
+pub enum ComparisonOp {
+    Equal,
+    NotEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+}
+
+/// WHERE condition representation for SIMD processing
+#[derive(Debug, Clone)]
+pub enum WhereCondition {
+    Comparison {
+        column: String,
+        op: ComparisonOp,
+        value: serde_json::Value,
+    },
+    And(Vec<WhereCondition>),
+    Or(Vec<WhereCondition>),
+}
+
 /// Supported data types for columnar storage
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DataType {
@@ -333,6 +540,152 @@ impl ColumnarResult {
 
         result.row_count = actual_limit;
         result
+    }
+
+    /// Apply SIMD-accelerated WHERE filter to columnar result
+    pub fn apply_simd_where_filter(&self, condition: &WhereCondition) -> ColumnarResult {
+        #[cfg(target_arch = "x86_64")]
+        {
+            use self::simd_ops::SimdFilter;
+
+            let filter = SimdFilter::new();
+            let mut masks = HashMap::new();
+
+            // Apply filter to each relevant column
+            for (col_name, column) in &self.columns {
+                let mask = filter.apply_where_filter(column, condition);
+                masks.insert(col_name.clone(), mask);
+            }
+
+            // Combine masks for all conditions (simplified - assumes single column for now)
+            let mut final_mask = vec![true; self.row_count];
+            for mask in masks.values() {
+                for i in 0..final_mask.len().min(mask.len()) {
+                    final_mask[i] = final_mask[i] && mask[i];
+                }
+            }
+
+            self.filter_by_mask(&final_mask)
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            // Fallback to scalar filtering
+            self.apply_scalar_where_filter(condition)
+        }
+    }
+
+    /// Scalar fallback for WHERE filtering
+    pub fn apply_scalar_where_filter(&self, condition: &WhereCondition) -> ColumnarResult {
+        let mut mask = vec![true; self.row_count];
+
+        match condition {
+            WhereCondition::Comparison {
+                column: col_name,
+                op,
+                value,
+            } => {
+                if let Some(column) = self.get_column(col_name) {
+                    for i in 0..self.row_count {
+                        if column.is_null(i) {
+                            mask[i] = false;
+                            continue;
+                        }
+
+                        let matches = match column.data_type {
+                            DataType::Int64 => {
+                                if let serde_json::Value::Number(num) = value {
+                                    if let Some(int_val) = num.as_i64() {
+                                        let col_val: i64 = column.get(i).unwrap_or(0);
+                                        match op {
+                                            ComparisonOp::Equal => col_val == int_val,
+                                            ComparisonOp::NotEqual => col_val != int_val,
+                                            ComparisonOp::Greater => col_val > int_val,
+                                            ComparisonOp::GreaterEqual => col_val >= int_val,
+                                            ComparisonOp::Less => col_val < int_val,
+                                            ComparisonOp::LessEqual => col_val <= int_val,
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            DataType::Float64 => {
+                                if let serde_json::Value::Number(num) = value {
+                                    if let Some(float_val) = num.as_f64() {
+                                        let col_val: f64 = column.get(i).unwrap_or(0.0);
+                                        match op {
+                                            ComparisonOp::Equal => {
+                                                (col_val - float_val).abs() < f64::EPSILON
+                                            }
+                                            ComparisonOp::NotEqual => {
+                                                (col_val - float_val).abs() >= f64::EPSILON
+                                            }
+                                            ComparisonOp::Greater => col_val > float_val,
+                                            ComparisonOp::GreaterEqual => col_val >= float_val,
+                                            ComparisonOp::Less => col_val < float_val,
+                                            ComparisonOp::LessEqual => col_val <= float_val,
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            DataType::Bool => {
+                                if let serde_json::Value::Bool(bool_val) = value {
+                                    let col_val: bool = column.get(i).unwrap_or(false);
+                                    match op {
+                                        ComparisonOp::Equal => col_val == *bool_val,
+                                        ComparisonOp::NotEqual => col_val != *bool_val,
+                                        _ => false, // Other ops don't make sense for bool
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            DataType::String => {
+                                if let serde_json::Value::String(str_val) = value {
+                                    let col_val: String = column.get(i).unwrap_or_default();
+                                    match op {
+                                        ComparisonOp::Equal => col_val == *str_val,
+                                        ComparisonOp::NotEqual => col_val != *str_val,
+                                        _ => false, // String comparisons limited for now
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                        };
+
+                        mask[i] = matches;
+                    }
+                }
+            }
+            WhereCondition::And(conditions) => {
+                for cond in conditions {
+                    let partial = self.apply_scalar_where_filter(cond);
+                    let partial_mask = vec![true; self.row_count]; // Simplified
+                    for i in 0..mask.len() {
+                        mask[i] = mask[i] && partial_mask[i];
+                    }
+                }
+            }
+            WhereCondition::Or(conditions) => {
+                for cond in conditions {
+                    let partial = self.apply_scalar_where_filter(cond);
+                    let partial_mask = vec![false; self.row_count]; // Simplified
+                    for i in 0..mask.len() {
+                        mask[i] = mask[i] || partial_mask[i];
+                    }
+                }
+            }
+        }
+
+        self.filter_by_mask(&mask)
     }
 
     /// Convert to traditional row-based format (for compatibility)

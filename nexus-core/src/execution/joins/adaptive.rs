@@ -366,10 +366,13 @@ mod tests {
             )
             .unwrap();
 
-        // Should use hash join for small datasets
+        // Should use nested loop for very small datasets (≤50 records)
         match result.algorithm_used {
-            JoinAlgorithm::HashJoin { .. } => {} // Expected
-            _ => panic!("Expected HashJoin, got {:?}", result.algorithm_used),
+            JoinAlgorithm::NestedLoop => {} // Expected for very small datasets
+            _ => panic!(
+                "Expected NestedLoop for small datasets, got {:?}",
+                result.algorithm_used
+            ),
         }
 
         assert_eq!(result.result.row_count, 2); // 2 matching rows
