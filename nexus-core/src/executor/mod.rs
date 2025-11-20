@@ -16,6 +16,33 @@ pub mod parser;
 /// Query planner for optimizing Cypher execution
 pub mod planner;
 
+/// Executor configuration for controlling execution behavior
+#[derive(Debug, Clone)]
+pub struct ExecutorConfig {
+    /// Enable vectorized execution for better performance on large datasets
+    pub enable_vectorized_execution: bool,
+    /// Enable JIT compilation for frequently executed queries
+    pub enable_jit_compilation: bool,
+    /// Enable parallel execution for CPU-intensive operations
+    pub enable_parallel_execution: bool,
+    /// Minimum dataset size to trigger vectorized operations
+    pub vectorized_threshold: usize,
+    /// Enable advanced join algorithms (hash joins, merge joins)
+    pub enable_advanced_joins: bool,
+}
+
+impl Default for ExecutorConfig {
+    fn default() -> Self {
+        Self {
+            enable_vectorized_execution: true,
+            enable_jit_compilation: true,
+            enable_parallel_execution: false, // TODO: Re-enable after stability testing
+            vectorized_threshold: 50,
+            enable_advanced_joins: true,
+        }
+    }
+}
+
 use crate::catalog::Catalog;
 use crate::execution::operators::{VectorizedCondition, VectorizedValue};
 use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
@@ -425,6 +452,8 @@ pub struct Executor {
     query_count: std::sync::atomic::AtomicUsize,
     /// Property access statistics for automatic indexing
     property_access_stats: Arc<RwLock<HashMap<String, usize>>>,
+    /// Executor configuration for controlling execution behavior
+    config: ExecutorConfig,
     // TODO: Add JIT and parallel execution after core optimizations
 }
 
@@ -436,6 +465,7 @@ impl Clone for Executor {
                 self.query_count.load(std::sync::atomic::Ordering::Relaxed),
             ),
             property_access_stats: self.property_access_stats.clone(),
+            config: self.config.clone(),
         }
     }
 }
@@ -508,17 +538,29 @@ impl ExecutorShared {
 }
 
 impl Executor {
-    /// Create a new executor
+    /// Create a new executor with default configuration
     pub fn new(
         catalog: &Catalog,
         store: &RecordStore,
         label_index: &LabelIndex,
         knn_index: &KnnIndex,
     ) -> Result<Self> {
+        Self::new_with_config(catalog, store, label_index, knn_index, ExecutorConfig::default())
+    }
+
+    /// Create a new executor with custom configuration
+    pub fn new_with_config(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+        config: ExecutorConfig,
+    ) -> Result<Self> {
         Ok(Self {
             shared: ExecutorShared::new(catalog, store, label_index, knn_index)?,
             query_count: std::sync::atomic::AtomicUsize::new(0),
             property_access_stats: Arc::new(RwLock::new(HashMap::new())),
+            config,
         })
     }
 
@@ -530,6 +572,25 @@ impl Executor {
         knn_index: &KnnIndex,
         udf_registry: UdfRegistry,
     ) -> Result<Self> {
+        Self::with_udf_registry_and_config(
+            catalog,
+            store,
+            label_index,
+            knn_index,
+            udf_registry,
+            ExecutorConfig::default(),
+        )
+    }
+
+    /// Create a new executor with custom UDF registry and configuration
+    pub fn with_udf_registry_and_config(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+        udf_registry: UdfRegistry,
+        config: ExecutorConfig,
+    ) -> Result<Self> {
         Ok(Self {
             shared: ExecutorShared::with_udf_registry(
                 catalog,
@@ -540,6 +601,7 @@ impl Executor {
             )?,
             query_count: std::sync::atomic::AtomicUsize::new(0),
             property_access_stats: Arc::new(RwLock::new(HashMap::new())),
+            config,
         })
     }
 
@@ -4461,8 +4523,8 @@ impl Executor {
         let right_size = right_context.result_set.rows.len();
 
         // Only use advanced joins for datasets large enough to benefit from optimization
-        // Minimum threshold: 50 rows on each side to justify columnar overhead
-        if left_size >= 50 && right_size >= 50 {
+        // Minimum threshold: configurable via executor config to justify columnar overhead
+        if self.config.enable_vectorized_execution && left_size >= self.config.vectorized_threshold && right_size >= self.config.vectorized_threshold {
             if let Ok(result) = self.try_advanced_relationship_join(
                 &left_context.result_set,
                 &right_context.result_set,
@@ -10076,7 +10138,8 @@ mod tests {
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new_default(128).unwrap();
 
-        let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
+        let config = ExecutorConfig::default();
+        let executor = Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config).unwrap();
         (executor, dir)
     }
 
