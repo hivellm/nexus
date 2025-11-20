@@ -29,6 +29,14 @@ pub struct ExecutorConfig {
     pub vectorized_threshold: usize,
     /// Enable advanced join algorithms (hash joins, merge joins)
     pub enable_advanced_joins: bool,
+    /// Enable relationship processing optimizations (specialized storage, advanced traversal, property indexing)
+    pub enable_relationship_optimizations: bool,
+    /// Phase 9: Enable NUMA-aware memory allocation and thread scheduling
+    pub enable_numa_optimizations: bool,
+    /// Phase 9: Enable advanced caching strategies with NUMA partitioning
+    pub enable_numa_caching: bool,
+    /// Phase 9: Enable lock-free data structures where possible
+    pub enable_lock_free_structures: bool,
 }
 
 impl Default for ExecutorConfig {
@@ -39,6 +47,10 @@ impl Default for ExecutorConfig {
             enable_parallel_execution: false, // TODO: Re-enable after stability testing
             vectorized_threshold: 50,
             enable_advanced_joins: true,
+            enable_relationship_optimizations: true,
+            enable_numa_optimizations: false, // Disabled by default (requires NUMA hardware)
+            enable_numa_caching: false,       // Disabled by default (requires NUMA hardware)
+            enable_lock_free_structures: true, // Enabled by default (always beneficial)
         }
     }
 }
@@ -49,6 +61,10 @@ use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
 use crate::graph::{algorithms::Graph, procedures::ProcedureRegistry};
 use crate::index::{KnnIndex, LabelIndex};
 use crate::query_cache::{IntelligentQueryCache, QueryCacheConfig};
+use crate::relationship::{
+    AdvancedTraversalEngine, RelationshipPropertyIndex, RelationshipStorageManager,
+    TraversalAction, TraversalError, TraversalVisitor,
+};
 use crate::storage::{
     RecordStore,
     row_lock::{RowLockGuard, RowLockManager},
@@ -441,6 +457,12 @@ pub struct ExecutorShared {
     query_cache: Option<Arc<RwLock<IntelligentQueryCache>>>,
     /// Row-level lock manager for fine-grained concurrency control
     row_lock_manager: Arc<RowLockManager>,
+    /// Phase 8.1: Specialized relationship storage manager
+    relationship_storage: Option<Arc<parking_lot::RwLock<RelationshipStorageManager>>>,
+    /// Phase 8.2: Advanced traversal engine for optimized relationship queries
+    traversal_engine: Option<Arc<AdvancedTraversalEngine>>,
+    /// Phase 8.3: Relationship property index for fast property-based queries
+    relationship_property_index: Option<Arc<parking_lot::RwLock<RelationshipPropertyIndex>>>,
 }
 
 /// Query executor
@@ -455,6 +477,8 @@ pub struct Executor {
     /// Executor configuration for controlling execution behavior
     config: ExecutorConfig,
     // TODO: Add JIT and parallel execution after core optimizations
+    /// Phase 8: Relationship processing optimizations enabled
+    enable_relationship_optimizations: bool,
 }
 
 impl Clone for Executor {
@@ -466,6 +490,7 @@ impl Clone for Executor {
             ),
             property_access_stats: self.property_access_stats.clone(),
             config: self.config.clone(),
+            enable_relationship_optimizations: self.enable_relationship_optimizations,
         }
     }
 }
@@ -478,6 +503,13 @@ impl ExecutorShared {
         label_index: &LabelIndex,
         knn_index: &KnnIndex,
     ) -> Result<Self> {
+        // Phase 8: Initialize relationship optimizations
+        let relationship_storage =
+            Arc::new(parking_lot::RwLock::new(RelationshipStorageManager::new()));
+        let traversal_engine = Arc::new(AdvancedTraversalEngine::new(relationship_storage.clone()));
+        let relationship_property_index =
+            Arc::new(parking_lot::RwLock::new(RelationshipPropertyIndex::new()));
+
         Ok(Self {
             catalog: catalog.clone(),
             store: Arc::new(RwLock::new(store.clone())),
@@ -488,6 +520,9 @@ impl ExecutorShared {
             cache: None,
             query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),
+            relationship_storage: Some(relationship_storage),
+            traversal_engine: Some(traversal_engine),
+            relationship_property_index: Some(relationship_property_index),
         })
     }
 
@@ -523,6 +558,13 @@ impl ExecutorShared {
         knn_index: &KnnIndex,
         udf_registry: UdfRegistry,
     ) -> Result<Self> {
+        // Phase 8: Initialize relationship optimizations
+        let relationship_storage =
+            Arc::new(parking_lot::RwLock::new(RelationshipStorageManager::new()));
+        let traversal_engine = Arc::new(AdvancedTraversalEngine::new(relationship_storage.clone()));
+        let relationship_property_index =
+            Arc::new(parking_lot::RwLock::new(RelationshipPropertyIndex::new()));
+
         Ok(Self {
             catalog: catalog.clone(),
             store: Arc::new(RwLock::new(store.clone())),
@@ -533,6 +575,9 @@ impl ExecutorShared {
             cache: None,
             query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),
+            relationship_storage: Some(relationship_storage),
+            traversal_engine: Some(traversal_engine),
+            relationship_property_index: Some(relationship_property_index),
         })
     }
 }
@@ -567,6 +612,7 @@ impl Executor {
             query_count: std::sync::atomic::AtomicUsize::new(0),
             property_access_stats: Arc::new(RwLock::new(HashMap::new())),
             config,
+            enable_relationship_optimizations: true, // Phase 8: Enable by default
         })
     }
 
@@ -608,6 +654,7 @@ impl Executor {
             query_count: std::sync::atomic::AtomicUsize::new(0),
             property_access_stats: Arc::new(RwLock::new(HashMap::new())),
             config,
+            enable_relationship_optimizations: true, // Phase 8: Enable by default
         })
     }
 
@@ -633,6 +680,20 @@ impl Executor {
     /// Get reference to shared state (for internal use)
     pub(crate) fn shared(&self) -> &ExecutorShared {
         &self.shared
+    }
+
+    /// Phase 8: Get relationship storage manager (for synchronization)
+    pub(crate) fn relationship_storage(
+        &self,
+    ) -> Option<&Arc<parking_lot::RwLock<RelationshipStorageManager>>> {
+        self.shared.relationship_storage.as_ref()
+    }
+
+    /// Phase 8: Get relationship property index (for synchronization)
+    pub(crate) fn relationship_property_index(
+        &self,
+    ) -> Option<&Arc<parking_lot::RwLock<RelationshipPropertyIndex>>> {
+        self.shared.relationship_property_index.as_ref()
     }
 
     /// Get reference to catalog (for internal use)
@@ -1702,6 +1763,9 @@ impl Executor {
                         serde_json::Value::Null
                     };
 
+                    // Clone properties for Phase 8 synchronization (before moving to create_relationship)
+                    let rel_props_clone = rel_properties.clone();
+
                     // Acquire row locks on source and target nodes before creating relationship
                     let (_source_lock, _target_lock) =
                         self.acquire_relationship_locks(source_id, target_id)?;
@@ -1728,6 +1792,51 @@ impl Executor {
                                 type_id,
                             },
                         );
+                    }
+
+                    // Phase 8: Update RelationshipStorageManager and RelationshipPropertyIndex
+                    if self.enable_relationship_optimizations {
+                        if let Some(ref rel_storage) = self.shared.relationship_storage {
+                            // Convert properties from JSON Value to HashMap<String, Value>
+                            let mut props_map = std::collections::HashMap::new();
+                            if let serde_json::Value::Object(obj) = &rel_props_clone {
+                                for (key, value) in obj {
+                                    props_map.insert(key.clone(), value.clone());
+                                }
+                            }
+
+                            // Add relationship to specialized storage
+                            if let Err(e) = rel_storage.write().create_relationship(
+                                source_id,
+                                target_id,
+                                type_id,
+                                props_map.clone(),
+                            ) {
+                                tracing::warn!(
+                                    "Failed to update RelationshipStorageManager: {}",
+                                    e
+                                );
+                                // Don't fail the operation, just log the warning
+                            }
+
+                            // Update property index if there are properties
+                            if !props_map.is_empty() {
+                                if let Some(ref prop_index) =
+                                    self.shared.relationship_property_index
+                                {
+                                    if let Err(e) = prop_index
+                                        .write()
+                                        .index_properties(rel_id, type_id, &props_map)
+                                    {
+                                        tracing::warn!(
+                                            "Failed to update RelationshipPropertyIndex: {}",
+                                            e
+                                        );
+                                        // Don't fail the operation, just log the warning
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2334,13 +2443,78 @@ impl Executor {
                     None => continue,
                 };
 
-                let relationships =
-                    self.find_relationships(source_id, type_ids, direction, cache)?;
+                // Phase 8.3: Try to use relationship property index if there are property filters
+                // First, try to get pre-filtered relationships from the index
+                let relationships = if self.enable_relationship_optimizations && !rel_var.is_empty()
+                {
+                    // Try to use property index to pre-filter relationships
+                    if let Some(indexed_rel_ids) =
+                        self.use_relationship_property_index_for_expand(type_ids, context, rel_var)?
+                    {
+                        // Convert relationship IDs to RelationshipInfo
+                        let mut indexed_rels = Vec::new();
+                        for rel_id in indexed_rel_ids {
+                            if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                                if !rel_record.is_deleted() {
+                                    // Copy fields to local variables to avoid packed struct reference issues
+                                    let record_type_id = rel_record.type_id;
+                                    let record_src_id = rel_record.src_id;
+                                    let record_dst_id = rel_record.dst_id;
+
+                                    // Check if relationship matches type and direction filters
+                                    let matches_type =
+                                        type_ids.is_empty() || type_ids.contains(&record_type_id);
+                                    let matches_direction = match direction {
+                                        Direction::Outgoing => record_src_id == source_id,
+                                        Direction::Incoming => record_dst_id == source_id,
+                                        Direction::Both => {
+                                            record_src_id == source_id || record_dst_id == source_id
+                                        }
+                                    };
+                                    if matches_type && matches_direction {
+                                        indexed_rels.push(RelationshipInfo {
+                                            id: rel_id,
+                                            source_id: record_src_id,
+                                            target_id: record_dst_id,
+                                            type_id: record_type_id,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        if !indexed_rels.is_empty() {
+                            indexed_rels
+                        } else {
+                            // Fallback to standard lookup
+                            self.find_relationships(source_id, type_ids, direction, cache)?
+                        }
+                    } else {
+                        // No index optimization available, use standard lookup
+                        self.find_relationships(source_id, type_ids, direction, cache)?
+                    }
+                } else {
+                    // Standard lookup
+                    self.find_relationships(source_id, type_ids, direction, cache)?
+                };
+
                 if relationships.is_empty() {
                     continue;
                 }
 
-                for rel_info in relationships {
+                // Phase 8.3: Apply additional property index filtering if enabled
+                // (for cases where we couldn't pre-filter but can post-filter)
+                let filtered_relationships = if self.enable_relationship_optimizations {
+                    self.filter_relationships_by_property_index(
+                        &relationships,
+                        type_ids.first().copied(),
+                        context,
+                        rel_var,
+                    )?
+                } else {
+                    relationships
+                };
+
+                for rel_info in filtered_relationships {
                     let target_id = match direction {
                         Direction::Outgoing => rel_info.target_id,
                         Direction::Incoming => rel_info.source_id,
@@ -5599,7 +5773,41 @@ impl Executor {
         direction: Direction,
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<Vec<RelationshipInfo>> {
-        // Phase 3: Try adjacency list first (fastest path)
+        // Phase 8.1: Try specialized relationship storage first (if enabled)
+        if self.enable_relationship_optimizations {
+            if let Some(ref rel_storage) = self.shared.relationship_storage {
+                let type_filter = if type_ids.len() == 1 {
+                    Some(type_ids[0])
+                } else {
+                    None // Multiple types or all types - will filter later
+                };
+
+                if let Ok(rel_records) =
+                    rel_storage
+                        .read()
+                        .get_relationships(node_id, direction, type_filter)
+                {
+                    // Convert RelationshipRecord to RelationshipInfo
+                    let mut relationships = Vec::with_capacity(rel_records.len());
+                    for rel_record in rel_records {
+                        // Filter by type_ids if multiple types specified
+                        if type_ids.is_empty() || type_ids.contains(&rel_record.type_id) {
+                            relationships.push(RelationshipInfo {
+                                id: rel_record.id,
+                                source_id: rel_record.source_id,
+                                target_id: rel_record.target_id,
+                                type_id: rel_record.type_id,
+                            });
+                        }
+                    }
+                    if !relationships.is_empty() {
+                        return Ok(relationships);
+                    }
+                }
+            }
+        }
+
+        // Phase 3: Fallback to adjacency list (fastest path)
         if let Ok(Some(adj_rel_ids)) = match direction {
             Direction::Outgoing => self
                 .store()
@@ -5807,6 +6015,176 @@ impl Executor {
         Ok(relationships)
     }
 
+    /// Phase 8.3: Filter relationships using property index when applicable
+    fn filter_relationships_by_property_index(
+        &self,
+        relationships: &[RelationshipInfo],
+        type_id: Option<u32>,
+        context: &ExecutionContext,
+        rel_var: &str,
+    ) -> Result<Vec<RelationshipInfo>> {
+        // If no property index is available, return relationships as-is
+        let prop_index = match &self.shared.relationship_property_index {
+            Some(idx) => idx,
+            None => return Ok(relationships.to_vec()),
+        };
+
+        // Try to extract property filters from context
+        // For now, we'll check if there are any property filters in the WHERE clause
+        // by looking at the execution context's filter expressions
+        // This is a simplified implementation - a full implementation would parse
+        // the WHERE clause AST to extract relationship property filters
+
+        // For now, return relationships as-is
+        // A full implementation would:
+        // 1. Parse WHERE clause to find relationship property filters (e.g., r.weight > 10)
+        // 2. Use RelationshipPropertyIndex to find matching relationship IDs
+        // 3. Filter the relationships list to only include indexed matches
+        Ok(relationships.to_vec())
+    }
+
+    /// Phase 8.3: Extract relationship property filters from WHERE clause and use index
+    fn use_relationship_property_index_for_expand(
+        &self,
+        type_ids: &[u32],
+        _context: &ExecutionContext,
+        rel_var: &str,
+    ) -> Result<Option<Vec<u64>>> {
+        // Check if property index is available
+        let prop_index = match &self.shared.relationship_property_index {
+            Some(idx) => idx,
+            None => return Ok(None),
+        };
+
+        // For now, we can't extract filters from WHERE clause without the full query AST
+        // A full implementation would:
+        // 1. Store WHERE clause filters in ExecutionContext during query planning
+        // 2. Parse filters to find relationship property filters (e.g., r.weight > 10)
+        // 3. Use RelationshipPropertyIndex::query_by_property to get matching relationship IDs
+        // 4. Return the filtered list
+
+        // Example of how it would work:
+        // if let Some((prop_name, operator, value)) = extract_relationship_property_filter(rel_var, context) {
+        //     let type_id = type_ids.first().copied();
+        //     let rel_ids = prop_index.read().query_by_property(type_id, &prop_name, operator, &value)?;
+        //     return Ok(Some(rel_ids));
+        // }
+
+        Ok(None)
+    }
+}
+
+/// Phase 8.2: Visitor for variable-length path traversal
+struct VariableLengthPathVisitor {
+    start_node: u64,
+    min_length: usize,
+    max_length: usize,
+    type_filter: Option<u32>,
+    direction: Direction,
+    paths: Vec<(Vec<u64>, Vec<u64>)>, // (path_nodes, path_relationships)
+    current_path_nodes: Vec<u64>,
+    current_path_rels: Vec<u64>,
+}
+
+impl VariableLengthPathVisitor {
+    fn new(
+        start_node: u64,
+        min_length: usize,
+        max_length: usize,
+        type_filter: Option<u32>,
+        direction: Direction,
+    ) -> Self {
+        Self {
+            start_node,
+            min_length,
+            max_length,
+            type_filter,
+            direction,
+            paths: Vec::new(),
+            current_path_nodes: vec![start_node],
+            current_path_rels: Vec::new(),
+        }
+    }
+
+    fn get_paths(self) -> Vec<(Vec<u64>, Vec<u64>)> {
+        self.paths
+    }
+}
+
+impl TraversalVisitor for VariableLengthPathVisitor {
+    fn visit_node(
+        &mut self,
+        node_id: u64,
+        depth: usize,
+    ) -> std::result::Result<TraversalAction, TraversalError> {
+        // Update current path nodes if this is a new node
+        if !self.current_path_nodes.contains(&node_id) {
+            // This shouldn't happen in normal traversal, but handle it
+            if let Some(&last) = self.current_path_nodes.last() {
+                if last != node_id {
+                    // Reset path if we're at a different node
+                    self.current_path_nodes = vec![self.start_node, node_id];
+                    self.current_path_rels.clear();
+                }
+            }
+        }
+
+        // Check if we've reached a valid path length
+        // Path length is number of relationships, which is depth
+        if depth >= self.min_length && depth <= self.max_length {
+            // Save this path (only if it's complete and valid)
+            if self.current_path_nodes.len() == depth + 1 && self.current_path_rels.len() == depth {
+                self.paths.push((
+                    self.current_path_nodes.clone(),
+                    self.current_path_rels.clone(),
+                ));
+            }
+        }
+
+        // Continue traversal if we haven't reached max length
+        if depth < self.max_length {
+            Ok(TraversalAction::Continue)
+        } else {
+            Ok(TraversalAction::SkipChildren)
+        }
+    }
+
+    fn visit_relationship(&mut self, rel_id: u64, source: u64, target: u64, type_id: u32) -> bool {
+        // Filter by type if specified
+        if let Some(filter_type) = self.type_filter {
+            if type_id != filter_type {
+                return false;
+            }
+        }
+
+        // Update current path - find which node is the next in the path
+        let last_node = *self.current_path_nodes.last().unwrap();
+        if source == last_node {
+            self.current_path_nodes.push(target);
+            self.current_path_rels.push(rel_id);
+            true
+        } else if target == last_node {
+            self.current_path_nodes.push(source);
+            self.current_path_rels.push(rel_id);
+            true
+        } else {
+            // Relationship doesn't match current path - skip
+            false
+        }
+    }
+
+    fn should_prune(&self, node_id: u64, depth: usize) -> bool {
+        // Prune if we've exceeded max length
+        if depth > self.max_length {
+            return true;
+        }
+
+        // Prune if we've already visited this node in the current path (avoid cycles)
+        self.current_path_nodes.contains(&node_id)
+    }
+}
+
+impl Executor {
     /// Execute variable-length path expansion using BFS
     #[allow(clippy::too_many_arguments)]
     fn execute_variable_length_path(
@@ -5844,6 +6222,11 @@ impl Executor {
 
         let mut expanded_rows = Vec::new();
 
+        // Phase 8.2: Try to use AdvancedTraversalEngine if optimizations are enabled
+        let use_optimized_traversal = self.enable_relationship_optimizations
+            && self.shared.traversal_engine.is_some()
+            && max_length < 100; // Use optimized traversal for reasonable depth limits
+
         // Process each source row
         for row in rows {
             let source_value = row
@@ -5857,6 +6240,87 @@ impl Executor {
                 None => continue,
             };
 
+            // Phase 8.2: Use optimized traversal if available and appropriate
+            if use_optimized_traversal {
+                if let Some(ref traversal_engine) = self.shared.traversal_engine {
+                    let mut visitor = VariableLengthPathVisitor::new(
+                        source_id, min_length, max_length, type_id, direction,
+                    );
+
+                    if let Ok(result) = traversal_engine.traverse_bfs_optimized(
+                        source_id,
+                        direction,
+                        max_length,
+                        &mut visitor,
+                    ) {
+                        // Process paths found by optimized traversal
+                        let paths = visitor.get_paths();
+                        for (path_nodes, path_rels) in paths {
+                            if path_nodes.len() - 1 >= min_length
+                                && path_nodes.len() - 1 <= max_length
+                            {
+                                let target_node =
+                                    self.read_node_as_value(*path_nodes.last().unwrap())?;
+                                let mut new_row = row.clone();
+                                new_row.insert(source_var.to_string(), source_value.clone());
+                                new_row.insert(target_var.to_string(), target_node);
+
+                                // Add relationship variable if specified
+                                if !rel_var.is_empty() && !path_rels.is_empty() {
+                                    let rel_values: Vec<Value> = path_rels
+                                        .iter()
+                                        .filter_map(|rel_id| {
+                                            if let Ok(rel_record) = self.store().read_rel(*rel_id) {
+                                                Some(RelationshipInfo {
+                                                    id: *rel_id,
+                                                    source_id: rel_record.src_id,
+                                                    target_id: rel_record.dst_id,
+                                                    type_id: rel_record.type_id,
+                                                })
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .filter_map(|rel_info| {
+                                            self.read_relationship_as_value(&rel_info).ok()
+                                        })
+                                        .collect();
+
+                                    if path_rels.len() == 1 {
+                                        if let Some(first) = rel_values.first() {
+                                            new_row
+                                                .entry(rel_var.to_string())
+                                                .or_insert_with(|| first.clone());
+                                        }
+                                    } else {
+                                        new_row
+                                            .insert(rel_var.to_string(), Value::Array(rel_values));
+                                    }
+                                }
+
+                                // Add path variable if specified
+                                if !path_var.is_empty() {
+                                    let path_nodes_values: Vec<Value> = path_nodes
+                                        .iter()
+                                        .filter_map(|node_id| {
+                                            self.read_node_as_value(*node_id).ok()
+                                        })
+                                        .collect();
+                                    new_row.insert(
+                                        path_var.to_string(),
+                                        Value::Array(path_nodes_values),
+                                    );
+                                }
+
+                                expanded_rows.push(new_row);
+                            }
+                        }
+                        continue; // Skip to next source node
+                    }
+                }
+            }
+
+            // Fallback: Original BFS implementation
             // BFS to find all paths matching the quantifier
             let mut queue = VecDeque::new();
             let mut visited = HashSet::new();

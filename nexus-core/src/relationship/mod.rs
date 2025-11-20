@@ -18,6 +18,7 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::RwLock;
     use std::collections::HashMap;
 
     #[test]
@@ -283,8 +284,8 @@ mod tests {
 
     #[test]
     fn test_advanced_traversal_basic() {
-        let mut storage = RelationshipStorageManager::new();
-        let engine = AdvancedTraversalEngine::new(Arc::new(storage));
+        let storage = RelationshipStorageManager::new();
+        let engine = AdvancedTraversalEngine::new(Arc::new(RwLock::new(storage)));
 
         // For now, test that the engine can be created and basic methods work
         // Full traversal testing would require a different approach with proper storage setup
@@ -303,7 +304,7 @@ mod tests {
     #[test]
     fn test_advanced_traversal_with_bloom_filter() {
         let storage = RelationshipStorageManager::new();
-        let engine = AdvancedTraversalEngine::new(Arc::new(storage));
+        let engine = AdvancedTraversalEngine::new(Arc::new(RwLock::new(storage)));
 
         // Test bloom filter creation and basic functionality
         let mut visitor = TestTraversalVisitor::new();
@@ -319,7 +320,7 @@ mod tests {
     #[test]
     fn test_parallel_path_finding() {
         let storage = RelationshipStorageManager::new();
-        let engine = AdvancedTraversalEngine::new(Arc::new(storage));
+        let engine = AdvancedTraversalEngine::new(Arc::new(RwLock::new(storage)));
 
         // Test with empty storage - should return empty paths without panicking
         let paths = engine.find_paths_parallel(1, 4, 5, 10).unwrap();

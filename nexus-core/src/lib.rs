@@ -53,6 +53,7 @@ pub mod geospatial;
 pub mod graph; // Unified graph module with submodules
 pub mod index;
 pub mod loader;
+pub mod memory;
 pub mod memory_management;
 pub mod monitoring;
 pub mod page_cache;
@@ -3155,7 +3156,7 @@ impl Engine {
         let type_id = self.catalog.get_or_create_type(&rel_type)?;
         let rel_id = self
             .storage
-            .create_relationship(tx, from, to, type_id, properties)?;
+            .create_relationship(tx, from, to, type_id, properties.clone())?;
 
         // Update relationship index for performance (Phase 3 optimization)
         if let Err(e) = self
@@ -3165,6 +3166,40 @@ impl Engine {
         {
             tracing::warn!("Failed to update relationship index: {}", e);
             // Don't fail the operation, just log the warning
+        }
+
+        // Phase 8: Update RelationshipStorageManager and RelationshipPropertyIndex
+        if let Some(rel_storage) = self.executor.relationship_storage() {
+            // Convert properties from JSON Value to HashMap<String, Value>
+            let mut props_map = std::collections::HashMap::new();
+            if let serde_json::Value::Object(obj) = properties {
+                for (key, value) in obj {
+                    props_map.insert(key, value);
+                }
+            }
+
+            // Add relationship to specialized storage
+            if let Err(e) =
+                rel_storage
+                    .write()
+                    .create_relationship(from, to, type_id, props_map.clone())
+            {
+                tracing::warn!("Failed to update RelationshipStorageManager: {}", e);
+                // Don't fail the operation, just log the warning
+            }
+
+            // Update property index if there are properties
+            if !props_map.is_empty() {
+                if let Some(prop_index) = self.executor.relationship_property_index() {
+                    if let Err(e) = prop_index
+                        .write()
+                        .index_properties(rel_id, type_id, &props_map)
+                    {
+                        tracing::warn!("Failed to update RelationshipPropertyIndex: {}", e);
+                        // Don't fail the operation, just log the warning
+                    }
+                }
+            }
         }
 
         // Only commit if we created our own transaction

@@ -91,12 +91,12 @@ impl BloomFilter {
 
 /// Advanced Traversal Engine with bloom filters and parallel processing
 pub struct AdvancedTraversalEngine {
-    storage: Arc<RelationshipStorageManager>,
+    storage: Arc<parking_lot::RwLock<RelationshipStorageManager>>,
     max_memory_mb: usize,
 }
 
 impl AdvancedTraversalEngine {
-    pub fn new(storage: Arc<RelationshipStorageManager>) -> Self {
+    pub fn new(storage: Arc<parking_lot::RwLock<RelationshipStorageManager>>) -> Self {
         Self {
             storage,
             max_memory_mb: 512, // Configurable memory limit
@@ -143,9 +143,10 @@ impl AdvancedTraversalEngine {
             }
 
             // Get adjacency list
-            let adjacency = self
-                .storage
-                .get_adjacency_list(current_node, direction, None)?;
+            let adjacency =
+                self.storage
+                    .read()
+                    .get_adjacency_list(current_node, direction, None)?;
 
             // Process neighbors
             for entry in adjacency.entries {
@@ -308,9 +309,10 @@ impl AdvancedTraversalEngine {
         }
 
         // Get neighbors
-        if let Ok(adjacency) = self
-            .storage
-            .get_adjacency_list(current, Direction::Both, None)
+        if let Ok(adjacency) =
+            self.storage
+                .read()
+                .get_adjacency_list(current, Direction::Both, None)
         {
             for entry in &adjacency.entries {
                 let neighbor = entry.neighbor_id;
@@ -349,7 +351,11 @@ impl AdvancedTraversalEngine {
             let target = window[1];
 
             // Find relationship between nodes
-            if let Ok(adjacency) = self.storage.get_adjacency_list(source, direction, None) {
+            if let Ok(adjacency) = self
+                .storage
+                .read()
+                .get_adjacency_list(source, direction, None)
+            {
                 for entry in &adjacency.entries {
                     if entry.neighbor_id == target {
                         relationships.push(entry.relationship_id);

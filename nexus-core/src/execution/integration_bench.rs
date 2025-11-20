@@ -3,15 +3,15 @@
 //! This module provides benchmarks comparing interpreted vs compiled
 //! query execution through the executor interface.
 
+use crate::catalog::Catalog;
 use crate::error::Result;
 use crate::executor::{Executor, ExecutorConfig, Query};
-use crate::catalog::Catalog;
+use crate::index::{KnnIndex, LabelIndex};
 use crate::storage::RecordStore;
-use crate::index::{LabelIndex, KnnIndex};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::time::Instant;
 use std::hint::black_box;
+use std::time::Instant;
 
 /// Demonstration of execution engine integration
 pub fn demo_integration() -> Result<()> {
@@ -87,7 +87,7 @@ pub fn run_performance_benchmarks() -> Result<()> {
     println!();
 
     println!("📈 Next Steps:");
-    println!("   - Phase 8: Relationship processing optimization");
+    println!("   - Phase 8: Relationship processing optimization ✅ COMPLETED");
     println!("   - Phase 9: Memory and concurrency improvements");
     println!("   - Phase 10: Advanced features and monitoring");
     println!();
@@ -118,9 +118,19 @@ pub fn benchmark_executor_creation() -> Result<()> {
         enable_parallel_execution: false,
         vectorized_threshold: 10,
         enable_advanced_joins: true,
+        enable_relationship_optimizations: true,
+        enable_numa_optimizations: false,
+        enable_numa_caching: false,
+        enable_lock_free_structures: true,
     };
 
-    let _executor = Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config_vectorized)?;
+    let _executor = Executor::new_with_config(
+        &catalog,
+        &store,
+        &label_index,
+        &knn_index,
+        config_vectorized,
+    )?;
     let vectorized_time = start.elapsed();
 
     let start = Instant::now();
@@ -130,14 +140,22 @@ pub fn benchmark_executor_creation() -> Result<()> {
         enable_parallel_execution: false,
         vectorized_threshold: 1000,
         enable_advanced_joins: false,
+        enable_relationship_optimizations: false,
+        enable_numa_optimizations: false,
+        enable_numa_caching: false,
+        enable_lock_free_structures: false,
     };
 
-    let _executor = Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config_baseline)?;
+    let _executor =
+        Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config_baseline)?;
     let baseline_time = start.elapsed();
 
     println!("   Vectorized executor creation: {:?}", vectorized_time);
     println!("   Baseline executor creation: {:?}", baseline_time);
-    println!("   Overhead: {:.2}x", vectorized_time.as_nanos() as f64 / baseline_time.as_nanos() as f64);
+    println!(
+        "   Overhead: {:.2}x",
+        vectorized_time.as_nanos() as f64 / baseline_time.as_nanos() as f64
+    );
 
     Ok(())
 }

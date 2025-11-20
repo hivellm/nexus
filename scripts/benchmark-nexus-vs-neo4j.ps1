@@ -455,7 +455,7 @@ foreach ($win in $neo4jWinsList) {
 
 # Export detailed results
 $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-$resultsFile = "scripts/benchmark-results-$timestamp.json"
+$resultsFile = "benchmark-results-$timestamp.json"
 $global:BenchmarkResults | ConvertTo-Json -Depth 10 | Out-File $resultsFile
 Write-Host "`nDetailed results saved to: $resultsFile" -ForegroundColor Green
 
