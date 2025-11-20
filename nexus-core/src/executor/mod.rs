@@ -545,7 +545,13 @@ impl Executor {
         label_index: &LabelIndex,
         knn_index: &KnnIndex,
     ) -> Result<Self> {
-        Self::new_with_config(catalog, store, label_index, knn_index, ExecutorConfig::default())
+        Self::new_with_config(
+            catalog,
+            store,
+            label_index,
+            knn_index,
+            ExecutorConfig::default(),
+        )
     }
 
     /// Create a new executor with custom configuration
@@ -4524,7 +4530,10 @@ impl Executor {
 
         // Only use advanced joins for datasets large enough to benefit from optimization
         // Minimum threshold: configurable via executor config to justify columnar overhead
-        if self.config.enable_vectorized_execution && left_size >= self.config.vectorized_threshold && right_size >= self.config.vectorized_threshold {
+        if self.config.enable_vectorized_execution
+            && left_size >= self.config.vectorized_threshold
+            && right_size >= self.config.vectorized_threshold
+        {
             if let Ok(result) = self.try_advanced_relationship_join(
                 &left_context.result_set,
                 &right_context.result_set,
@@ -10139,7 +10148,8 @@ mod tests {
         let knn_index = KnnIndex::new_default(128).unwrap();
 
         let config = ExecutorConfig::default();
-        let executor = Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config).unwrap();
+        let executor =
+            Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config).unwrap();
         (executor, dir)
     }
 
