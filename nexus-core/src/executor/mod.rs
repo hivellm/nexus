@@ -1354,15 +1354,25 @@ impl Executor {
 
     /// Execute COUNT(*) directly from storage
     fn execute_count_all_nodes(&self) -> Result<ResultSet> {
-        // Use optimized catalog metadata instead of scanning all nodes
-        let count = self.catalog().get_total_node_count()?;
+        // Count non-deleted nodes directly from storage
+        // This is more reliable than using catalog statistics which may not be updated
+        let total_nodes = self.store().node_count();
+        let mut count = 0u64;
+
+        for node_id in 0..total_nodes {
+            if let Ok(node_record) = self.store().read_node(node_id) {
+                if !node_record.is_deleted() {
+                    count += 1;
+                }
+            }
+        }
 
         let row = Row {
             values: vec![serde_json::Value::Number(count.into())],
         };
 
         Ok(ResultSet {
-            columns: vec!["total".to_string()],
+            columns: vec!["count".to_string()],
             rows: vec![row],
         })
     }
@@ -1945,7 +1955,8 @@ impl Executor {
                 Ok(format!("{}.{}", variable, property))
             }
             parser::Expression::Literal(literal) => match literal {
-                parser::Literal::String(s) => Ok(format!("\"{}\"", s)),
+                // Use single quotes for strings in filter predicates to match Cypher parser expectations
+                parser::Literal::String(s) => Ok(format!("'{}'", s)),
                 parser::Literal::Integer(i) => Ok(i.to_string()),
                 parser::Literal::Float(f) => Ok(f.to_string()),
                 parser::Literal::Boolean(b) => Ok(b.to_string()),
@@ -2138,8 +2149,10 @@ impl Executor {
                 let var_name = left[..dot_pos].to_string();
                 let prop_name = left[dot_pos + 1..].to_string();
 
-                // Parse right side: remove quotes if present
-                let value = if right.starts_with('\'') && right.ends_with('\'') && right.len() > 1 {
+                // Parse right side: remove quotes if present (support both single and double quotes)
+                let value = if (right.starts_with('\'') && right.ends_with('\'') && right.len() > 1)
+                    || (right.starts_with('"') && right.ends_with('"') && right.len() > 1)
+                {
                     right[1..right.len() - 1].to_string()
                 } else {
                     right.to_string()
@@ -2169,9 +2182,11 @@ impl Executor {
                     let var_name = left[..dot_pos].to_string();
                     let prop_name = left[dot_pos + 1..].to_string();
 
-                    // Parse right side: remove quotes if present
+                    // Parse right side: remove quotes if present (support both single and double quotes)
                     let value =
-                        if right.starts_with('\'') && right.ends_with('\'') && right.len() > 1 {
+                        if (right.starts_with('\'') && right.ends_with('\'') && right.len() > 1)
+                            || (right.starts_with('"') && right.ends_with('"') && right.len() > 1)
+                        {
                             right[1..right.len() - 1].to_string()
                         } else {
                             right.to_string()

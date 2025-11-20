@@ -1148,9 +1148,10 @@ impl<'a> QueryPlanner<'a> {
                     if let Some(property_map) = &node.properties {
                         for (prop_name, prop_value_expr) in &property_map.properties {
                             // Convert property value expression to string for filter
+                            // Use single quotes for strings to match Cypher parser expectations
                             let value_str = match prop_value_expr {
                                 Expression::Literal(lit) => match lit {
-                                    Literal::String(s) => format!("\"{}\"", s),
+                                    Literal::String(s) => format!("'{}'", s),
                                     Literal::Integer(i) => i.to_string(),
                                     Literal::Float(f) => f.to_string(),
                                     Literal::Boolean(b) => b.to_string(),
@@ -1209,9 +1210,10 @@ impl<'a> QueryPlanner<'a> {
                         // Add filters for inline properties
                         if let Some(property_map) = &node.properties {
                             for (prop_name, prop_value_expr) in &property_map.properties {
+                                // Use single quotes for strings to match Cypher parser expectations
                                 let value_str = match prop_value_expr {
                                     Expression::Literal(lit) => match lit {
-                                        Literal::String(s) => format!("\"{}\"", s),
+                                        Literal::String(s) => format!("'{}'", s),
                                         Literal::Integer(i) => i.to_string(),
                                         Literal::Float(f) => f.to_string(),
                                         Literal::Boolean(b) => b.to_string(),
