@@ -192,10 +192,11 @@ impl Engine {
 
         // Initialize multi-layer cache system
         let cache_config = cache::CacheConfig::default();
-        let mut cache = cache::MultiLayerCache::new(cache_config)?;
+        let cache = cache::MultiLayerCache::new(cache_config)?;
 
-        // Warm up the cache system before creating the engine
-        cache.warm_cache()?;
+        // Only warm cache if explicitly requested (not by default)
+        // This prevents performance regression on engine startup
+        // Cache will warm up naturally during query execution
 
         // Engine shares the same TransactionManager Arc with SessionManager
         let mut engine = Engine {
@@ -219,6 +220,14 @@ impl Engine {
         engine.rebuild_indexes_from_storage()?;
 
         Ok(engine)
+    }
+
+    /// Warm up the cache system for better initial performance
+    /// This should be called after engine creation if cache warming is desired
+    /// Note: This can be expensive and should be done in background for production
+    pub fn warm_cache(&mut self) -> Result<()> {
+        self.cache.warm_cache()?;
+        Ok(())
     }
 
     fn rebuild_indexes_from_storage(&mut self) -> Result<()> {

@@ -4368,7 +4368,9 @@ impl Executor {
             ExecutionContext::new(context.params.clone(), context.cache.clone());
         self.execute_operator(&mut right_context, right)?;
 
-        // Try advanced join algorithms first
+        // DISABLED: Try advanced join algorithms first
+        // Temporarily disabled due to performance regression
+        /*
         if let Ok(result) = self.try_advanced_relationship_join(
             &left_context.result_set,
             &right_context.result_set,
@@ -4381,6 +4383,7 @@ impl Executor {
             self.update_variables_from_rows(context, &row_maps);
             return Ok(());
         }
+        */
 
         // Fallback to traditional nested loop join
         tracing::debug!("Advanced join failed, falling back to nested loop join");
