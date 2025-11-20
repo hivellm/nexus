@@ -305,7 +305,7 @@ impl Default for CacheConfig {
                 stats_interval: Duration::from_secs(60),
                 max_total_memory: 200 * 1024 * 1024, // 200MB total
                 warming: CacheWarmingConfig {
-                    enable_auto_warming: true,
+                    enable_auto_warming: false, // Temporarily disabled - causing performance regression
                     max_warm_time_secs: 30,
                     min_access_count: 5,
                     max_warm_items: 100,

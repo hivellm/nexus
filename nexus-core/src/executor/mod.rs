@@ -4368,22 +4368,26 @@ impl Executor {
             ExecutionContext::new(context.params.clone(), context.cache.clone());
         self.execute_operator(&mut right_context, right)?;
 
-        // DISABLED: Try advanced join algorithms first
-        // Temporarily disabled due to performance regression
-        /*
-        if let Ok(result) = self.try_advanced_relationship_join(
-            &left_context.result_set,
-            &right_context.result_set,
-            join_type,
-            condition,
-        ) {
-            tracing::info!("🚀 ADVANCED JOIN: Used optimized join algorithm");
-            context.result_set = result;
-            let row_maps = self.result_set_as_rows(context);
-            self.update_variables_from_rows(context, &row_maps);
-            return Ok(());
+        // Try advanced join algorithms first (only for larger datasets)
+        let left_size = left_context.result_set.rows.len();
+        let right_size = right_context.result_set.rows.len();
+
+        // Only use advanced joins for datasets large enough to benefit from optimization
+        // Minimum threshold: 50 rows on each side to justify columnar overhead
+        if left_size >= 50 && right_size >= 50 {
+            if let Ok(result) = self.try_advanced_relationship_join(
+                &left_context.result_set,
+                &right_context.result_set,
+                join_type,
+                condition,
+            ) {
+                tracing::info!("🚀 ADVANCED JOIN: Used optimized join algorithm ({}x{} rows)", left_size, right_size);
+                context.result_set = result;
+                let row_maps = self.result_set_as_rows(context);
+                self.update_variables_from_rows(context, &row_maps);
+                return Ok(());
+            }
         }
-        */
 
         // Fallback to traditional nested loop join
         tracing::debug!("Advanced join failed, falling back to nested loop join");
