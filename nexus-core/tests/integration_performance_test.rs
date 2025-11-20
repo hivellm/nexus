@@ -309,7 +309,7 @@ async fn test_system_integration_performance() {
         "\n⚡ Phase 2: Running concurrent workload test ({}s)",
         config.test_duration_secs
     );
-    let test_results = run_concurrent_workload_test(executor.clone(), &config)
+    let test_results = run_concurrent_workload_test(Arc::new(executor.clone()), &config)
         .await
         .unwrap();
 

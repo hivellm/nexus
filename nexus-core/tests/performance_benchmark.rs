@@ -293,7 +293,7 @@ async fn benchmark_read_operations(
 
 /// Run mixed workload benchmark
 async fn benchmark_mixed_workload(
-    executor: &Executor,
+    executor: Arc<Executor>,
     config: &BenchmarkConfig,
 ) -> (f64, Duration, Duration, Duration) {
     tracing::info!("Running mixed workload benchmark...");
@@ -303,7 +303,7 @@ async fn benchmark_mixed_workload(
 
     // Spawn worker threads
     for worker_id in 0..config.concurrent_clients {
-        let executor_arc = Arc::new(executor.clone());
+        let executor_arc = executor.clone();
         let results_clone = results.clone();
         let config_clone = config.clone();
 
@@ -325,7 +325,7 @@ async fn benchmark_mixed_workload(
                                     cypher: format!("MATCH (n:Person {{id: {}}}) RETURN n", id),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             1 => {
                                 let id = worker_id % config_clone.node_count;
@@ -336,7 +336,7 @@ async fn benchmark_mixed_workload(
                                     ),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             2 => {
                                 let query = Query {
@@ -344,14 +344,14 @@ async fn benchmark_mixed_workload(
                                         .to_string(),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             3 => {
                                 let query = Query {
                                     cypher: "MATCH (n:Person)-[:KNOWS]-(m:Person) RETURN count(n) as connections".to_string(),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             _ => unreachable!(),
                         }
@@ -366,7 +366,7 @@ async fn benchmark_mixed_workload(
                                     cypher: format!("MATCH (n:Person {{id: {}}}) RETURN n", id),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             3 => {
                                 // 20% relationship queries
@@ -378,7 +378,7 @@ async fn benchmark_mixed_workload(
                                     ),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             4 => {
                                 // 20% writes
@@ -392,7 +392,7 @@ async fn benchmark_mixed_workload(
                                     ),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             _ => unreachable!(),
                         }
@@ -405,21 +405,21 @@ async fn benchmark_mixed_workload(
                                     cypher: "MATCH (n:Person) RETURN n.age, count(*) as count ORDER BY count DESC LIMIT 10".to_string(),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             1 => {
                                 let query = Query {
                                     cypher: "MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN count(r) as total_relationships".to_string(),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             2 => {
                                 let query = Query {
                                     cypher: "MATCH (n:Person) WHERE n.age >= 20 AND n.age <= 30 RETURN count(n) as young_people".to_string(),
                                     params: HashMap::new(),
                                 };
-                                let _ = executor_clone.execute(&query);
+                                let _ = executor_arc.execute(&query);
                             }
                             _ => unreachable!(),
                         }
@@ -511,7 +511,7 @@ async fn performance_benchmark_vs_neo4j() {
     // Phase 5: Mixed workload benchmark
     tracing::info!("\n🔄 Phase 5: Mixed workload benchmark");
     let (mixed_throughput, mixed_avg, mixed_p95, mixed_p99) =
-        benchmark_mixed_workload(executor.clone(), &config).await;
+        benchmark_mixed_workload(Arc::new(executor), &config).await;
 
     // Phase 6: Results and validation
     tracing::info!("\n📈 Phase 6: Benchmark Results vs Neo4j Targets");

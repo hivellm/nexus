@@ -394,6 +394,7 @@ struct Path {
 
 /// Shared executor state for concurrent execution
 /// This structure contains all components that can be safely shared across threads
+#[derive(Clone)]
 pub struct ExecutorShared {
     /// Catalog for label/type lookups (thread-safe via LMDB transactions)
     catalog: Catalog,
@@ -425,6 +426,18 @@ pub struct Executor {
     /// Property access statistics for automatic indexing
     property_access_stats: Arc<RwLock<HashMap<String, usize>>>,
     // TODO: Add JIT and parallel execution after core optimizations
+}
+
+impl Clone for Executor {
+    fn clone(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            query_count: std::sync::atomic::AtomicUsize::new(
+                self.query_count.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            property_access_stats: self.property_access_stats.clone(),
+        }
+    }
 }
 
 impl ExecutorShared {

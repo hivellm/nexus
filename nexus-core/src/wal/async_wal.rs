@@ -222,7 +222,9 @@ impl AsyncWalWriter {
                     batch.push(entry);
                     let current_stats =
                         unsafe { &mut *(Arc::as_ptr(&stats) as *mut AsyncWalStats) };
-                    current_stats.current_queue_depth -= 1;
+                    if current_stats.current_queue_depth > 0 {
+                        current_stats.current_queue_depth -= 1;
+                    }
 
                     // Check if batch reached max size - flush immediately
                     if batch.len() >= config.max_batch_size {
