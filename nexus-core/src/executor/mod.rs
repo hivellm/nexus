@@ -2467,129 +2467,137 @@ impl Executor {
 
                 // CRITICAL FIX: Handle case where source_value might be an Array
                 // This can happen if materialize_rows_from_variables didn't work correctly
-                // or if we're in an edge case. Extract first element if it's an Array.
-                let source_value = match &source_value {
+                // or if we're in an edge case. If it's an Array, we need to process each element
+                // as a separate source node to ensure all nodes are processed.
+                let source_nodes = match &source_value {
                     Value::Array(arr) if !arr.is_empty() => {
-                        // If we got an Array, take the first element
-                        // This shouldn't happen if materialize_rows_from_variables worked correctly
-                        arr[0].clone()
+                        // If we got an Array, process each element as a separate source node
+                        // This ensures all nodes are processed even if materialize_rows_from_variables
+                        // didn't work correctly
+                        arr.clone()
                     }
-                    other => other.clone(),
+                    other => vec![other.clone()],
                 };
 
-                let source_id = match Self::extract_entity_id(&source_value) {
-                    Some(id) => id,
-                    None => continue,
-                };
-
-                // Phase 8.3: Try to use relationship property index if there are property filters
-                // First, try to get pre-filtered relationships from the index
-                let relationships = if self.enable_relationship_optimizations && !rel_var.is_empty()
-                {
-                    // Try to use property index to pre-filter relationships
-                    if let Some(indexed_rel_ids) =
-                        self.use_relationship_property_index_for_expand(type_ids, context, rel_var)?
-                    {
-                        // Convert relationship IDs to RelationshipInfo
-                        let mut indexed_rels = Vec::new();
-                        for rel_id in indexed_rel_ids {
-                            if let Ok(rel_record) = self.store().read_rel(rel_id) {
-                                if !rel_record.is_deleted() {
-                                    // Copy fields to local variables to avoid packed struct reference issues
-                                    let record_type_id = rel_record.type_id;
-                                    let record_src_id = rel_record.src_id;
-                                    let record_dst_id = rel_record.dst_id;
-
-                                    // Check if relationship matches type and direction filters
-                                    let matches_type =
-                                        type_ids.is_empty() || type_ids.contains(&record_type_id);
-                                    let matches_direction = match direction {
-                                        Direction::Outgoing => record_src_id == source_id,
-                                        Direction::Incoming => record_dst_id == source_id,
-                                        Direction::Both => {
-                                            record_src_id == source_id || record_dst_id == source_id
-                                        }
-                                    };
-                                    if matches_type && matches_direction {
-                                        indexed_rels.push(RelationshipInfo {
-                                            id: rel_id,
-                                            source_id: record_src_id,
-                                            target_id: record_dst_id,
-                                            type_id: record_type_id,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        if !indexed_rels.is_empty() {
-                            indexed_rels
-                        } else {
-                            // Fallback to standard lookup
-                            self.find_relationships(source_id, type_ids, direction, cache)?
-                        }
-                    } else {
-                        // No index optimization available, use standard lookup
-                        self.find_relationships(source_id, type_ids, direction, cache)?
-                    }
-                } else {
-                    // Standard lookup
-                    self.find_relationships(source_id, type_ids, direction, cache)?
-                };
-
-                if relationships.is_empty() {
-                    continue;
-                }
-
-                // Phase 8.3: Apply additional property index filtering if enabled
-                // (for cases where we couldn't pre-filter but can post-filter)
-                let filtered_relationships = if self.enable_relationship_optimizations {
-                    self.filter_relationships_by_property_index(
-                        &relationships,
-                        type_ids.first().copied(),
-                        context,
-                        rel_var,
-                    )?
-                } else {
-                    relationships
-                };
-
-                for rel_info in filtered_relationships {
-                    let target_id = match direction {
-                        Direction::Outgoing => rel_info.target_id,
-                        Direction::Incoming => rel_info.source_id,
-                        Direction::Both => {
-                            if rel_info.source_id == source_id {
-                                rel_info.target_id
-                            } else {
-                                rel_info.source_id
-                            }
-                        }
+                // Process each source node in the array
+                for source_value in source_nodes {
+                    let source_id = match Self::extract_entity_id(&source_value) {
+                        Some(id) => id,
+                        None => continue,
                     };
 
-                    let target_node = self.read_node_as_value(target_id)?;
+                    // Phase 8.3: Try to use relationship property index if there are property filters
+                    // First, try to get pre-filtered relationships from the index
+                    let relationships =
+                        if self.enable_relationship_optimizations && !rel_var.is_empty() {
+                            // Try to use property index to pre-filter relationships
+                            if let Some(indexed_rel_ids) = self
+                                .use_relationship_property_index_for_expand(
+                                    type_ids, context, rel_var,
+                                )?
+                            {
+                                // Convert relationship IDs to RelationshipInfo
+                                let mut indexed_rels = Vec::new();
+                                for rel_id in indexed_rel_ids {
+                                    if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                                        if !rel_record.is_deleted() {
+                                            // Copy fields to local variables to avoid packed struct reference issues
+                                            let record_type_id = rel_record.type_id;
+                                            let record_src_id = rel_record.src_id;
+                                            let record_dst_id = rel_record.dst_id;
 
-                    if let Some(ref allowed) = allowed_target_ids {
-                        // Only filter if allowed set is non-empty and doesn't contain target
-                        if !allowed.is_empty() && !allowed.contains(&target_id) {
-                            continue;
+                                            // Check if relationship matches type and direction filters
+                                            let matches_type = type_ids.is_empty()
+                                                || type_ids.contains(&record_type_id);
+                                            let matches_direction = match direction {
+                                                Direction::Outgoing => record_src_id == source_id,
+                                                Direction::Incoming => record_dst_id == source_id,
+                                                Direction::Both => {
+                                                    record_src_id == source_id
+                                                        || record_dst_id == source_id
+                                                }
+                                            };
+                                            if matches_type && matches_direction {
+                                                indexed_rels.push(RelationshipInfo {
+                                                    id: rel_id,
+                                                    source_id: record_src_id,
+                                                    target_id: record_dst_id,
+                                                    type_id: record_type_id,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                                if !indexed_rels.is_empty() {
+                                    indexed_rels
+                                } else {
+                                    // Fallback to standard lookup
+                                    self.find_relationships(source_id, type_ids, direction, cache)?
+                                }
+                            } else {
+                                // No index optimization available, use standard lookup
+                                self.find_relationships(source_id, type_ids, direction, cache)?
+                            }
+                        } else {
+                            // Standard lookup
+                            self.find_relationships(source_id, type_ids, direction, cache)?
+                        };
+
+                    if relationships.is_empty() {
+                        continue;
+                    }
+
+                    // Phase 8.3: Apply additional property index filtering if enabled
+                    // (for cases where we couldn't pre-filter but can post-filter)
+                    let filtered_relationships = if self.enable_relationship_optimizations {
+                        self.filter_relationships_by_property_index(
+                            &relationships,
+                            type_ids.first().copied(),
+                            context,
+                            rel_var,
+                        )?
+                    } else {
+                        relationships
+                    };
+
+                    for rel_info in filtered_relationships {
+                        let target_id = match direction {
+                            Direction::Outgoing => rel_info.target_id,
+                            Direction::Incoming => rel_info.source_id,
+                            Direction::Both => {
+                                if rel_info.source_id == source_id {
+                                    rel_info.target_id
+                                } else {
+                                    rel_info.source_id
+                                }
+                            }
+                        };
+
+                        let target_node = self.read_node_as_value(target_id)?;
+
+                        if let Some(ref allowed) = allowed_target_ids {
+                            // Only filter if allowed set is non-empty and doesn't contain target
+                            if !allowed.is_empty() && !allowed.contains(&target_id) {
+                                continue;
+                            }
                         }
-                    }
 
-                    // CRITICAL FIX: Clone row first to preserve all existing variables
-                    // Then update/add source, target, and relationship variables
-                    // This ensures all variables from previous operators are preserved
-                    let mut new_row = row.clone();
-                    // Update source variable (may already exist, but ensure it's correct)
-                    new_row.insert(source_var.to_string(), source_value.clone());
-                    // Update/add target variable
-                    new_row.insert(target_var.to_string(), target_node);
-                    // Update/add relationship variable if specified
-                    if !rel_var.is_empty() {
-                        let relationship_value = self.read_relationship_as_value(&rel_info)?;
-                        new_row.insert(rel_var.to_string(), relationship_value);
-                    }
+                        // CRITICAL FIX: Clone row first to preserve all existing variables
+                        // Then update/add source, target, and relationship variables
+                        // This ensures all variables from previous operators are preserved
+                        let mut new_row = row.clone();
+                        // Update source variable (may already exist, but ensure it's correct)
+                        new_row.insert(source_var.to_string(), source_value.clone());
+                        // Update/add target variable
+                        new_row.insert(target_var.to_string(), target_node);
+                        // Update/add relationship variable if specified
+                        if !rel_var.is_empty() {
+                            let relationship_value = self.read_relationship_as_value(&rel_info)?;
+                            new_row.insert(rel_var.to_string(), relationship_value);
+                        }
 
-                    expanded_rows.push(new_row);
+                        expanded_rows.push(new_row);
+                    }
                 }
             }
         }

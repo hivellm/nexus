@@ -102,9 +102,11 @@
 **Remaining Work**: 3 issues
 - Section 7: 3 relationship tests (Neo4j returns more rows than Nexus)
   - 7.19 Relationship with aggregation (Neo4j=2, Nexus=1)
-    - **Status**: IN PROGRESS - Code analysis completed, Expand and Aggregate operators appear correct
+    - **Status**: IN PROGRESS - Enhanced Array handling in Expand operator
     - **Issue**: Nexus returns 1 row instead of 2 (Alice with 2 jobs, Bob with 1 job)
-    - **Hypothesis**: Expand may not be processing all initial Person nodes, or Aggregate not grouping correctly
+    - **Fix Applied**: Enhanced handling for case where source_value might be an Array in Expand operator. Now processes all elements of the Array instead of just the first element, ensuring all source nodes are processed even if materialize_rows_from_variables didn't work correctly.
+    - **Hypothesis**: Expand may not be processing all initial Person nodes correctly when multiple nodes exist. The fix ensures that if source_value is an Array, all elements are processed as separate source nodes.
+    - **Next**: Need to test if this fix resolves the issue
   - 7.25 MATCH all connected nodes (Neo4j=2, Nexus=1)
     - **Status**: PENDING - Needs investigation
     - **Issue**: DISTINCT may be removing rows incorrectly, or Expand not processing all source nodes when direction is Both
@@ -114,8 +116,13 @@
 
 **Note**: See `specs/cypher/relationship-issues-analysis.md` for detailed analysis of remaining issues.
 
+**Recent Fixes**:
+- ✅ Added Array handling in Expand operator to prevent skipping rows when source_value is an Array
+- ✅ Improved error handling when source variable is not found in row
+
 **Next Steps**: 
-1. Add debug logging to Expand operator to verify all source nodes are processed
-2. Add debug logging to Aggregate operator to verify grouping is correct
-3. Run specific tests to identify exact point of failure
+1. Test the Array handling fix to verify it resolves the issue
+2. Add debug logging to Expand operator to verify all source nodes are processed
+3. Add debug logging to Aggregate operator to verify grouping is correct
+4. Run specific tests to identify exact point of failure if fix doesn't resolve
 
