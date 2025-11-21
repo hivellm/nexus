@@ -581,7 +581,6 @@ impl ExecutorShared {
         })
     }
 }
-
 impl Executor {
     /// Create a new executor with default configuration
     pub fn new(
@@ -1376,7 +1375,6 @@ impl Executor {
             rows: vec![row],
         })
     }
-
     /// Invalidate cache entries based on affected data
     pub fn invalidate_query_cache(&self, affected_labels: &[&str], affected_properties: &[&str]) {
         if let Some(ref cache) = self.shared.query_cache {
@@ -2164,7 +2162,6 @@ impl Executor {
 
         None
     }
-
     /// Parse range filter: variable.property > value, variable.property < value, etc.
     fn parse_range_filter(&self, predicate: &str) -> Option<(String, String, String, String)> {
         let predicate = predicate.trim();
@@ -2253,6 +2250,9 @@ impl Executor {
         let expr = parser.parse_expression()?;
 
         // Get rows from variables OR from result_set.rows (e.g., from UNWIND)
+        // CRITICAL FIX: Always prefer materializing from variables if they exist,
+        // because variables contain the actual node/relationship objects with all properties.
+        // Using result_set.rows may lose property information if columns were reordered.
         let had_existing_rows = !context.result_set.rows.is_empty();
         let existing_columns = if had_existing_rows {
             context.result_set.columns.clone()
@@ -2260,8 +2260,12 @@ impl Executor {
             Vec::new()
         };
 
-        let rows = if had_existing_rows {
-            // Convert existing rows to row maps for filtering
+        let rows = if !context.variables.is_empty() {
+            // Prefer materializing from variables - this ensures we have full node/relationship objects
+            // with all properties accessible for filtering
+            self.materialize_rows_from_variables(context)
+        } else if had_existing_rows {
+            // Convert existing rows to row maps for filtering (fallback for UNWIND, etc.)
             context
                 .result_set
                 .rows
@@ -2269,8 +2273,8 @@ impl Executor {
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect()
         } else {
-            // Materialize rows from variables
-            self.materialize_rows_from_variables(context)
+            // No variables and no existing rows
+            Vec::new()
         };
         let mut filtered_rows = Vec::new();
 
@@ -2630,9 +2634,19 @@ impl Executor {
         }
 
         // Use existing result_set.rows if available (from UNWIND, Filter, etc), otherwise materialize from variables
-        // If result_set has columns but no rows, it means Filter removed all rows, so don't create new rows
-        let rows = if !context.result_set.rows.is_empty() {
-            // Convert existing rows to row maps for projection
+        // CRITICAL FIX: In UNION context, always materialize from variables to ensure correct structure
+        // The existing result_set.rows may have wrong column structure from previous operators
+        let rows = if !context.result_set.rows.is_empty()
+            && !context
+                .result_set
+                .columns
+                .contains(&"__filtered__".to_string())
+            && !context
+                .result_set
+                .columns
+                .contains(&"__filter_created__".to_string())
+        {
+            // Use existing rows only if they don't have filter markers (indicating they are real data rows)
             let existing_columns = context.result_set.columns.clone();
             context
                 .result_set
@@ -2641,43 +2655,51 @@ impl Executor {
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect()
         } else {
-            // If result_set has columns but no rows, Filter already ran and removed all rows
-            // (marked with "__filtered__" column). Don't create new rows in this case.
-            // Also check for "__filter_created__" which means Filter already created a row
-            // Check if Filter already ran and removed all rows (marked with "__filtered__" or "__filter_created__")
+            // Check if Filter already ran and removed all rows (marked with "__filtered__" column)
             let has_filter_marker = context
                 .result_set
                 .columns
                 .iter()
                 .any(|c| c == "__filtered__" || c == "__filter_created__");
+
             if has_filter_marker && context.result_set.rows.is_empty() {
                 // Filter already processed and removed all rows, don't create new ones
                 vec![]
             } else {
-                // If Filter marker exists, don't create any rows
-                if has_filter_marker {
-                    vec![]
-                } else {
-                    let materialized = self.materialize_rows_from_variables(context);
-                    // If we have no rows from variables and no variables, but we have projection items that can be evaluated,
-                    // we need to create at least one row to evaluate the expressions
-                    // This handles: RETURN 1+1 AS result, RETURN 5 > 3 AS gt, RETURN CASE WHEN ... END, etc.
-                    // But NOT: MATCH (n:NonExistent) RETURN n (which should return 0 rows)
-                    // And NOT: UNWIND [] AS x RETURN x (which should return 0 rows)
-                    // But NOT: RETURN ... WHERE false (Filter already processed and removed all rows)
-                    if materialized.is_empty()
-                        && context.variables.is_empty()
-                        && !items.is_empty()
-                        && items.iter().any(|item| {
-                            // Check if any projection item can be evaluated without variables
-                            self.can_evaluate_without_variables(&item.expression)
-                        })
-                    {
-                        // Create single empty row for expression evaluation
-                        vec![std::collections::HashMap::new()]
+                let materialized = self.materialize_rows_from_variables(context);
+
+                // CRITICAL FIX: If we have variables but materialized is empty,
+                // it means variables contain single values, not arrays
+                // We need to create a row from single values (e.g., after MATCH with filter)
+                if materialized.is_empty() && !context.variables.is_empty() {
+                    let mut row = HashMap::new();
+                    for (var, value) in &context.variables {
+                        match value {
+                            Value::Array(arr) if arr.len() == 1 => {
+                                row.insert(var.clone(), arr[0].clone());
+                            }
+                            _ => {
+                                row.insert(var.clone(), value.clone());
+                            }
+                        }
+                    }
+                    if !row.is_empty() {
+                        vec![row]
                     } else {
                         materialized
                     }
+                } else if materialized.is_empty()
+                    && context.variables.is_empty()
+                    && !items.is_empty()
+                    && items.iter().any(|item| {
+                        // Check if any projection item can be evaluated without variables
+                        self.can_evaluate_without_variables(&item.expression)
+                    })
+                {
+                    // Create single empty row for expression evaluation (literals like 1+1)
+                    vec![std::collections::HashMap::new()]
+                } else {
+                    materialized
                 }
             }
         };
@@ -2859,7 +2881,6 @@ impl Executor {
     ) -> Result<()> {
         self.execute_aggregate_with_projections(context, group_by, aggregations, None)
     }
-
     /// Execute Aggregate operator with projection items (for evaluating literals in virtual row)
     fn execute_aggregate_with_projections(
         &self,
@@ -2909,7 +2930,9 @@ impl Executor {
             1
         };
 
-        let mut groups: HashMap<Vec<Value>, Vec<Row>> = HashMap::with_capacity(estimated_groups);
+        // Use a more robust key type for grouping that handles NULL and type differences correctly
+        // Convert Vec<Value> to a canonical string representation for reliable hashing
+        let mut groups: HashMap<String, Vec<Row>> = HashMap::with_capacity(estimated_groups);
 
         // If we have aggregations without GROUP BY and no rows, create a virtual row
         // This handles cases like: RETURN count(*) (without MATCH)
@@ -2968,7 +2991,8 @@ impl Executor {
                 // No columns projected yet, use single value for count(*)
                 virtual_row_values.push(Value::Number(serde_json::Number::from(1)));
             }
-            groups.entry(Vec::new()).or_default().push(Row {
+            // Use empty string as key for empty group (no GROUP BY)
+            groups.entry(String::new()).or_default().push(Row {
                 values: virtual_row_values.clone(),
             });
         }
@@ -2982,7 +3006,7 @@ impl Executor {
         };
 
         for row in rows_to_process {
-            let mut group_key = Vec::new();
+            let mut group_key_values = Vec::new();
             for col in group_by {
                 // Use project_columns if available, otherwise use context.result_set.columns
                 let columns_to_use = if !project_columns.is_empty() {
@@ -2992,15 +3016,18 @@ impl Executor {
                 };
                 if let Some(index) = self.get_column_index(col, columns_to_use) {
                     if index < row.values.len() {
-                        group_key.push(row.values[index].clone());
+                        group_key_values.push(row.values[index].clone());
                     } else {
-                        group_key.push(Value::Null);
+                        group_key_values.push(Value::Null);
                     }
                 } else {
-                    group_key.push(Value::Null);
+                    group_key_values.push(Value::Null);
                 }
             }
 
+            // Convert group key to canonical string representation for reliable hashing
+            // This ensures that NULL values, numbers, strings, etc. are compared correctly
+            let group_key = serde_json::to_string(&group_key_values).unwrap_or_default();
             groups.entry(group_key).or_default().push(row);
         }
 
@@ -3216,15 +3243,19 @@ impl Executor {
             self.update_variables_from_rows(context, &row_maps);
             return Ok(());
         }
-
-        for (group_key, group_rows) in groups {
+        for (group_key_str, group_rows) in groups {
             let effective_row_count = if group_rows.is_empty() && needs_virtual_row {
                 1
             } else {
                 group_rows.len()
             };
 
-            let mut result_row = group_key.clone();
+            // Parse the group key back to Vec<Value> for the result row
+            let group_key: Vec<Value> = serde_json::from_str(&group_key_str).unwrap_or_else(|_| {
+                // Fallback: if parsing fails, use empty vector (shouldn't happen, but be safe)
+                Vec::new()
+            });
+            let mut result_row = group_key;
             for agg in aggregations {
                 let agg_value = match agg {
                     Aggregation::CountStarOptimized { .. } => {
@@ -3931,7 +3962,6 @@ impl Executor {
             }
             context.result_set.rows.push(Row { values: result_row });
         }
-
         // CRITICAL: Final check - if we needed a virtual row, ALWAYS ensure we have correct values
         // This is the ultimate fallback to fix any issues with groups processing
         // BUT: Only execute if we don't have variables or MATCH columns (no MATCH that returned empty)
@@ -4289,41 +4319,170 @@ impl Executor {
         // Combine results from both sides
         // Ensure results are in result_set.rows (some operators may store in variables)
         // Convert variable-based results to rows if needed
-        if left_context.result_set.rows.is_empty() {
-            let row_maps = self.result_set_as_rows(&left_context);
-            left_context.result_set.rows = row_maps
-                .into_iter()
-                .map(|map| {
-                    let values: Vec<serde_json::Value> = left_context
-                        .result_set
-                        .columns
-                        .iter()
-                        .map(|col| map.get(col).cloned().unwrap_or(serde_json::Value::Null))
-                        .collect();
-                    Row { values }
-                })
-                .collect();
+        // CRITICAL FIX: Project operator should populate result_set.rows, but if it's empty,
+        // we need to materialize from variables to ensure all rows are collected for UNION
+        if left_context.result_set.rows.is_empty() && !left_context.variables.is_empty() {
+            // If no rows but we have variables, materialize from variables
+            let row_maps = self.materialize_rows_from_variables(&left_context);
+            if !row_maps.is_empty() {
+                // Ensure columns are set from variables if not already set
+                if left_context.result_set.columns.is_empty() {
+                    let mut columns: Vec<String> = row_maps[0].keys().cloned().collect();
+                    columns.sort();
+                    left_context.result_set.columns = columns;
+                }
+                self.update_result_set_from_rows(&mut left_context, &row_maps);
+            }
         }
 
-        if right_context.result_set.rows.is_empty() {
-            let row_maps = self.result_set_as_rows(&right_context);
-            right_context.result_set.rows = row_maps
-                .into_iter()
-                .map(|map| {
-                    let values: Vec<serde_json::Value> = right_context
+        if right_context.result_set.rows.is_empty() && !right_context.variables.is_empty() {
+            // If no rows but we have variables, materialize from variables
+            let row_maps = self.materialize_rows_from_variables(&right_context);
+            if !row_maps.is_empty() {
+                // Ensure columns are set from variables if not already set
+                if right_context.result_set.columns.is_empty() {
+                    let mut columns: Vec<String> = row_maps[0].keys().cloned().collect();
+                    columns.sort();
+                    right_context.result_set.columns = columns;
+                }
+                self.update_result_set_from_rows(&mut right_context, &row_maps);
+            }
+        }
+
+        // CRITICAL FIX: Ensure columns are set from result_set.rows if Project already executed
+        // Project should have set columns, but verify they match the row structure
+        if !left_context.result_set.rows.is_empty() && !left_context.result_set.columns.is_empty() {
+            // Verify column count matches row value count
+            if let Some(first_row) = left_context.result_set.rows.first() {
+                if first_row.values.len() != left_context.result_set.columns.len() {
+                    // Mismatch - this shouldn't happen, but log it
+                    eprintln!(
+                        "UNION WARNING: Left side column/row mismatch: {} cols, {} values",
+                        left_context.result_set.columns.len(),
+                        first_row.values.len()
+                    );
+                }
+            }
+        }
+
+        if !right_context.result_set.rows.is_empty() && !right_context.result_set.columns.is_empty()
+        {
+            if let Some(first_row) = right_context.result_set.rows.first() {
+                if first_row.values.len() != right_context.result_set.columns.len() {
+                    eprintln!(
+                        "UNION WARNING: Right side column/row mismatch: {} cols, {} values",
+                        right_context.result_set.columns.len(),
+                        first_row.values.len()
+                    );
+                }
+            }
+        }
+
+        // Ensure both sides have the same columns (UNION requires matching column structure)
+        // UNION requires that both sides have the same number of columns with compatible types
+        // Priority: left columns > right columns > columns from RETURN items
+        let columns = if !left_context.result_set.columns.is_empty() {
+            left_context.result_set.columns.clone()
+        } else if !right_context.result_set.columns.is_empty() {
+            right_context.result_set.columns.clone()
+        } else {
+            // If both sides are empty, try to get columns from variables or result set rows
+            // First try to get from left side variables
+            let left_row_maps = self.materialize_rows_from_variables(&left_context);
+            let right_row_maps = self.materialize_rows_from_variables(&right_context);
+
+            // Get columns from row maps if available
+            let mut all_columns = std::collections::HashSet::new();
+            if !left_row_maps.is_empty() {
+                all_columns.extend(left_row_maps[0].keys().cloned());
+            }
+            if !right_row_maps.is_empty() {
+                all_columns.extend(right_row_maps[0].keys().cloned());
+            }
+
+            // If still empty, try variables
+            if all_columns.is_empty() {
+                for (var, _) in &left_context.variables {
+                    all_columns.insert(var.clone());
+                }
+                for (var, _) in &right_context.variables {
+                    all_columns.insert(var.clone());
+                }
+            }
+
+            let mut cols: Vec<String> = all_columns.into_iter().collect();
+            cols.sort();
+            cols
+        };
+
+        // Normalize rows from both sides to use the same column order
+        // CRITICAL FIX: If columns are empty but rows exist, use row order directly
+        let mut left_rows = Vec::new();
+        if left_context.result_set.columns.is_empty() && !left_context.result_set.rows.is_empty() {
+            // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
+            for row in &left_context.result_set.rows {
+                left_rows.push(row.clone());
+            }
+        } else {
+            for row in &left_context.result_set.rows {
+                let mut normalized_values = Vec::new();
+                for col in &columns {
+                    if let Some(idx) = left_context
                         .result_set
                         .columns
                         .iter()
-                        .map(|col| map.get(col).cloned().unwrap_or(serde_json::Value::Null))
-                        .collect();
-                    Row { values }
-                })
-                .collect();
+                        .position(|c| c == col)
+                    {
+                        if idx < row.values.len() {
+                            normalized_values.push(row.values[idx].clone());
+                        } else {
+                            normalized_values.push(Value::Null);
+                        }
+                    } else {
+                        normalized_values.push(Value::Null);
+                    }
+                }
+                left_rows.push(Row {
+                    values: normalized_values,
+                });
+            }
+        }
+
+        let mut right_rows = Vec::new();
+        if right_context.result_set.columns.is_empty() && !right_context.result_set.rows.is_empty()
+        {
+            // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
+            for row in &right_context.result_set.rows {
+                right_rows.push(row.clone());
+            }
+        } else {
+            for row in &right_context.result_set.rows {
+                let mut normalized_values = Vec::new();
+                for col in &columns {
+                    if let Some(idx) = right_context
+                        .result_set
+                        .columns
+                        .iter()
+                        .position(|c| c == col)
+                    {
+                        if idx < row.values.len() {
+                            normalized_values.push(row.values[idx].clone());
+                        } else {
+                            normalized_values.push(Value::Null);
+                        }
+                    } else {
+                        normalized_values.push(Value::Null);
+                    }
+                }
+                right_rows.push(Row {
+                    values: normalized_values,
+                });
+            }
         }
 
         let mut combined_rows = Vec::new();
-        combined_rows.extend(left_context.result_set.rows.clone());
-        combined_rows.extend(right_context.result_set.rows.clone());
+        combined_rows.extend(left_rows);
+        combined_rows.extend(right_rows);
 
         // If UNION (not UNION ALL), deduplicate results
         if distinct {
@@ -4340,13 +4499,6 @@ impl Executor {
             }
             combined_rows = deduped_rows;
         }
-
-        // Use columns from left context (both sides should have same columns)
-        let columns = if !left_context.result_set.columns.is_empty() {
-            left_context.result_set.columns.clone()
-        } else {
-            right_context.result_set.columns.clone()
-        };
 
         // Update the main context with combined results
         context.set_columns_and_rows(columns, combined_rows);
@@ -4522,7 +4674,6 @@ impl Executor {
 
         Ok(())
     }
-
     /// Execute a single operator and return results
     fn execute_operator(&self, context: &mut ExecutionContext, operator: &Operator) -> Result<()> {
         match operator {
@@ -5301,7 +5452,6 @@ impl Executor {
 
         Ok(())
     }
-
     /// Execute Distinct operator
     fn execute_distinct(&self, context: &mut ExecutionContext, columns: &[String]) -> Result<()> {
         if context.result_set.rows.is_empty() && !context.variables.is_empty() {
@@ -5313,14 +5463,18 @@ impl Executor {
             return Ok(());
         }
 
+        // Use a more robust comparison method that handles NULL correctly
+        // Create a key from the values that can be used for comparison
         let mut seen = std::collections::HashSet::new();
         let mut distinct_rows = Vec::new();
 
         for row in &context.result_set.rows {
             let mut key_values = Vec::new();
             if columns.is_empty() {
+                // DISTINCT on all columns
                 key_values = row.values.clone();
             } else {
+                // DISTINCT on specific columns
                 for column in columns {
                     if let Some(index) = self.get_column_index(column, &context.result_set.columns)
                     {
@@ -5335,10 +5489,21 @@ impl Executor {
                 }
             }
 
+            // Create a canonical key for comparison
+            // Use JSON serialization with sorted keys for objects to ensure consistent comparison
+            // This handles NULL, numbers, strings, arrays, objects correctly
+            // For consistent comparison, we need to ensure the same value always produces the same key
             let key = serde_json::to_string(&key_values).unwrap_or_default();
+
+            // Only add row if we haven't seen this key before
             if seen.insert(key) {
                 distinct_rows.push(row.clone());
             }
+        }
+
+        // Debug: Log if we're filtering out rows
+        if distinct_rows.len() < context.result_set.rows.len() {
+            // Some rows were filtered out, which is expected for DISTINCT
         }
 
         context.result_set.rows = distinct_rows.clone();
@@ -5731,6 +5896,38 @@ impl Executor {
                     false
                 }
             }
+            (Value::String(a), Value::String(b)) => {
+                // String comparison - exact match
+                a == b
+            }
+            (Value::String(a), Value::Number(b)) => {
+                // Try to parse string as number for comparison
+                if let Ok(parsed) = a.parse::<f64>() {
+                    if let Some(b_f64) = b.as_f64() {
+                        (parsed - b_f64).abs() < f64::EPSILON * 10.0
+                    } else if let Some(b_i64) = b.as_i64() {
+                        (parsed - b_i64 as f64).abs() < f64::EPSILON * 10.0
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            (Value::Number(a), Value::String(b)) => {
+                // Try to parse string as number for comparison
+                if let Ok(parsed) = b.parse::<f64>() {
+                    if let Some(a_f64) = a.as_f64() {
+                        (parsed - a_f64).abs() < f64::EPSILON * 10.0
+                    } else if let Some(a_i64) = a.as_i64() {
+                        (parsed - a_i64 as f64).abs() < f64::EPSILON * 10.0
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
             _ => left == right,
         }
     }
@@ -6029,7 +6226,6 @@ impl Executor {
 
         Ok(relationships)
     }
-
     /// Phase 8.3: Filter relationships using property index when applicable
     fn filter_relationships_by_property_index(
         &self,
@@ -6823,7 +7019,6 @@ impl Executor {
             Value::Object(obj) => format!("{{{}}}", obj.len()),
         }
     }
-
     /// Execute UNWIND operator - expands a list into rows
     fn execute_unwind(
         &self,
@@ -7625,7 +7820,6 @@ impl Executor {
             parser::Expression::ListComprehension { .. } => false, // List comprehension needs graph context
         }
     }
-
     fn evaluate_projection_expression(
         &self,
         row: &HashMap<String, Value>,
@@ -9682,14 +9876,8 @@ impl Executor {
 
     fn extract_property(entity: &Value, property: &str) -> Value {
         if let Value::Object(obj) = entity {
-            // First check if there's a nested "properties" object (for nodes)
-            if let Some(Value::Object(props)) = obj.get("properties") {
-                if let Some(value) = props.get(property) {
-                    return value.clone();
-                }
-            }
-            // Then check directly in the object (for relationships and nodes with flat properties)
-            // This handles relationships where properties are stored directly in the object
+            // First check directly in the object (for nodes with flat properties)
+            // This is the primary case - nodes have properties directly in the object
             if let Some(value) = obj.get(property) {
                 // Skip internal properties that shouldn't be exposed
                 if property != "_nexus_id"
@@ -9698,6 +9886,12 @@ impl Executor {
                     && property != "_target"
                     && property != "_element_id"
                 {
+                    return value.clone();
+                }
+            }
+            // Then check if there's a nested "properties" object (for compatibility with other formats)
+            if let Some(Value::Object(props)) = obj.get("properties") {
+                if let Some(value) = props.get(property) {
                     return value.clone();
                 }
             }
@@ -9960,7 +10154,6 @@ impl Executor {
             )
         })
     }
-
     /// Phase 2.5.2 & 2.5.3: Parallel aggregation for large datasets
     /// Splits data into chunks and processes in parallel, then merges results
     fn execute_parallel_aggregation(

@@ -10,6 +10,11 @@ CRITICAL RULES:
    - Coverage check
 4. Update docs/ when implementing features
 5. Follow strict documentation structure
+6. PowerShell Script Execution: Always use the correct format to execute PowerShell scripts:
+   ```
+   powershell -ExecutionPolicy Bypass -Command "Get-Content scripts/[script-name].ps1 -Encoding UTF8 | Out-File -Encoding UTF8 scripts/test-temp.ps1; & scripts/test-temp.ps1; Remove-Item scripts/test-temp.ps1"
+   ```
+   Replace `[script-name].ps1` with the actual script filename. This ensures proper UTF-8 encoding and temporary file cleanup.
 
 Language-specific rules are in @AGENTS.md.
 Module-specific patterns are in @AGENTS.md.

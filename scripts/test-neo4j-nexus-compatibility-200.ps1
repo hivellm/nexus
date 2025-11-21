@@ -169,6 +169,74 @@ function Compare-QueryResults {
     Write-Host "✅ PASS: $TestName" -ForegroundColor Green
 }
 
+# Cleanup function to clear databases before each section
+function Clear-Databases {
+    param([string]$SectionName = "")
+    
+    if ($SectionName) {
+        Write-Host "`n🧹 Cleaning databases before $SectionName..." -ForegroundColor Cyan -NoNewline
+    } else {
+        Write-Host "🧹 Cleaning databases..." -ForegroundColor Cyan -NoNewline
+    }
+    
+    try {
+        Invoke-Neo4jQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
+        Invoke-NexusQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
+        Write-Host " ✓" -ForegroundColor Green
+    } catch {
+        Write-Host " ✗ (Error: $($_.Exception.Message))" -ForegroundColor Red
+    }
+}
+
+# Setup function to create test data
+function Setup-TestData {
+    param([string]$DataType = "basic")
+    
+    try {
+        if ($DataType -eq "basic") {
+            # Delete existing test data first to avoid duplicates
+            Invoke-Neo4jQuery -Cypher "MATCH (n:Person {name: 'Alice'}) DELETE n" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MATCH (n:Person {name: 'Bob'}) DELETE n" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MATCH (n:Company {name: 'Acme'}) DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n:Person {name: 'Alice'}) DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n:Person {name: 'Bob'}) DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n:Company {name: 'Acme'}) DELETE n" | Out-Null
+            
+            # Create basic Person and Company nodes (only if they don't exist)
+            Invoke-Neo4jQuery -Cypher "MERGE (n:Person {name: 'Alice'}) SET n.age = 30, n.city = 'NYC'" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MERGE (n:Person {name: 'Bob'}) SET n.age = 25, n.city = 'LA'" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MERGE (n:Company {name: 'Acme'})" | Out-Null
+            
+            Invoke-NexusQuery -Cypher "MERGE (n:Person {name: 'Alice'}) SET n.age = 30, n.city = 'NYC'" | Out-Null
+            Invoke-NexusQuery -Cypher "MERGE (n:Person {name: 'Bob'}) SET n.age = 25, n.city = 'LA'" | Out-Null
+            Invoke-NexusQuery -Cypher "MERGE (n:Company {name: 'Acme'})" | Out-Null
+        } elseif ($DataType -eq "relationships") {
+            # Delete existing relationships first
+            Invoke-Neo4jQuery -Cypher "MATCH ()-[r]->() DELETE r" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH ()-[r]->() DELETE r" | Out-Null
+            
+            # Delete existing test nodes
+            Invoke-Neo4jQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Acme', 'TechCorp'] DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Acme', 'TechCorp'] DELETE n" | Out-Null
+            
+            # Create Person and Company nodes with relationships
+            Invoke-Neo4jQuery -Cypher "CREATE (p1:Person {name: 'Alice'}), (p2:Person {name: 'Bob'}), (c1:Company {name: 'Acme'}), (c2:Company {name: 'TechCorp'})" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MATCH (p1:Person {name: 'Alice'}), (c1:Company {name: 'Acme'}) CREATE (p1)-[:WORKS_AT {since: 2020}]->(c1)" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MATCH (p1:Person {name: 'Alice'}), (c2:Company {name: 'TechCorp'}) CREATE (p1)-[:WORKS_AT {since: 2021}]->(c2)" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MATCH (p2:Person {name: 'Bob'}), (c1:Company {name: 'Acme'}) CREATE (p2)-[:WORKS_AT {since: 2019}]->(c1)" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MATCH (p1:Person {name: 'Alice'}), (p2:Person {name: 'Bob'}) CREATE (p1)-[:KNOWS]->(p2)" | Out-Null
+            
+            Invoke-NexusQuery -Cypher "CREATE (p1:Person {name: 'Alice'}), (p2:Person {name: 'Bob'}), (c1:Company {name: 'Acme'}), (c2:Company {name: 'TechCorp'})" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (p1:Person {name: 'Alice'}), (c1:Company {name: 'Acme'}) CREATE (p1)-[:WORKS_AT {since: 2020}]->(c1)" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (p1:Person {name: 'Alice'}), (c2:Company {name: 'TechCorp'}) CREATE (p1)-[:WORKS_AT {since: 2021}]->(c2)" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (p2:Person {name: 'Bob'}), (c1:Company {name: 'Acme'}) CREATE (p2)-[:WORKS_AT {since: 2019}]->(c1)" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (p1:Person {name: 'Alice'}), (p2:Person {name: 'Bob'}) CREATE (p1)-[:KNOWS]->(p2)" | Out-Null
+        }
+    } catch {
+        Write-Host "⚠ Warning: Setup data creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
 # Test runner function
 function Run-Test {
     param(
@@ -226,6 +294,7 @@ Run-Test -Name "1.20 RETURN logical OR" -Query "RETURN true OR false AS result"
 #═══════════════════════════════════════════════════════════════════
 # SECTION 2: MATCH QUERIES (25 tests)
 #═══════════════════════════════════════════════════════════════════
+# Section 2 uses data from Section 1, so no cleanup needed
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 2: MATCH Queries (25 tests)                │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -259,6 +328,7 @@ Run-Test -Name "2.25 MATCH keys function" -Query "MATCH (n:Person {name: 'Alice'
 #═══════════════════════════════════════════════════════════════════
 # SECTION 3: AGGREGATION FUNCTIONS (25 tests)
 #═══════════════════════════════════════════════════════════════════
+# Section 3 uses data from Section 1-2, so no cleanup needed
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 3: Aggregation Functions (25 tests)        │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -292,6 +362,7 @@ Run-Test -Name "3.25 COUNT with multiple labels" -Query "MATCH (n:Person:Employe
 #═══════════════════════════════════════════════════════════════════
 # SECTION 4: STRING FUNCTIONS (20 tests)
 #═══════════════════════════════════════════════════════════════════
+Clear-Databases -SectionName "Section 4: String Functions"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 4: String Functions (20 tests)             │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -310,6 +381,8 @@ Run-Test -Name "4.11 split function" -Query "RETURN split('a,b,c', ',') AS resul
 Run-Test -Name "4.12 reverse string" -Query "RETURN reverse('hello') AS result"
 Run-Test -Name "4.13 size of string" -Query "RETURN size('hello') AS result"
 Run-Test -Name "4.14 String concatenation" -Query "RETURN 'Hello' + ' ' + 'World' AS result"
+# Setup test data for property-based string tests
+Setup-TestData -DataType "basic"
 Run-Test -Name "4.15 String with property" -Query "MATCH (n:Person {name: 'Alice'}) RETURN toLower(n.name) AS result"
 Run-Test -Name "4.16 WHERE with string function" -Query "MATCH (n:Person) WHERE toLower(n.name) = 'alice' RETURN count(n) AS cnt"
 Run-Test -Name "4.17 WHERE STARTS WITH" -Query "MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN count(n) AS cnt"
@@ -320,6 +393,7 @@ Run-Test -Name "4.20 String comparison" -Query 'RETURN ''apple'' < ''banana'' AS
 #═══════════════════════════════════════════════════════════════════
 # SECTION 5: LIST/ARRAY OPERATIONS (20 tests)
 #═══════════════════════════════════════════════════════════════════
+Clear-Databases -SectionName "Section 5: List/Array Operations"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 5: List/Array Operations (20 tests)        │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -341,6 +415,8 @@ Run-Test -Name "5.14 Empty array" -Query "RETURN [] AS empty"
 Run-Test -Name "5.15 Nested arrays" -Query "RETURN [[1, 2], [3, 4]] AS nested"
 Run-Test -Name "5.16 Array with mixed types" -Query "RETURN [1, 'two', true, null] AS mixed"
 Run-Test -Name "5.17 Array indexing negative" -Query "RETURN [1, 2, 3][-1] AS last"
+# Setup test data for property-based array tests
+Setup-TestData -DataType "basic"
 Run-Test -Name "5.18 Array length property" -Query "MATCH (n:Person {name: 'Alice'}) RETURN size(keys(n)) AS prop_count"
 Run-Test -Name "5.19 Array with aggregation" -Query "MATCH (n:Person) RETURN collect(n.age) AS ages"
 Run-Test -Name "5.20 Array filtering with WHERE IN" -Query "MATCH (n:Person) WHERE n.name IN ['Alice', 'Bob'] RETURN count(n) AS cnt"
@@ -348,6 +424,7 @@ Run-Test -Name "5.20 Array filtering with WHERE IN" -Query "MATCH (n:Person) WHE
 #═══════════════════════════════════════════════════════════════════
 # SECTION 6: MATHEMATICAL OPERATIONS (20 tests)
 #═══════════════════════════════════════════════════════════════════
+Clear-Databases -SectionName "Section 6: Mathematical Operations"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 6: Mathematical Operations (20 tests)      │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -369,6 +446,8 @@ Run-Test -Name "6.14 Expression with parentheses" -Query "RETURN (2 + 3) * 4 AS 
 Run-Test -Name "6.15 Complex expression" -Query "RETURN (10 + 5) * 2 - 8 / 4 AS result"
 Run-Test -Name "6.16 Float division" -Query "RETURN 10.0 / 4.0 AS result"
 Run-Test -Name "6.17 Negative numbers" -Query "RETURN -5 + 3 AS result"
+# Setup test data for property-based math tests
+Setup-TestData -DataType "basic"
 Run-Test -Name "6.18 Math with WHERE" -Query 'MATCH (n:Person) WHERE n.age * 2 > 50 RETURN count(n) AS cnt'
 Run-Test -Name "6.19 Math in RETURN" -Query "MATCH (n:Person) RETURN n.age * 2 AS double_age LIMIT 1"
 Run-Test -Name "6.20 Math aggregation" -Query "MATCH (n:Person) RETURN sum(n.age) / count(n) AS avg_age"
@@ -376,19 +455,12 @@ Run-Test -Name "6.20 Math aggregation" -Query "MATCH (n:Person) RETURN sum(n.age
 #═══════════════════════════════════════════════════════════════════
 # SECTION 7: RELATIONSHIPS (30 tests)
 #═══════════════════════════════════════════════════════════════════
+Clear-Databases -SectionName "Section 7: Relationships"
+# Setup test data with relationships
+Setup-TestData -DataType "relationships"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 7: Relationships (30 tests)                │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
-
-# Create relationships for testing
-Invoke-Neo4jQuery -Cypher "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)" | Out-Null
-Invoke-NexusQuery -Cypher "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)" | Out-Null
-
-Invoke-Neo4jQuery -Cypher "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT {since: 2020}]->(c)" | Out-Null
-Invoke-NexusQuery -Cypher "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT {since: 2020}]->(c)" | Out-Null
-
-Invoke-Neo4jQuery -Cypher "MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT {since: 2021}]->(c)" | Out-Null
-Invoke-NexusQuery -Cypher "MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT {since: 2021}]->(c)" | Out-Null
 
 Run-Test -Name "7.01 MATCH relationship" -Query "MATCH (a)-[r]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.02 MATCH specific rel type" -Query "MATCH (a)-[r:KNOWS]->(b) RETURN count(r) AS cnt"
@@ -416,14 +488,15 @@ Run-Test -Name "7.23 Nodes in path" -Query "MATCH p = (a:Person)-[r:KNOWS]->(b) 
 Run-Test -Name "7.24 Relationships in path" -Query "MATCH p = (a:Person)-[r]->(b) RETURN relationships(p) AS path_rels LIMIT 1"
 Run-Test -Name "7.25 MATCH all connected nodes" -Query "MATCH (a:Person)-[r]-(b) RETURN DISTINCT a.name AS name ORDER BY name"
 Run-Test -Name "7.26 Degree count" -Query "MATCH (a:Person {name: 'Alice'})-[r]-(b) RETURN count(r) AS degree"
-Run-Test -Name "7.27 Filter by rel type" -Query "MATCH ()-[r]->() WHERE type(r) = 'KNOWS' RETURN count(r) AS cnt"
-Run-Test -Name "7.28 Filter by rel property" -Query "MATCH ()-[r]->() WHERE r.since IS NOT NULL RETURN count(r) AS cnt"
-Run-Test -Name "7.29 Return distinct rel types" -Query "MATCH ()-[r]->() RETURN DISTINCT type(r) AS t ORDER BY t"
+Run-Test -Name "7.27 Filter by rel type" -Query 'MATCH ()-[r]->() WHERE type(r) = ''KNOWS'' RETURN count(r) AS cnt'
+Run-Test -Name "7.28 Filter by rel property" -Query 'MATCH ()-[r]->() WHERE r.since IS NOT NULL RETURN count(r) AS cnt'
+Run-Test -Name "7.29 Return distinct rel types" -Query 'MATCH ()-[r]->() RETURN DISTINCT type(r) AS t ORDER BY t'
 Run-Test -Name "7.30 Complex relationship query" -Query "MATCH (a:Person)-[r:WORKS_AT]->(c:Company) RETURN a.name AS person, c.name AS company, r.since AS year ORDER BY year"
 
 #═══════════════════════════════════════════════════════════════════
 # SECTION 8: NULL HANDLING (15 tests)
 #═══════════════════════════════════════════════════════════════════
+Clear-Databases -SectionName "Section 8: NULL Handling"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 8: NULL Handling (15 tests)                │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -431,14 +504,16 @@ Write-Host "└─────────────────────�
 Run-Test -Name "8.01 Return NULL" -Query "RETURN null AS result"
 Run-Test -Name "8.02 IS NULL check" -Query "RETURN null IS NULL AS result"
 Run-Test -Name "8.03 IS NOT NULL check" -Query "RETURN null IS NOT NULL AS result"
+# Setup test data for property-based NULL tests
+Setup-TestData -DataType "basic"
 Run-Test -Name "8.04 WHERE IS NULL" -Query "MATCH (n:Person) WHERE n.city IS NULL RETURN count(n) AS cnt"
 Run-Test -Name "8.05 WHERE IS NOT NULL" -Query "MATCH (n:Person) WHERE n.city IS NOT NULL RETURN count(n) AS cnt"
 Run-Test -Name "8.06 NULL in comparison" -Query "RETURN null = null AS result"
 Run-Test -Name "8.07 NULL in arithmetic" -Query "RETURN 5 + null AS result"
 Run-Test -Name "8.08 NULL in string concat" -Query "RETURN 'hello' + null AS result"
-Run-Test -Name "8.09 coalesce function" -Query "RETURN coalesce(null, 'default') AS result"
-Run-Test -Name "8.10 coalesce with value" -Query "RETURN coalesce('value', 'default') AS result"
-Run-Test -Name "8.11 coalesce multiple" -Query "RETURN coalesce(null, null, 'third') AS result"
+Run-Test -Name "8.09 coalesce function" -Query 'RETURN coalesce(null, ''default'') AS result'
+Run-Test -Name "8.10 coalesce with value" -Query 'RETURN coalesce(''value'', ''default'') AS result'
+Run-Test -Name "8.11 coalesce multiple" -Query 'RETURN coalesce(null, null, ''third'') AS result'
 Run-Test -Name "8.12 NULL in aggregation" -Query "MATCH (n:Person) RETURN count(n.city) AS cnt"
 Run-Test -Name "8.13 NULL property access" -Query "MATCH (n:Person {name: 'Alice'}) RETURN n.nonexistent AS result"
 Run-Test -Name "8.14 CASE with NULL" -Query "RETURN CASE WHEN null THEN 'yes' ELSE 'no' END AS result"
@@ -447,6 +522,7 @@ Run-Test -Name "8.15 NULL in array" -Query "RETURN [1, null, 3] AS array"
 #═══════════════════════════════════════════════════════════════════
 # SECTION 9: CASE EXPRESSIONS (10 tests)
 #═══════════════════════════════════════════════════════════════════
+Clear-Databases -SectionName "Section 9: CASE Expressions"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 9: CASE Expressions (10 tests)             │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -454,6 +530,8 @@ Write-Host "└─────────────────────�
 Run-Test -Name "9.01 Simple CASE" -Query 'RETURN CASE WHEN 5 > 3 THEN ''yes'' ELSE ''no'' END AS result'
 Run-Test -Name "9.02 CASE with multiple WHEN" -Query 'RETURN CASE WHEN 1 > 2 THEN ''a'' WHEN 2 > 1 THEN ''b'' ELSE ''c'' END AS result'
 Run-Test -Name "9.03 CASE without ELSE" -Query "RETURN CASE WHEN false THEN 'yes' END AS result"
+# Setup test data for property-based CASE tests
+Setup-TestData -DataType "basic"
 Run-Test -Name "9.04 CASE with property" -Query 'MATCH (n:Person) RETURN CASE WHEN n.age > 30 THEN ''old'' ELSE ''young'' END AS category LIMIT 1'
 Run-Test -Name "9.05 CASE with NULL" -Query "RETURN CASE WHEN null THEN 'yes' ELSE 'no' END AS result"
 Run-Test -Name "9.06 CASE with arithmetic" -Query "RETURN CASE WHEN 10 / 2 = 5 THEN 'correct' ELSE 'wrong' END AS result"
@@ -465,6 +543,9 @@ Run-Test -Name "9.10 CASE with ORDER BY" -Query 'MATCH (n:Person) RETURN n.name,
 #═══════════════════════════════════════════════════════════════════
 # SECTION 10: UNION QUERIES (10 tests)
 #═══════════════════════════════════════════════════════════════════
+Clear-Databases -SectionName "Section 10: UNION Queries"
+# Setup test data for UNION tests
+Setup-TestData -DataType "basic"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 10: UNION Queries (10 tests)               │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow

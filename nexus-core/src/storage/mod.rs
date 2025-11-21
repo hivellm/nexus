@@ -815,12 +815,28 @@ impl RecordStore {
 
     /// Load properties for a node
     pub fn load_node_properties(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
+        // First try to use prop_ptr from NodeRecord (more reliable)
+        if let Ok(node_record) = self.read_node(node_id) {
+            if node_record.prop_ptr != 0 {
+                // Use prop_ptr directly from the node record
+                if let Ok(Some(props)) = self
+                    .property_store
+                    .load_properties_at_offset(node_record.prop_ptr)
+                {
+                    return Ok(Some(props));
+                }
+            }
+        }
+
+        // Fallback to reverse_index lookup (for compatibility)
         self.property_store
             .load_properties(node_id, property_store::EntityType::Node)
     }
 
     /// Load properties for a relationship
     pub fn load_relationship_properties(&self, rel_id: u64) -> Result<Option<serde_json::Value>> {
+        // For relationships, use reverse_index lookup
+        // (Relationship records are accessed differently, so we use the index)
         self.property_store
             .load_properties(rel_id, property_store::EntityType::Relationship)
     }

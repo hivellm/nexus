@@ -1931,7 +1931,9 @@ impl<'a> QueryPlanner<'a> {
                 Ok(format!("{}[{}]", base_str, index_str))
             }
             Expression::Literal(literal) => match literal {
-                Literal::String(s) => Ok(format!("\"{}\"", s)),
+                // Use single quotes for strings to match Cypher parser expectations
+                // This is critical for filter predicates to work correctly
+                Literal::String(s) => Ok(format!("'{}'", s)),
                 Literal::Integer(i) => Ok(i.to_string()),
                 Literal::Float(f) => Ok(f.to_string()),
                 Literal::Boolean(b) => Ok(b.to_string()),
@@ -3041,10 +3043,10 @@ mod tests {
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
-        // Test string literal
+        // Test string literal - use single quotes for Neo4j compatibility (fixed in Phase 1)
         let expr = Expression::Literal(Literal::String("hello".to_string()));
         let result = planner.expression_to_string(&expr).unwrap();
-        assert_eq!(result, "\"hello\"");
+        assert_eq!(result, "'hello'");
 
         // Test integer literal
         let expr = Expression::Literal(Literal::Integer(42));
