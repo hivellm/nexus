@@ -2669,35 +2669,59 @@ impl Executor {
                 let materialized = self.materialize_rows_from_variables(context);
 
                 // CRITICAL FIX: If we have variables but materialized is empty,
-                // it means variables contain single values, not arrays
-                // We need to create a row from single values (e.g., after MATCH with filter)
+                // check if variables contain empty arrays (MATCH found nothing)
+                // vs single values (after MATCH with filter)
                 if materialized.is_empty() && !context.variables.is_empty() {
-                    let mut row = HashMap::new();
-                    for (var, value) in &context.variables {
-                        match value {
-                            Value::Array(arr) if arr.len() == 1 => {
-                                row.insert(var.clone(), arr[0].clone());
-                            }
-                            _ => {
-                                row.insert(var.clone(), value.clone());
+                    // Check if all variables are empty arrays - if so, no rows should be created
+                    let all_empty_arrays = context.variables.values().all(|v| {
+                        match v {
+                            Value::Array(arr) => arr.is_empty(),
+                            _ => false, // Non-array values should create a row
+                        }
+                    });
+
+                    if all_empty_arrays {
+                        // All variables are empty arrays (MATCH found nothing) - return empty
+                        vec![]
+                    } else {
+                        // Some variables contain single values, create a row
+                        let mut row = HashMap::new();
+                        for (var, value) in &context.variables {
+                            match value {
+                                Value::Array(arr) if arr.len() == 1 => {
+                                    row.insert(var.clone(), arr[0].clone());
+                                }
+                                Value::Array(_) => {
+                                    // Empty or multiple-element array - skip
+                                }
+                                _ => {
+                                    row.insert(var.clone(), value.clone());
+                                }
                             }
                         }
-                    }
-                    if !row.is_empty() {
-                        vec![row]
-                    } else {
-                        materialized
+                        if !row.is_empty() {
+                            vec![row]
+                        } else {
+                            materialized
+                        }
                     }
                 } else if materialized.is_empty()
                     && context.variables.is_empty()
                     && !items.is_empty()
-                    && items.iter().any(|item| {
-                        // Check if any projection item can be evaluated without variables
-                        self.can_evaluate_without_variables(&item.expression)
-                    })
                 {
-                    // Create single empty row for expression evaluation (literals like 1+1)
-                    vec![std::collections::HashMap::new()]
+                    // Check if ALL projection items can be evaluated without variables
+                    // Only create a row if ALL items are literals/constants (like RETURN 1+1)
+                    // If ANY item requires variables (like RETURN a), don't create a row
+                    if items
+                        .iter()
+                        .all(|item| self.can_evaluate_without_variables(&item.expression))
+                    {
+                        // Create single empty row for expression evaluation (literals like 1+1)
+                        vec![std::collections::HashMap::new()]
+                    } else {
+                        // Some expressions require variables but none exist - return empty (MATCH found nothing)
+                        vec![]
+                    }
                 } else {
                     materialized
                 }
@@ -4321,32 +4345,55 @@ impl Executor {
         // Convert variable-based results to rows if needed
         // CRITICAL FIX: Project operator should populate result_set.rows, but if it's empty,
         // we need to materialize from variables to ensure all rows are collected for UNION
+        // However, we should NOT materialize if variables only contain empty arrays (no matches found)
         if left_context.result_set.rows.is_empty() && !left_context.variables.is_empty() {
-            // If no rows but we have variables, materialize from variables
-            let row_maps = self.materialize_rows_from_variables(&left_context);
-            if !row_maps.is_empty() {
-                // Ensure columns are set from variables if not already set
-                if left_context.result_set.columns.is_empty() {
-                    let mut columns: Vec<String> = row_maps[0].keys().cloned().collect();
-                    columns.sort();
-                    left_context.result_set.columns = columns;
+            // Check if any variable has non-empty array - if all are empty, don't materialize
+            let has_non_empty_array = left_context.variables.values().any(|v| {
+                match v {
+                    Value::Array(arr) => !arr.is_empty(),
+                    _ => true, // Non-array values should be materialized
                 }
-                self.update_result_set_from_rows(&mut left_context, &row_maps);
+            });
+
+            if has_non_empty_array {
+                // If no rows but we have variables with data, materialize from variables
+                let row_maps = self.materialize_rows_from_variables(&left_context);
+                if !row_maps.is_empty() {
+                    // Ensure columns are set from variables if not already set
+                    if left_context.result_set.columns.is_empty() {
+                        let mut columns: Vec<String> = row_maps[0].keys().cloned().collect();
+                        columns.sort();
+                        left_context.result_set.columns = columns;
+                    }
+                    self.update_result_set_from_rows(&mut left_context, &row_maps);
+                }
             }
+            // If all arrays are empty (no matches found), leave result_set.rows empty
         }
 
         if right_context.result_set.rows.is_empty() && !right_context.variables.is_empty() {
-            // If no rows but we have variables, materialize from variables
-            let row_maps = self.materialize_rows_from_variables(&right_context);
-            if !row_maps.is_empty() {
-                // Ensure columns are set from variables if not already set
-                if right_context.result_set.columns.is_empty() {
-                    let mut columns: Vec<String> = row_maps[0].keys().cloned().collect();
-                    columns.sort();
-                    right_context.result_set.columns = columns;
+            // Check if any variable has non-empty array - if all are empty, don't materialize
+            let has_non_empty_array = right_context.variables.values().any(|v| {
+                match v {
+                    Value::Array(arr) => !arr.is_empty(),
+                    _ => true, // Non-array values should be materialized
                 }
-                self.update_result_set_from_rows(&mut right_context, &row_maps);
+            });
+
+            if has_non_empty_array {
+                // If no rows but we have variables with data, materialize from variables
+                let row_maps = self.materialize_rows_from_variables(&right_context);
+                if !row_maps.is_empty() {
+                    // Ensure columns are set from variables if not already set
+                    if right_context.result_set.columns.is_empty() {
+                        let mut columns: Vec<String> = row_maps[0].keys().cloned().collect();
+                        columns.sort();
+                        right_context.result_set.columns = columns;
+                    }
+                    self.update_result_set_from_rows(&mut right_context, &row_maps);
+                }
             }
+            // If all arrays are empty (no matches found), leave result_set.rows empty
         }
 
         // CRITICAL FIX: Ensure columns are set from result_set.rows if Project already executed
