@@ -37,9 +37,9 @@
 - [ ] 5.3 Fix "2.25 MATCH keys function" - Query: `MATCH (n:Person {name: 'Alice'}) RETURN keys(n) AS ks` - Expected: 1 row, Got: 0 rows
 
 ### Phase 6: Relationship Query Issues (3 tests) - MEDIUM PRIORITY
-- [ ] 6.1 Fix "7.19 Relationship with aggregation" - Query: `MATCH (a:Person)-[r:WORKS_AT]->(b:Company) RETURN a.name AS person, count(r) AS jobs ORDER BY person` - Expected: 2 rows, Got: 1 row
+- [ ] 6.1 Fix "7.19 Relationship with aggregation" - Query: `MATCH (a:Person)-[r:WORKS_AT]->(b:Company) RETURN a.name AS person, count(r) AS jobs ORDER BY person` - Expected: 2 rows, Got: 1 row - **IN PROGRESS**: Added debug comments to Expand and Aggregate operators
 - [ ] 6.2 Fix "7.25 MATCH all connected nodes" - Query: `MATCH (a:Person)-[r]-(b) RETURN DISTINCT a.name AS name ORDER BY name` - Expected: 2 rows, Got: 1 row
-- [ ] 6.3 Fix "7.30 Complex relationship query" - Query: `MATCH (a:Person)-[r:WORKS_AT]->(c:Company) RETURN a.name AS person, c.name AS company, r.since AS year ORDER BY year` - Expected: 2 rows, Got: 67 rows
+- [ ] 6.3 Fix "7.30 Complex relationship query" - Query: `MATCH (a:Person)-[r:WORKS_AT]->(c:Company) RETURN a.name AS person, c.name AS company, r.since AS year ORDER BY year` - Expected: 3 rows, Got: 2 rows
 
 ### Phase 7: Property Access Issues (2 tests) - MEDIUM PRIORITY
 - [ ] 7.1 Fix "4.15 String with property" - Query: `MATCH (n:Person {name: 'Alice'}) RETURN toLower(n.name) AS result` - Expected: 1 row, Got: 0 rows
@@ -102,8 +102,8 @@
 **Remaining Work**: 3 issues
 - Section 7: 3 relationship tests (Neo4j returns more rows than Nexus)
   - 7.19 Relationship with aggregation (Neo4j=2, Nexus=1)
-  - 7.25 MATCH all connected nodes (Neo4j=2, Nexus=1)  
+  - 7.25 MATCH all connected nodes (Neo4j=2, Nexus=1)
   - 7.30 Complex relationship query (Neo4j=3, Nexus=2)
 
-**Note**: Many improvements achieved through better test data management. Remaining failures appear to be real compatibility issues in Filter, DISTINCT, UNION, and relationship aggregation logic.
+**Note**: See `specs/cypher/relationship-issues-analysis.md` for detailed analysis of remaining issues.
 

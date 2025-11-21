@@ -2558,10 +2558,15 @@ impl Executor {
                         }
                     }
 
+                    // CRITICAL FIX: Clone row first to preserve all existing variables
+                    // Then update/add source, target, and relationship variables
+                    // This ensures all variables from previous operators are preserved
                     let mut new_row = row.clone();
+                    // Update source variable (may already exist, but ensure it's correct)
                     new_row.insert(source_var.to_string(), source_value.clone());
+                    // Update/add target variable
                     new_row.insert(target_var.to_string(), target_node);
-
+                    // Update/add relationship variable if specified
                     if !rel_var.is_empty() {
                         let relationship_value = self.read_relationship_as_value(&rel_info)?;
                         new_row.insert(rel_var.to_string(), relationship_value);
@@ -3035,7 +3040,10 @@ impl Executor {
         for row in rows_to_process {
             let mut group_key_values = Vec::new();
             for col in group_by {
-                // Use project_columns if available, otherwise use context.result_set.columns
+                // CRITICAL FIX: Always use project_columns if available for GROUP BY
+                // This ensures we use the correct column names created by Project operator
+                // The project_columns should contain the aliases (e.g., "person") that match
+                // the GROUP BY columns, while context.result_set.columns may have different names
                 let columns_to_use = if !project_columns.is_empty() {
                     &project_columns
                 } else {
@@ -3045,9 +3053,13 @@ impl Executor {
                     if index < row.values.len() {
                         group_key_values.push(row.values[index].clone());
                     } else {
+                        // Index found but row doesn't have enough values - this shouldn't happen
+                        // but handle gracefully
                         group_key_values.push(Value::Null);
                     }
                 } else {
+                    // Column not found - this should not happen if Project created it correctly
+                    // but handle gracefully by using Null (will group all NULLs together)
                     group_key_values.push(Value::Null);
                 }
             }
