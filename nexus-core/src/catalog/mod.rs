@@ -1262,7 +1262,9 @@ mod tests {
         use std::thread;
 
         let dir = TempDir::new().unwrap();
-        let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
+        // Use larger map size for concurrent tests to avoid MapFull errors
+        // 512KB should be sufficient for 10 concurrent operations (5 types + 5 keys)
+        let catalog = Arc::new(Catalog::with_map_size(dir.path(), 512 * 1024).unwrap());
 
         let mut handles = vec![];
 
