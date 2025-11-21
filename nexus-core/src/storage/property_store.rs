@@ -94,9 +94,10 @@ impl PropertyStore {
     ) -> Result<u64> {
         // Check if properties already exist for this entity
         if let Some(&existing_ptr) = self.reverse_index.get(&(entity_id, entity_type)) {
-            // Update existing properties
-            self.update_properties(existing_ptr, entity_id, entity_type, properties)?;
-            return Ok(existing_ptr);
+            // Update existing properties - may return new offset if properties don't fit
+            let actual_offset =
+                self.update_properties(existing_ptr, entity_id, entity_type, properties)?;
+            return Ok(actual_offset);
         }
 
         // Phase 1 Deep Optimization: Use to_string for small properties, to_writer for large
@@ -212,7 +213,7 @@ impl PropertyStore {
         entity_id: u64,
         entity_type: EntityType,
         properties: serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         // Serialize new properties
         let serialized = serde_json::to_vec(&properties).map_err(Error::Json)?;
 
@@ -225,6 +226,7 @@ impl PropertyStore {
         if new_data_size <= existing_data_size {
             self.write_u32(offset + 9, new_data_size);
             self.write_bytes(offset + 13, &serialized);
+            Ok(offset) // Return same offset
         } else {
             // Need to allocate new space
             let new_offset = self.next_offset;
@@ -245,9 +247,9 @@ impl PropertyStore {
                 .insert((entity_id, entity_type), new_offset);
 
             self.next_offset = new_offset + entry_size as u64;
-        }
 
-        Ok(())
+            Ok(new_offset) // Return new offset
+        }
     }
 
     /// Delete properties for an entity

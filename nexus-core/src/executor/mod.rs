@@ -2339,7 +2339,10 @@ impl Executor {
                 .collect();
         } else {
             // Had rows initially from variables - update result set normally
+            // CRITICAL FIX: Update variables FIRST, then result_set, ensuring variables match filtered rows
             self.update_variables_from_rows(context, &filtered_rows);
+            // Clear existing rows before updating to avoid duplicates
+            context.result_set.rows.clear();
             self.update_result_set_from_rows(context, &filtered_rows);
         }
         Ok(())

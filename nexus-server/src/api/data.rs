@@ -1041,14 +1041,30 @@ mod tests {
         assert!(response.error.is_none());
         assert_eq!(response.message, "Node updated successfully");
 
-        // Verify the update by getting the node
-        let mut params = std::collections::HashMap::new();
-        params.insert("id".to_string(), node_id.to_string());
-        let get_response = get_node_by_id(axum::extract::Query(params)).await;
-        assert!(get_response.node.is_some());
-        let node = get_response.node.as_ref().unwrap();
-        assert_eq!(node.properties["name"], json!("Bob"));
-        assert_eq!(node.properties["age"], json!(25));
+        // Verify the update by getting the node directly from storage
+        // Access the engine again to read the updated properties
+        let global_engine = ENGINE.get().expect("Engine should be initialized");
+        let engine_guard = global_engine.read().await;
+        let properties = engine_guard.storage.load_node_properties(node_id);
+        drop(engine_guard);
+
+        match properties {
+            Ok(Some(props)) => {
+                if let serde_json::Value::Object(props_map) = props {
+                    assert_eq!(
+                        props_map.get("name"),
+                        Some(&json!("Bob")),
+                        "Expected name to be 'Bob', got: {:?}",
+                        props_map.get("name")
+                    );
+                    assert_eq!(props_map.get("age"), Some(&json!(25)));
+                } else {
+                    panic!("Expected properties to be an object");
+                }
+            }
+            Ok(None) => panic!("Node properties should exist"),
+            Err(e) => panic!("Failed to load node properties: {}", e),
+        }
     }
 
     #[tokio::test]
