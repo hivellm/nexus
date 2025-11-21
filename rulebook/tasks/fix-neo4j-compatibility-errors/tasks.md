@@ -102,8 +102,20 @@
 **Remaining Work**: 3 issues
 - Section 7: 3 relationship tests (Neo4j returns more rows than Nexus)
   - 7.19 Relationship with aggregation (Neo4j=2, Nexus=1)
+    - **Status**: IN PROGRESS - Code analysis completed, Expand and Aggregate operators appear correct
+    - **Issue**: Nexus returns 1 row instead of 2 (Alice with 2 jobs, Bob with 1 job)
+    - **Hypothesis**: Expand may not be processing all initial Person nodes, or Aggregate not grouping correctly
   - 7.25 MATCH all connected nodes (Neo4j=2, Nexus=1)
+    - **Status**: PENDING - Needs investigation
+    - **Issue**: DISTINCT may be removing rows incorrectly, or Expand not processing all source nodes when direction is Both
   - 7.30 Complex relationship query (Neo4j=3, Nexus=2)
+    - **Status**: PENDING - Needs investigation
+    - **Issue**: One relationship not being found or processed by Expand (possibly missing one of Alice's relationships)
 
 **Note**: See `specs/cypher/relationship-issues-analysis.md` for detailed analysis of remaining issues.
+
+**Next Steps**: 
+1. Add debug logging to Expand operator to verify all source nodes are processed
+2. Add debug logging to Aggregate operator to verify grouping is correct
+3. Run specific tests to identify exact point of failure
 

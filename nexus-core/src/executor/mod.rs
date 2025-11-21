@@ -2457,8 +2457,25 @@ impl Executor {
                 let source_value = row
                     .get(source_var)
                     .cloned()
-                    .or_else(|| context.get_variable(source_var).cloned())
+                    .or_else(|| {
+                        // If not in row, try to get from context variables
+                        // But if it's an Array, we should have already materialized rows
+                        // This fallback should only happen in edge cases
+                        context.get_variable(source_var).cloned()
+                    })
                     .unwrap_or(Value::Null);
+
+                // CRITICAL FIX: Handle case where source_value might be an Array
+                // This can happen if materialize_rows_from_variables didn't work correctly
+                // or if we're in an edge case. Extract first element if it's an Array.
+                let source_value = match &source_value {
+                    Value::Array(arr) if !arr.is_empty() => {
+                        // If we got an Array, take the first element
+                        // This shouldn't happen if materialize_rows_from_variables worked correctly
+                        arr[0].clone()
+                    }
+                    other => other.clone(),
+                };
 
                 let source_id = match Self::extract_entity_id(&source_value) {
                     Some(id) => id,
