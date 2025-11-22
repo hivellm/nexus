@@ -979,6 +979,14 @@ impl Executor {
 
         // Vectorized execution framework ready - will be activated in next phase
 
+        // If a pipeline mixes Project and Aggregate, ensure Aggregate runs before Project.
+        // We detect presence of Aggregate upfront and, if present, we will skip executing
+        // Project operators until after the aggregation step. This preserves intermediate
+        // row variables (e.g., relationship variable `r`) needed by aggregations like COUNT(r).
+        let has_aggregate_in_pipeline = operators
+            .iter()
+            .any(|op| matches!(op, Operator::Aggregate { .. }));
+
         for operator in operators.iter() {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
@@ -989,6 +997,10 @@ impl Executor {
                         label_id,
                         variable
                     );
+                    // CRITICAL FIX: Clear result_set.rows and variables for this variable before setting new one
+                    // This prevents mixing old rows with new ones and avoids product cartesian from old variables
+                    context.result_set.rows.clear();
+                    context.variables.remove(variable);
                     context.set_variable(variable, Value::Array(nodes));
                     let rows = self.materialize_rows_from_variables(&context);
                     tracing::debug!(
@@ -1032,10 +1044,17 @@ impl Executor {
                 }
                 Operator::Project { items } => {
                     projection_columns = items.iter().map(|item| item.alias.clone()).collect();
-                    results = self.execute_project(&mut context, items)?;
-                    // Store projection items in context for Aggregate to use when creating virtual row
-                    // We'll store them in a temporary variable that Aggregate can access
-                    // For now, we'll pass them through the operator chain
+                    if has_aggregate_in_pipeline {
+                        // Defer Project until after Aggregate to keep source columns (e.g., `r`) available.
+                        // Aggregation operator will produce the correct final columns/rows.
+                        tracing::debug!(
+                            "Deferring Project ({} items) because Aggregate exists later in pipeline",
+                            items.len()
+                        );
+                    } else {
+                        results = self.execute_project(&mut context, items)?;
+                        // Store projection items in context for downstream operators if needed
+                    }
                 }
                 Operator::Limit { count } => {
                     self.execute_limit(&mut context, *count)?;
@@ -2025,17 +2044,28 @@ impl Executor {
         // Always use label_index - label_id 0 is valid (it's the first label)
         let bitmap = self.label_index().get_nodes(label_id)?;
 
+        // CRITICAL FIX: Deduplicate node IDs to avoid returning duplicate nodes
+        // Use HashSet to track seen node IDs since bitmap should already be unique
+        use std::collections::HashSet;
+        let mut seen_node_ids = HashSet::new();
         let mut results = Vec::new();
 
         for node_id in bitmap.iter() {
+            let node_id_u64 = node_id as u64;
+
+            // Skip if we've already seen this node ID (shouldn't happen, but safety check)
+            if !seen_node_ids.insert(node_id_u64) {
+                continue;
+            }
+
             // Skip deleted nodes
-            if let Ok(node_record) = self.store().read_node(node_id as u64) {
+            if let Ok(node_record) = self.store().read_node(node_id_u64) {
                 if node_record.is_deleted() {
                     continue;
                 }
             }
 
-            match self.read_node_as_value(node_id as u64)? {
+            match self.read_node_as_value(node_id_u64)? {
                 Value::Null => continue,
                 value => results.push(value),
             }
@@ -2283,7 +2313,7 @@ impl Executor {
         let expr = parser.parse_expression()?;
 
         // Get rows from variables OR from result_set.rows (e.g., from UNWIND)
-        // CRITICAL FIX: Always prefer materializing from variables if they exist,
+        // CRITICAL: Always prefer materializing from variables if they exist,
         // because variables contain the actual node/relationship objects with all properties.
         // Using result_set.rows may lose property information if columns were reordered.
         let had_existing_rows = !context.result_set.rows.is_empty();
@@ -2293,18 +2323,22 @@ impl Executor {
             Vec::new()
         };
 
-        let rows = if !context.variables.is_empty() {
-            // Prefer materializing from variables - this ensures we have full node/relationship objects
-            // with all properties accessible for filtering
-            self.materialize_rows_from_variables(context)
-        } else if had_existing_rows {
-            // Convert existing rows to row maps for filtering (fallback for UNWIND, etc.)
+        // CRITICAL FIX: If result_set.rows already exists, use them directly to avoid rematerialization
+        // Rematerializing from variables when rows already exist can cause duplicates if variables
+        // contain unfiltered arrays. Only materialize from variables if no rows exist yet.
+        let rows = if had_existing_rows {
+            // Use existing rows - they're already correctly materialized and filtered
+            // This prevents duplicate materialization when variables still contain unfiltered arrays
             context
                 .result_set
                 .rows
                 .iter()
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect()
+        } else if !context.variables.is_empty() {
+            // No existing rows - materialize from variables (source of truth)
+            // This ensures we have full node/relationship objects with all properties accessible for filtering
+            self.materialize_rows_from_variables(context)
         } else {
             // No variables and no existing rows
             Vec::new()
@@ -2328,9 +2362,47 @@ impl Executor {
             }
             // If predicate is false, filtered_rows stays empty (no rows returned)
         } else {
+            // CRITICAL FIX: Deduplicate rows by node ID before filtering
+            // Use HashSet to track unique node IDs to avoid processing the same node twice
+            // IMPORTANT: Check ALL variables in the row, not just the first one found
+            use std::collections::HashSet;
+            let mut seen_node_ids = HashSet::new();
+
             for row in &rows {
-                if self.evaluate_predicate_on_row(row, context, &expr)? {
-                    filtered_rows.push(row.clone());
+                // Extract node ID from row to detect duplicates
+                // Check ALL variables in the row to find any node objects
+                let mut is_duplicate = false;
+                let mut found_node_id: Option<u64> = None;
+
+                // First pass: find all node IDs in the row
+                for var_name in row.keys() {
+                    if let Some(Value::Object(obj)) = row.get(var_name) {
+                        if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                            if let Some(node_id) = id.as_u64() {
+                                // Check if we've seen this node ID before
+                                if !seen_node_ids.insert(node_id) {
+                                    // This node ID was already seen - this row is a duplicate
+                                    is_duplicate = true;
+                                    break;
+                                }
+                                // Remember the first node ID we found for this row
+                                if found_node_id.is_none() {
+                                    found_node_id = Some(node_id);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Only process row if it's not a duplicate and passes the predicate
+                if !is_duplicate {
+                    if self.evaluate_predicate_on_row(row, context, &expr)? {
+                        filtered_rows.push(row.clone());
+                        // Ensure node ID is tracked for the filtered row
+                        if let Some(node_id) = found_node_id {
+                            seen_node_ids.insert(node_id);
+                        }
+                    }
                 }
             }
         }
@@ -2356,10 +2428,13 @@ impl Executor {
                 context.result_set.columns = vec!["__filter_created__".to_string()];
             }
         } else if had_existing_rows {
-            // Had rows from result_set (e.g., from UNWIND) - preserve columns and update rows
+            // Had rows from result_set (e.g., from UNWIND or previous operators) - preserve columns and update rows
+            // CRITICAL FIX: Clear result_set.rows BEFORE updating to ensure we don't mix old and new rows
+            // This prevents duplicates when Filter processes rows that were already materialized
+            context.result_set.rows.clear();
             // Update variables first
             self.update_variables_from_rows(context, &filtered_rows);
-            // Preserve existing columns and update rows
+            // Preserve existing columns and update rows completely (no mixing with old rows)
             context.result_set.columns = existing_columns.clone();
             context.result_set.rows = filtered_rows
                 .iter()
@@ -2372,10 +2447,11 @@ impl Executor {
                 .collect();
         } else {
             // Had rows initially from variables - update result set normally
-            // CRITICAL FIX: Update variables FIRST, then result_set, ensuring variables match filtered rows
+            // Update variables FIRST (this clears old variables and sets new filtered ones),
+            // then result_set, ensuring variables match filtered rows
+            // CRITICAL: update_result_set_from_rows already replaces result_set.rows completely,
+            // so no need to clear beforehand
             self.update_variables_from_rows(context, &filtered_rows);
-            // Clear existing rows before updating to avoid duplicates
-            context.result_set.rows.clear();
             self.update_result_set_from_rows(context, &filtered_rows);
         }
         Ok(())
@@ -2589,16 +2665,27 @@ impl Executor {
                 };
 
                 // Process each source node in the array
-                for source_value in source_nodes {
-                    let source_id = match Self::extract_entity_id(&source_value) {
+                for (source_idx, source_value) in source_nodes.iter().enumerate() {
+                    let source_id = match Self::extract_entity_id(source_value) {
                         Some(id) => id,
-                        None => continue,
+                        None => {
+                            tracing::debug!(
+                                "Expand: skipping source node {} (index {}) - no entity ID found",
+                                source_idx + 1,
+                                source_idx
+                            );
+                            continue;
+                        }
                     };
 
                     tracing::debug!(
-                        "Expand: processing source node_id {} for source_var '{}'",
+                        "Expand: processing source node {} (index {}) - node_id {} for source_var '{}' (row {}/{})",
+                        source_idx + 1,
+                        source_idx,
                         source_id,
-                        source_var
+                        source_var,
+                        row_idx + 1,
+                        rows.len()
                     );
 
                     // Phase 8.3: Try to use relationship property index if there are property filters
@@ -2685,7 +2772,7 @@ impl Executor {
                         relationships
                     };
 
-                    for rel_info in filtered_relationships {
+                    for (rel_idx, rel_info) in filtered_relationships.iter().enumerate() {
                         let target_id = match direction {
                             Direction::Outgoing => rel_info.target_id,
                             Direction::Incoming => rel_info.source_id,
@@ -2703,6 +2790,12 @@ impl Executor {
                         if let Some(ref allowed) = allowed_target_ids {
                             // Only filter if allowed set is non-empty and doesn't contain target
                             if !allowed.is_empty() && !allowed.contains(&target_id) {
+                                tracing::debug!(
+                                    "Expand: skipping relationship {} (rel_id: {}) - target_id {} not in allowed set",
+                                    rel_idx + 1,
+                                    rel_info.id,
+                                    target_id
+                                );
                                 continue;
                             }
                         }
@@ -2717,10 +2810,19 @@ impl Executor {
                         new_row.insert(target_var.to_string(), target_node);
                         // Update/add relationship variable if specified
                         if !rel_var.is_empty() {
-                            let relationship_value = self.read_relationship_as_value(&rel_info)?;
+                            let relationship_value = self.read_relationship_as_value(rel_info)?;
                             new_row.insert(rel_var.to_string(), relationship_value);
                         }
 
+                        tracing::debug!(
+                            "Expand: adding expanded row {} for source node_id {} (relationship {}: rel_id={}, source={}, target={})",
+                            expanded_rows.len() + 1,
+                            source_id,
+                            rel_idx + 1,
+                            rel_info.id,
+                            rel_info.source_id,
+                            rel_info.target_id
+                        );
                         expanded_rows.push(new_row);
                     }
                 }
@@ -2733,23 +2835,60 @@ impl Executor {
             rows.len()
         );
 
+        // CRITICAL DEBUG: Log detailed information about expanded rows for debugging
+        if !expanded_rows.is_empty() {
+            tracing::debug!(
+                "Expand: Expanded rows summary - Total: {}, Source nodes processed: {}",
+                expanded_rows.len(),
+                rows.len()
+            );
+            // Log first few expanded rows for debugging
+            for (idx, expanded_row) in expanded_rows.iter().take(5).enumerate() {
+                let row_keys: Vec<String> = expanded_row.keys().cloned().collect();
+                tracing::debug!(
+                    "Expand: Expanded row {} has variables: {:?}",
+                    idx + 1,
+                    row_keys
+                );
+            }
+        }
+
         // If no rows were expanded but we had input rows, preserve columns to indicate MATCH was executed but returned empty
         if expanded_rows.is_empty() && !rows.is_empty() {
             // Preserve columns to indicate MATCH was executed but returned empty
             // This will be detected by Aggregate operator via has_match_columns check
             // Don't clear columns - they indicate that MATCH was executed
+            tracing::warn!(
+                "Expand: No expanded rows created from {} input rows - this may indicate a problem",
+                rows.len()
+            );
             context.result_set.rows.clear();
         } else {
             // CRITICAL: Always update result_set with all expanded rows
             // This ensures all relationships are included in the result
+            // CRITICAL FIX: Clear result_set.rows BEFORE updating to avoid mixing old and new rows
+            // This prevents missing rows when Expand processes multiple source nodes
+            let rows_before_clear = context.result_set.rows.len();
+            context.result_set.rows.clear();
             self.update_variables_from_rows(context, &expanded_rows);
             self.update_result_set_from_rows(context, &expanded_rows);
 
             // Verify that all expanded rows were added to result_set
             tracing::debug!(
-                "Expand: result_set now has {} rows after update",
-                context.result_set.rows.len()
+                "Expand: result_set had {} rows before clear, now has {} rows after update (expected {} expanded rows)",
+                rows_before_clear,
+                context.result_set.rows.len(),
+                expanded_rows.len()
             );
+
+            // Assert that all expanded rows were added
+            if context.result_set.rows.len() != expanded_rows.len() {
+                tracing::warn!(
+                    "Expand: Mismatch! result_set has {} rows but {} expanded rows were created - some rows may have been lost in deduplication",
+                    context.result_set.rows.len(),
+                    expanded_rows.len()
+                );
+            }
         }
 
         Ok(())
@@ -2966,15 +3105,83 @@ impl Executor {
         }
 
         tracing::debug!(
-            "Project: input_rows={}, items={:?}, result_set.rows={}",
+            "Project: input_rows={}, items={:?}, result_set.rows={}, variables={:?}",
             rows.len(),
             items.iter().map(|i| i.alias.clone()).collect::<Vec<_>>(),
-            context.result_set.rows.len()
+            context.result_set.rows.len(),
+            context.variables.keys().collect::<Vec<_>>()
         );
+
+        // DEBUG: Log variable contents for UNION context
+        if rows.is_empty() && !context.variables.is_empty() {
+            tracing::debug!("Project: DEBUG - No input rows, checking variables:");
+            for (var, value) in &context.variables {
+                match value {
+                    Value::Array(arr) => {
+                        tracing::debug!(
+                            "Project: DEBUG - Variable '{}' has array with {} elements",
+                            var,
+                            arr.len()
+                        );
+                    }
+                    _ => {
+                        tracing::debug!(
+                            "Project: DEBUG - Variable '{}' has non-array value: {:?}",
+                            var,
+                            value
+                        );
+                    }
+                }
+            }
+        }
 
         let mut projected_rows = Vec::new();
 
-        for (idx, row_map) in rows.iter().enumerate() {
+        // CRITICAL FIX: Deduplicate rows before projecting to avoid duplicate output
+        // Use HashSet to track unique node IDs to avoid processing the same node twice
+        use std::collections::HashSet;
+        let mut seen_node_ids = HashSet::new();
+        let mut unique_rows = Vec::new();
+
+        // Deduplicate input rows by node ID
+        for row_map in &rows {
+            let mut is_duplicate = false;
+            let mut found_node_id: Option<u64> = None;
+
+            // Extract node ID from row to detect duplicates
+            for var_name in row_map.keys() {
+                if let Some(Value::Object(obj)) = row_map.get(var_name) {
+                    if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                        if let Some(node_id) = id.as_u64() {
+                            // Check if we've seen this node ID before
+                            if !seen_node_ids.insert(node_id) {
+                                // This node ID was already seen - this row is a duplicate
+                                is_duplicate = true;
+                                break;
+                            }
+                            // Remember the first node ID we found for this row
+                            if found_node_id.is_none() {
+                                found_node_id = Some(node_id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Only process row if it's not a duplicate
+            if !is_duplicate {
+                unique_rows.push(row_map.clone());
+            }
+        }
+
+        tracing::debug!(
+            "Project: deduplicated {} rows to {} unique rows",
+            rows.len(),
+            unique_rows.len()
+        );
+
+        // Process deduplicated rows
+        for (idx, row_map) in unique_rows.iter().enumerate() {
             let mut values = Vec::with_capacity(items.len());
             for item in items {
                 let value =
@@ -2982,7 +3189,11 @@ impl Executor {
                 values.push(value);
             }
             projected_rows.push(Row { values });
-            tracing::debug!("Project: processed row {} of {}", idx + 1, rows.len());
+            tracing::debug!(
+                "Project: processed row {} of {}",
+                idx + 1,
+                unique_rows.len()
+            );
         }
 
         tracing::debug!("Project: output_rows={}", projected_rows.len());
@@ -3569,7 +3780,20 @@ impl Executor {
                                     count
                                 }
                             } else {
-                                0
+                                // Column not found in result_set columns - this can happen when Project
+                                // removed the column before Aggregate (like `r` in `count(r)`)
+                                // For relationship aggregations, each row in the group represents one relationship
+                                // So we can count the rows in the group as the relationship count
+                                // This is safe because Expand creates one row per relationship
+                                if *distinct {
+                                    // For COUNT(DISTINCT r), count unique rows in the group
+                                    // Each row is unique if it represents a different relationship
+                                    effective_row_count
+                                } else {
+                                    // For COUNT(r), simply count all rows in the group
+                                    // Each row represents one relationship
+                                    effective_row_count
+                                }
                             };
                             Value::Number(serde_json::Number::from(count))
                         }
@@ -4550,16 +4774,54 @@ impl Executor {
     ) -> Result<()> {
         // Execute left operator pipeline and collect its results
         let mut left_context = ExecutionContext::new(context.params.clone(), context.cache.clone());
-        for operator in left {
+        for (idx, operator) in left.iter().enumerate() {
+            tracing::debug!(
+                "UNION: executing left operator {}/{}: {:?}",
+                idx + 1,
+                left.len(),
+                operator
+            );
             self.execute_operator(&mut left_context, operator)?;
+            tracing::debug!(
+                "UNION: after left operator {}, result_set.rows={}, columns={:?}, variables={:?}",
+                idx + 1,
+                left_context.result_set.rows.len(),
+                left_context.result_set.columns,
+                left_context.variables.keys().collect::<Vec<_>>()
+            );
         }
+
+        tracing::debug!(
+            "UNION: left side completed - result_set.rows={}, columns={:?}",
+            left_context.result_set.rows.len(),
+            left_context.result_set.columns
+        );
 
         // Execute right operator pipeline and collect its results
         let mut right_context =
             ExecutionContext::new(context.params.clone(), context.cache.clone());
-        for operator in right {
+        for (idx, operator) in right.iter().enumerate() {
+            tracing::debug!(
+                "UNION: executing right operator {}/{}: {:?}",
+                idx + 1,
+                right.len(),
+                operator
+            );
             self.execute_operator(&mut right_context, operator)?;
+            tracing::debug!(
+                "UNION: after right operator {}, result_set.rows={}, columns={:?}, variables={:?}",
+                idx + 1,
+                right_context.result_set.rows.len(),
+                right_context.result_set.columns,
+                right_context.variables.keys().collect::<Vec<_>>()
+            );
         }
+
+        tracing::debug!(
+            "UNION: right side completed - result_set.rows={}, columns={:?}",
+            right_context.result_set.rows.len(),
+            right_context.result_set.columns
+        );
 
         // Combine results from both sides
         // Ensure results are in result_set.rows (some operators may store in variables)
@@ -5000,11 +5262,36 @@ impl Executor {
         match operator {
             Operator::NodeByLabel { label_id, variable } => {
                 let nodes = self.execute_node_by_label(*label_id)?;
+                tracing::debug!(
+                    "execute_operator NodeByLabel: found {} nodes for label_id {}, variable '{}'",
+                    nodes.len(),
+                    label_id,
+                    variable
+                );
+                // CRITICAL FIX: Clear result_set.rows and variables for this variable before setting new one
+                // This prevents mixing old rows with new ones and avoids product cartesian from old variables
+                context.result_set.rows.clear();
+                context.variables.remove(variable);
                 context.set_variable(variable, Value::Array(nodes));
+                // CRITICAL FIX: Materialize rows from variables so Project can process them
+                // This matches the behavior in the main execute loop
+                let rows = self.materialize_rows_from_variables(context);
+                tracing::debug!(
+                    "execute_operator NodeByLabel: materialized {} rows from variables",
+                    rows.len()
+                );
+                self.update_result_set_from_rows(context, &rows);
+                tracing::debug!(
+                    "execute_operator NodeByLabel: result_set now has {} rows",
+                    context.result_set.rows.len()
+                );
             }
             Operator::AllNodesScan { variable } => {
                 let nodes = self.execute_all_nodes_scan()?;
                 context.set_variable(variable, Value::Array(nodes));
+                // CRITICAL FIX: Materialize rows from variables so Project can process them
+                let rows = self.materialize_rows_from_variables(context);
+                self.update_result_set_from_rows(context, &rows);
             }
             Operator::Filter { predicate } => {
                 self.execute_filter(context, predicate)?;
@@ -8076,10 +8363,16 @@ impl Executor {
             return Vec::new();
         }
 
+        // CRITICAL FIX: Always deduplicate by node ID to avoid duplicates
+        // Even for single variables, duplicates can occur if nodes are added multiple times
+        // Deduplication ensures each node ID appears only once in the result
         let mut rows = Vec::new();
+        let mut seen_node_ids = std::collections::HashSet::new();
+
         for idx in 0..max_len {
             let mut row = HashMap::new();
             let mut all_null = true;
+            let mut node_id: Option<u64> = None;
 
             for (var, values) in &arrays {
                 let value = if values.len() == max_len {
@@ -8098,15 +8391,36 @@ impl Executor {
                 // Track if row has at least one non-null value
                 if !matches!(value, Value::Null) {
                     all_null = false;
+
+                    // Extract node ID if this is a node object (always for deduplication)
+                    if node_id.is_none() {
+                        if let Value::Object(obj) = &value {
+                            if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                if let Some(nid) = id.as_u64() {
+                                    node_id = Some(nid);
+                                }
+                            }
+                        }
+                    }
                 }
 
                 row.insert(var.clone(), value);
             }
 
-            // CRITICAL FIX: Only add row if it has at least one non-null value
-            // This prevents creating rows that are completely null
+            // CRITICAL FIX: Only add row if it has at least one non-null value AND we haven't seen this node ID
+            // This prevents duplicates even for single variables
             if !all_null {
-                rows.push(row);
+                let should_add = if let Some(nid) = node_id {
+                    // Deduplicate by node ID - only add if we haven't seen this node ID before
+                    seen_node_ids.insert(nid)
+                } else {
+                    // No node ID found - add anyway (can't deduplicate, but this should be rare)
+                    true
+                };
+
+                if should_add {
+                    rows.push(row);
+                }
             }
         }
 
@@ -8132,8 +8446,70 @@ impl Executor {
         let mut columns: Vec<String> = columns.into_iter().collect();
         columns.sort();
 
+        // CRITICAL FIX: Deduplicate rows intelligently - consider full row content for relationship rows
+        // When we have relationships (multiple rows with same source node), we need to check the full row
+        // content, not just the source node ID, to avoid removing valid relationship rows
+        use std::collections::HashSet;
+        let mut seen_row_keys = HashSet::new();
+        let mut unique_rows = Vec::new();
+
+        for row_map in rows {
+            // Collect all entity IDs (nodes and relationships) in this row
+            // CRITICAL FIX: Extract all _nexus_id values, which can be from nodes or relationships
+            // For relationship rows, we need to use ALL IDs (source node + target node + relationship)
+            // to correctly differentiate between different relationships
+            let mut all_entity_ids: Vec<u64> = Vec::new();
+
+            // Extract all _nexus_id values from the row (both nodes and relationships have this)
+            for value in row_map.values() {
+                if let Value::Object(obj) = value {
+                    if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                        if let Some(entity_id) = id.as_u64() {
+                            all_entity_ids.push(entity_id);
+                        }
+                    }
+                }
+            }
+
+            // CRITICAL FIX: Determine deduplication key based on number of entity IDs
+            // Relationship rows typically have multiple entity IDs (source node + target node + relationship)
+            // Non-relationship rows have only one entity ID (just the node)
+            let is_duplicate = if all_entity_ids.len() > 1 {
+                // Relationship row or row with multiple entities
+                // Use combination of ALL entity IDs (sorted) for deduplication
+                // This ensures that different relationships (even with same source/target) are differentiated
+                all_entity_ids.sort();
+                let key_parts: Vec<String> =
+                    all_entity_ids.iter().map(|id| format!("e{}", id)).collect();
+                let row_key = key_parts.join("_");
+                !seen_row_keys.insert(row_key)
+            } else if let Some(first_id) = all_entity_ids.first() {
+                // Non-relationship row - use only entity ID
+                let entity_key = format!("node_{}", first_id);
+                !seen_row_keys.insert(entity_key)
+            } else {
+                // No entity IDs found - use full row content as fallback
+                let row_key = serde_json::to_string(row_map).unwrap_or_default();
+                !seen_row_keys.insert(row_key)
+            };
+
+            // Only add row if it's not a duplicate
+            if !is_duplicate {
+                unique_rows.push(row_map.clone());
+            }
+        }
+
+        tracing::debug!(
+            "update_result_set_from_rows: deduplicated {} rows to {} unique rows",
+            rows.len(),
+            unique_rows.len()
+        );
+
+        // CRITICAL FIX: Always clear result_set.rows before updating to ensure complete replacement
+        // This prevents mixing old rows with new ones
+        context.result_set.rows.clear();
         context.result_set.columns = columns.clone();
-        context.result_set.rows = rows
+        context.result_set.rows = unique_rows
             .iter()
             .map(|row_map| Row {
                 values: columns

@@ -31,3 +31,46 @@ Each issue requires investigation into the executor, query planner, or storage l
 - **Breaking change**: NO - This is a bug fix that improves compatibility
 - **User benefit**: Enables Nexus to run more Neo4j-compatible queries, improving adoption and reducing migration friction
 
+## Status
+
+**Current Progress**: **192/195 passing (98.46%)** ✅ **EXCELLENT** - Above 95% target!
+
+### Test Results Summary
+
+- **Total Tests**: 195 compatibility tests
+- **Passed**: 192
+- **Failed**: 3 (all in Section 7 - Relationships)
+- **Pass Rate**: **98.46%** ✅ **EXCELLENT** (above 95% target!)
+
+### Progress by Phase
+
+- ✅ **Phase 1** (MATCH Property Filters): 4/4 (100%) - COMPLETED
+- ✅ **Phase 2** (GROUP BY Aggregation): 5/5 (100%) - COMPLETED
+- ✅ **Phase 3** (UNION Queries): 10/10 (100%) - COMPLETED
+- ✅ **Phase 4** (DISTINCT): 1/1 (100%) - COMPLETED
+- ✅ **Phase 5** (Function Calls): 3/3 (100%) - COMPLETED
+- ⚠️ **Phase 6** (Relationship Queries): 0/3 (0%) - IN PROGRESS
+- ✅ **Phase 7** (Property Access): 2/2 (100%) - COMPLETED
+- ✅ **Phase 8** (Array Operations): 1/1 (100%) - COMPLETED
+
+### Remaining Issues
+
+**Section 7: Relationship Queries** (3 tests failing):
+- 7.19: `MATCH (a:Person)-[r:WORKS_AT]->(b:Company) RETURN a.name AS person, count(r) AS jobs ORDER BY person` — Expected: 2, Got: 1
+- 7.25: `MATCH (a:Person)-[r]-(b) RETURN DISTINCT a.name AS name ORDER BY name` — Expected: 2, Got: 1
+- 7.30: `MATCH (a:Person)-[r:WORKS_AT]->(c:Company) RETURN a.name AS person, c.name AS company, r.since AS year ORDER BY year` — Expected: 3, Got: 1
+
+**Root Causes Identified**:
+- Expand operator may not be receiving all source nodes correctly
+- Deduplication may be removing valid relationship rows when same source node has multiple relationships
+
+**Fixes Applied**:
+- Improved deduplication in `update_result_set_from_rows` to include relationship ID
+- Added comprehensive debug logging to Expand operator
+- Simplified database cleanup to use DETACH DELETE
+
+**Next Steps**:
+- Run compatibility tests with debug logs enabled
+- Analyze logs to identify where relationship rows are being lost
+- Verify Expand is processing all source nodes correctly
+

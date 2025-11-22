@@ -52,6 +52,7 @@ fn test_union_operator() {
     let (mut executor, _dir) = create_test_executor();
     setup_test_data(&mut executor);
 
+    // Test UNION with different queries - should combine results
     let query = Query {
         cypher:
             "MATCH (a:Person) RETURN a.name AS name UNION MATCH (a:Person) RETURN a.name AS name"
@@ -59,19 +60,72 @@ fn test_union_operator() {
         params: HashMap::new(),
     };
 
-    // UNION may not be fully supported yet
     let result = executor.execute(&query);
     match result {
         Ok(r) => {
-            // UNION may return duplicates removed or empty results
-            // Just verify it doesn't crash
+            // UNION should return distinct results (duplicates removed)
             assert_eq!(r.columns.len(), 1);
+            assert_eq!(r.columns[0], "name");
+            // Should have 2 rows (Alice and Bob) with duplicates removed
+            assert!(
+                r.rows.len() >= 2,
+                "Expected at least 2 rows, got {}",
+                r.rows.len()
+            );
         }
-        Err(_) => {
-            // UNION not implemented - skip test
-            // This is acceptable as it's a future feature
+        Err(e) => {
+            panic!("UNION query failed: {:?}", e);
         }
     }
+}
+
+#[test]
+fn test_union_different_labels() {
+    let (mut executor, _dir) = create_test_executor();
+
+    // Create test data with Person and Company nodes
+    let setup_query = Query {
+        cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'})".to_string(),
+        params: HashMap::new(),
+    };
+    executor.execute(&setup_query).unwrap();
+
+    // Test UNION combining Person and Company names
+    let query = Query {
+        cypher:
+            "MATCH (n:Person) RETURN n.name AS name UNION MATCH (n:Company) RETURN n.name AS name"
+                .to_string(),
+        params: HashMap::new(),
+    };
+
+    let result = executor.execute(&query).unwrap();
+
+    // Should return 3 rows: Alice, Bob (Person) + Acme (Company)
+    assert_eq!(result.columns.len(), 1);
+    assert_eq!(result.columns[0], "name");
+    assert_eq!(
+        result.rows.len(),
+        3,
+        "Expected 3 rows, got {}",
+        result.rows.len()
+    );
+
+    // Verify all names are present
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|row| {
+            if let Some(Value::String(s)) = row.values.first() {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(names.contains(&"Alice".to_string()), "Should contain Alice");
+    assert!(names.contains(&"Bob".to_string()), "Should contain Bob");
+    assert!(names.contains(&"Acme".to_string()), "Should contain Acme");
 }
 
 #[test]

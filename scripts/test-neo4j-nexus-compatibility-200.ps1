@@ -180,9 +180,55 @@ function Clear-Databases {
     }
     
     try {
+        # CRITICAL FIX: Use DETACH DELETE which automatically removes all relationships before deleting nodes
+        # DETACH DELETE handles relationship deletion automatically, no need to delete relationships first
         Invoke-Neo4jQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
         Invoke-NexusQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
-        Write-Host " ✓" -ForegroundColor Green
+        
+        # Small delay to ensure deletion is processed
+        Start-Sleep -Milliseconds 200
+        
+        # Verify cleanup by checking node count
+        $neo4jCount = -1
+        $nexusCount = -1
+        
+        try {
+            $neo4jResult = Invoke-Neo4jQuery -Cypher "MATCH (n) RETURN count(n) AS total"
+            if ($neo4jResult -and $neo4jResult.data -and $neo4jResult.data.Count -gt 0) {
+                $neo4jCount = $neo4jResult.data[0][0]
+            }
+        } catch {
+            # Ignore errors in verification
+        }
+        
+        try {
+            $nexusResult = Invoke-NexusQuery -Cypher "MATCH (n) RETURN count(n) AS total"
+            if ($nexusResult -and $nexusResult.rows -and $nexusResult.rows.Count -gt 0) {
+                # Nexus returns rows as array of arrays or objects
+                if ($nexusResult.rows[0].total) {
+                    $nexusCount = $nexusResult.rows[0].total
+                } elseif ($nexusResult.rows[0] -is [array] -and $nexusResult.rows[0].Count -gt 0) {
+                    $nexusCount = $nexusResult.rows[0][0]
+                } elseif ($nexusResult.rows[0] -is [PSCustomObject] -and $nexusResult.rows[0].total) {
+                    $nexusCount = $nexusResult.rows[0].total
+                }
+            } elseif ($nexusResult -and $nexusResult.data -and $nexusResult.data.Count -gt 0) {
+                $nexusCount = $nexusResult.data[0].total
+            }
+        } catch {
+            # Ignore errors in verification
+        }
+        
+        if ($neo4jCount -eq 0 -and $nexusCount -eq 0) {
+            Write-Host " ✓" -ForegroundColor Green
+        } else {
+            Write-Host " ⚠ (Neo4j: $neo4jCount nodes, Nexus: $nexusCount nodes remaining)" -ForegroundColor Yellow -NoNewline
+            # Try DETACH DELETE as fallback with delay
+            Invoke-Neo4jQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
+            Start-Sleep -Milliseconds 200
+            Write-Host " - retried with DETACH DELETE" -ForegroundColor Yellow
+        }
     } catch {
         Write-Host " ✗ (Error: $($_.Exception.Message))" -ForegroundColor Red
     }
@@ -194,13 +240,16 @@ function Setup-TestData {
     
     try {
         if ($DataType -eq "basic") {
-            # Delete existing test data first to avoid duplicates
-            Invoke-Neo4jQuery -Cypher "MATCH (n:Person {name: 'Alice'}) DELETE n" | Out-Null
-            Invoke-Neo4jQuery -Cypher "MATCH (n:Person {name: 'Bob'}) DELETE n" | Out-Null
-            Invoke-Neo4jQuery -Cypher "MATCH (n:Company {name: 'Acme'}) DELETE n" | Out-Null
-            Invoke-NexusQuery -Cypher "MATCH (n:Person {name: 'Alice'}) DELETE n" | Out-Null
-            Invoke-NexusQuery -Cypher "MATCH (n:Person {name: 'Bob'}) DELETE n" | Out-Null
-            Invoke-NexusQuery -Cypher "MATCH (n:Company {name: 'Acme'}) DELETE n" | Out-Null
+            # CRITICAL FIX: Delete ALL existing Person and Company nodes first to avoid duplicates
+            # Use DETACH DELETE which automatically removes relationships before deleting nodes
+            Invoke-Neo4jQuery -Cypher "MATCH (n:Person) DETACH DELETE n" | Out-Null
+            Invoke-Neo4jQuery -Cypher "MATCH (n:Company) DETACH DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n:Person) DETACH DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n:Company) DETACH DELETE n" | Out-Null
+            
+            # Also delete any other test nodes that might exist
+            Invoke-Neo4jQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Charlie', 'David', 'Acme'] DETACH DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Charlie', 'David', 'Acme'] DETACH DELETE n" | Out-Null
             
             # Create basic Person and Company nodes (only if they don't exist)
             Invoke-Neo4jQuery -Cypher "MERGE (n:Person {name: 'Alice'}) SET n.age = 30, n.city = 'NYC'" | Out-Null
@@ -211,13 +260,9 @@ function Setup-TestData {
             Invoke-NexusQuery -Cypher "MERGE (n:Person {name: 'Bob'}) SET n.age = 25, n.city = 'LA'" | Out-Null
             Invoke-NexusQuery -Cypher "MERGE (n:Company {name: 'Acme'})" | Out-Null
         } elseif ($DataType -eq "relationships") {
-            # Delete existing relationships first
-            Invoke-Neo4jQuery -Cypher "MATCH ()-[r]->() DELETE r" | Out-Null
-            Invoke-NexusQuery -Cypher "MATCH ()-[r]->() DELETE r" | Out-Null
-            
-            # Delete existing test nodes
-            Invoke-Neo4jQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Acme', 'TechCorp'] DELETE n" | Out-Null
-            Invoke-NexusQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Acme', 'TechCorp'] DELETE n" | Out-Null
+            # Delete existing test nodes (DETACH DELETE automatically removes relationships)
+            Invoke-Neo4jQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Acme', 'TechCorp'] DETACH DELETE n" | Out-Null
+            Invoke-NexusQuery -Cypher "MATCH (n) WHERE n.name IN ['Alice', 'Bob', 'Acme', 'TechCorp'] DETACH DELETE n" | Out-Null
             
             # Create Person and Company nodes with relationships
             Invoke-Neo4jQuery -Cypher "CREATE (p1:Person {name: 'Alice'}), (p2:Person {name: 'Bob'}), (c1:Company {name: 'Acme'}), (c2:Company {name: 'TechCorp'})" | Out-Null
@@ -286,7 +331,7 @@ Run-Test -Name "1.13 RETURN division" -Query "RETURN 20 / 4 AS quotient"
 Run-Test -Name "1.14 RETURN modulo" -Query "RETURN 17 % 5 AS remainder"
 Run-Test -Name "1.15 RETURN string concatenation" -Query "RETURN 'Hello' + ' ' + 'World' AS text"
 Run-Test -Name "1.16 RETURN comparison true" -Query 'RETURN 5 > 3 AS result'
-Run-Test -Name "1.17 RETURN comparison false" -Query 'RETURN 2 > 10 AS result'
+Run-Test -Name "1.17 RETURN comparison false" -Query "RETURN 2 > 10 AS result"
 Run-Test -Name "1.18 RETURN equality" -Query "RETURN 'test' = 'test' AS result"
 Run-Test -Name "1.19 RETURN logical AND" -Query "RETURN true AND false AS result"
 Run-Test -Name "1.20 RETURN logical OR" -Query "RETURN true OR false AS result"
@@ -294,7 +339,9 @@ Run-Test -Name "1.20 RETURN logical OR" -Query "RETURN true OR false AS result"
 #═══════════════════════════════════════════════════════════════════
 # SECTION 2: MATCH QUERIES (25 tests)
 #═══════════════════════════════════════════════════════════════════
-# Section 2 uses data from Section 1, so no cleanup needed
+# Section 2 uses data from Section 1, but we need to ensure clean state
+Clear-Databases -SectionName "Section 2: MATCH Queries"
+Setup-TestData -DataType "basic"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 2: MATCH Queries (25 tests)                │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -306,7 +353,7 @@ Run-Test -Name "2.04 MATCH Person with property" -Query "MATCH (n:Person {name: 
 Run-Test -Name "2.05 MATCH and return multiple properties" -Query "MATCH (n:Person {name: 'Alice'}) RETURN n.name AS name, n.age AS age"
 Run-Test -Name "2.06 MATCH with WHERE clause" -Query 'MATCH (n:Person) WHERE n.age > 30 RETURN count(n) AS cnt'
 Run-Test -Name "2.07 MATCH with WHERE equality" -Query "MATCH (n:Person) WHERE n.name = 'Bob' RETURN n.name"
-Run-Test -Name "2.08 MATCH with WHERE inequality" -Query 'MATCH (n:Person) WHERE n.name <> ''Alice'' RETURN count(n) AS cnt'
+Run-Test -Name "2.08 MATCH with WHERE inequality" -Query "MATCH (n:Person) WHERE n.name <> 'Alice' RETURN count(n) AS cnt"
 Run-Test -Name "2.09 MATCH with WHERE AND" -Query 'MATCH (n:Person) WHERE n.age > 25 AND n.age < 35 RETURN count(n) AS cnt'
 Run-Test -Name "2.10 MATCH with WHERE OR" -Query "MATCH (n:Person) WHERE n.name = 'Alice' OR n.name = 'Bob' RETURN count(n) AS cnt"
 Run-Test -Name "2.11 MATCH with WHERE NOT" -Query 'MATCH (n:Person) WHERE NOT n.age > 35 RETURN count(n) AS cnt'
@@ -328,7 +375,9 @@ Run-Test -Name "2.25 MATCH keys function" -Query "MATCH (n:Person {name: 'Alice'
 #═══════════════════════════════════════════════════════════════════
 # SECTION 3: AGGREGATION FUNCTIONS (25 tests)
 #═══════════════════════════════════════════════════════════════════
-# Section 3 uses data from Section 1-2, so no cleanup needed
+# Section 3 uses data from Section 1-2, but we need to ensure clean state
+Clear-Databases -SectionName "Section 3: Aggregation Functions"
+Setup-TestData -DataType "basic"
 Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "│ Section 3: Aggregation Functions (25 tests)        │" -ForegroundColor Yellow
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
@@ -399,15 +448,15 @@ Write-Host "│ Section 5: List/Array Operations (20 tests)        │" -Foregro
 Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
 
 Run-Test -Name "5.01 Return literal array" -Query "RETURN [1, 2, 3, 4, 5] AS numbers"
-Run-Test -Name "5.02 Array size" -Query 'RETURN size([1, 2, 3]) AS length'
-Run-Test -Name "5.03 head function" -Query 'RETURN head([1, 2, 3]) AS first'
-Run-Test -Name "5.04 tail function" -Query 'RETURN tail([1, 2, 3]) AS rest'
-Run-Test -Name "5.05 last function" -Query 'RETURN last([1, 2, 3]) AS final'
+Run-Test -Name "5.02 Array size" -Query "RETURN size([1, 2, 3]) AS length"
+Run-Test -Name "5.03 head function" -Query "RETURN head([1, 2, 3]) AS first"
+Run-Test -Name "5.04 tail function" -Query "RETURN tail([1, 2, 3]) AS rest"
+Run-Test -Name "5.05 last function" -Query "RETURN last([1, 2, 3]) AS final"
 Run-Test -Name "5.06 Array indexing" -Query "RETURN [1, 2, 3][0] AS first"
 Run-Test -Name "5.07 Array slicing" -Query "RETURN [1, 2, 3, 4, 5][1..3] AS slice"
 Run-Test -Name "5.08 Array concatenation" -Query "RETURN [1, 2] + [3, 4] AS combined"
 Run-Test -Name "5.09 IN operator with array" -Query "RETURN 2 IN [1, 2, 3] AS result"
-Run-Test -Name "5.10 reverse array" -Query 'RETURN reverse([1, 2, 3]) AS reversed'
+Run-Test -Name "5.10 reverse array" -Query "RETURN reverse([1, 2, 3]) AS reversed"
 Run-Test -Name "5.11 range function" -Query "RETURN range(1, 5) AS numbers"
 Run-Test -Name "5.12 range with step" -Query "RETURN range(0, 10, 2) AS evens"
 Run-Test -Name "5.13 Array with strings" -Query "RETURN ['a', 'b', 'c'] AS letters"

@@ -16,6 +16,38 @@ CRITICAL RULES:
    ```
    Replace `[script-name].ps1` with the actual script filename. This ensures proper UTF-8 encoding and temporary file cleanup.
 
+Build and Test Workflow:
+1. **Build Release Version**: Always build in release mode for production/testing:
+   ```
+   wsl -d Ubuntu-24.04 -- bash -l -c "cd /mnt/f/Node/hivellm/nexus && cargo build --release --package nexus-core"
+   wsl -d Ubuntu-24.04 -- bash -l -c "cd /mnt/f/Node/hivellm/nexus && cargo build --release --package nexus-server"
+   ```
+
+2. **Stop Server Before Starting**: Always stop any running server instance first:
+   ```
+   wsl -d Ubuntu-24.04 -- bash -l -c "cd /mnt/f/Node/hivellm/nexus && pkill -f nexus-server || true"
+   ```
+
+3. **Start Server in Background**: Start the server in background mode:
+   ```
+   wsl -d Ubuntu-24.04 -- bash -l -c "cd /mnt/f/Node/hivellm/nexus && nohup ./target/release/nexus-server > /tmp/nexus-server.log 2>&1 & echo \$!"
+   ```
+
+4. **Wait for Server to Start**: Wait 5 seconds after starting server before running tests:
+   ```
+   timeout /t 5 /nobreak >nul 2>&1 && echo "Server started"
+   ```
+
+5. **Run Compatibility Tests**: Execute the full compatibility test suite:
+   ```
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content scripts/test-neo4j-nexus-compatibility-200.ps1 -Encoding UTF8 | Out-File -Encoding UTF8 scripts/test-temp.ps1; & scripts/test-temp.ps1; Remove-Item scripts/test-temp.ps1" 2>&1 | Select-Object -Last 200
+   ```
+
+6. **Check Test Results**: Verify test results from log files:
+   ```
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content scripts/test-output-*.log -Tail 200 | Select-Object -Last 200"
+   ```
+
 Language-specific rules are in @AGENTS.md.
 Module-specific patterns are in @AGENTS.md.
 
