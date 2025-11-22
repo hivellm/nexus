@@ -68,9 +68,15 @@ Each issue requires investigation into the executor, query planner, or storage l
 - Improved deduplication in `update_result_set_from_rows` to include relationship ID
 - Added comprehensive debug logging to Expand operator
 - Simplified database cleanup to use DETACH DELETE
+- Fixed Aggregate `count(r)` to use `effective_row_count` when column not in result_set
+- Fixed Aggregate GROUP BY when Project deferred - materialize rows from variables and evaluate projection expressions
 
 **Next Steps**:
-- Run compatibility tests with debug logs enabled
-- Analyze logs to identify where relationship rows are being lost
-- Verify Expand is processing all source nodes correctly
+- Investigate why Expand is not finding relationships (40 relationships exist in catalog but MATCH finds 0)
+- Verify CREATE relationship is persisting correctly
+- Analyze why relationships are not being expanded correctly
+
+**Documentation**:
+- Comprehensive investigation report created: `docs/section7-relationship-tests-investigation-report.md`
+- Report includes all tests performed, code changes made, investigation findings, and next steps
 
