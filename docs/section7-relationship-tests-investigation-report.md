@@ -269,9 +269,25 @@ When a relationship is created (`create_relationship` in `storage/mod.rs`):
 
 The issue is not with the query execution logic (Expand, Aggregate, Project operators) but with the **relationship storage and retrieval mechanism**. Relationships are being created and tracked in the catalog, but the `find_relationships` function cannot locate them through any of its methods.
 
+**Critical Finding (2025-01-20)**:
+- Single relationship for a node: **WORKS** (count returns 1)
+- Multiple relationships for the same node: **FAILS** (only first relationship found, count returns 1 instead of 2)
+- This indicates the linked list traversal is working for the first relationship but failing to traverse to subsequent relationships
+
+**Root Cause Hypothesis**:
+The linked list structure appears correct in code (`first_rel_ptr` updated, `next_src_ptr` set), but when reading relationships, only the first one is found. Possible causes:
+1. Linked list pointers not being persisted correctly after transaction commit
+2. Linked list traversal breaking after first relationship (missing or incorrect `next_src_ptr`)
+3. Transaction isolation issue - second relationship not visible to read transactions
+
+**Debug Logging Added**:
+- `[create_relationship]` logs for `first_rel_ptr` updates
+- `[find_relationships]` logs for node reading and linked list traversal
+- Logs should reveal if `first_rel_ptr` is being updated correctly and if linked list traversal is following pointers correctly
+
 The next investigation should focus on:
-1. Transaction commit/visibility
-2. Relationship record storage format
-3. Linked list pointer integrity
-4. Adjacency store initialization and population
+1. Verifying linked list pointers are persisted correctly after commit
+2. Checking if `next_src_ptr` is correctly set when creating second relationship
+3. Transaction visibility - are relationships created in same transaction visible to each other?
+4. Linked list traversal - is it following `next_src_ptr` correctly after finding first relationship?
 

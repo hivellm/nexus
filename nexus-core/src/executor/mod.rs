@@ -6832,6 +6832,23 @@ impl Executor {
         // Read the node record to get the first relationship pointer
         if let Ok(node_record) = self.store().read_node(node_id) {
             let mut rel_ptr = node_record.first_rel_ptr;
+
+            // CRITICAL DEBUG: Log node reading and first_rel_ptr
+            tracing::debug!(
+                "[find_relationships] Node {} read: first_rel_ptr={}, type_ids={:?}, direction={:?}",
+                node_id,
+                rel_ptr,
+                type_ids,
+                direction
+            );
+
+            if rel_ptr == 0 {
+                tracing::debug!(
+                    "[find_relationships] Node {}: first_rel_ptr is 0 - no relationships found in linked list",
+                    node_id
+                );
+            }
+
             let mut visited = std::collections::HashSet::new();
             let mut iteration_count = 0;
             const MAX_ITERATIONS: usize = 100000; // Failsafe limit
@@ -6861,14 +6878,37 @@ impl Executor {
 
                 let current_rel_id = rel_ptr.saturating_sub(1);
 
+                // CRITICAL DEBUG: Log relationship traversal
+                tracing::debug!(
+                    "[find_relationships] Node {}: rel_ptr={}, current_rel_id={}",
+                    node_id,
+                    rel_ptr,
+                    current_rel_id
+                );
+
                 if let Ok(rel_record) = self.store().read_rel(current_rel_id) {
                     // Copy fields to local variables to avoid packed struct reference issues
                     let src_id = rel_record.src_id;
                     let dst_id = rel_record.dst_id;
                     let next_src_ptr = rel_record.next_src_ptr;
                     let next_dst_ptr = rel_record.next_dst_ptr;
+                    let record_type_id = rel_record.type_id;
+                    let is_deleted = rel_record.is_deleted();
 
-                    if rel_record.is_deleted() {
+                    // CRITICAL DEBUG: Log relationship record details
+                    tracing::debug!(
+                        "[find_relationships] Node {}: rel_id={}, src_id={}, dst_id={}, type_id={}, is_deleted={}, next_src_ptr={}, next_dst_ptr={}",
+                        node_id,
+                        current_rel_id,
+                        src_id,
+                        dst_id,
+                        record_type_id,
+                        is_deleted,
+                        next_src_ptr,
+                        next_dst_ptr
+                    );
+
+                    if is_deleted {
                         rel_ptr = if src_id == node_id {
                             next_src_ptr
                         } else {
@@ -6877,8 +6917,7 @@ impl Executor {
                         continue;
                     }
 
-                    // Copy type_id to local variable (rel_record is packed struct)
-                    let record_type_id = rel_record.type_id;
+                    // record_type_id already copied above
                     let matches_type = type_ids.is_empty() || type_ids.contains(&record_type_id);
                     let matches_direction = match direction {
                         Direction::Outgoing => src_id == node_id,
@@ -6887,12 +6926,28 @@ impl Executor {
                     };
 
                     if matches_type && matches_direction {
+                        tracing::debug!(
+                            "[find_relationships] Node {}: MATCHED relationship id={}, src={}, dst={}, type_id={}",
+                            node_id,
+                            current_rel_id,
+                            src_id,
+                            dst_id,
+                            record_type_id
+                        );
                         relationships.push(RelationshipInfo {
                             id: current_rel_id,
                             source_id: src_id,
                             target_id: dst_id,
-                            type_id: rel_record.type_id,
+                            type_id: record_type_id,
                         });
+                    } else {
+                        tracing::debug!(
+                            "[find_relationships] Node {}: SKIPPED relationship id={} (matches_type={}, matches_direction={})",
+                            node_id,
+                            current_rel_id,
+                            matches_type,
+                            matches_direction
+                        );
                     }
 
                     rel_ptr = if src_id == node_id {

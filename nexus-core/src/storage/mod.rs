@@ -643,6 +643,16 @@ impl RecordStore {
         // Read source node
         if let Ok(mut source_node) = self.read_node(from) {
             source_prev_ptr = source_node.first_rel_ptr;
+
+            // CRITICAL DEBUG: Log first_rel_ptr update
+            tracing::debug!(
+                "[create_relationship] Source node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})",
+                from,
+                source_prev_ptr,
+                rel_id + 1,
+                rel_id
+            );
+
             source_node.first_rel_ptr = rel_id + 1;
             source_node_opt = Some(source_node);
         }
@@ -656,15 +666,35 @@ impl RecordStore {
             }
         } else if let Ok(mut target_node) = self.read_node(to) {
             target_prev_ptr = target_node.first_rel_ptr;
+
+            // CRITICAL DEBUG: Log first_rel_ptr update for target
+            tracing::debug!(
+                "[create_relationship] Target node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})",
+                to,
+                target_prev_ptr,
+                rel_id + 1,
+                rel_id
+            );
+
             target_node.first_rel_ptr = rel_id + 1;
             target_node_opt = Some(target_node);
         }
 
         // Write both nodes (better cache locality - sequential writes)
         if let Some(source_node) = source_node_opt {
+            tracing::debug!(
+                "[create_relationship] Writing source node {} with first_rel_ptr={}",
+                from,
+                source_node.first_rel_ptr
+            );
             self.write_node(from, &source_node)?;
         }
         if let Some(target_node) = target_node_opt {
+            tracing::debug!(
+                "[create_relationship] Writing target node {} with first_rel_ptr={}",
+                to,
+                target_node.first_rel_ptr
+            );
             self.write_node(to, &target_node)?;
         }
 
