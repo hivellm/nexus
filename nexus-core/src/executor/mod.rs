@@ -3361,10 +3361,15 @@ impl Executor {
         // Only create rows from variables if we don't have match columns (indicating MATCH returned empty)
         // If we have match columns but no rows, it means MATCH was executed but returned empty
         // In that case, we should not create rows from variables
-        if context.result_set.rows.is_empty() && !context.variables.is_empty() && !has_match_columns
-        {
-            let rows = self.materialize_rows_from_variables(context);
-            self.update_result_set_from_rows(context, &rows);
+        // CRITICAL FIX: When there's GROUP BY, we MUST materialize rows from variables even if has_match_columns is true
+        // because Project was deferred and rows haven't been created yet. Without rows, no groups can be created.
+        if context.result_set.rows.is_empty() && !context.variables.is_empty() {
+            // Only skip materialization if we don't have GROUP BY and have match columns (MATCH returned empty)
+            // If we have GROUP BY, we need rows to create groups, so materialize even with match columns
+            if !has_match_columns || !group_by.is_empty() {
+                let rows = self.materialize_rows_from_variables(context);
+                self.update_result_set_from_rows(context, &rows);
+            }
         }
 
         // Check rows AFTER we've stored project_rows, but rows may have been modified
@@ -3448,8 +3453,29 @@ impl Executor {
 
         // Use project_rows if rows is empty (Project created rows with literal values)
         // Clone project_rows so we can use it later for virtual row handling in aggregations
+        // CRITICAL FIX: When there's GROUP BY and rows is empty, materialize from variables
+        // because Project was deferred and rows haven't been created yet
         let rows_to_process = if rows.is_empty() && !project_rows.is_empty() {
             project_rows.clone()
+        } else if rows.is_empty() && !group_by.is_empty() && !context.variables.is_empty() {
+            // GROUP BY but no rows - materialize from variables if Project was deferred
+            // This happens when Project is deferred until after Aggregate
+            let materialized_rows = self.materialize_rows_from_variables(context);
+            if !materialized_rows.is_empty() {
+                // Convert to Row format for grouping
+                let columns = context.result_set.columns.clone();
+                materialized_rows
+                    .iter()
+                    .map(|row_map| Row {
+                        values: columns
+                            .iter()
+                            .map(|col| row_map.get(col).cloned().unwrap_or(Value::Null))
+                            .collect(),
+                    })
+                    .collect()
+            } else {
+                rows
+            }
         } else {
             rows
         };
@@ -3475,9 +3501,40 @@ impl Executor {
                         group_key_values.push(Value::Null);
                     }
                 } else {
-                    // Column not found - this should not happen if Project created it correctly
-                    // but handle gracefully by using Null (will group all NULLs together)
-                    group_key_values.push(Value::Null);
+                    // Column not found - this can happen when Project was deferred (adopted for Aggregate)
+                    // In that case, we need to evaluate the projection expression using projection_items
+                    if let Some(items) = projection_items {
+                        // Find the projection item that matches the GROUP BY column
+                        if let Some(projection_item) = items.iter().find(|item| item.alias == *col)
+                        {
+                            // Convert row back to HashMap to evaluate expression
+                            let current_columns = if !project_columns.is_empty() {
+                                &project_columns
+                            } else {
+                                &context.result_set.columns
+                            };
+                            let row_map: HashMap<String, Value> = current_columns
+                                .iter()
+                                .zip(row.values.iter())
+                                .map(|(col, val)| (col.clone(), val.clone()))
+                                .collect();
+                            // Evaluate the projection expression to get the GROUP BY value
+                            match self.evaluate_projection_expression(
+                                &row_map,
+                                context,
+                                &projection_item.expression,
+                            ) {
+                                Ok(value) => group_key_values.push(value),
+                                Err(_) => group_key_values.push(Value::Null),
+                            }
+                        } else {
+                            // Projection item not found - use Null
+                            group_key_values.push(Value::Null);
+                        }
+                    } else {
+                        // No projection_items available - use Null
+                        group_key_values.push(Value::Null);
+                    }
                 }
             }
 
