@@ -169,12 +169,14 @@ impl Catalog {
                 .map(|name| name.contains("test") || name.contains("cargo"))
                 .unwrap_or(false);
 
-        // Use minimal map_size: 128KB for tests (especially on Windows/PowerShell), 512KB for production
-        // Windows has stricter TLS key limits, so we need even smaller size for tests
+        // Use minimal map_size: 256KB for tests (especially on Windows/PowerShell), 512KB for production
+        // Windows has stricter TLS key limits, so we need smaller size for tests
+        // macOS may need slightly larger size due to different LMDB implementation
         let map_size = if is_test {
-            // Use 128KB for tests - Windows/PowerShell has stricter TLS limits
-            // This allows maximum number of parallel test execution
-            128 * 1024
+            // Use 256KB for tests - increased from 128KB to prevent MapFull errors on macOS
+            // Windows/PowerShell has stricter TLS limits, but 256KB should still work
+            // This allows maximum number of parallel test execution while preventing MapFull
+            256 * 1024
         } else {
             // 512KB for production - minimum safe size
             512 * 1024
@@ -1068,17 +1070,22 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
 
+        // Use larger map_size for this test to prevent MapFull errors on macOS
+        // macOS LMDB may need more space when reopening the database
+        let map_size = 512 * 1024; // 512KB
+
         // Create catalog and add data
         {
-            let catalog = Catalog::new(&path).unwrap();
+            let catalog = Catalog::with_map_size(&path, map_size).unwrap();
             catalog.get_or_create_label("Person").unwrap();
             catalog.get_or_create_type("KNOWS").unwrap();
             catalog.sync().unwrap();
         }
 
         // Reopen and verify data persisted
+        // Use same map_size when reopening to prevent MapFull errors
         {
-            let catalog = Catalog::new(&path).unwrap();
+            let catalog = Catalog::with_map_size(&path, map_size).unwrap();
             let person_id = catalog.get_or_create_label("Person").unwrap();
             let knows_id = catalog.get_or_create_type("KNOWS").unwrap();
 
