@@ -701,6 +701,16 @@ impl RecordStore {
         record.next_src_ptr = source_prev_ptr;
         record.next_dst_ptr = target_prev_ptr;
 
+        // CRITICAL DEBUG: Log linked list construction
+        tracing::debug!(
+            "[create_relationship] Relationship {}: src={}, dst={}, next_src_ptr={}, next_dst_ptr={}",
+            rel_id,
+            from,
+            to,
+            source_prev_ptr,
+            target_prev_ptr
+        );
+
         // Write the record to storage
         self.write_rel(rel_id, &record)?;
 

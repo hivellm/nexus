@@ -253,6 +253,29 @@ When a relationship is created (`create_relationship` in `storage/mod.rs`):
 - All methods fail to find relationships
 - Created comprehensive test suite
 
+### 2025-01-20 - Linked List Analysis
+
+- **Code Review**: Verified linked list construction logic
+  - `first_rel_ptr` stored as `rel_id + 1` in nodes
+  - `next_src_ptr` stored as previous `rel_id + 1` in relationships
+  - Traversal uses `rel_id = rel_ptr - 1` to read relationship records
+  - Structure appears correct in code
+
+- **Test Results**: 
+  - Single relationship: WORKS (count returns 1)
+  - Multiple relationships: FAILS (count returns 1 instead of 2)
+  - First relationship is found, second is not
+
+- **Debug Logging Enhanced**:
+  - Added logging for `next_src_ptr`/`next_dst_ptr` values during relationship creation
+  - Added logging for linked list traversal (moving from one relationship to next)
+  - Added logging when reaching end of linked list (rel_ptr=0)
+
+- **Next Steps**: 
+  - Analyze debug logs to see actual pointer values
+  - Verify if traversal is following `next_src_ptr` correctly
+  - Check if there's a condition stopping traversal prematurely
+
 ## Files Modified
 
 1. `nexus-core/src/executor/mod.rs` - Aggregate fixes, deduplication fixes, debug logging
@@ -281,13 +304,28 @@ The linked list structure appears correct in code (`first_rel_ptr` updated, `nex
 3. Transaction isolation issue - second relationship not visible to read transactions
 
 **Debug Logging Added**:
-- `[create_relationship]` logs for `first_rel_ptr` updates
-- `[find_relationships]` logs for node reading and linked list traversal
+- `[create_relationship]` logs for `first_rel_ptr` updates and `next_src_ptr`/`next_dst_ptr` values
+- `[find_relationships]` logs for node reading, linked list traversal, and pointer following
 - Logs should reveal if `first_rel_ptr` is being updated correctly and if linked list traversal is following pointers correctly
 
+**Latest Investigation (2025-01-20 - Continued)**:
+- Added additional debug logging to track `next_src_ptr` and `next_dst_ptr` values when creating relationships
+- Added logging to track linked list traversal - when moving from one relationship to the next
+- Testing with multiple relationships to see if linked list pointers are being followed correctly
+
+**Code Analysis**:
+- `RelationshipRecord::new()` initializes `next_src_ptr` and `next_dst_ptr` to `u64::MAX`
+- These are then set to `source_prev_ptr` and `target_prev_ptr` (which should be the previous relationship's `rel_id + 1`)
+- When first relationship is created: `source_prev_ptr = 0` (no previous), so `next_src_ptr = 0` (end of list) ✓
+- When second relationship is created: `source_prev_ptr = first_rel_id + 1`, so `next_src_ptr = first_rel_id + 1` (should point to first) ✓
+- Linked list structure appears correct in code
+
+**Hypothesis**:
+The linked list structure is being built correctly, but traversal may be stopping prematurely or not following `next_src_ptr` correctly when it's not 0.
+
 The next investigation should focus on:
-1. Verifying linked list pointers are persisted correctly after commit
-2. Checking if `next_src_ptr` is correctly set when creating second relationship
-3. Transaction visibility - are relationships created in same transaction visible to each other?
-4. Linked list traversal - is it following `next_src_ptr` correctly after finding first relationship?
+1. Analyzing debug logs to see actual `next_src_ptr` values when creating relationships
+2. Verifying if traversal is following `next_src_ptr` when it's not 0
+3. Checking if there's a condition that stops traversal prematurely
+4. Verifying if `next_src_ptr` values are being persisted correctly to disk
 

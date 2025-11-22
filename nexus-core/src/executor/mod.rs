@@ -6950,12 +6950,36 @@ impl Executor {
                         );
                     }
 
+                    let old_rel_ptr = rel_ptr;
                     rel_ptr = if src_id == node_id {
                         next_src_ptr
                     } else {
                         next_dst_ptr
                     };
+
+                    // CRITICAL DEBUG: Log linked list traversal
+                    tracing::debug!(
+                        "[find_relationships] Node {}: Moving from rel_id={} to next_ptr={} (src_id={}, node_id={}, using_next_src={})",
+                        node_id,
+                        current_rel_id,
+                        rel_ptr,
+                        src_id,
+                        node_id,
+                        src_id == node_id
+                    );
+
+                    if rel_ptr == 0 {
+                        tracing::debug!(
+                            "[find_relationships] Node {}: Reached end of linked list (rel_ptr=0)",
+                            node_id
+                        );
+                    }
                 } else {
+                    tracing::debug!(
+                        "[find_relationships] Node {}: Failed to read relationship record for rel_id={}",
+                        node_id,
+                        current_rel_id
+                    );
                     break;
                 }
             }
