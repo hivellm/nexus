@@ -455,11 +455,67 @@ impl<'a> QueryPlanner<'a> {
                         true // Default to UNION (distinct)
                     };
 
-                // Split query into left and right parts
-                let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
-                let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..].to_vec();
+                // Find where ORDER BY and LIMIT clauses start (after UNION)
+                // These should be applied to the combined UNION results, not individual branches
+                let mut right_end_idx = query.clauses.len();
+                for i in union_idx + 1..query.clauses.len() {
+                    match &query.clauses[i] {
+                        Clause::OrderBy(_) | Clause::Limit(_) => {
+                            // ORDER BY and LIMIT are processed after UNION, not as part of right side
+                            right_end_idx = i;
+                            break;
+                        }
+                        Clause::Union(_) => {
+                            // Another UNION found - this is part of the right side
+                            // We'll handle multiple UNIONs in the right side recursively
+                            break;
+                        }
+                        _ => {
+                            // Other clauses are part of the right side
+                        }
+                    }
+                }
 
-                // Create separate queries for left and right
+                // Split query into left and right parts (excluding ORDER BY/LIMIT after UNION)
+                let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
+                let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..right_end_idx].to_vec();
+
+                // Extract ORDER BY and LIMIT clauses that come after UNION
+                let mut post_union_order_by: Option<(Vec<String>, Vec<bool>)> = None;
+                let mut post_union_limit: Option<usize> = None;
+
+                for clause in query.clauses.iter().skip(right_end_idx) {
+                    match clause {
+                        Clause::OrderBy(order_by_clause) => {
+                            // Collect ORDER BY clause to add after UNION
+                            let mut columns = Vec::new();
+                            let mut ascending = Vec::new();
+
+                            for item in &order_by_clause.items {
+                                // Convert expression to column name
+                                let column = self.expression_to_string(&item.expression)?;
+                                columns.push(column);
+
+                                // Convert direction
+                                let is_asc = item.direction == SortDirection::Ascending;
+                                ascending.push(is_asc);
+                            }
+
+                            post_union_order_by = Some((columns, ascending));
+                        }
+                        Clause::Limit(limit_clause) => {
+                            if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
+                                post_union_limit = Some(*count as usize);
+                            }
+                        }
+                        _ => {
+                            // Other clauses after UNION are not supported (e.g., SKIP, another UNION)
+                            // For now, we'll skip them
+                        }
+                    }
+                }
+
+                // Create separate queries for left and right (without ORDER BY/LIMIT)
                 let left_query = CypherQuery {
                     clauses: left_clauses,
                     params: query.params.clone(),
@@ -488,11 +544,24 @@ impl<'a> QueryPlanner<'a> {
                 let right_operators = temp_planner.plan_query(&right_query)?;
 
                 // Create UNION operator with complete operator pipelines for each side
-                let operators = vec![Operator::Union {
+                let mut operators = vec![Operator::Union {
                     left: left_operators,
                     right: right_operators,
                     distinct,
                 }];
+
+                // Add ORDER BY after UNION if present
+                if let Some((columns, ascending)) = post_union_order_by {
+                    operators.push(Operator::Sort {
+                        columns,
+                        ascending,
+                    });
+                }
+
+                // Add LIMIT after UNION (and ORDER BY if present) if present
+                if let Some(count) = post_union_limit {
+                    operators.push(Operator::Limit { count });
+                }
 
                 // Cache the UNION plan
                 let estimated_cost = 100.0; // Placeholder cost
@@ -656,6 +725,7 @@ impl<'a> QueryPlanner<'a> {
                 return_distinct,
                 &unwind_operators,
                 &match_hints,
+                &order_by_clause,
                 &mut operators,
             )?;
         }
@@ -970,50 +1040,6 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Add ORDER BY operator (Sort) AFTER projection/aggregation but BEFORE limit
-        // Resolve column names to aliases from RETURN items
-        if let Some((columns, ascending)) = order_by_clause {
-            // Build a map of expression -> alias from return_items for resolution
-            let mut expression_to_alias = std::collections::HashMap::new();
-            for item in &return_items {
-                let expr_str = self
-                    .expression_to_string(&item.expression)
-                    .unwrap_or_default();
-                let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
-                expression_to_alias.insert(expr_str, alias);
-            }
-
-            // Resolve ORDER BY column names to aliases
-            let resolved_columns: Vec<String> = columns
-                .iter()
-                .map(|col| {
-                    // Try to resolve to alias, otherwise use as-is
-                    expression_to_alias
-                        .get(col)
-                        .cloned()
-                        .unwrap_or_else(|| col.clone())
-                })
-                .collect();
-
-            // Find where to insert Sort (before Limit if exists)
-            let limit_pos = operators
-                .iter()
-                .position(|op| matches!(op, Operator::Limit { .. }));
-
-            let sort_op = Operator::Sort {
-                columns: resolved_columns,
-                ascending,
-            };
-
-            if let Some(pos) = limit_pos {
-                // Insert before Limit
-                operators.insert(pos, sort_op);
-            } else {
-                // Add at the end
-                operators.push(sort_op);
-            }
-        }
-
         // Cache the planned operators for future use
         // Estimate cost using the improved cost model
         let estimated_cost = self
@@ -1036,6 +1062,7 @@ impl<'a> QueryPlanner<'a> {
         distinct: bool,
         unwind_operators: &[Operator],
         hints: &[QueryHint],
+        order_by_clause: &Option<(Vec<String>, Vec<bool>)>,
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         // Process ALL patterns, not just the first one
@@ -1043,15 +1070,19 @@ impl<'a> QueryPlanner<'a> {
         let mut all_target_nodes = std::collections::HashSet::new();
 
         // Identify target nodes across all patterns
+        // CRITICAL FIX: Include ALL nodes that are targets of relationships (Expand),
+        // not just nodes without labels. Nodes that are targets of Expand will be populated
+        // by the Expand operator and don't need a separate NodeByLabel.
         for pattern in patterns {
             for (idx, element) in pattern.elements.iter().enumerate() {
                 if let PatternElement::Relationship(_) = element {
                     if idx + 1 < pattern.elements.len() {
                         if let PatternElement::Node(node) = &pattern.elements[idx + 1] {
                             if let Some(var) = &node.variable {
-                                if node.labels.is_empty() {
-                                    all_target_nodes.insert(var.clone());
-                                }
+                                // CRITICAL: Add ALL target nodes, regardless of labels
+                                // Nodes that are targets of Expand will be populated by Expand,
+                                // so we shouldn't create NodeByLabel for them
+                                all_target_nodes.insert(var.clone());
                             }
                         }
                     }
@@ -1244,6 +1275,9 @@ impl<'a> QueryPlanner<'a> {
             });
         }
 
+        // Capture order_by_clause reference before entering nested blocks to ensure it's accessible
+        let order_by_clause_ref = order_by_clause.as_ref();
+
         // Add projection or aggregation operator for RETURN clause
         if !return_items.is_empty() {
             // Check if any return items contain aggregate functions
@@ -1255,7 +1289,7 @@ impl<'a> QueryPlanner<'a> {
             // Initialize projection_items early so we can add literal projections for aggregations
             let mut projection_items: Vec<ProjectionItem> = Vec::new();
 
-            for item in return_items {
+            for item in return_items.iter() {
                 // First, check if this expression contains any nested aggregations
                 if self.contains_aggregation(&item.expression) {
                     has_aggregation = true;
@@ -1472,7 +1506,7 @@ impl<'a> QueryPlanner<'a> {
                                 let mut temp_agg_alias: Option<String> = None;
 
                                 for arg in args {
-                                    if self.contains_aggregation(arg) {
+                                    if self.contains_aggregation(&arg) {
                                         has_nested_agg = true;
                                         // Extract nested aggregation (e.g., collect() inside head())
                                         if let Expression::FunctionCall {
@@ -1797,6 +1831,90 @@ impl<'a> QueryPlanner<'a> {
                         columns: distinct_columns,
                     });
                 }
+
+                // Add ORDER BY after DISTINCT if UNWIND is present (ORDER BY must come after DISTINCT)
+                // This ensures correct order: UNWIND → Project → DISTINCT → ORDER BY → LIMIT
+                if !unwind_operators.is_empty() {
+                    if let Some((columns, ascending)) = order_by_clause_ref {
+                        // Build a map of expression -> alias from return_items for resolution
+                        let mut expression_to_alias = std::collections::HashMap::new();
+                        for item in return_items.iter() {
+                            let expr_str = self
+                                .expression_to_string(&item.expression)
+                                .unwrap_or_default();
+                            let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
+                            expression_to_alias.insert(expr_str, alias);
+                        }
+
+                        // Resolve ORDER BY column names to aliases
+                        let resolved_columns: Vec<String> = columns
+                            .iter()
+                            .map(|col| {
+                                // Try to resolve to alias, otherwise use as-is
+                                expression_to_alias
+                                    .get(col)
+                                    .cloned()
+                                    .unwrap_or_else(|| col.clone())
+                            })
+                            .collect();
+
+                        // Add ORDER BY right after DISTINCT (which was just added above)
+                        operators.push(Operator::Sort {
+                            columns: resolved_columns,
+                            ascending: ascending.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Add ORDER BY operator (Sort) AFTER projection/aggregation but BEFORE limit
+        // This handles ORDER BY for queries WITHOUT UNWIND + DISTINCT
+        // (UNWIND + DISTINCT case was already handled above)
+        // Check if ORDER BY was already added (for UNWIND queries)
+        let order_by_added = !unwind_operators.is_empty() && distinct && order_by_clause_ref.is_some();
+        
+        if !order_by_added {
+            if let Some((columns, ascending)) = order_by_clause_ref {
+            // Build a map of expression -> alias from return_items for resolution
+            let mut expression_to_alias = std::collections::HashMap::new();
+            for item in return_items.iter() {
+                let expr_str = self
+                    .expression_to_string(&item.expression)
+                    .unwrap_or_default();
+                let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
+                expression_to_alias.insert(expr_str, alias);
+            }
+
+            // Resolve ORDER BY column names to aliases
+            let resolved_columns: Vec<String> = columns
+                .iter()
+                .map(|col| {
+                    // Try to resolve to alias, otherwise use as-is
+                    expression_to_alias
+                        .get(col)
+                        .cloned()
+                        .unwrap_or_else(|| col.clone())
+                })
+                .collect();
+
+            // Find where to insert Sort (before Limit if exists)
+            let limit_pos = operators
+                .iter()
+                .position(|op| matches!(op, Operator::Limit { .. }));
+
+            let sort_op = Operator::Sort {
+                columns: resolved_columns,
+                ascending: ascending.clone(),
+            };
+
+            if let Some(pos) = limit_pos {
+                // Insert before Limit
+                operators.insert(pos, sort_op);
+            } else {
+                // Add at the end
+                operators.push(sort_op);
+            }
             }
         }
 

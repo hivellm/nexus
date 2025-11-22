@@ -557,19 +557,45 @@ impl RecordStore {
                 .map(|m| !m.is_empty())
                 .unwrap_or(false);
 
+        tracing::debug!(
+            "create_node_with_label_bits: node_id={}, has_properties={}, properties={:?}",
+            node_id,
+            has_properties,
+            properties
+        );
+
         // Store properties and get property pointer
         record.prop_ptr = if has_properties {
-            self.property_store.store_properties(
+            let prop_ptr = self.property_store.store_properties(
                 node_id,
                 property_store::EntityType::Node,
                 properties,
-            )?
+            )?;
+            tracing::debug!(
+                "create_node_with_label_bits: node_id={}, stored properties, prop_ptr={}",
+                node_id,
+                prop_ptr
+            );
+            prop_ptr
         } else {
+            tracing::debug!(
+                "create_node_with_label_bits: node_id={}, no properties to store, prop_ptr=0",
+                node_id
+            );
             0
         };
 
         // Write the record
         self.write_node(node_id, &record)?;
+
+        // Verify the prop_ptr was written correctly
+        if let Ok(verify_record) = self.read_node(node_id) {
+            tracing::debug!(
+                "create_node_with_label_bits: node_id={}, after write_node, read back prop_ptr={}",
+                node_id,
+                verify_record.prop_ptr
+            );
+        }
 
         Ok(node_id)
     }
@@ -817,20 +843,65 @@ impl RecordStore {
     pub fn load_node_properties(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
         // First try to use prop_ptr from NodeRecord (more reliable)
         if let Ok(node_record) = self.read_node(node_id) {
+            tracing::debug!(
+                "load_node_properties: node_id={}, prop_ptr={}",
+                node_id,
+                node_record.prop_ptr
+            );
             if node_record.prop_ptr != 0 {
                 // Use prop_ptr directly from the node record
-                if let Ok(Some(props)) = self
+                match self
                     .property_store
                     .load_properties_at_offset(node_record.prop_ptr)
                 {
-                    return Ok(Some(props));
+                    Ok(Some(props)) => {
+                        tracing::debug!(
+                            "load_node_properties: node_id={}, loaded properties from prop_ptr={}, keys={:?}",
+                            node_id,
+                            node_record.prop_ptr,
+                            props.as_object().map(|m| m.keys().collect::<Vec<_>>())
+                        );
+                        return Ok(Some(props));
+                    }
+                    Ok(None) => {
+                        tracing::debug!(
+                            "load_node_properties: node_id={}, prop_ptr={} returned None",
+                            node_id,
+                            node_record.prop_ptr
+                        );
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "load_node_properties: node_id={}, error loading from prop_ptr={}: {}",
+                            node_id,
+                            node_record.prop_ptr,
+                            e
+                        );
+                    }
                 }
+            } else {
+                tracing::debug!(
+                    "load_node_properties: node_id={}, prop_ptr is 0, trying reverse_index",
+                    node_id
+                );
             }
+        } else {
+            tracing::debug!(
+                "load_node_properties: node_id={}, failed to read node record",
+                node_id
+            );
         }
 
         // Fallback to reverse_index lookup (for compatibility)
-        self.property_store
-            .load_properties(node_id, property_store::EntityType::Node)
+        let result = self
+            .property_store
+            .load_properties(node_id, property_store::EntityType::Node);
+        tracing::debug!(
+            "load_node_properties: node_id={}, reverse_index result: {:?}",
+            node_id,
+            result.as_ref().ok().and_then(|opt| opt.as_ref().map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>())))
+        );
+        result
     }
 
     /// Load properties for a relationship

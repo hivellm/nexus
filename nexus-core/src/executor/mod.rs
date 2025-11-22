@@ -983,9 +983,25 @@ impl Executor {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
                     let nodes = self.execute_node_by_label(*label_id)?;
+                    tracing::debug!(
+                        "NodeByLabel: found {} nodes for label_id {}, variable '{}'",
+                        nodes.len(),
+                        label_id,
+                        variable
+                    );
                     context.set_variable(variable, Value::Array(nodes));
                     let rows = self.materialize_rows_from_variables(&context);
+                    tracing::debug!(
+                        "NodeByLabel: materialized {} rows from variables for '{}'",
+                        rows.len(),
+                        variable
+                    );
                     self.update_result_set_from_rows(&mut context, &rows);
+                    tracing::debug!(
+                        "NodeByLabel: result_set now has {} rows, {} columns",
+                        context.result_set.rows.len(),
+                        context.result_set.columns.len()
+                    );
                 }
                 Operator::AllNodesScan { variable } => {
                     let nodes = self.execute_all_nodes_scan()?;
@@ -1635,8 +1651,19 @@ impl Executor {
                             let json_value = self.expression_to_json_value(value_expr)?;
                             json_props.insert(key.clone(), json_value);
                         }
+                        tracing::debug!(
+                            "execute_create_pattern_internal: creating node with variable {:?}, labels {:?}, properties={:?}",
+                            node.variable,
+                            node.labels,
+                            serde_json::Value::Object(json_props.clone())
+                        );
                         serde_json::Value::Object(json_props)
                     } else {
+                        tracing::debug!(
+                            "execute_create_pattern_internal: creating node with variable {:?}, labels {:?}, NO PROPERTIES",
+                            node.variable,
+                            node.labels
+                        );
                         serde_json::Value::Null
                     };
 
@@ -1644,6 +1671,12 @@ impl Executor {
                     let node_id = self
                         .store_mut()
                         .create_node_with_label_bits(&mut tx, label_bits, properties)?;
+                    
+                    tracing::debug!(
+                        "execute_create_pattern_internal: created node_id={}, variable={:?}",
+                        node_id,
+                        node.variable
+                    );
 
                     // Phase 1 Optimization: Batch catalog metadata updates (defer to end)
                     for label_id in label_ids_for_update {
@@ -2361,11 +2394,62 @@ impl Executor {
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<()> {
         // Use result_set rows instead of variables to maintain row context from previous operators
+        // CRITICAL: Always use result_set_as_rows if available, as it preserves row context
+        // from previous operators (like NodeByLabel which creates multiple rows)
         let rows = if !context.result_set.rows.is_empty() {
-            self.result_set_as_rows(context)
+            let rows_from_result_set = self.result_set_as_rows(context);
+            tracing::debug!(
+                "Expand: result_set has {} rows, converted to {} row maps",
+                context.result_set.rows.len(),
+                rows_from_result_set.len()
+            );
+            
+            // CRITICAL: Don't filter rows by source_var here - process all rows
+            // The filtering will happen later when we try to get source_value from each row
+            // This ensures we don't accidentally skip valid rows
+            // Only use rows_from_result_set directly - don't filter yet
+            rows_from_result_set
         } else {
             self.materialize_rows_from_variables(context)
         };
+        
+        // DEBUG: Log number of input rows for debugging relationship expansion issues
+        // This helps identify if Expand is receiving all source nodes correctly
+        if !rows.is_empty() && !source_var.is_empty() {
+            tracing::debug!(
+                "Expand operator: processing {} input rows for source_var '{}'",
+                rows.len(),
+                source_var
+            );
+            // Log source node IDs to verify all nodes are being processed
+            for (idx, row) in rows.iter().enumerate() {
+                if let Some(source_value) = row.get(source_var) {
+                    if let Some(source_id) = Self::extract_entity_id(source_value) {
+                        tracing::debug!(
+                            "Expand input row {}: source_var '{}' = node_id {}",
+                            idx,
+                            source_var,
+                            source_id
+                        );
+                    } else {
+                        tracing::debug!(
+                            "Expand input row {}: source_var '{}' = {:?} (no entity ID)",
+                            idx,
+                            source_var,
+                            source_value
+                        );
+                    }
+                } else {
+                    tracing::debug!(
+                        "Expand input row {}: source_var '{}' not found in row (keys: {:?})",
+                        idx,
+                        source_var,
+                        row.keys().collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
+        
         let mut expanded_rows = Vec::new();
 
         // Special case: if source_var is empty or rows is empty, scan all relationships directly
@@ -2453,7 +2537,9 @@ impl Executor {
                         })
                 };
 
-            for row in &rows {
+            for (row_idx, row) in rows.iter().enumerate() {
+                // CRITICAL: Get source_value from row first, then fallback to context variables
+                // This ensures we process each row independently
                 let source_value = row
                     .get(source_var)
                     .cloned()
@@ -2464,6 +2550,29 @@ impl Executor {
                         context.get_variable(source_var).cloned()
                     })
                     .unwrap_or(Value::Null);
+
+                // Skip rows that don't have a valid source value
+                if source_value.is_null() {
+                    tracing::debug!(
+                        "Expand: skipping row {} of {} - source_var '{}' is Null",
+                        row_idx + 1,
+                        rows.len(),
+                        source_var
+                    );
+                    continue;
+                }
+
+                tracing::debug!(
+                    "Expand: processing row {} of {}, source_var '{}' = {:?}",
+                    row_idx + 1,
+                    rows.len(),
+                    source_var,
+                    if let Some(id) = Self::extract_entity_id(&source_value) {
+                        format!("node_id {}", id)
+                    } else {
+                        format!("{:?}", source_value)
+                    }
+                );
 
                 // CRITICAL FIX: Handle case where source_value might be an Array
                 // This can happen if materialize_rows_from_variables didn't work correctly
@@ -2485,6 +2594,12 @@ impl Executor {
                         Some(id) => id,
                         None => continue,
                     };
+
+                    tracing::debug!(
+                        "Expand: processing source node_id {} for source_var '{}'",
+                        source_id,
+                        source_var
+                    );
 
                     // Phase 8.3: Try to use relationship property index if there are property filters
                     // First, try to get pre-filtered relationships from the index
@@ -2543,7 +2658,17 @@ impl Executor {
                             self.find_relationships(source_id, type_ids, direction, cache)?
                         };
 
+                    tracing::debug!(
+                        "Expand: found {} relationships for source node_id {}",
+                        relationships.len(),
+                        source_id
+                    );
+
                     if relationships.is_empty() {
+                        tracing::debug!(
+                            "Expand: source node_id {} has no relationships matching criteria, skipping",
+                            source_id
+                        );
                         continue;
                     }
 
@@ -2602,6 +2727,12 @@ impl Executor {
             }
         }
 
+        tracing::debug!(
+            "Expand: created {} expanded rows from {} input rows",
+            expanded_rows.len(),
+            rows.len()
+        );
+
         // If no rows were expanded but we had input rows, preserve columns to indicate MATCH was executed but returned empty
         if expanded_rows.is_empty() && !rows.is_empty() {
             // Preserve columns to indicate MATCH was executed but returned empty
@@ -2609,8 +2740,16 @@ impl Executor {
             // Don't clear columns - they indicate that MATCH was executed
             context.result_set.rows.clear();
         } else {
+            // CRITICAL: Always update result_set with all expanded rows
+            // This ensures all relationships are included in the result
             self.update_variables_from_rows(context, &expanded_rows);
             self.update_result_set_from_rows(context, &expanded_rows);
+            
+            // Verify that all expanded rows were added to result_set
+            tracing::debug!(
+                "Expand: result_set now has {} rows after update",
+                context.result_set.rows.len()
+            );
         }
 
         Ok(())
@@ -2717,25 +2856,53 @@ impl Executor {
                         // All variables are empty arrays (MATCH found nothing) - return empty
                         vec![]
                     } else {
-                        // Some variables contain single values, create a row
-                        let mut row = HashMap::new();
-                        for (var, value) in &context.variables {
-                            match value {
-                                Value::Array(arr) if arr.len() == 1 => {
-                                    row.insert(var.clone(), arr[0].clone());
-                                }
-                                Value::Array(_) => {
-                                    // Empty or multiple-element array - skip
-                                }
-                                _ => {
-                                    row.insert(var.clone(), value.clone());
+                        // CRITICAL FIX: If materialized is empty but we have non-empty arrays,
+                        // there might be arrays with multiple elements that materialize_rows_from_variables
+                        // should have handled. Let's check if we have multi-element arrays:
+                        let has_multi_element_arrays = context.variables.values().any(|v| {
+                            match v {
+                                Value::Array(arr) => arr.len() > 1,
+                                _ => false,
+                            }
+                        });
+                        
+                        if has_multi_element_arrays {
+                            // We have multi-element arrays - materialize_rows_from_variables should have
+                            // created rows from them. If it didn't, there's a bug. But let's try again
+                            // in case variables changed:
+                            let retry_materialized = self.materialize_rows_from_variables(context);
+                            if !retry_materialized.is_empty() {
+                                tracing::debug!("Project: retry materialization succeeded, got {} rows", retry_materialized.len());
+                                retry_materialized
+                            } else {
+                                // Still empty - this suggests a bug in materialize_rows_from_variables
+                                // or the variables don't match what we expect
+                                tracing::warn!("Project: materialize_rows_from_variables returned empty despite multi-element arrays");
+                                // Return empty - this will cause the query to return no rows
+                                vec![]
+                            }
+                        } else {
+                            // Some variables contain single values, create a row
+                            let mut row = HashMap::new();
+                            for (var, value) in &context.variables {
+                                match value {
+                                    Value::Array(arr) if arr.len() == 1 => {
+                                        row.insert(var.clone(), arr[0].clone());
+                                    }
+                                    Value::Array(_) => {
+                                        // Empty or multiple-element array - skip
+                                        // (multi-element arrays should be handled above)
+                                    }
+                                    _ => {
+                                        row.insert(var.clone(), value.clone());
+                                    }
                                 }
                             }
-                        }
-                        if !row.is_empty() {
-                            vec![row]
-                        } else {
-                            materialized
+                            if !row.is_empty() {
+                                vec![row]
+                            } else {
+                                materialized
+                            }
                         }
                     }
                 } else if materialized.is_empty()
@@ -2794,9 +2961,16 @@ impl Executor {
             return Ok(vec![]);
         }
 
+        tracing::debug!(
+            "Project: input_rows={}, items={:?}, result_set.rows={}",
+            rows.len(),
+            items.iter().map(|i| i.alias.clone()).collect::<Vec<_>>(),
+            context.result_set.rows.len()
+        );
+
         let mut projected_rows = Vec::new();
 
-        for row_map in &rows {
+        for (idx, row_map) in rows.iter().enumerate() {
             let mut values = Vec::with_capacity(items.len());
             for item in items {
                 let value =
@@ -2804,7 +2978,10 @@ impl Executor {
                 values.push(value);
             }
             projected_rows.push(Row { values });
+            tracing::debug!("Project: processed row {} of {}", idx + 1, rows.len());
         }
+
+        tracing::debug!("Project: output_rows={}", projected_rows.len());
 
         context.result_set.columns = items.iter().map(|item| item.alias.clone()).collect();
         context.result_set.rows = projected_rows.clone();
@@ -4505,13 +4682,21 @@ impl Executor {
         // Normalize rows from both sides to use the same column order
         // CRITICAL FIX: If columns are empty but rows exist, use row order directly
         let mut left_rows = Vec::new();
+        tracing::debug!(
+            "UNION: left side - result_set.rows={}, columns={:?}, left_context.columns={:?}",
+            left_context.result_set.rows.len(),
+            columns,
+            left_context.result_set.columns
+        );
+        
         if left_context.result_set.columns.is_empty() && !left_context.result_set.rows.is_empty() {
             // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
+            tracing::debug!("UNION: left side has no columns, using row values as-is");
             for row in &left_context.result_set.rows {
                 left_rows.push(row.clone());
             }
         } else {
-            for row in &left_context.result_set.rows {
+            for (row_idx, row) in left_context.result_set.rows.iter().enumerate() {
                 let mut normalized_values = Vec::new();
                 for col in &columns {
                     if let Some(idx) = left_context
@@ -4529,21 +4714,32 @@ impl Executor {
                         normalized_values.push(Value::Null);
                     }
                 }
+                tracing::debug!("UNION: left row {} normalized: {:?}", row_idx, normalized_values);
                 left_rows.push(Row {
                     values: normalized_values,
                 });
             }
         }
+        
+        tracing::debug!("UNION: left_rows after normalization: {}", left_rows.len());
 
         let mut right_rows = Vec::new();
+        tracing::debug!(
+            "UNION: right side - result_set.rows={}, columns={:?}, right_context.columns={:?}",
+            right_context.result_set.rows.len(),
+            columns,
+            right_context.result_set.columns
+        );
+        
         if right_context.result_set.columns.is_empty() && !right_context.result_set.rows.is_empty()
         {
             // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
+            tracing::debug!("UNION: right side has no columns, using row values as-is");
             for row in &right_context.result_set.rows {
                 right_rows.push(row.clone());
             }
         } else {
-            for row in &right_context.result_set.rows {
+            for (row_idx, row) in right_context.result_set.rows.iter().enumerate() {
                 let mut normalized_values = Vec::new();
                 for col in &columns {
                     if let Some(idx) = right_context
@@ -4561,15 +4757,31 @@ impl Executor {
                         normalized_values.push(Value::Null);
                     }
                 }
+                tracing::debug!("UNION: right row {} normalized: {:?}", row_idx, normalized_values);
                 right_rows.push(Row {
                     values: normalized_values,
                 });
             }
         }
+        
+        tracing::debug!("UNION: right_rows after normalization: {}", right_rows.len());
+
+        tracing::debug!(
+            "UNION: left_rows={}, right_rows={}, columns={:?}",
+            left_rows.len(),
+            right_rows.len(),
+            columns
+        );
 
         let mut combined_rows = Vec::new();
         combined_rows.extend(left_rows);
         combined_rows.extend(right_rows);
+
+        tracing::debug!(
+            "UNION: combined_rows before dedup={}, distinct={}",
+            combined_rows.len(),
+            distinct
+        );
 
         // If UNION (not UNION ALL), deduplicate results
         if distinct {
@@ -4580,15 +4792,22 @@ impl Executor {
                 // Serialize row values to a string for comparison
                 // Use a canonical JSON representation to ensure consistent comparison
                 let row_key = serde_json::to_string(&row.values).unwrap_or_default();
-                if seen.insert(row_key) {
+                if seen.insert(row_key.clone()) {
                     deduped_rows.push(row);
+                } else {
+                    tracing::debug!("UNION: duplicate row removed: {}", row_key);
                 }
             }
             combined_rows = deduped_rows;
+            tracing::debug!("UNION: deduped_rows={}", combined_rows.len());
         }
 
         // Update the main context with combined results
         context.set_columns_and_rows(columns, combined_rows);
+        tracing::debug!(
+            "UNION: final result_set.rows={}",
+            context.result_set.rows.len()
+        );
         let row_maps = self.result_set_as_rows(context);
         self.update_variables_from_rows(context, &row_maps);
         Ok(())
@@ -5550,12 +5769,19 @@ impl Executor {
             return Ok(());
         }
 
+        tracing::debug!(
+            "DISTINCT: input_rows={}, columns={:?}, distinct_columns={:?}",
+            context.result_set.rows.len(),
+            context.result_set.columns,
+            columns
+        );
+
         // Use a more robust comparison method that handles NULL correctly
         // Create a key from the values that can be used for comparison
         let mut seen = std::collections::HashSet::new();
         let mut distinct_rows = Vec::new();
 
-        for row in &context.result_set.rows {
+        for (idx, row) in context.result_set.rows.iter().enumerate() {
             let mut key_values = Vec::new();
             if columns.is_empty() {
                 // DISTINCT on all columns
@@ -5582,16 +5808,26 @@ impl Executor {
             // For consistent comparison, we need to ensure the same value always produces the same key
             let key = serde_json::to_string(&key_values).unwrap_or_default();
 
+            tracing::debug!(
+                "DISTINCT: row {} key={}, key_values={:?}",
+                idx,
+                key,
+                key_values
+            );
+
             // Only add row if we haven't seen this key before
-            if seen.insert(key) {
+            if seen.insert(key.clone()) {
                 distinct_rows.push(row.clone());
+            } else {
+                tracing::debug!("DISTINCT: duplicate row {} removed (key={})", idx, key);
             }
         }
 
-        // Debug: Log if we're filtering out rows
-        if distinct_rows.len() < context.result_set.rows.len() {
-            // Some rows were filtered out, which is expected for DISTINCT
-        }
+        tracing::debug!(
+            "DISTINCT: output_rows={} (filtered {} duplicates)",
+            distinct_rows.len(),
+            context.result_set.rows.len() - distinct_rows.len()
+        );
 
         context.result_set.rows = distinct_rows.clone();
         let row_maps = self.result_set_as_rows(context);
@@ -7016,11 +7252,30 @@ impl Executor {
 
         let properties_value = self.store().load_node_properties(node_id)?;
 
+        tracing::debug!(
+            "read_node_as_value: node_id={}, properties_value={:?}",
+            node_id,
+            properties_value
+        );
+
         let properties_value = properties_value.unwrap_or_else(|| Value::Object(Map::new()));
 
         let properties_map = match properties_value {
-            Value::Object(map) => map,
+            Value::Object(map) => {
+                tracing::debug!(
+                    "read_node_as_value: node_id={}, properties_map has {} keys: {:?}",
+                    node_id,
+                    map.len(),
+                    map.keys().collect::<Vec<_>>()
+                );
+                map
+            }
             other => {
+                tracing::debug!(
+                    "read_node_as_value: node_id={}, properties_value is not Object: {:?}",
+                    node_id,
+                    other
+                );
                 let mut map = Map::new();
                 map.insert("value".to_string(), other);
                 map
@@ -7031,6 +7286,13 @@ impl Executor {
         // But include _nexus_id for internal ID extraction during relationship traversal
         let mut node = properties_map;
         node.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
+
+        tracing::debug!(
+            "read_node_as_value: node_id={}, final node has {} keys: {:?}",
+            node_id,
+            node.len(),
+            node.keys().collect::<Vec<_>>()
+        );
 
         Ok(Value::Object(node))
     }
@@ -7771,10 +8033,16 @@ impl Executor {
         for (var, value) in &context.variables {
             match value {
                 Value::Array(values) => {
-                    arrays.insert(var.clone(), values.clone());
+                    // Only include non-empty arrays
+                    if !values.is_empty() {
+                        arrays.insert(var.clone(), values.clone());
+                    }
                 }
                 other => {
-                    arrays.insert(var.clone(), vec![other.clone()]);
+                    // Include non-null single values
+                    if !matches!(other, Value::Null) {
+                        arrays.insert(var.clone(), vec![other.clone()]);
+                    }
                 }
             }
         }
@@ -7789,20 +8057,42 @@ impl Executor {
             .max()
             .unwrap_or(0);
 
+        if max_len == 0 {
+            return Vec::new();
+        }
+
         let mut rows = Vec::new();
         for idx in 0..max_len {
             let mut row = HashMap::new();
+            let mut all_null = true;
+            
             for (var, values) in &arrays {
                 let value = if values.len() == max_len {
                     values.get(idx).cloned().unwrap_or(Value::Null)
                 } else if values.len() == 1 {
                     values.first().cloned().unwrap_or(Value::Null)
                 } else {
-                    values.get(idx).cloned().unwrap_or(Value::Null)
+                    // For arrays with different lengths, only use value if index exists
+                    if idx < values.len() {
+                        values.get(idx).cloned().unwrap_or(Value::Null)
+                    } else {
+                        Value::Null
+                    }
                 };
+                
+                // Track if row has at least one non-null value
+                if !matches!(value, Value::Null) {
+                    all_null = false;
+                }
+                
                 row.insert(var.clone(), value);
             }
-            rows.push(row);
+            
+            // CRITICAL FIX: Only add row if it has at least one non-null value
+            // This prevents creating rows that are completely null
+            if !all_null {
+                rows.push(row);
+            }
         }
 
         rows
@@ -7813,13 +8103,16 @@ impl Executor {
         context: &mut ExecutionContext,
         rows: &[HashMap<String, Value>],
     ) {
-        // Collect all unique column names from the rows
+        // CRITICAL FIX: Only use columns from rows, not from context.variables
+        // Context variables may contain old/unused variables that cause null rows
+        // Only include variables that are actually present in the rows
         let mut columns: std::collections::HashSet<String> = std::collections::HashSet::new();
         for row in rows {
             columns.extend(row.keys().cloned());
         }
-        // Also include variables from context (for compatibility)
-        columns.extend(context.variables.keys().cloned());
+        
+        // Don't include variables from context - they may be stale
+        // Only use what's actually in the rows
 
         let mut columns: Vec<String> = columns.into_iter().collect();
         columns.sort();
