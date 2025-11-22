@@ -899,7 +899,9 @@ impl RecordStore {
         tracing::debug!(
             "load_node_properties: node_id={}, reverse_index result: {:?}",
             node_id,
-            result.as_ref().ok().and_then(|opt| opt.as_ref().map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>())))
+            result.as_ref().ok().and_then(|opt| opt
+                .as_ref()
+                .map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>())))
         );
         result
     }

@@ -478,7 +478,8 @@ impl<'a> QueryPlanner<'a> {
 
                 // Split query into left and right parts (excluding ORDER BY/LIMIT after UNION)
                 let left_clauses: Vec<Clause> = query.clauses[..union_idx].to_vec();
-                let right_clauses: Vec<Clause> = query.clauses[union_idx + 1..right_end_idx].to_vec();
+                let right_clauses: Vec<Clause> =
+                    query.clauses[union_idx + 1..right_end_idx].to_vec();
 
                 // Extract ORDER BY and LIMIT clauses that come after UNION
                 let mut post_union_order_by: Option<(Vec<String>, Vec<bool>)> = None;
@@ -504,7 +505,9 @@ impl<'a> QueryPlanner<'a> {
                             post_union_order_by = Some((columns, ascending));
                         }
                         Clause::Limit(limit_clause) => {
-                            if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
+                            if let Expression::Literal(Literal::Integer(count)) =
+                                &limit_clause.count
+                            {
                                 post_union_limit = Some(*count as usize);
                             }
                         }
@@ -552,10 +555,7 @@ impl<'a> QueryPlanner<'a> {
 
                 // Add ORDER BY after UNION if present
                 if let Some((columns, ascending)) = post_union_order_by {
-                    operators.push(Operator::Sort {
-                        columns,
-                        ascending,
-                    });
+                    operators.push(Operator::Sort { columns, ascending });
                 }
 
                 // Add LIMIT after UNION (and ORDER BY if present) if present
@@ -1872,49 +1872,50 @@ impl<'a> QueryPlanner<'a> {
         // This handles ORDER BY for queries WITHOUT UNWIND + DISTINCT
         // (UNWIND + DISTINCT case was already handled above)
         // Check if ORDER BY was already added (for UNWIND queries)
-        let order_by_added = !unwind_operators.is_empty() && distinct && order_by_clause_ref.is_some();
-        
+        let order_by_added =
+            !unwind_operators.is_empty() && distinct && order_by_clause_ref.is_some();
+
         if !order_by_added {
             if let Some((columns, ascending)) = order_by_clause_ref {
-            // Build a map of expression -> alias from return_items for resolution
-            let mut expression_to_alias = std::collections::HashMap::new();
-            for item in return_items.iter() {
-                let expr_str = self
-                    .expression_to_string(&item.expression)
-                    .unwrap_or_default();
-                let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
-                expression_to_alias.insert(expr_str, alias);
-            }
+                // Build a map of expression -> alias from return_items for resolution
+                let mut expression_to_alias = std::collections::HashMap::new();
+                for item in return_items.iter() {
+                    let expr_str = self
+                        .expression_to_string(&item.expression)
+                        .unwrap_or_default();
+                    let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
+                    expression_to_alias.insert(expr_str, alias);
+                }
 
-            // Resolve ORDER BY column names to aliases
-            let resolved_columns: Vec<String> = columns
-                .iter()
-                .map(|col| {
-                    // Try to resolve to alias, otherwise use as-is
-                    expression_to_alias
-                        .get(col)
-                        .cloned()
-                        .unwrap_or_else(|| col.clone())
-                })
-                .collect();
+                // Resolve ORDER BY column names to aliases
+                let resolved_columns: Vec<String> = columns
+                    .iter()
+                    .map(|col| {
+                        // Try to resolve to alias, otherwise use as-is
+                        expression_to_alias
+                            .get(col)
+                            .cloned()
+                            .unwrap_or_else(|| col.clone())
+                    })
+                    .collect();
 
-            // Find where to insert Sort (before Limit if exists)
-            let limit_pos = operators
-                .iter()
-                .position(|op| matches!(op, Operator::Limit { .. }));
+                // Find where to insert Sort (before Limit if exists)
+                let limit_pos = operators
+                    .iter()
+                    .position(|op| matches!(op, Operator::Limit { .. }));
 
-            let sort_op = Operator::Sort {
-                columns: resolved_columns,
-                ascending: ascending.clone(),
-            };
+                let sort_op = Operator::Sort {
+                    columns: resolved_columns,
+                    ascending: ascending.clone(),
+                };
 
-            if let Some(pos) = limit_pos {
-                // Insert before Limit
-                operators.insert(pos, sort_op);
-            } else {
-                // Add at the end
-                operators.push(sort_op);
-            }
+                if let Some(pos) = limit_pos {
+                    // Insert before Limit
+                    operators.insert(pos, sort_op);
+                } else {
+                    // Add at the end
+                    operators.push(sort_op);
+                }
             }
         }
 

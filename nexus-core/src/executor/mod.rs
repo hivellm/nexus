@@ -1671,7 +1671,7 @@ impl Executor {
                     let node_id = self
                         .store_mut()
                         .create_node_with_label_bits(&mut tx, label_bits, properties)?;
-                    
+
                     tracing::debug!(
                         "execute_create_pattern_internal: created node_id={}, variable={:?}",
                         node_id,
@@ -2403,7 +2403,7 @@ impl Executor {
                 context.result_set.rows.len(),
                 rows_from_result_set.len()
             );
-            
+
             // CRITICAL: Don't filter rows by source_var here - process all rows
             // The filtering will happen later when we try to get source_value from each row
             // This ensures we don't accidentally skip valid rows
@@ -2412,7 +2412,7 @@ impl Executor {
         } else {
             self.materialize_rows_from_variables(context)
         };
-        
+
         // DEBUG: Log number of input rows for debugging relationship expansion issues
         // This helps identify if Expand is receiving all source nodes correctly
         if !rows.is_empty() && !source_var.is_empty() {
@@ -2449,7 +2449,7 @@ impl Executor {
                 }
             }
         }
-        
+
         let mut expanded_rows = Vec::new();
 
         // Special case: if source_var is empty or rows is empty, scan all relationships directly
@@ -2744,7 +2744,7 @@ impl Executor {
             // This ensures all relationships are included in the result
             self.update_variables_from_rows(context, &expanded_rows);
             self.update_result_set_from_rows(context, &expanded_rows);
-            
+
             // Verify that all expanded rows were added to result_set
             tracing::debug!(
                 "Expand: result_set now has {} rows after update",
@@ -2859,25 +2859,29 @@ impl Executor {
                         // CRITICAL FIX: If materialized is empty but we have non-empty arrays,
                         // there might be arrays with multiple elements that materialize_rows_from_variables
                         // should have handled. Let's check if we have multi-element arrays:
-                        let has_multi_element_arrays = context.variables.values().any(|v| {
-                            match v {
+                        let has_multi_element_arrays =
+                            context.variables.values().any(|v| match v {
                                 Value::Array(arr) => arr.len() > 1,
                                 _ => false,
-                            }
-                        });
-                        
+                            });
+
                         if has_multi_element_arrays {
                             // We have multi-element arrays - materialize_rows_from_variables should have
                             // created rows from them. If it didn't, there's a bug. But let's try again
                             // in case variables changed:
                             let retry_materialized = self.materialize_rows_from_variables(context);
                             if !retry_materialized.is_empty() {
-                                tracing::debug!("Project: retry materialization succeeded, got {} rows", retry_materialized.len());
+                                tracing::debug!(
+                                    "Project: retry materialization succeeded, got {} rows",
+                                    retry_materialized.len()
+                                );
                                 retry_materialized
                             } else {
                                 // Still empty - this suggests a bug in materialize_rows_from_variables
                                 // or the variables don't match what we expect
-                                tracing::warn!("Project: materialize_rows_from_variables returned empty despite multi-element arrays");
+                                tracing::warn!(
+                                    "Project: materialize_rows_from_variables returned empty despite multi-element arrays"
+                                );
                                 // Return empty - this will cause the query to return no rows
                                 vec![]
                             }
@@ -4688,7 +4692,7 @@ impl Executor {
             columns,
             left_context.result_set.columns
         );
-        
+
         if left_context.result_set.columns.is_empty() && !left_context.result_set.rows.is_empty() {
             // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
             tracing::debug!("UNION: left side has no columns, using row values as-is");
@@ -4714,13 +4718,17 @@ impl Executor {
                         normalized_values.push(Value::Null);
                     }
                 }
-                tracing::debug!("UNION: left row {} normalized: {:?}", row_idx, normalized_values);
+                tracing::debug!(
+                    "UNION: left row {} normalized: {:?}",
+                    row_idx,
+                    normalized_values
+                );
                 left_rows.push(Row {
                     values: normalized_values,
                 });
             }
         }
-        
+
         tracing::debug!("UNION: left_rows after normalization: {}", left_rows.len());
 
         let mut right_rows = Vec::new();
@@ -4730,7 +4738,7 @@ impl Executor {
             columns,
             right_context.result_set.columns
         );
-        
+
         if right_context.result_set.columns.is_empty() && !right_context.result_set.rows.is_empty()
         {
             // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
@@ -4757,14 +4765,21 @@ impl Executor {
                         normalized_values.push(Value::Null);
                     }
                 }
-                tracing::debug!("UNION: right row {} normalized: {:?}", row_idx, normalized_values);
+                tracing::debug!(
+                    "UNION: right row {} normalized: {:?}",
+                    row_idx,
+                    normalized_values
+                );
                 right_rows.push(Row {
                     values: normalized_values,
                 });
             }
         }
-        
-        tracing::debug!("UNION: right_rows after normalization: {}", right_rows.len());
+
+        tracing::debug!(
+            "UNION: right_rows after normalization: {}",
+            right_rows.len()
+        );
 
         tracing::debug!(
             "UNION: left_rows={}, right_rows={}, columns={:?}",
@@ -8065,7 +8080,7 @@ impl Executor {
         for idx in 0..max_len {
             let mut row = HashMap::new();
             let mut all_null = true;
-            
+
             for (var, values) in &arrays {
                 let value = if values.len() == max_len {
                     values.get(idx).cloned().unwrap_or(Value::Null)
@@ -8079,15 +8094,15 @@ impl Executor {
                         Value::Null
                     }
                 };
-                
+
                 // Track if row has at least one non-null value
                 if !matches!(value, Value::Null) {
                     all_null = false;
                 }
-                
+
                 row.insert(var.clone(), value);
             }
-            
+
             // CRITICAL FIX: Only add row if it has at least one non-null value
             // This prevents creating rows that are completely null
             if !all_null {
@@ -8110,7 +8125,7 @@ impl Executor {
         for row in rows {
             columns.extend(row.keys().cloned());
         }
-        
+
         // Don't include variables from context - they may be stale
         // Only use what's actually in the rows
 
