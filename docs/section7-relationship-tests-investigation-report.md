@@ -350,12 +350,45 @@ The linked list structure is being built correctly, but traversal may be stoppin
   - Second relationship created: Count = 1 ✗ (expected: 2)
   - **Confirmed**: Only first relationship is found, second is not
 
-- **Debug Logs Analysis**:
-  - Need to analyze logs to see:
-    1. Actual `first_rel_ptr` values when creating relationships
-    2. Actual `next_src_ptr` values in relationship records
-    3. Whether traversal is following `next_src_ptr` correctly
-    4. If traversal is stopping prematurely
+- **Debug Logs Status**:
+  - Log file was empty (0 bytes) - logs may not be configured or written yet
+  - Test confirmed the issue without logs: Count = 1 after 2 relationships created
+  - **Critical Observation**: Only the first relationship is found
+
+- **Critical Hypothesis to Verify**:
+  When the second relationship is created, it reads the node to get `first_rel_ptr`. The question is:
+  - **Does it read `first_rel_ptr=0` (old value) instead of `first_rel_ptr=1` (new value from first relationship)?**
+  - If yes, this would cause `next_src_ptr` to be set to 0 instead of 1, breaking the linked list chain
+  - This could happen if memory-mapped file writes are not immediately visible to subsequent reads in the same transaction
+
+- **Code Flow Analysis**:
+  When multiple relationships are created in the same transaction:
+    1. **First relationship creation** (rel_id=0):
+       - Reads node: `first_rel_ptr = 0` (no previous relationships)
+       - Writes node: `first_rel_ptr = 1` (points to rel_id=0)
+       - Writes relationship record: `next_src_ptr = 0` (end of list)
+    
+    2. **Second relationship creation** (rel_id=1):
+       - Reads node: `first_rel_ptr = ?` (should be 1, but might be 0 if write not visible)
+       - Writes node: `first_rel_ptr = 2` (points to rel_id=1)
+       - Writes relationship record: `next_src_ptr = ?` (should be 1, but might be 0)
+  
+  **Critical Code Locations**:
+  - `storage/mod.rs:644-645`: Node read happens HERE
+  - `storage/mod.rs:656`: Node write with updated `first_rel_ptr`
+  - `storage/mod.rs:690`: `write_node()` called (memory-mapped file write)
+  - `storage/mod.rs:701`: `next_src_ptr` set to `source_prev_ptr` (which was read at line 645)
+  
+  **Potential Issue**: If `read_node()` at line 644 happens before `write_node()` at line 690 is visible (from first relationship), `source_prev_ptr` would be 0 instead of 1, breaking the linked list.
+
+- **Memory-Mapped File Behavior**:
+  - `write_node()` uses `copy_from_slice()` which should be immediately visible
+  - `read_node()` reads directly from mmap which should see latest writes
+  - However, there's no explicit memory barrier or synchronization
+  - In same-thread/same-process, this usually works, but not guaranteed by spec
+
+- **Proposed Fix**:
+  Add explicit memory ordering/synchronization between writes and reads, or ensure that the node read for second relationship happens AFTER the first relationship's node write is complete and visible.
 
 The next investigation should focus on:
 1. Analyzing debug logs to see actual `next_src_ptr` values when creating relationships
