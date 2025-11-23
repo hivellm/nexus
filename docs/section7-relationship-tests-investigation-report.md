@@ -276,6 +276,25 @@ When a relationship is created (`create_relationship` in `storage/mod.rs`):
   - Verify if traversal is following `next_src_ptr` correctly
   - Check if there's a condition stopping traversal prematurely
 
+### 2025-01-20 - Code Deep Analysis
+
+- **Memory-Mapped File Writes**:
+  - Writes use `mmap.copy_from_slice()` which should be immediately visible
+  - No explicit memory barriers or synchronization found
+  - `flush_async()` is called after transaction commit but doesn't wait for OS
+
+- **Potential Issues Identified**:
+  1. **Write Ordering**: When multiple relationships are created in the same transaction:
+     - First relationship: writes node (first_rel_ptr=1), then relationship (next_src_ptr=0)
+     - Second relationship: reads node (should see first_rel_ptr=1), writes node (first_rel_ptr=2), then relationship (next_src_ptr=1)
+     - If node read happens before first relationship's node write is visible, source_prev_ptr would be 0 instead of 1
+  
+  2. **Transaction Isolation**: All relationships created in same transaction should be visible to each other, but mmap writes may need explicit synchronization
+
+- **Hypothesis**: The node read for the second relationship may not see the updated `first_rel_ptr` from the first relationship's write, causing `source_prev_ptr` to be 0 instead of 1, which breaks the linked list chain.
+
+- **Solution to Test**: Add explicit memory synchronization (e.g., `std::sync::atomic::fence`) or ensure reads happen after all writes in the transaction are complete.
+
 ## Files Modified
 
 1. `nexus-core/src/executor/mod.rs` - Aggregate fixes, deduplication fixes, debug logging
