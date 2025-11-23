@@ -433,9 +433,36 @@ The linked list structure is being built correctly, but traversal may be stoppin
   
   **Alternative Hypothesis**: The problem may not be visibility, but rather that when the second relationship reads the node, the `first_rel_ptr` is correctly 1, but `next_src_ptr` is being set incorrectly. Or the traversal is not following `next_src_ptr` correctly.
 
+### 2025-01-20 - Synchronous Flush Fix Test Results
+
+- **Fix Applied**: Changed from `flush_async()` (does nothing) to synchronous `flush()` after transaction commit
+- **Test Executed**: Full compatibility test suite (195 tests)
+- **Results**:
+  - **Total Tests**: 195
+  - **Passed**: 192 (98.46%)
+  - **Failed**: 3 (same as before - Section 7 relationships)
+    - **7.19**: Relationship with aggregation (Expected: 2, Got: 1)
+    - **7.25**: MATCH all connected nodes (Expected: 2, Got: 1)
+    - **7.30**: Complex relationship query (Expected: 3, Got: 1)
+  - **Still failing**: Synchronous flush did not resolve the issue
+
+- **Analysis**:
+  - The problem persists even after ensuring writes are flushed synchronously
+  - All 3 failing tests return fewer rows than expected (1 instead of 2-3)
+  - This suggests the issue is not about write visibility, but rather:
+    - How the linked list is being constructed when multiple relationships are created
+    - How the traversal is following `next_src_ptr` links
+    - Or possibly how relationships are being found during MATCH queries
+
+- **Next Steps**:
+  - Investigate the actual `next_src_ptr` values in the linked list
+  - Verify if traversal logic is correctly following the chain
+  - Check if relationships created in the same transaction are being linked correctly
+  - Consider that relationships might be created in separate transactions and not seeing each other's updates
+
 The next investigation should focus on:
-1. Analyzing debug logs to see actual `next_src_ptr` values when creating relationships
-2. Verifying if traversal is following `next_src_ptr` when it's not 0
-3. Checking if there's a condition that stops traversal prematurely
-4. Verifying if `next_src_ptr` values are being persisted correctly to disk
+1. Verifying the actual `next_src_ptr` values stored in relationship records
+2. Analyzing the traversal logic to ensure it follows the entire chain
+3. Checking if relationships created in separate transactions need special handling
+4. Investigating whether the adjacency list or relationship index is interfering with linked list traversal
 
