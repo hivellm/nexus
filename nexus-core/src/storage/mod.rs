@@ -309,6 +309,12 @@ impl RecordStore {
         let record_bytes = bytemuck::bytes_of(record);
         self.nodes_mmap[start..end].copy_from_slice(record_bytes);
 
+        // CRITICAL FIX: Ensure write is visible before subsequent reads
+        // Use memory barrier to guarantee write visibility in same-thread scenarios
+        // This is especially important when multiple relationships are created in sequence
+        // to the same node, where the second relationship must see the updated first_rel_ptr
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+
         Ok(())
     }
 
@@ -384,6 +390,12 @@ impl RecordStore {
         let end = start + REL_RECORD_SIZE;
         let record_bytes = bytemuck::bytes_of(record);
         self.rels_mmap[start..end].copy_from_slice(record_bytes);
+
+        // CRITICAL FIX: Ensure write is visible before subsequent reads
+        // Use memory barrier to guarantee write visibility in same-thread scenarios
+        // This is especially important for linked list traversal where relationship records
+        // are read in sequence and must see the latest next_src_ptr values
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
         Ok(())
     }

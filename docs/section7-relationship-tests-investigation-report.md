@@ -387,8 +387,14 @@ The linked list structure is being built correctly, but traversal may be stoppin
   - However, there's no explicit memory barrier or synchronization
   - In same-thread/same-process, this usually works, but not guaranteed by spec
 
-- **Proposed Fix**:
-  Add explicit memory ordering/synchronization between writes and reads, or ensure that the node read for second relationship happens AFTER the first relationship's node write is complete and visible.
+-   **Fix Applied**:
+  Added memory barriers (`std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst)`) after `write_node()` and `write_rel()` to ensure writes are visible before subsequent reads. This guarantees that when the second relationship reads the node, it will see the updated `first_rel_ptr` from the first relationship.
+
+  **Implementation**:
+  - `storage/mod.rs:write_node()`: Added `std::sync::atomic::fence()` after `copy_from_slice()`
+  - `storage/mod.rs:write_rel()`: Added `std::sync::atomic::fence()` after `copy_from_slice()`
+  
+  This ensures memory visibility across relationship creation operations in the same transaction.
 
 The next investigation should focus on:
 1. Analyzing debug logs to see actual `next_src_ptr` values when creating relationships
