@@ -396,6 +396,32 @@ The linked list structure is being built correctly, but traversal may be stoppin
   
   This ensures memory visibility across relationship creation operations in the same transaction.
 
+### 2025-01-20 - Memory Barrier Fix Test Results
+
+- **Fix Applied**: Memory barriers added after `write_node()` and `write_rel()`
+- **Test Executed**: `test-linked-list-direct.ps1` and `test-multiple-relationships.ps1`
+- **Results**:
+  - First relationship created: Count = 1 ✓ (expected: 1)
+  - Second relationship created: Count = 1 ✗ (expected: 2)
+  - **Still failing**: Memory barriers did not resolve the issue
+
+- **Analysis**:
+  - Relationships are created in separate transactions (each query commits)
+  - Each query has its own transaction that commits after CREATE
+  - Memory barriers ensure visibility within same transaction, but transactions are separate
+  - **Hypothesis**: The problem may not be visibility, but rather how `next_src_ptr` is being set
+
+- **Code Flow Analysis**:
+  When second relationship is created:
+  1. Read node: `first_rel_ptr` = ? (should be 1 from first relationship, but might be 0)
+  2. Set `source_prev_ptr` = `first_rel_ptr` (line 657)
+  3. Update node: `first_rel_ptr` = 2 (line 668)
+  4. Write node with updated `first_rel_ptr` (line 702)
+  5. Set relationship: `next_src_ptr` = `source_prev_ptr` (line 713)
+  6. Write relationship with `next_src_ptr` (line 730)
+
+  **Critical Question**: When line 657 reads `first_rel_ptr`, does it get the value 1 (from first relationship) or 0 (old value)?
+
 The next investigation should focus on:
 1. Analyzing debug logs to see actual `next_src_ptr` values when creating relationships
 2. Verifying if traversal is following `next_src_ptr` when it's not 0
