@@ -1,7 +1,7 @@
 # Section 7 Relationship Tests Investigation Report
 
-**Date**: 2025-01-20  
-**Status**: In Progress  
+**Date**: 2025-01-23 (Updated)  
+**Status**: In Progress - Context Contamination Issue Identified  
 **Issue**: 3 tests failing in Section 7 (Relationship Queries)
 
 ## Executive Summary
@@ -11,7 +11,7 @@ Three tests in Section 7 are failing with row count mismatches:
 - **7.25**: `MATCH (a:Person)-[r]-(b) RETURN DISTINCT a.name AS name ORDER BY name` — Expected: 2, Got: 1  
 - **7.30**: `MATCH (a:Person)-[r:WORKS_AT]->(c:Company) RETURN a.name AS person, c.name AS company, r.since AS year ORDER BY year` — Expected: 3, Got: 1
 
-**Root Cause Identified**: Relationships exist in catalog (40 relationships reported) but are not being found by Expand operator during MATCH queries.
+**Root Cause Identified (2025-01-23)**: After CREATE statements, relationship objects are contaminating variables in subsequent MATCH queries. When Filter operators try to read node properties (e.g., `a.name = 'Alice'`) from relationship objects, the predicates fail, preventing the MATCH from returning rows for subsequent CREATE statements. This causes only the first relationship to be created correctly, while subsequent relationships fail or are created incorrectly.
 
 ## Tests Performed
 
@@ -465,4 +465,216 @@ The next investigation should focus on:
 2. Analyzing the traversal logic to ensure it follows the entire chain
 3. Checking if relationships created in separate transactions need special handling
 4. Investigating whether the adjacency list or relationship index is interfering with linked list traversal
+
+## 2025-01-23: Debug Logs Added
+
+Added extensive debug logging to `execute_create_with_context` to track:
+- Number of rows converted from `result_set.rows`
+- Which columns are present
+- Which node IDs are extracted for each variable
+- When relationships are created
+
+This will help identify where node properties are being lost during the `MATCH ... CREATE` sequence.
+
+### Next Steps
+1. Compile server with debug logs enabled
+2. Run test suite with debug logging to see what's happening
+3. Analyze logs to identify where properties are lost
+
+## 2025-01-23: Root Cause Identified
+
+### Problem: MATCH with Multiple Patterns Not Working
+
+Testing revealed that when using `MATCH (p1:Person {name: 'Alice'}), (c1:Company {name: 'Acme'})`:
+
+1. **MATCH with inline properties returns 0 rows** (expected: 1)
+2. **MATCH without inline properties creates incorrect cartesian product** (e.g., `company_name='Alice'` instead of `'Acme'`)
+
+### Root Cause
+
+The planner processes multiple nodes in the same Pattern correctly, adding Filter operators for inline properties (lines 1178-1198 in planner.rs). However, when there are multiple nodes separated by comma in the same Pattern (without relationships between them), the `materialize_rows_from_variables` may be creating a cartesian product BEFORE the Filter operators are applied.
+
+### Evidence
+
+- `MATCH (p:Person), (c:Company) RETURN p.name, c.name` returns incorrect rows (company name is wrong)
+- `MATCH (p1:Person {name: 'Alice'}), (c1:Company {name: 'Acme'}) RETURN p1.name, c1.name` returns 0 rows (should return 1)
+
+### Fix Required
+
+The Filter operators for inline properties need to be applied BEFORE the cartesian product is created, or the cartesian product should be created AFTER all Filters are applied. This may require adjusting the operator order or how `materialize_rows_from_variables` processes multiple variables.
+
+## 2025-01-23: Current Status - Major Progress
+
+### Fixes Applied
+
+1. **Deduplication in `materialize_rows_from_variables`** (line 8566):
+   - Changed from single node ID deduplication to composite key (all entity IDs)
+   - Allows valid 1-to-N relationships (one node with multiple relationships)
+   - Status: ✅ Committed and tested
+
+2. **Deduplication in `update_result_set_from_rows`** (line ~8635):
+   - Updated to use composite key including relationship ID
+   - Prevents valid relationship rows from being removed as duplicates
+   - Status: ✅ Committed and tested
+
+3. **Filter operator** (line ~2329):
+   - Fixed to update `context.variables` after filtering
+   - Ensures subsequent operators work with correctly filtered variables
+   - Status: ✅ Committed and tested
+
+### Test Results (2025-01-23)
+
+**Full Compatibility Test Suite**:
+- **Total Tests**: 195
+- **Passed**: 192 (98.46%)
+- **Failed**: 3 (Section 7 relationships)
+- **Status**: ✅ Major improvement achieved
+
+**Failing Tests** (all return 1 row instead of 2-3):
+1. **7.19**: `MATCH (a:Person)-[r:WORKS_AT]->(b:Company) RETURN a.name AS person, count(r) AS jobs ORDER BY person`
+   - Neo4j: 2 rows | Nexus: 1 row
+   
+2. **7.25**: `MATCH (a:Person)-[r]-(b) RETURN DISTINCT a.name AS name ORDER BY name`
+   - Neo4j: 2 rows | Nexus: 1 row
+   
+3. **7.30**: `MATCH (a:Person)-[r:WORKS_AT]->(c:Company) RETURN a.name AS person, c.name AS company, r.since AS year ORDER BY year`
+   - Neo4j: 3 rows | Nexus: 1 row
+
+### Root Cause Hypothesis (Current)
+
+The fixes for deduplication resolved most issues (Section 7 now has 27/30 tests passing). However, the 3 remaining failures suggest that when a node has **multiple relationships**, only the **first relationship** is being processed/returned.
+
+**Possible causes**:
+1. Expand operator stops after finding first relationship instead of finding all
+2. Relationship traversal (linked list) only follows first link
+3. Deduplication or filtering removing additional relationships incorrectly
+
+### Next Investigation Steps (If Needed)
+
+1. Verify Expand operator processes ALL relationships for each source node
+2. Check if linked list traversal follows complete chain
+3. Debug logging to see how many relationships Expand finds vs returns
+
+**Note**: With 98.46% compatibility rate, these 3 edge cases may be acceptable for now, or can be investigated further when needed.
+
+## 2025-01-23: Context Contamination Issue Identified
+
+### Problem: Relationship Objects Contaminating Variables After CREATE
+
+**Critical Discovery**: After the first `MATCH...CREATE` query, when the second `MATCH...CREATE` query executes, the Filter operator is finding **relationship objects** in variables that should contain **node objects**.
+
+### Evidence from Debug Logs
+
+After the first CREATE (Alice → Acme), when the second MATCH executes:
+
+```
+[execute_filter] Variable a has _nexus_id=822
+[execute_filter] WARNING: Variable a appears to be a RELATIONSHIP, not a node! Object: {"_nexus_id": Number(822), "since": Number(2020)}
+[execute_filter] Evaluating predicate 'a.name = 'Alice'' on row with node_id=822, node_value=Object {"_nexus_id": Number(822), "since": Number(2020)}
+[execute_filter] Predicate 'a.name = 'Alice'' evaluated to false for row with node_id=Some(822)
+```
+
+The Filter is trying to read node properties (`a.name`) from a relationship object, which causes the predicate to fail, preventing the second MATCH from finding Alice and Bob for subsequent CREATE statements.
+
+### Root Cause Analysis
+
+1. **First CREATE**: Creates relationship Alice → Acme successfully
+   - Relationship object is added to `result_set.rows`
+   - Relationship object may be stored in `context.variables` or `result_set.rows`
+
+2. **Context Cleaning**: After CREATE, `result_set.rows` and `context.variables` are cleared:
+   ```rust
+   context.result_set.rows.clear();
+   context.result_set.columns.clear();
+   context.variables.clear();
+   ```
+
+3. **Second MATCH**: Executes NodeByLabel and creates a cartesian product
+   - The cartesian product is created BEFORE the Filter operators are applied
+   - The rows in the cartesian product contain relationship objects from the previous CREATE
+
+4. **Filter Failure**: Filter tries to read node properties from relationship objects
+   - Predicate `a.name = 'Alice'` fails because `a` is a relationship object
+   - No rows pass the filter, so subsequent CREATE statements execute in standalone mode
+   - This causes incorrect relationships to be created (e.g., Alice → Alice instead of Alice → TechCorp)
+
+### Fix Attempted
+
+**Location**: `nexus-core/src/executor/mod.rs` - `execute_create_with_context` function (lines ~5441-5451)
+
+**Change**: Added explicit clearing of `result_set.rows` and `context.variables` after CREATE:
+```rust
+context.result_set.rows.clear();
+context.result_set.columns.clear();
+context.variables.clear();
+println!("[execute_create_with_context] Cleared result_set.rows and context.variables after CREATE");
+```
+
+**Status**: ✅ Applied but **still failing**
+
+### Why Fix Didn't Work
+
+The cleanup is executed correctly (logs show `Cleared result_set.rows and context.variables after CREATE`), but the problem persists. This suggests:
+
+1. **Timing Issue**: The cartesian product may be created BEFORE the cleanup, or
+2. **Re-population**: Something is re-populating `result_set.rows` or `context.variables` after the cleanup, or
+3. **Row Creation Order**: The cartesian product is being created from stale data before the cleanup is applied
+
+### Logs Analysis
+
+From the debug logs, we can see:
+
+1. **First CREATE** works correctly:
+   - Relationship created: `rel_id=182, src=822, dst=824`
+   - Cleanup executed: `Cleared result_set.rows and context.variables after CREATE`
+
+2. **Second MATCH** fails:
+   - NodeByLabel creates cartesian product
+   - Rows contain relationship objects: `Variable a appears to be a RELATIONSHIP`
+   - Filter fails: `Predicate 'a.name = 'Alice'' evaluated to false`
+   - Result: 0 rows, so CREATE executes in standalone mode
+
+3. **Third MATCH** also fails:
+   - Similar issue: Filter cannot find Bob because variable contains relationship object
+   - Result: 0 rows, so CREATE executes in standalone mode
+
+### Key Findings
+
+1. **Relationship Objects in Variables**: After CREATE, relationship objects are present in `result_set.rows` or `context.variables`
+2. **Cleanup Timing**: The cleanup happens AFTER CREATE, but rows with relationship objects are created BEFORE Filter operators are applied
+3. **Cartesian Product Issue**: The cartesian product created by NodeByLabel includes relationship objects from previous operations
+4. **Filter Failure**: Filter cannot evaluate predicates on relationship objects (they don't have node properties)
+
+### Next Steps Required
+
+1. **Investigate Row Creation**: Check where the cartesian product is created and why it includes relationship objects
+2. **Filter Placement**: Ensure Filter operators are applied BEFORE cartesian product is created, or ensure cartesian product only uses node objects
+3. **Variable Cleanup**: Investigate if `context.variables` is being re-populated after cleanup
+4. **Execution Order**: Verify the order of operators in the query plan and ensure cleanup happens at the right time
+
+### Code Locations to Investigate
+
+1. **`materialize_rows_from_variables`** (line ~8566): Creates cartesian product from variables - may be using relationship objects
+2. **`update_result_set_from_rows`** (line ~8635): Updates result_set from rows - may be preserving relationship objects
+3. **`execute_filter`** (line ~2329): Filters rows - needs to handle relationship objects correctly or ensure they're filtered out earlier
+4. **`execute_node_by_label`** (line ~2260): Creates rows from nodes - may be mixing with existing rows containing relationships
+
+### Hypothesis
+
+The cartesian product is being created from `context.variables` or `result_set.rows` that still contain relationship objects from the previous CREATE, even after cleanup. This could happen if:
+
+1. The cleanup clears `result_set.rows`, but `context.variables` still contains relationship objects
+2. The cartesian product is created from a cached or stale version of `result_set.rows`
+3. Multiple operators are updating `result_set.rows` simultaneously, causing race conditions
+
+### Test Results After Context Cleanup Fix
+
+- **Total Tests**: 195
+- **Passed**: 192 (98.46%)
+- **Failed**: 3 (Section 7 relationships)
+  - **7.19**: Expected 2, Got 1
+  - **7.25**: Expected 2, Got 1
+  - **7.30**: Expected 3, Got 1
+
+**Status**: ❌ Still failing - Context cleanup did not resolve the issue
 

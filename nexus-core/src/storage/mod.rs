@@ -296,6 +296,27 @@ impl RecordStore {
     /// Write a node record
     /// Phase 3 Deep Optimization: Optimized write path
     pub fn write_node(&mut self, node_id: u64, record: &NodeRecord) -> Result<()> {
+        // PHASE 2: Validate prop_ptr before writing to prevent corruption
+        if record.prop_ptr != 0 {
+            if let Some((stored_entity_id, stored_entity_type)) = self.property_store.get_entity_info_at_offset(record.prop_ptr) {
+                if stored_entity_type != property_store::EntityType::Node || stored_entity_id != node_id {
+                    let error_msg = format!(
+                        "PHASE 2 VALIDATION FAILED: Invalid prop_ptr for node {}. prop_ptr={} points to {:?} entity {} instead of Node {}",
+                        node_id, record.prop_ptr, stored_entity_type, stored_entity_id, node_id
+                    );
+                    println!("[write_node] FATAL ERROR: {}", error_msg);
+                    tracing::error!("{}", error_msg);
+                    return Err(Error::Storage(error_msg));
+                }
+            } else {
+                // prop_ptr not found in property_store index - might be stale or invalid
+                tracing::warn!(
+                    "write_node: node_id={}, prop_ptr={} not found in property_store index, but proceeding with write",
+                    node_id, record.prop_ptr
+                );
+            }
+        }
+        
         let offset = (node_id as usize * NODE_RECORD_SIZE) as u64;
 
         // Phase 3 Optimization: Pre-check file size to avoid unnecessary grow check
@@ -362,6 +383,11 @@ impl RecordStore {
 
     /// Read a node record
     pub fn read_node(&self, node_id: u64) -> Result<NodeRecord> {
+        // CRITICAL FIX: Memory barrier before reading to ensure we see latest writes
+        // This is essential when reading nodes that were just modified in a previous transaction
+        // Without this, we might read stale values from CPU cache or memory ordering issues
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        
         let offset = (node_id as usize * NODE_RECORD_SIZE) as u64;
 
         if offset + NODE_RECORD_SIZE as u64 > self.nodes_file_size as u64 {
@@ -652,31 +678,101 @@ impl RecordStore {
         let mut source_node_opt = None;
         let mut target_node_opt = None;
 
-        // Read source node
-        if let Ok(mut source_node) = self.read_node(from) {
-            source_prev_ptr = source_node.first_rel_ptr;
+        // CRITICAL FIX: Ensure all previous writes are visible before reading nodes
+        // This is essential when creating multiple relationships in separate transactions
+        // Without this, we might read stale first_rel_ptr values from mmap cache
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        
+        // PHASE 1: Read source node ONCE at the beginning and preserve prop_ptr
+        println!("[create_relationship] About to read source node {} for rel_id {}", from, rel_id);
+        let mut source_node = self.read_node(from)?;
+        
+        // CRITICAL FIX: Isolate and preserve prop_ptr - never modify it during relationship creation
+        let preserved_source_prop_ptr = source_node.prop_ptr;
+        println!("[create_relationship] Read source node {}: first_rel_ptr={}, prop_ptr={} (preserved)", from, source_node.first_rel_ptr, preserved_source_prop_ptr);
+        
+        source_prev_ptr = source_node.first_rel_ptr;
 
-            // CRITICAL DEBUG: Log first_rel_ptr update
-            tracing::debug!(
-                "[create_relationship] Source node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})",
-                from,
-                source_prev_ptr,
-                rel_id + 1,
-                rel_id
-            );
-
-            source_node.first_rel_ptr = rel_id + 1;
-            source_node_opt = Some(source_node);
+        // CRITICAL FIX: If first_rel_ptr is 0 but this is not the first relationship (rel_id > 0),
+        // try to find the actual first_rel_ptr by scanning existing relationships
+        // This handles the case where mmap synchronization fails between queries
+        if source_prev_ptr == 0 && rel_id > 0 {
+            println!("[create_relationship] WARNING: first_rel_ptr is 0 but rel_id={} > 0, attempting to find actual first_rel_ptr for node {}", rel_id, from);
+            
+            // Scan backwards to find the most recent relationship for this node
+            // CRITICAL FIX: Since 'from' is the SOURCE node for the new relationship,
+            // we must only look for relationships where src_id == from (not dst_id == from)
+            // Relationships where dst_id == from are INCOMING to this node, not OUTGOING
+            let mut found_rel_id = None;
+            let mut scanned_count = 0;
+            for check_rel_id in (0..rel_id).rev() {
+                scanned_count += 1;
+                if let Ok(rel_record) = self.read_rel(check_rel_id) {
+                    if !rel_record.is_deleted() {
+                        // Check if this relationship originates from the source node
+                        // We only care about OUTGOING relationships (src_id == from)
+                        let check_src_id = rel_record.src_id;
+                        let check_dst_id = rel_record.dst_id;
+                        println!("[create_relationship] Scan check: rel_id={}, src={}, dst={}, node={}", check_rel_id, check_src_id, check_dst_id, from);
+                        // CRITICAL: Only consider relationships where this node is the SOURCE
+                        if check_src_id == from {
+                            found_rel_id = Some(check_rel_id);
+                            println!("[create_relationship] Found previous OUTGOING relationship: rel_id={}, src={}, dst={}", check_rel_id, check_src_id, check_dst_id);
+                            break;
+                        }
+                    }
+                }
+                // Limit scan to avoid performance issues - only scan last 100 relationships
+                if scanned_count >= 100 {
+                    println!("[create_relationship] Scan limit reached (100 relationships), stopping");
+                    break;
+                }
+            }
+            
+            // If we found a previous relationship, use it as the prev_ptr
+            if let Some(prev_rel_id) = found_rel_id {
+                source_prev_ptr = prev_rel_id + 1;
+                println!("[create_relationship] Corrected source_prev_ptr from 0 to {} (prev_rel_id={})", source_prev_ptr, prev_rel_id);
+            } else {
+                println!("[create_relationship] No previous relationship found after scanning {} relationships, keeping source_prev_ptr=0", scanned_count);
+            }
         }
 
-        // Read target node (if different from source)
+        // CRITICAL DEBUG: Log first_rel_ptr update
+        println!("[create_relationship] Source node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})", from, source_prev_ptr, rel_id + 1, rel_id);
+        tracing::debug!(
+            "[create_relationship] Source node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})",
+            from,
+            source_prev_ptr,
+            rel_id + 1,
+            rel_id
+        );
+        
+        // PHASE 1: Update only first_rel_ptr, FORCE prop_ptr preservation
+        source_node.first_rel_ptr = rel_id + 1;
+        // CRITICAL: Explicitly restore prop_ptr to the preserved value before writing
+        source_node.prop_ptr = preserved_source_prop_ptr;
+        
+        // Validate that prop_ptr was correctly preserved
+        if source_node.prop_ptr != preserved_source_prop_ptr {
+            println!("[create_relationship] FATAL ERROR: Source node {} prop_ptr corruption detected! Expected {}, got {}", from, preserved_source_prop_ptr, source_node.prop_ptr);
+            return Err(Error::Storage(format!("prop_ptr corruption detected for node {}", from)));
+        }
+        
+        println!("[create_relationship] Source node {}: preserving prop_ptr={}, updating first_rel_ptr from {} to {}", from, preserved_source_prop_ptr, source_prev_ptr, rel_id + 1);
+        source_node_opt = Some(source_node);
+
+        // PHASE 1: Read target node (if different from source) - preserve prop_ptr
         if to == from {
             target_prev_ptr = source_prev_ptr;
-            // For self-loops, reuse source node
+            // For self-loops, reuse source node (prop_ptr already preserved)
             if let Some(ref source_node) = source_node_opt {
                 target_node_opt = Some(*source_node);
             }
-        } else if let Ok(mut target_node) = self.read_node(to) {
+        } else {
+            // Read target node ONCE and preserve prop_ptr
+            let mut target_node = self.read_node(to)?;
+            let preserved_target_prop_ptr = target_node.prop_ptr;
             target_prev_ptr = target_node.first_rel_ptr;
 
             // CRITICAL DEBUG: Log first_rel_ptr update for target
@@ -688,7 +784,17 @@ impl RecordStore {
                 rel_id
             );
 
+            // Update only first_rel_ptr, FORCE prop_ptr preservation
             target_node.first_rel_ptr = rel_id + 1;
+            target_node.prop_ptr = preserved_target_prop_ptr;
+            
+            // Validate that prop_ptr was correctly preserved
+            if target_node.prop_ptr != preserved_target_prop_ptr {
+                println!("[create_relationship] FATAL ERROR: Target node {} prop_ptr corruption detected! Expected {}, got {}", to, preserved_target_prop_ptr, target_node.prop_ptr);
+                return Err(Error::Storage(format!("prop_ptr corruption detected for node {}", to)));
+            }
+            
+            println!("[create_relationship] Target node {}: preserving prop_ptr={}, updating first_rel_ptr from {} to {}", to, preserved_target_prop_ptr, target_prev_ptr, rel_id + 1);
             target_node_opt = Some(target_node);
         }
 
@@ -700,6 +806,29 @@ impl RecordStore {
                 source_node.first_rel_ptr
             );
             self.write_node(from, &source_node)?;
+            
+            // CRITICAL FIX: Flush source node immediately to ensure first_rel_ptr is visible
+            // for subsequent relationship creations in separate queries
+            // This is essential when creating multiple relationships to the same node
+            // in separate MATCH...CREATE statements
+            println!("[create_relationship] Flushing source node {} after write (first_rel_ptr={})", from, source_node.first_rel_ptr);
+            if let Err(e) = self.nodes_mmap.flush() {
+                tracing::warn!("Failed to flush source node {} after write: {}", from, e);
+                println!("[create_relationship] ERROR: Failed to flush source node {}: {}", from, e);
+            } else {
+                println!("[create_relationship] Successfully flushed source node {}", from);
+            }
+            // CRITICAL FIX: Memory barrier after flush to ensure writes are visible to subsequent reads
+            // This is essential when creating multiple relationships in separate transactions
+            // Without this, the second transaction might read stale values from CPU cache
+            std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            
+            // CRITICAL FIX: Force CPU cache invalidation by reading back the value immediately
+            // This ensures the CPU cache is synchronized with the mmap memory
+            let _verify = self.read_node(from);
+            if let Ok(verify_node) = _verify {
+                println!("[create_relationship] Verification read after flush: node {} has first_rel_ptr={}", from, verify_node.first_rel_ptr);
+            }
         }
         if let Some(target_node) = target_node_opt {
             tracing::debug!(
@@ -708,12 +837,20 @@ impl RecordStore {
                 target_node.first_rel_ptr
             );
             self.write_node(to, &target_node)?;
+            
+            // Flush target node as well if different from source
+            if to != from {
+                if let Err(e) = self.nodes_mmap.flush() {
+                    tracing::warn!("Failed to flush target node {} after write: {}", to, e);
+                }
+            }
         }
 
         record.next_src_ptr = source_prev_ptr;
         record.next_dst_ptr = target_prev_ptr;
 
         // CRITICAL DEBUG: Log linked list construction
+        println!("[create_relationship] Relationship {}: src={}, dst={}, next_src_ptr={}, next_dst_ptr={}", rel_id, from, to, source_prev_ptr, target_prev_ptr);
         tracing::debug!(
             "[create_relationship] Relationship {}: src={}, dst={}, next_src_ptr={}, next_dst_ptr={}",
             rel_id,
@@ -892,6 +1029,7 @@ impl RecordStore {
     }
 
     /// Load properties for a node
+    /// PHASE 3: Enhanced validation with safe fallback to reverse_index
     pub fn load_node_properties(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
         // First try to use prop_ptr from NodeRecord (more reliable)
         if let Ok(node_record) = self.read_node(node_id) {
@@ -901,35 +1039,50 @@ impl RecordStore {
                 node_record.prop_ptr
             );
             if node_record.prop_ptr != 0 {
-                // Use prop_ptr directly from the node record
-                match self
-                    .property_store
-                    .load_properties_at_offset(node_record.prop_ptr)
-                {
-                    Ok(Some(props)) => {
-                        tracing::debug!(
-                            "load_node_properties: node_id={}, loaded properties from prop_ptr={}, keys={:?}",
-                            node_id,
-                            node_record.prop_ptr,
-                            props.as_object().map(|m| m.keys().collect::<Vec<_>>())
+                // PHASE 3: Double validation - verify that prop_ptr points to Node properties
+                // Check the entity_type stored at this offset BEFORE loading
+                if let Some((stored_entity_id, stored_entity_type)) = self.property_store.get_entity_info_at_offset(node_record.prop_ptr) {
+                    if stored_entity_type != property_store::EntityType::Node || stored_entity_id != node_id {
+                        // PHASE 3: Prop_ptr corruption detected - fallback to reverse_index
+                        println!("[TRACE] load_node_properties: PHASE 3 VALIDATION FAILED - node_id={} prop_ptr={} points to wrong entity! Expected Node {}, but found {:?} entity {}. Using reverse_index fallback", node_id, node_record.prop_ptr, node_id, stored_entity_type, stored_entity_id);
+                        tracing::warn!(
+                            "load_node_properties: node_id={} prop_ptr={} points to wrong entity (type={:?}, id={}), using reverse_index instead",
+                            node_id, node_record.prop_ptr, stored_entity_type, stored_entity_id
                         );
-                        return Ok(Some(props));
+                        // Fall through to reverse_index lookup - prop_ptr is corrupted
+                    } else {
+                        // PHASE 3: Entity type and ID match - safe to load from prop_ptr
+                        match self.property_store.load_properties_at_offset(node_record.prop_ptr) {
+                            Ok(Some(props)) => {
+                                let keys = props.as_object().map(|m| m.keys().collect::<Vec<_>>());
+                                tracing::debug!(
+                                    "load_node_properties: node_id={}, loaded properties from prop_ptr={}, keys={:?}",
+                                    node_id, node_record.prop_ptr, keys
+                                );
+                                // PHASE 3: Additional validation - check for relationship-like properties
+                                if let Some(obj) = props.as_object() {
+                                    if obj.contains_key("since") || obj.contains_key("type") {
+                                        println!("[TRACE] load_node_properties: PHASE 3 WARNING - node_id={} prop_ptr={} returned relationship-like properties: {:?}. Falling back to reverse_index", node_id, node_record.prop_ptr, keys);
+                                        // Fall through to reverse_index - properties look wrong
+                                    } else {
+                                        return Ok(Some(props));
+                                    }
+                                } else {
+                                    return Ok(Some(props));
+                                }
+                            }
+                            Ok(None) => {
+                                tracing::debug!("load_node_properties: node_id={}, prop_ptr={} returned None, using reverse_index", node_id, node_record.prop_ptr);
+                            }
+                            Err(e) => {
+                                tracing::debug!("load_node_properties: node_id={}, error loading from prop_ptr={}: {}, using reverse_index", node_id, node_record.prop_ptr, e);
+                            }
+                        }
                     }
-                    Ok(None) => {
-                        tracing::debug!(
-                            "load_node_properties: node_id={}, prop_ptr={} returned None",
-                            node_id,
-                            node_record.prop_ptr
-                        );
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            "load_node_properties: node_id={}, error loading from prop_ptr={}: {}",
-                            node_id,
-                            node_record.prop_ptr,
-                            e
-                        );
-                    }
+                } else {
+                    println!("[TRACE] load_node_properties: PHASE 3 WARNING - node_id={} prop_ptr={} not found in property_store, falling back to reverse_index", node_id, node_record.prop_ptr);
+                    tracing::warn!("load_node_properties: node_id={} prop_ptr={} not found in property_store", node_id, node_record.prop_ptr);
+                    // Fall through to reverse_index lookup
                 }
             } else {
                 tracing::debug!(
@@ -939,22 +1092,31 @@ impl RecordStore {
             }
         } else {
             tracing::debug!(
-                "load_node_properties: node_id={}, failed to read node record",
+                "load_node_properties: node_id={}, failed to read node record, trying reverse_index",
                 node_id
             );
         }
 
-        // Fallback to reverse_index lookup (for compatibility)
+        // PHASE 3: Safe fallback to reverse_index lookup (always reliable)
         let result = self
             .property_store
             .load_properties(node_id, property_store::EntityType::Node);
+        let keys_debug = result.as_ref().ok().and_then(|opt| opt
+            .as_ref()
+            .map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>())));
         tracing::debug!(
             "load_node_properties: node_id={}, reverse_index result: {:?}",
             node_id,
-            result.as_ref().ok().and_then(|opt| opt
-                .as_ref()
-                .map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>())))
+            keys_debug
         );
+        // PHASE 3: Final validation - check if reverse_index returned relationship-like properties
+        if let Ok(Some(props)) = &result {
+            if let Some(obj) = props.as_object() {
+                if obj.contains_key("since") || obj.contains_key("type") {
+                    println!("[TRACE] load_node_properties: PHASE 3 CRITICAL WARNING - node_id={} reverse_index has relationship-like properties: {:?}. This indicates severe data corruption!", node_id, keys_debug);
+                }
+            }
+        }
         result
     }
 

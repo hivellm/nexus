@@ -206,6 +206,24 @@ impl PropertyStore {
         Ok(Some(properties))
     }
 
+    /// Check what entity type is stored at a given offset
+    /// Returns (entity_id, entity_type) if found, None otherwise
+    pub fn get_entity_info_at_offset(&self, offset: u64) -> Option<(u64, EntityType)> {
+        if offset as usize >= self.mmap.len() {
+            return None;
+        }
+
+        // Read entity_id (8 bytes)
+        let entity_id = self.read_u64(offset);
+
+        // Read entity_type (1 byte)
+        if let Ok(entity_type) = EntityType::from_u8(self.read_u8(offset + 8)) {
+            Some((entity_id, entity_type))
+        } else {
+            None
+        }
+    }
+
     /// Update existing properties
     fn update_properties(
         &mut self,

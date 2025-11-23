@@ -6,19 +6,12 @@ Write-Host "=== Restarting Nexus Server ===" -ForegroundColor Cyan
 Write-Host ""
 
 Write-Host "Stopping old server..." -ForegroundColor Yellow
-try {
-    wsl -d Ubuntu-24.04 -- bash -l -c "pkill -f nexus-server" | Out-Null
-    Write-Host "  Linux processes terminated" -ForegroundColor Gray
-} catch {
-    Write-Host "  Unable to terminate Linux processes via pkill (may already be stopped)" -ForegroundColor DarkYellow
-}
-
 Get-Process -Name nexus-server -ErrorAction SilentlyContinue | ForEach-Object {
     try {
         $_ | Stop-Process -Force -ErrorAction Stop
-        Write-Host "  Windows proxy process $($_.Id) terminated" -ForegroundColor Gray
+        Write-Host "  Windows process $($_.Id) terminated" -ForegroundColor Gray
     } catch {
-        Write-Host "  Warning: could not stop Windows process $($_.Id): $_" -ForegroundColor DarkYellow
+        Write-Host "  Warning: could not stop process $($_.Id): $_" -ForegroundColor DarkYellow
     }
 }
 
@@ -38,14 +31,30 @@ if ($CleanCatalog) {
 }
 
 Write-Host "Starting new server..." -ForegroundColor Green
-$startCommand = "cd /mnt/f/Node/hivellm/nexus && env NEXUS_DATA_DIR=/mnt/f/Node/hivellm/nexus/data RUST_LOG=debug ./target/release/nexus-server"
-Start-Process -FilePath "wsl" -ArgumentList "-d", "Ubuntu-24.04", "--", "bash", "-l", "-c", $startCommand -WindowStyle Hidden
+$scriptPath = Join-Path $PSScriptRoot "start-server.sh"
+$wslPath = $scriptPath.Replace('\', '/').Replace('F:', '/mnt/f')
+$serverPid = wsl -d Ubuntu-24.04 -- bash "$wslPath"
+Write-Host "  Server process started (PID: $serverPid)" -ForegroundColor Gray
+Write-Host "  Logs available at: /tmp/nexus-server.log" -ForegroundColor Gray
 
 Write-Host "Waiting for server to start..." -ForegroundColor Yellow
-Start-Sleep -Seconds 5
+$maxWait = 30
+$waited = 0
+$serverReady = $false
 
-try {
-    $response = Invoke-RestMethod -Uri "http://localhost:15474/stats" -Method Get -ErrorAction Stop
+while ($waited -lt $maxWait) {
+    Start-Sleep -Seconds 1
+    $waited++
+    try {
+        $response = Invoke-RestMethod -Uri "http://localhost:15474/stats" -Method Get -ErrorAction Stop -TimeoutSec 1
+        $serverReady = $true
+        break
+    } catch {
+        Write-Host "  Waiting... ($waited/$maxWait seconds)" -ForegroundColor Gray
+    }
+}
+
+if ($serverReady) {
     Write-Host "✅ Server is running!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Stats:" -ForegroundColor Cyan
@@ -53,9 +62,10 @@ try {
     Write-Host "  Relationships: $($response.catalog.rel_count)" -ForegroundColor White
     Write-Host "  Labels: $($response.catalog.label_count)" -ForegroundColor White
     Write-Host "  Rel Types: $($response.catalog.rel_type_count)" -ForegroundColor White
-} catch {
-    Write-Host "❌ Server failed to start" -ForegroundColor Red
-    Write-Host "Error: $_" -ForegroundColor Red
+} else {
+    Write-Host "❌ Server failed to start within $maxWait seconds" -ForegroundColor Red
+    Write-Host "Check logs: wsl tail -50 /tmp/nexus-server.log" -ForegroundColor Yellow
+    exit 1
 }
 
 Write-Host ""

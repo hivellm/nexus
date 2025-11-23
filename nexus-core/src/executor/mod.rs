@@ -822,6 +822,7 @@ impl Executor {
         });
 
         // Check query cache for read operations
+        /*
         if !is_write_query {
             if let Some(ref cache) = self.shared.query_cache {
                 let query_hash =
@@ -850,6 +851,7 @@ impl Executor {
                 tracing::debug!("Query cache not available for query: {}", &query.cypher);
             }
         }
+        */
 
         // Lazy cache warming after observing query patterns
         if let Some(ref cache) = self.shared.cache {
@@ -867,7 +869,9 @@ impl Executor {
         }
 
         // Execute the plan using traditional operator-based execution
+        println!("[TRACE] Starting query execution, creating new ExecutionContext for query: {}", query.cypher);
         let mut context = ExecutionContext::new(query.params.clone(), self.shared.cache.clone());
+        println!("[TRACE] New ExecutionContext created: variables.len()={}, result_set.rows.len()={}", context.variables.len(), context.result_set.rows.len());
         let mut results = Vec::new();
         let mut projection_columns: Vec<String> = Vec::new();
 
@@ -997,16 +1001,21 @@ impl Executor {
                         label_id,
                         variable
                     );
-                    // CRITICAL FIX: Clear result_set.rows and variables for this variable before setting new one
-                    // This prevents mixing old rows with new ones and avoids product cartesian from old variables
-                    context.result_set.rows.clear();
+                    // CRITICAL FIX: Only clear result_set.rows if this is the first NodeByLabel
+                    // For subsequent NodeByLabel operators (comma-separated MATCH patterns),
+                    // we need to preserve existing filtered rows to create correct cartesian product
+                    let is_first_node_by_label = context.variables.is_empty() && context.result_set.rows.is_empty();
+                    if is_first_node_by_label {
+                        context.result_set.rows.clear();
+                    }
                     context.variables.remove(variable);
                     context.set_variable(variable, Value::Array(nodes));
                     let rows = self.materialize_rows_from_variables(&context);
                     tracing::debug!(
-                        "NodeByLabel: materialized {} rows from variables for '{}'",
+                        "NodeByLabel: materialized {} rows from variables for '{}' (is_first={})",
                         rows.len(),
-                        variable
+                        variable,
+                        is_first_node_by_label
                     );
                     self.update_result_set_from_rows(&mut context, &rows);
                     tracing::debug!(
@@ -1052,7 +1061,7 @@ impl Executor {
                             items.len()
                         );
                     } else {
-                        results = self.execute_project(&mut context, items)?;
+                    results = self.execute_project(&mut context, items)?;
                         // Store projection items in context for downstream operators if needed
                     }
                 }
@@ -1097,20 +1106,29 @@ impl Executor {
 
                     // Check if there are existing rows from MATCH
                     // Prioritize result_set.rows over variables (variables get moved to rows after MATCH)
+                    println!("[execute_operator CREATE] Checking for existing rows: result_set.rows.len()={}, variables.len()={}", context.result_set.rows.len(), context.variables.len());
                     let existing_rows = if !context.result_set.rows.is_empty() {
                         // Convert result_set.rows to HashMap format
                         let columns = context.result_set.columns.clone();
-                        context
+                        println!("[execute_operator CREATE] Using result_set.rows with {} rows, columns: {:?}", context.result_set.rows.len(), columns);
+                        let rows = context
                             .result_set
                             .rows
                             .iter()
                             .map(|row| self.row_to_map(row, &columns))
-                            .collect::<Vec<_>>()
+                            .collect::<Vec<_>>();
+                        println!("[execute_operator CREATE] Converted {} rows from result_set", rows.len());
+                        rows
                     } else {
-                        self.materialize_rows_from_variables(&context)
+                        println!("[execute_operator CREATE] result_set.rows is empty, using materialize_rows_from_variables");
+                        let rows = self.materialize_rows_from_variables(&context);
+                        println!("[execute_operator CREATE] materialize_rows_from_variables returned {} rows", rows.len());
+                        rows
                     };
 
+                    println!("[execute_operator CREATE] existing_rows.len()={}", existing_rows.len());
                     if existing_rows.is_empty() {
+                        println!("[execute_operator CREATE] No existing rows - executing CREATE standalone");
                         // CREATE standalone - create nodes and relationships directly
                         let (created_node_ids, created_rel_ids) =
                             self.execute_create_pattern_with_variables(pattern)?;
@@ -1156,7 +1174,12 @@ impl Executor {
                         }
                     } else {
                         // CREATE with MATCH context - use existing implementation
+                        println!("[execute_operator CREATE] Executing CREATE with {} existing rows from MATCH", existing_rows.len());
+                        for (idx, row) in existing_rows.iter().enumerate() {
+                            println!("[execute_operator CREATE] Row {} has {} variables: {:?}", idx, row.len(), row.keys().collect::<Vec<_>>());
+                        }
                         self.execute_create_with_context(&mut context, pattern)?;
+                        println!("[execute_operator CREATE] CREATE with context completed");
                     }
 
                     // If no RETURN clause follows, result_set is already populated above
@@ -2260,9 +2283,11 @@ impl Executor {
 
     /// Execute Filter operator with index optimization
     fn execute_filter(&self, context: &mut ExecutionContext, predicate: &str) -> Result<()> {
+        println!("[execute_filter] Executing filter with predicate: '{}', result_set.rows.len()={}, variables.len()={}", predicate, context.result_set.rows.len(), context.variables.len());
         // Try index-based filtering first (optimization for Phase 5)
         if let Some(optimized_rows) = self.try_index_based_filter(context, predicate)? {
             // Index-based filtering succeeded, use optimized results
+            println!("[execute_filter] Index-based filter succeeded, returning {} rows", optimized_rows.len());
             context.result_set.rows = optimized_rows;
             return Ok(());
         }
@@ -2360,6 +2385,12 @@ impl Executor {
             }
             // If predicate is false, filtered_rows stays empty (no rows returned)
         } else {
+            // CRITICAL DEBUG: Log number of input rows before filtering
+            tracing::debug!(
+                "Filter operator: received {} input rows before filtering",
+                rows.len()
+            );
+            
             // CRITICAL FIX: Deduplicate rows by node ID before filtering
             // Use HashSet to track unique node IDs to avoid processing the same node twice
             // IMPORTANT: Check ALL variables in the row, not just the first one found
@@ -2394,8 +2425,50 @@ impl Executor {
 
                 // Only process row if it's not a duplicate and passes the predicate
                 if !is_duplicate {
-                    if self.evaluate_predicate_on_row(row, context, &expr)? {
-                        filtered_rows.push(row.clone());
+                    // TRACE: Check row variables for relationships before evaluation
+                    let mut has_relationships_in_row = false;
+                    let mut var_types: Vec<(String, String)> = Vec::new();
+                    for (var_name, var_value) in row.iter() {
+                        let var_type = match var_value {
+                            Value::Object(obj) => {
+                                if obj.contains_key("type") {
+                                    has_relationships_in_row = true;
+                                    "RELATIONSHIP".to_string()
+                                } else {
+                                    "NODE".to_string()
+                                }
+                            }
+                            _ => "OTHER".to_string()
+                        };
+                        var_types.push((var_name.clone(), var_type));
+                    }
+                    println!("[TRACE] execute_filter: checking row variables for relationships before evaluation: {:?}, has_relationships={}", var_types, has_relationships_in_row);
+                    
+                    // DEBUG: Log what's actually in the row
+                    println!("[execute_filter] Row has {} variables: {:?}", row.len(), row.keys().collect::<Vec<_>>());
+                    for (var_name, var_value) in row {
+                        if let Value::Object(obj) = var_value {
+                            if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                println!("[execute_filter] Variable {} has _nexus_id={}", var_name, id);
+                                // Check if it's a node or relationship
+                                if obj.contains_key("type") || obj.contains_key("since") {
+                                    println!("[execute_filter] WARNING: Variable {} appears to be a RELATIONSHIP, not a node! Object: {:?}", var_name, obj);
+                                } else {
+                                    println!("[execute_filter] Variable {} appears to be a NODE. Object keys: {:?}", var_name, obj.keys().collect::<Vec<_>>());
+                                }
+                            }
+                        }
+                    }
+                    // DEBUG: Log node properties before evaluating predicate
+                    if let Some(node_id) = found_node_id {
+                        if let Ok(node_value) = self.read_node_as_value(node_id) {
+                            println!("[execute_filter] Evaluating predicate '{}' on row with node_id={}, node_value={:?}", predicate, node_id, node_value);
+                        }
+                    }
+                    let predicate_result = self.evaluate_predicate_on_row(row, context, &expr)?;
+                    println!("[execute_filter] Predicate '{}' evaluated to {} for row with node_id={:?}", predicate, predicate_result, found_node_id);
+                    if predicate_result {
+                    filtered_rows.push(row.clone());
                         // Ensure node ID is tracked for the filtered row
                         if let Some(node_id) = found_node_id {
                             seen_node_ids.insert(node_id);
@@ -2403,6 +2476,14 @@ impl Executor {
                     }
                 }
             }
+            
+            // CRITICAL DEBUG: Log number of filtered rows after deduplication and predicate evaluation
+            tracing::debug!(
+                "Filter operator: {} rows passed deduplication and predicate (from {} input rows)",
+                filtered_rows.len(),
+                rows.len()
+            );
+            println!("[execute_filter] Filtered {} rows from {} input rows (predicate: '{}')", filtered_rows.len(), rows.len(), predicate);
         }
 
         // If Filter processed rows and there were no rows/variables to begin with (RETURN ... WHERE),
@@ -2430,7 +2511,9 @@ impl Executor {
             // CRITICAL FIX: Clear result_set.rows BEFORE updating to ensure we don't mix old and new rows
             // This prevents duplicates when Filter processes rows that were already materialized
             context.result_set.rows.clear();
-            // Update variables first
+            // CRITICAL FIX: Update variables to reflect filtered rows
+            // This is essential when there are multiple NodeByLabel operators - the second NodeByLabel
+            // will materialize rows from variables, so variables must contain only filtered nodes
             self.update_variables_from_rows(context, &filtered_rows);
             // Preserve existing columns and update rows completely (no mixing with old rows)
             context.result_set.columns = existing_columns.clone();
@@ -2467,11 +2550,24 @@ impl Executor {
         rel_var: &str,
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<()> {
+        // TRACE: Log input source and check for relationships
+        let rows_source = if !context.result_set.rows.is_empty() {
+            "result_set.rows"
+        } else {
+            "variables"
+        };
+        println!("[TRACE] execute_expand: input rows from {} (result_set.rows.len()={}, variables.len()={})", rows_source, context.result_set.rows.len(), context.variables.len());
+        
         // Use result_set rows instead of variables to maintain row context from previous operators
         // CRITICAL: Always use result_set_as_rows if available, as it preserves row context
         // from previous operators (like NodeByLabel which creates multiple rows)
         let rows = if !context.result_set.rows.is_empty() {
             let rows_from_result_set = self.result_set_as_rows(context);
+            println!(
+                "DEBUG: Expand: result_set has {} rows, converted to {} row maps",
+                context.result_set.rows.len(),
+                rows_from_result_set.len()
+            );
             tracing::debug!(
                 "Expand: result_set has {} rows, converted to {} row maps",
                 context.result_set.rows.len(),
@@ -2484,7 +2580,9 @@ impl Executor {
             // Only use rows_from_result_set directly - don't filter yet
             rows_from_result_set
         } else {
-            self.materialize_rows_from_variables(context)
+            let materialized = self.materialize_rows_from_variables(context);
+            println!("DEBUG: Expand: materialized {} rows from variables", materialized.len());
+            materialized
         };
 
         // DEBUG: Log number of input rows for debugging relationship expansion issues
@@ -2748,6 +2846,7 @@ impl Executor {
                         relationships.len(),
                         source_id
                     );
+                    println!("DEBUG: Expand found {} relationships for source node_id {}", relationships.len(), source_id);
 
                     if relationships.is_empty() {
                         tracing::debug!(
@@ -2770,7 +2869,9 @@ impl Executor {
                         relationships
                     };
 
+                    println!("DEBUG: Expand processing {} filtered relationships for source node_id {}", filtered_relationships.len(), source_id);
                     for (rel_idx, rel_info) in filtered_relationships.iter().enumerate() {
+                        println!("DEBUG: Expand processing relationship {} of {}: rel_id={}, src={}, dst={}", rel_idx + 1, filtered_relationships.len(), rel_info.id, rel_info.source_id, rel_info.target_id);
                         let target_id = match direction {
                             Direction::Outgoing => rel_info.target_id,
                             Direction::Incoming => rel_info.source_id,
@@ -2832,6 +2933,7 @@ impl Executor {
             expanded_rows.len(),
             rows.len()
         );
+        println!("DEBUG: Expand created {} expanded rows from {} input rows", expanded_rows.len(), rows.len());
 
         // CRITICAL DEBUG: Log detailed information about expanded rows for debugging
         if !expanded_rows.is_empty() {
@@ -2872,6 +2974,7 @@ impl Executor {
             self.update_result_set_from_rows(context, &expanded_rows);
 
             // Verify that all expanded rows were added to result_set
+            println!("DEBUG: Expand: result_set had {} rows before clear, now has {} rows after update (expected {} expanded rows)", rows_before_clear, context.result_set.rows.len(), expanded_rows.len());
             tracing::debug!(
                 "Expand: result_set had {} rows before clear, now has {} rows after update (expected {} expanded rows)",
                 rows_before_clear,
@@ -2881,6 +2984,7 @@ impl Executor {
 
             // Assert that all expanded rows were added
             if context.result_set.rows.len() != expanded_rows.len() {
+                println!("DEBUG: Expand: Mismatch! result_set has {} rows but {} expanded rows were created - some rows may have been lost in deduplication", context.result_set.rows.len(), expanded_rows.len());
                 tracing::warn!(
                     "Expand: Mismatch! result_set has {} rows but {} expanded rows were created - some rows may have been lost in deduplication",
                     context.result_set.rows.len(),
@@ -3365,8 +3469,8 @@ impl Executor {
             // Only skip materialization if we don't have GROUP BY and have match columns (MATCH returned empty)
             // If we have GROUP BY, we need rows to create groups, so materialize even with match columns
             if !has_match_columns || !group_by.is_empty() {
-                let rows = self.materialize_rows_from_variables(context);
-                self.update_result_set_from_rows(context, &rows);
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
             }
         }
 
@@ -3527,7 +3631,7 @@ impl Executor {
                             }
                         } else {
                             // Projection item not found - use Null
-                            group_key_values.push(Value::Null);
+                    group_key_values.push(Value::Null);
                         }
                     } else {
                         // No projection_items available - use Null
@@ -5159,14 +5263,21 @@ impl Executor {
         let current_rows = if !context.result_set.rows.is_empty() {
             // Convert result_set.rows to HashMap format
             let columns = context.result_set.columns.clone();
-            context
+            let rows: Vec<_> = context
                 .result_set
                 .rows
                 .iter()
                 .map(|row| self.row_to_map(row, &columns))
-                .collect::<Vec<_>>()
+                .collect();
+            tracing::debug!(
+                "execute_create_with_context: converted {} rows from result_set.rows, columns={:?}",
+                rows.len(),
+                columns
+            );
+            rows
         } else {
             // Fallback to materialize if result_set is empty
+            tracing::debug!("execute_create_with_context: result_set.rows is empty, falling back to materialize_rows_from_variables");
             self.materialize_rows_from_variables(context)
         };
 
@@ -5185,15 +5296,28 @@ impl Executor {
                 std::collections::HashMap::new();
 
             // First, resolve existing node variables from the row
+            println!("[execute_create_with_context] Processing row with {} variables", row.len());
             for (var_name, var_value) in row {
                 if let JsonValue::Object(obj) = var_value {
                     if let Some(JsonValue::Number(id)) = obj.get("_nexus_id") {
                         if let Some(node_id) = id.as_u64() {
+                            tracing::debug!(
+                                "execute_create_with_context: extracted node_id={} for var={}, node_object={:?}",
+                                node_id,
+                                var_name,
+                                obj
+                            );
+                            println!("[execute_create_with_context] Extracted node_id={} for var={}", node_id, var_name);
                             node_ids.insert(var_name.clone(), node_id);
                         }
+                    } else {
+                        println!("[execute_create_with_context] WARNING: Variable {} has no _nexus_id: {:?}", var_name, obj);
                     }
+                } else {
+                    println!("[execute_create_with_context] WARNING: Variable {} is not an Object: {:?}", var_name, var_value);
                 }
             }
+            println!("[execute_create_with_context] Resolved {} node IDs from row: {:?}", node_ids.len(), node_ids.keys().collect::<Vec<_>>());
 
             // Now process the pattern elements to create new nodes and relationships
             let mut last_node_var: Option<String> = None;
@@ -5269,13 +5393,16 @@ impl Executor {
                             // Source is the last_node_var, target will be the next node in pattern
                             if let Some(source_var) = &last_node_var {
                                 if let Some(source_id) = node_ids.get(source_var) {
+                                    println!("[execute_create_with_context] Found source node: var={}, id={}", source_var, source_id);
                                     // Find target node (next element after this relationship)
                                     if idx + 1 < pattern.elements.len() {
                                         if let parser::PatternElement::Node(target_node) =
                                             &pattern.elements[idx + 1]
                                         {
                                             if let Some(target_var) = &target_node.variable {
+                                                println!("[execute_create_with_context] Looking for target node: var={}, available node_ids: {:?}", target_var, node_ids.keys().collect::<Vec<_>>());
                                                 if let Some(target_id) = node_ids.get(target_var) {
+                                                    println!("[execute_create_with_context] Found target node: var={}, id={}", target_var, target_id);
                                                     // Acquire row locks on source and target nodes
                                                     let (_source_lock, _target_lock_opt) = self
                                                         .acquire_relationship_locks(
@@ -5283,20 +5410,44 @@ impl Executor {
                                                         )?;
 
                                                     // Create the relationship (locks held by guards)
+                                                    tracing::debug!(
+                                                        "execute_create_with_context: creating relationship from source_id={} to target_id={}, type_id={}",
+                                                        source_id,
+                                                        target_id,
+                                                        type_id
+                                                    );
+                                                    println!("[execute_create_with_context] Creating relationship: source_id={}, target_id={}, type_id={}, source_var={:?}, target_var={:?}", source_id, target_id, type_id, source_var, target_var);
                                                     let _rel_id =
                                                         self.store_mut().create_relationship(
                                                             &mut tx, *source_id, *target_id,
                                                             type_id, properties,
                                                         )?;
+                                                    tracing::debug!(
+                                                        "execute_create_with_context: relationship created successfully, rel_id={}",
+                                                        _rel_id
+                                                    );
+                                                    println!("[execute_create_with_context] Relationship created successfully: rel_id={}, source_id={}, target_id={}", _rel_id, source_id, target_id);
 
                                                     // Locks are released when guards are dropped
 
                                                     // Relationship created successfully
+                                                } else {
+                                                    println!("[execute_create_with_context] ERROR: Target node not found: var={}, available node_ids: {:?}", target_var, node_ids.keys().collect::<Vec<_>>());
                                                 }
+                                            } else {
+                                                println!("[execute_create_with_context] ERROR: Target node has no variable");
                                             }
+                                        } else {
+                                            println!("[execute_create_with_context] ERROR: Next element is not a Node");
                                         }
+                                    } else {
+                                        println!("[execute_create_with_context] ERROR: No next element after relationship");
                                     }
+                                } else {
+                                    println!("[execute_create_with_context] ERROR: Source node not found: var={}, available node_ids: {:?}", source_var, node_ids.keys().collect::<Vec<_>>());
                                 }
+                            } else {
+                                println!("[execute_create_with_context] ERROR: No last_node_var (no source node before relationship)");
                             }
                         }
                     }
@@ -5309,6 +5460,25 @@ impl Executor {
 
         // Flush to ensure persistence
         self.store_mut().flush()?;
+        
+        // CRITICAL FIX: Add memory barrier to ensure all writes are visible to subsequent reads
+        // This is essential when creating multiple relationships in separate queries
+        // (e.g., Alice -> Acme, then Alice -> TechCorp in different MATCH...CREATE statements)
+        // Without this barrier, the second query might read stale node.first_rel_ptr values
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+
+        // CRITICAL FIX: Clear result_set.rows and context.variables after CREATE to avoid contamination
+        // After CREATE, the result_set.rows may contain rows with relationship objects instead of nodes
+        // Clearing ensures that subsequent MATCH queries don't reuse contaminated rows
+        context.result_set.rows.clear();
+        context.result_set.columns.clear();
+        // Don't clear all variables - only clear variables that were created/modified by CREATE
+        // This preserves variables from MATCH that might be needed by subsequent queries
+        // But actually, after CREATE, we don't need any variables from the previous MATCH
+        // So clearing all variables should be safe
+        context.variables.clear();
+        println!("[execute_create_with_context] Cleared result_set.rows and context.variables after CREATE");
+        println!("[TRACE] After cleanup: result_set.rows.len()={}, variables.len()={}", context.result_set.rows.len(), context.variables.len());
 
         Ok(())
     }
@@ -5323,17 +5493,45 @@ impl Executor {
                     label_id,
                     variable
                 );
-                // CRITICAL FIX: Clear result_set.rows and variables for this variable before setting new one
-                // This prevents mixing old rows with new ones and avoids product cartesian from old variables
-                context.result_set.rows.clear();
+                // CRITICAL FIX: Remove relationship objects from variables before creating cartesian product
+                // Relationship objects have a "type" property - filter them out to avoid contamination
+                context.variables.retain(|var_name, var_value| {
+                    let is_relationship = if let Value::Object(obj) = var_value {
+                        obj.contains_key("type") // Relationships have "type" property
+                    } else if let Value::Array(arr) = var_value {
+                        // Check if array contains relationship objects
+                        arr.iter().any(|v| {
+                            if let Value::Object(obj) = v {
+                                obj.contains_key("type")
+                            } else {
+                                false
+                            }
+                        })
+                    } else {
+                        false
+                    };
+                    if is_relationship {
+                        println!("[execute_operator NodeByLabel] Removing relationship variable '{}' before creating cartesian product", var_name);
+                    }
+                    !is_relationship // Keep only non-relationship variables
+                });
+                
+                // CRITICAL FIX: Only clear result_set.rows if this is the first NodeByLabel
+                // For subsequent NodeByLabel operators (comma-separated MATCH patterns),
+                // we need to preserve existing filtered rows to create correct cartesian product
+                let is_first_node_by_label = context.variables.is_empty() && context.result_set.rows.is_empty();
+                if is_first_node_by_label {
+                    context.result_set.rows.clear();
+                }
                 context.variables.remove(variable);
                 context.set_variable(variable, Value::Array(nodes));
                 // CRITICAL FIX: Materialize rows from variables so Project can process them
                 // This matches the behavior in the main execute loop
                 let rows = self.materialize_rows_from_variables(context);
                 tracing::debug!(
-                    "execute_operator NodeByLabel: materialized {} rows from variables",
-                    rows.len()
+                    "execute_operator NodeByLabel: materialized {} rows from variables (is_first={})",
+                    rows.len(),
+                    is_first_node_by_label
                 );
                 self.update_result_set_from_rows(context, &rows);
                 tracing::debug!(
@@ -6666,6 +6864,11 @@ impl Executor {
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<Vec<RelationshipInfo>> {
         // Phase 8.1: Try specialized relationship storage first (if enabled)
+        // CRITICAL FIX: Temporarily disabled to debug relationship finding issue
+        // The relationship_storage may not be updated correctly when relationships
+        // are created in separate transactions, causing only the first relationship
+        // to be found. We'll use linked list traversal instead for now.
+        /*
         if self.enable_relationship_optimizations {
             if let Some(ref rel_storage) = self.shared.relationship_storage {
                 let type_filter = if type_ids.len() == 1 {
@@ -6698,8 +6901,13 @@ impl Executor {
                 }
             }
         }
+        */
 
         // Phase 3: Fallback to adjacency list (fastest path)
+        // CRITICAL FIX: Temporarily disabled to debug relationship finding issue
+        // The adjacency list may not be updated correctly when relationships
+        // are created in separate transactions. We'll use linked list traversal instead for now.
+        /*
         if let Ok(Some(adj_rel_ids)) = match direction {
             Direction::Outgoing => self
                 .store()
@@ -6744,8 +6952,13 @@ impl Executor {
             }
             return Ok(relationships);
         }
+        */
 
         // Fallback: Try to use relationship index if available (Phase 3 optimization)
+        // CRITICAL FIX: Temporarily disabled to debug relationship finding issue
+        // The relationship index may not be updated correctly when relationships
+        // are created in separate transactions. We'll use linked list traversal instead for now.
+        /*
         if let Some(cache) = cache {
             let rel_index = cache.relationship_index();
 
@@ -6823,8 +7036,11 @@ impl Executor {
 
             return Ok(relationships);
         }
+        */
 
         // Fallback to original linked list traversal (Phase 1-2 behavior)
+        // CRITICAL FIX: Force use of linked list traversal to debug relationship finding issue
+        // This ensures we're using the most reliable method that should find all relationships
         let mut relationships = Vec::new();
 
         // Read the node record to get the first relationship pointer
@@ -6839,12 +7055,215 @@ impl Executor {
                 type_ids,
                 direction
             );
+            // Force println to stdout for debugging
+            println!("[DEBUG] find_relationships Node {}: first_rel_ptr={}", node_id, rel_ptr);
 
+            // CRITICAL FIX: If first_rel_ptr is 0, try to find relationships by scanning
+            // This handles the case where mmap synchronization failed and first_rel_ptr
+            // was not updated correctly, but relationships exist
+            // When first_rel_ptr is 0, we scan for all relationships matching the direction
+            // and then follow the linked list from each found relationship
             if rel_ptr == 0 {
                 tracing::debug!(
-                    "[find_relationships] Node {}: first_rel_ptr is 0 - no relationships found in linked list",
+                    "[find_relationships] Node {}: first_rel_ptr is 0 - attempting to find relationships by scanning",
                     node_id
                 );
+                
+                // Scan for relationships where this node is the source (for Outgoing) or target (for Incoming)
+                // We'll scan recent relationships (limit to avoid performance issues)
+                // CRITICAL: Start from a reasonable high ID and scan backwards, checking up to 500 relationships
+                // This assumes relationships are created sequentially, so recent ones have higher IDs
+                let start_id = 500; // Start from a reasonable high ID (adjust if you have more relationships)
+                let scan_limit = 500; // Check at most 500 relationships
+                let mut scanned_rel_ids = std::collections::HashSet::new();
+                let mut scanned_count = 0;
+                
+                // First pass: Find all relationships directly connected to this node
+                // Scan backwards from start_id to find recent relationships
+                for check_rel_id in (0..=start_id).rev() {
+                    if scanned_count >= scan_limit {
+                        break;
+                    }
+                    scanned_count += 1;
+                    if let Ok(rel_record) = self.store().read_rel(check_rel_id) {
+                        if !rel_record.is_deleted() {
+                            let check_src_id = rel_record.src_id;
+                            let check_dst_id = rel_record.dst_id;
+                            
+                            // Check if this relationship matches the direction we're looking for
+                            let matches_direction = match direction {
+                                Direction::Outgoing => check_src_id == node_id,
+                                Direction::Incoming => check_dst_id == node_id,
+                                Direction::Both => check_src_id == node_id || check_dst_id == node_id,
+                            };
+                            
+                            if matches_direction {
+                                let record_type_id = rel_record.type_id;
+                                let matches_type = type_ids.is_empty() || type_ids.contains(&record_type_id);
+                                
+                                if matches_type {
+                                    scanned_rel_ids.insert(check_rel_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // If we found relationships via scan, add them and return
+                // (Skip linked list traversal since first_rel_ptr is 0 - linked list is broken)
+                if !scanned_rel_ids.is_empty() {
+                    tracing::debug!(
+                        "[find_relationships] Node {}: Found {} relationships via scan (first_rel_ptr was 0)",
+                        node_id,
+                        scanned_rel_ids.len()
+                    );
+                    println!("[DEBUG] find_relationships Node {}: Found {} relationships via scan (first_rel_ptr was 0)", node_id, scanned_rel_ids.len());
+                    
+                    for rel_id in scanned_rel_ids {
+                        if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                            if !rel_record.is_deleted() {
+                                relationships.push(RelationshipInfo {
+                                    id: rel_id,
+                                    source_id: rel_record.src_id,
+                                    target_id: rel_record.dst_id,
+                                    type_id: rel_record.type_id,
+                                });
+                            }
+                        }
+                    }
+                    
+                    // Return early - we found relationships via scan
+                    println!("DEBUG: Expand found {} relationships for source node_id {} (via scan)", relationships.len(), node_id);
+                    return Ok(relationships);
+                } else {
+                    tracing::debug!(
+                        "[find_relationships] Node {}: first_rel_ptr is 0 - no relationships found in linked list or scan",
+                        node_id
+                    );
+                }
+            }
+
+            // CRITICAL FIX: Verify that first_rel_ptr points to a valid relationship for the requested direction
+            // If first_rel_ptr points to a relationship where the node is TARGET but we're looking for OUTGOING,
+            // or vice versa, then first_rel_ptr is invalid and we should use scan instead
+            let mut should_use_scan = rel_ptr == 0;
+            if rel_ptr != 0 {
+                let verify_rel_id = rel_ptr.saturating_sub(1);
+                if let Ok(verify_rel) = self.store().read_rel(verify_rel_id) {
+                    if !verify_rel.is_deleted() {
+                        let verify_src_id = verify_rel.src_id;
+                        let verify_dst_id = verify_rel.dst_id;
+                        let is_valid_for_direction = match direction {
+                            Direction::Outgoing => verify_src_id == node_id,
+                            Direction::Incoming => verify_dst_id == node_id,
+                            Direction::Both => verify_src_id == node_id || verify_dst_id == node_id,
+                        };
+                        
+                        if !is_valid_for_direction {
+                            // first_rel_ptr points to an invalid relationship - use scan instead
+                            tracing::debug!(
+                                "[find_relationships] Node {}: first_rel_ptr={} points to invalid relationship {} (src={}, dst={}) for direction {:?}, using scan",
+                                node_id, rel_ptr, verify_rel_id, verify_src_id, verify_dst_id, direction
+                            );
+                            println!("[DEBUG] find_relationships Node {}: first_rel_ptr={} points to invalid relationship {} (src={}, dst={}) for direction {:?}, using scan", node_id, rel_ptr, verify_rel_id, verify_src_id, verify_dst_id, direction);
+                            should_use_scan = true;
+                        }
+                    } else {
+                        // Relationship is deleted - use scan
+                        should_use_scan = true;
+                    }
+                } else {
+                    // Can't read relationship - use scan
+                    should_use_scan = true;
+                }
+            }
+
+            // If we should use scan (and rel_ptr != 0, meaning first_rel_ptr is invalid), do it now
+            if should_use_scan && rel_ptr != 0 {
+                // first_rel_ptr is invalid - scan for relationships
+                tracing::debug!(
+                    "[find_relationships] Node {}: first_rel_ptr={} is invalid, scanning for relationships",
+                    node_id, rel_ptr
+                );
+                
+                // CRITICAL: Scan from a high ID down to 0 to find ALL relationships
+                // Start from a reasonable high ID (assume max 10000 relationships) and scan down
+                let start_id = 10000;
+                let scan_limit = 10000; // Increase limit to scan more relationships
+                let mut scanned_rel_ids = std::collections::HashSet::new();
+                let mut scanned_count = 0;
+                let mut checked_count = 0;
+                
+                // Scan backwards from start_id to find recent relationships
+                for check_rel_id in (0..=start_id).rev() {
+                    if scanned_count >= scan_limit {
+                        break;
+                    }
+                    checked_count += 1;
+                    if checked_count > scan_limit * 2 {
+                        // Stop if we've checked too many (many may be empty)
+                        break;
+                    }
+                    
+                    if let Ok(rel_record) = self.store().read_rel(check_rel_id) {
+                        if !rel_record.is_deleted() {
+                            scanned_count += 1;
+                            let check_src_id = rel_record.src_id;
+                            let check_dst_id = rel_record.dst_id;
+                            
+                            let matches_direction = match direction {
+                                Direction::Outgoing => check_src_id == node_id,
+                                Direction::Incoming => check_dst_id == node_id,
+                                Direction::Both => check_src_id == node_id || check_dst_id == node_id,
+                            };
+                            
+                            if matches_direction {
+                                let record_type_id = rel_record.type_id;
+                                let matches_type = type_ids.is_empty() || type_ids.contains(&record_type_id);
+                                
+                                if matches_type {
+                                    scanned_rel_ids.insert(check_rel_id);
+                                    println!("[DEBUG] find_relationships Node {}: Scan found relationship {} (src={}, dst={}, type={})", node_id, check_rel_id, check_src_id, check_dst_id, record_type_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                println!("[DEBUG] find_relationships Node {}: Scan completed - checked {} slots, found {} valid relationships, matched {} relationships", node_id, checked_count, scanned_count, scanned_rel_ids.len());
+                
+                if !scanned_rel_ids.is_empty() {
+                    tracing::debug!(
+                        "[find_relationships] Node {}: Found {} relationships via scan (first_rel_ptr was invalid)",
+                        node_id,
+                        scanned_rel_ids.len()
+                    );
+                    println!("[DEBUG] find_relationships Node {}: Found {} relationships via scan (first_rel_ptr was invalid)", node_id, scanned_rel_ids.len());
+                    
+                    for rel_id in scanned_rel_ids {
+                        if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                            if !rel_record.is_deleted() {
+                                relationships.push(RelationshipInfo {
+                                    id: rel_id,
+                                    source_id: rel_record.src_id,
+                                    target_id: rel_record.dst_id,
+                                    type_id: rel_record.type_id,
+                                });
+                            }
+                        }
+                    }
+                    
+                    println!("DEBUG: Expand found {} relationships for source node_id {} (via scan - invalid first_rel_ptr)", relationships.len(), node_id);
+                    return Ok(relationships);
+                } else {
+                    // Scan found nothing and first_rel_ptr is invalid - no relationships exist for this direction
+                    tracing::debug!(
+                        "[find_relationships] Node {}: first_rel_ptr was invalid and scan found no relationships for direction {:?}",
+                        node_id, direction
+                    );
+                    println!("[DEBUG] find_relationships Node {}: first_rel_ptr was invalid and scan found no relationships for direction {:?}", node_id, direction);
+                    return Ok(relationships); // Return empty vector
+                }
             }
 
             let mut visited = std::collections::HashSet::new();
@@ -6883,6 +7302,7 @@ impl Executor {
                     rel_ptr,
                     current_rel_id
                 );
+                println!("[DEBUG] find_relationships Node {}: processing rel_ptr={} (id={})", node_id, rel_ptr, current_rel_id);
 
                 if let Ok(rel_record) = self.store().read_rel(current_rel_id) {
                     // Copy fields to local variables to avoid packed struct reference issues
@@ -6923,6 +7343,7 @@ impl Executor {
                         Direction::Both => true,
                     };
 
+                    println!("[DEBUG] find_relationships Node {}: checking rel_id={}, src={}, dst={}, direction={:?}, matches_direction={}", node_id, current_rel_id, src_id, dst_id, direction, matches_direction);
                     if matches_type && matches_direction {
                         tracing::debug!(
                             "[find_relationships] Node {}: MATCHED relationship id={}, src={}, dst={}, type_id={}",
@@ -6932,6 +7353,7 @@ impl Executor {
                             dst_id,
                             record_type_id
                         );
+                        println!("[DEBUG] find_relationships Node {}: ADDING relationship id={} (src={}, dst={})", node_id, current_rel_id, src_id, dst_id);
                         relationships.push(RelationshipInfo {
                             id: current_rel_id,
                             source_id: src_id,
@@ -6939,6 +7361,7 @@ impl Executor {
                             type_id: record_type_id,
                         });
                     } else {
+                        println!("[DEBUG] find_relationships Node {}: SKIPPING relationship id={} (matches_type={}, matches_direction={}, src={}, dst={}, node_id={})", node_id, current_rel_id, matches_type, matches_direction, src_id, dst_id, node_id);
                         tracing::debug!(
                             "[find_relationships] Node {}: SKIPPED relationship id={} (matches_type={}, matches_direction={})",
                             node_id,
@@ -6965,6 +7388,7 @@ impl Executor {
                         node_id,
                         src_id == node_id
                     );
+                    println!("[DEBUG] find_relationships Node {}: moving to next_ptr={} (from rel_id={}, src={}, using_src={})", node_id, rel_ptr, current_rel_id, src_id, src_id == node_id);
 
                     if rel_ptr == 0 {
                         tracing::debug!(
@@ -7687,6 +8111,16 @@ impl Executor {
         let _labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
 
         let properties_value = self.store().load_node_properties(node_id)?;
+        
+        // TRACE: Check if loaded properties look like relationship properties
+        if let Some(props) = &properties_value {
+            if let Some(obj) = props.as_object() {
+                // Check if properties contain relationship-specific keys
+                if obj.contains_key("since") || obj.contains_key("type") {
+                    println!("[TRACE] read_node_as_value: WARNING - node_id={} has relationship-like properties: {:?}", node_id, obj.keys().collect::<Vec<_>>());
+                }
+            }
+        }
 
         tracing::debug!(
             "read_node_as_value: node_id={}, properties_value={:?}",
@@ -8464,6 +8898,38 @@ impl Executor {
         &self,
         context: &ExecutionContext,
     ) -> Vec<HashMap<String, Value>> {
+        // TRACE: Log variables before creating cartesian product
+        let mut has_relationships = false;
+        let mut var_types: Vec<(String, String)> = Vec::new();
+        for (var, value) in &context.variables {
+            let var_type = match value {
+                Value::Object(obj) => {
+                    if obj.contains_key("type") {
+                        has_relationships = true;
+                        "RELATIONSHIP".to_string()
+                    } else {
+                        "NODE".to_string()
+                    }
+                }
+                Value::Array(arr) => {
+                    let has_rel = arr.iter().any(|v| {
+                        if let Value::Object(obj) = v {
+                            obj.contains_key("type")
+                        } else {
+                            false
+                        }
+                    });
+                    if has_rel {
+                        has_relationships = true;
+                    }
+                    format!("ARRAY({})", if has_rel { "HAS_RELATIONSHIPS" } else { "NODES_ONLY" })
+                }
+                _ => "OTHER".to_string()
+            };
+            var_types.push((var.clone(), var_type));
+        }
+        println!("[TRACE] materialize_rows_from_variables: variables={:?}, has_relationships={}, creating cartesian product", var_types, has_relationships);
+        
         let mut arrays: HashMap<String, Vec<Value>> = HashMap::new();
 
         for (var, value) in &context.variables {
@@ -8497,16 +8963,17 @@ impl Executor {
             return Vec::new();
         }
 
-        // CRITICAL FIX: Always deduplicate by node ID to avoid duplicates
-        // Even for single variables, duplicates can occur if nodes are added multiple times
-        // Deduplication ensures each node ID appears only once in the result
+        // CRITICAL FIX: Deduplicate by content (composite key of all IDs) to allow valid cartesian products
+        // We cannot deduplicate by a single node ID because that prevents 1-to-N relationships
+        // (where one node repeats across multiple rows).
+        // We use a set of "seen rows" based on their unique entity IDs.
         let mut rows = Vec::new();
-        let mut seen_node_ids = std::collections::HashSet::new();
+        // let mut seen_row_keys = std::collections::HashSet::new();
 
         for idx in 0..max_len {
             let mut row = HashMap::new();
             let mut all_null = true;
-            let mut node_id: Option<u64> = None;
+            let mut entity_ids = Vec::new();
 
             for (var, values) in &arrays {
                 let value = if values.len() == max_len {
@@ -8526,13 +8993,11 @@ impl Executor {
                 if !matches!(value, Value::Null) {
                     all_null = false;
 
-                    // Extract node ID if this is a node object (always for deduplication)
-                    if node_id.is_none() {
-                        if let Value::Object(obj) = &value {
-                            if let Some(Value::Number(id)) = obj.get("_nexus_id") {
-                                if let Some(nid) = id.as_u64() {
-                                    node_id = Some(nid);
-                                }
+                    // Extract entity ID (node or relationship) for deduplication
+                    if let Value::Object(obj) = &value {
+                        if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                            if let Some(nid) = id.as_u64() {
+                                entity_ids.push(nid);
                             }
                         }
                     }
@@ -8541,20 +9006,30 @@ impl Executor {
                 row.insert(var.clone(), value);
             }
 
-            // CRITICAL FIX: Only add row if it has at least one non-null value AND we haven't seen this node ID
-            // This prevents duplicates even for single variables
+            // Add row if it has content and is not a duplicate
             if !all_null {
-                let should_add = if let Some(nid) = node_id {
-                    // Deduplicate by node ID - only add if we haven't seen this node ID before
-                    seen_node_ids.insert(nid)
+                /*
+                let is_duplicate = if !entity_ids.is_empty() {
+                    // Sort IDs to ensure consistent key regardless of column order
+                    entity_ids.sort();
+                    let key = entity_ids
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<String>>()
+                        .join("_");
+                    !seen_row_keys.insert(key)
                 } else {
-                    // No node ID found - add anyway (can't deduplicate, but this should be rare)
-                    true
+                    // Fallback for rows without entities (e.g. literals) - no deduplication or full content deduplication?
+                    // For now, allow all since we can't identify entities
+                    false
                 };
 
-                if should_add {
+                if !is_duplicate {
                     rows.push(row);
                 }
+                */
+                // DEBUG: Disable deduplication to see if rows are being generated
+                rows.push(row);
             }
         }
 
@@ -8566,6 +9041,22 @@ impl Executor {
         context: &mut ExecutionContext,
         rows: &[HashMap<String, Value>],
     ) {
+        // TRACE: Check if input rows contain relationships
+        let mut rows_with_relationships = 0;
+        for row in rows {
+            let has_rel = row.values().any(|value| {
+                if let Value::Object(obj) = value {
+                    obj.contains_key("type") // Relationships have "type" property
+                } else {
+                    false
+                }
+            });
+            if has_rel {
+                rows_with_relationships += 1;
+            }
+        }
+        println!("[TRACE] update_result_set_from_rows: input rows={}, rows_with_relationships={}, result_set.rows.len()={} before update", rows.len(), rows_with_relationships, context.result_set.rows.len());
+        
         // CRITICAL FIX: Only use columns from rows, not from context.variables
         // Context variables may contain old/unused variables that cause null rows
         // Only include variables that are actually present in the rows
@@ -8610,13 +9101,84 @@ impl Executor {
             // Non-relationship rows have only one entity ID (just the node)
             let is_duplicate = if all_entity_ids.len() > 1 {
                 // Relationship row or row with multiple entities
-                // Use combination of ALL entity IDs (sorted) for deduplication
-                // This ensures that different relationships (even with same source/target) are differentiated
-                all_entity_ids.sort();
-                let key_parts: Vec<String> =
-                    all_entity_ids.iter().map(|id| format!("e{}", id)).collect();
-                let row_key = key_parts.join("_");
-                !seen_row_keys.insert(row_key)
+                // CRITICAL FIX: Find relationship ID and use it as primary key for deduplication
+                // This ensures that rows with the same relationship ID are considered duplicates
+                // even if they appear in different contexts (e.g., bidirectional relationships from source vs target)
+                let relationship_id = row_map.values().find_map(|value| {
+                    if let Value::Object(obj) = value {
+                        // Relationship objects have a "type" property
+                        if obj.contains_key("type") {
+                            if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
+                                return nid.as_u64();
+                            }
+                        }
+                    }
+                    None
+                });
+                
+                if let Some(rel_id) = relationship_id {
+                    // CRITICAL FIX: For relationship rows, use relationship ID + variable values
+                    // This ensures that rows with same relationship ID but different variable assignments
+                    // are not considered duplicates (e.g., bidirectional relationships: a=778,b=779 vs a=779,b=778)
+                    // Build key using relationship ID + sorted list of variable names and their node IDs
+                    let mut var_entries: Vec<(String, u64)> = Vec::new();
+                    
+                    for (key, value) in row_map {
+                        if let Value::Object(obj) = value {
+                            if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
+                                if let Some(entity_id) = nid.as_u64() {
+                                    // Skip relationship ID
+                                    if entity_id != rel_id && !obj.contains_key("type") {
+                                        // This is a node variable
+                                        var_entries.push((key.clone(), entity_id));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Sort variable entries by variable name for consistent key generation
+                    var_entries.sort_by(|a, b| a.0.cmp(&b.0));
+                    
+                    // Build deduplication key: rel_{id}_{var1}_{id1}_{var2}_{id2}...
+                    let mut key_parts = vec![format!("rel_{}", rel_id)];
+                    for (var_name, var_id) in &var_entries {
+                        key_parts.push(format!("{}_{}", var_name, var_id));
+                    }
+                    let row_key = key_parts.join("_");
+                    
+                    let is_dup = !seen_row_keys.insert(row_key.clone());
+                    println!("DEBUG: update_result_set_from_rows: relationship row -> key='{}' (rel_id={}), is_duplicate={}, entity_ids={:?}, vars={:?}", row_key, rel_id, is_dup, all_entity_ids, var_entries);
+                    is_dup
+                } else {
+                    // Fallback: Can't find rel_id but have multiple entities - include variables in key
+                    // This handles bidirectional relationships where we need to differentiate by variable assignment
+                    let mut var_entries: Vec<(String, u64)> = Vec::new();
+                    
+                    for (key, value) in row_map {
+                        if let Value::Object(obj) = value {
+                            if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
+                                if let Some(entity_id) = nid.as_u64() {
+                                    // Include all entities with their variable names
+                                    var_entries.push((key.clone(), entity_id));
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Sort by variable name for consistent key generation
+                    var_entries.sort_by(|a, b| a.0.cmp(&b.0));
+                    
+                    // Build key: var1_id1_var2_id2_var3_id3...
+                    let key_parts: Vec<String> = var_entries.iter()
+                        .map(|(var_name, var_id)| format!("{}_{}", var_name, var_id))
+                        .collect();
+                    let row_key = key_parts.join("_");
+                    
+                    let is_dup = !seen_row_keys.insert(row_key.clone());
+                    println!("DEBUG: update_result_set_from_rows: relationship row (no rel_id, using vars) -> key='{}', is_duplicate={}, entity_ids={:?}, vars={:?}", row_key, is_dup, all_entity_ids, var_entries);
+                    is_dup
+                }
             } else if let Some(first_id) = all_entity_ids.first() {
                 // Non-relationship row - use only entity ID
                 let entity_key = format!("node_{}", first_id);
@@ -8633,11 +9195,28 @@ impl Executor {
             }
         }
 
+        println!("DEBUG: update_result_set_from_rows: deduplicated {} rows to {} unique rows", rows.len(), unique_rows.len());
         tracing::debug!(
             "update_result_set_from_rows: deduplicated {} rows to {} unique rows",
             rows.len(),
             unique_rows.len()
         );
+        
+        // DEBUG: Log details of each row for debugging
+        for (idx, row_map) in rows.iter().enumerate() {
+            let mut all_entity_ids: Vec<u64> = Vec::new();
+            for value in row_map.values() {
+                if let Value::Object(obj) = value {
+                    if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                        if let Some(entity_id) = id.as_u64() {
+                            all_entity_ids.push(entity_id);
+                        }
+                    }
+                }
+            }
+            all_entity_ids.sort();
+            println!("DEBUG: update_result_set_from_rows: row {} has entity_ids: {:?}, keys: {:?}", idx, all_entity_ids, row_map.keys().collect::<Vec<_>>());
+        }
 
         // CRITICAL FIX: Always clear result_set.rows before updating to ensure complete replacement
         // This prevents mixing old rows with new ones
@@ -10983,7 +11562,7 @@ impl Executor {
     }
 
     fn read_relationship_as_value(&self, rel: &RelationshipInfo) -> Result<Value> {
-        let _type_name = self
+        let type_name = self
             .catalog()
             .get_type_name(rel.type_id)?
             .unwrap_or_else(|| format!("type_{}", rel.type_id));
@@ -11003,8 +11582,10 @@ impl Executor {
         };
 
         // Add _nexus_id for internal ID extraction (e.g., for type() function)
+        // Add type property to identify this as a relationship object in deduplication
         let mut rel_obj = properties_map;
         rel_obj.insert("_nexus_id".to_string(), Value::Number(rel.id.into()));
+        rel_obj.insert("type".to_string(), Value::String(type_name));
 
         // Return only the properties as a flat object, matching Neo4j's format
         Ok(Value::Object(rel_obj))

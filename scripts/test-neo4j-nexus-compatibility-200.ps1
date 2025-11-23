@@ -18,9 +18,9 @@ $global:FailedTests = 0
 $global:SkippedTests = 0
 $global:TestResults = @()
 
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║  Neo4j vs Nexus Compatibility Test Suite - 200+ Tests      ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = ╗" -ForegroundColor Cyan
+Write-Host "|  Neo4j vs Nexus Compatibility Test Suite - 200+ Tests      |" -ForegroundColor Cyan
+Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = ╝" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Neo4j:  $Neo4jUri" -ForegroundColor Yellow
 Write-Host "Nexus:  $NexusUri" -ForegroundColor Yellow
@@ -116,7 +116,7 @@ function Compare-QueryResults {
         $testEntry.Message = "Neo4j error: $($Neo4jResult.error)"
         $global:SkippedTests++
         $global:TestResults += $testEntry
-        Write-Host "⏭️  SKIP: $TestName" -ForegroundColor Yellow
+        Write-Host "⏭  SKIP: $TestName" -ForegroundColor Yellow
         if ($Verbose) { Write-Host "   Reason: $($testEntry.Message)" -ForegroundColor Gray }
         return
     }
@@ -126,7 +126,7 @@ function Compare-QueryResults {
         $testEntry.Message = "Nexus error: $($NexusResult.error)"
         $global:FailedTests++
         $global:TestResults += $testEntry
-        Write-Host "❌ FAIL: $TestName" -ForegroundColor Red
+        Write-Host "ERROR FAIL: $TestName" -ForegroundColor Red
         if ($Verbose) { Write-Host "   Nexus Error: $($NexusResult.error)" -ForegroundColor Red }
         return
     }
@@ -144,7 +144,7 @@ function Compare-QueryResults {
         $testEntry.Message = "Row count mismatch: Neo4j=$neo4jRows, Nexus=$nexusRows"
         $global:FailedTests++
         $global:TestResults += $testEntry
-        Write-Host "❌ FAIL: $TestName" -ForegroundColor Red
+        Write-Host "ERROR FAIL: $TestName" -ForegroundColor Red
         if ($Verbose) { 
             Write-Host "   Expected rows: $neo4jRows" -ForegroundColor Red
             Write-Host "   Got rows: $nexusRows" -ForegroundColor Red
@@ -157,7 +157,7 @@ function Compare-QueryResults {
         $testEntry.Status = "PASSED"
         $global:PassedTests++
         $global:TestResults += $testEntry
-        Write-Host "✅ PASS: $TestName" -ForegroundColor Green
+        Write-Host "OK PASS: $TestName" -ForegroundColor Green
         return
     }
     
@@ -166,7 +166,7 @@ function Compare-QueryResults {
     $testEntry.Status = "PASSED"
     $global:PassedTests++
     $global:TestResults += $testEntry
-    Write-Host "✅ PASS: $TestName" -ForegroundColor Green
+    Write-Host "OK PASS: $TestName" -ForegroundColor Green
 }
 
 # Cleanup function to clear databases before each section
@@ -174,9 +174,9 @@ function Clear-Databases {
     param([string]$SectionName = "")
     
     if ($SectionName) {
-        Write-Host "`n🧹 Cleaning databases before $SectionName..." -ForegroundColor Cyan -NoNewline
+        Write-Host "`nCLEAN Cleaning databases before $SectionName..." -ForegroundColor Cyan -NoNewline
     } else {
-        Write-Host "🧹 Cleaning databases..." -ForegroundColor Cyan -NoNewline
+        Write-Host "CLEAN Cleaning databases..." -ForegroundColor Cyan -NoNewline
     }
     
     try {
@@ -220,9 +220,9 @@ function Clear-Databases {
         }
         
         if ($neo4jCount -eq 0 -and $nexusCount -eq 0) {
-            Write-Host " ✓" -ForegroundColor Green
+            Write-Host " OK" -ForegroundColor Green
         } else {
-            Write-Host " ⚠ (Neo4j: $neo4jCount nodes, Nexus: $nexusCount nodes remaining)" -ForegroundColor Yellow -NoNewline
+            Write-Host " WARN (Neo4j: $neo4jCount nodes, Nexus: $nexusCount nodes remaining)" -ForegroundColor Yellow -NoNewline
             # Try DETACH DELETE as fallback with delay
             Invoke-Neo4jQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
             Invoke-NexusQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
@@ -230,7 +230,7 @@ function Clear-Databases {
             Write-Host " - retried with DETACH DELETE" -ForegroundColor Yellow
         }
     } catch {
-        Write-Host " ✗ (Error: $($_.Exception.Message))" -ForegroundColor Red
+        Write-Host " ERROR (Error: $($_.Exception.Message))" -ForegroundColor Red
     }
 }
 
@@ -278,7 +278,7 @@ function Setup-TestData {
             Invoke-NexusQuery -Cypher "MATCH (p1:Person {name: 'Alice'}), (p2:Person {name: 'Bob'}) CREATE (p1)-[:KNOWS]->(p2)" | Out-Null
         }
     } catch {
-        Write-Host "⚠ Warning: Setup data creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "WARN Warning: Setup data creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
 
@@ -306,14 +306,14 @@ function Run-Test {
 Write-Host "`n🔧 Setting up test environment..." -ForegroundColor Cyan
 Invoke-Neo4jQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
 Invoke-NexusQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
-Write-Host "✓ Databases cleaned`n" -ForegroundColor Green
+Write-Host "OK Databases cleaned`n" -ForegroundColor Green
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 1: BASIC CREATE AND RETURN (20 tests)
-#═══════════════════════════════════════════════════════════════════
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 1: Basic CREATE and RETURN (20 tests)      │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 1: Basic CREATE and RETURN (20 tests)      |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "1.01 CREATE single node" -Query "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n.name AS name"
 Run-Test -Name "1.02 CREATE and return literal" -Query "CREATE (n:Person {name: 'Bob'}) RETURN 'created' AS status"
@@ -324,7 +324,7 @@ Run-Test -Name "1.06 RETURN literal number" -Query "RETURN 42 AS answer"
 Run-Test -Name "1.07 RETURN literal string" -Query "RETURN 'hello' AS greeting"
 Run-Test -Name "1.08 RETURN literal boolean" -Query "RETURN true AS flag"
 Run-Test -Name "1.09 RETURN literal null" -Query "RETURN null AS empty"
-Run-Test -Name "1.10 RETURN literal array" -Query "RETURN [1, 2, 3] AS numbers"
+Run-Test -Name "1.10 RETURN literal array" -Query 'RETURN [1, 2, 3] AS numbers'
 Run-Test -Name "1.11 RETURN arithmetic expression" -Query "RETURN 10 + 5 AS sum"
 Run-Test -Name "1.12 RETURN multiplication" -Query "RETURN 3 * 4 AS product"
 Run-Test -Name "1.13 RETURN division" -Query "RETURN 20 / 4 AS quotient"
@@ -336,15 +336,15 @@ Run-Test -Name "1.18 RETURN equality" -Query "RETURN 'test' = 'test' AS result"
 Run-Test -Name "1.19 RETURN logical AND" -Query "RETURN true AND false AS result"
 Run-Test -Name "1.20 RETURN logical OR" -Query "RETURN true OR false AS result"
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 2: MATCH QUERIES (25 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # Section 2 uses data from Section 1, but we need to ensure clean state
 Clear-Databases -SectionName "Section 2: MATCH Queries"
 Setup-TestData -DataType "basic"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 2: MATCH Queries (25 tests)                │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 2: MATCH Queries (25 tests)                |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "2.01 MATCH all Person nodes" -Query "MATCH (n:Person) RETURN count(n) AS cnt"
 Run-Test -Name "2.02 MATCH all Company nodes" -Query "MATCH (n:Company) RETURN count(n) AS cnt"
@@ -353,12 +353,12 @@ Run-Test -Name "2.04 MATCH Person with property" -Query "MATCH (n:Person {name: 
 Run-Test -Name "2.05 MATCH and return multiple properties" -Query "MATCH (n:Person {name: 'Alice'}) RETURN n.name AS name, n.age AS age"
 Run-Test -Name "2.06 MATCH with WHERE clause" -Query 'MATCH (n:Person) WHERE n.age > 30 RETURN count(n) AS cnt'
 Run-Test -Name "2.07 MATCH with WHERE equality" -Query "MATCH (n:Person) WHERE n.name = 'Bob' RETURN n.name"
-Run-Test -Name "2.08 MATCH with WHERE inequality" -Query "MATCH (n:Person) WHERE n.name <> 'Alice' RETURN count(n) AS cnt"
+Run-Test -Name "2.08 MATCH with WHERE inequality" -Query 'MATCH (n:Person) WHERE n.name <> ''Alice'' RETURN count(n) AS cnt'
 Run-Test -Name "2.09 MATCH with WHERE AND" -Query 'MATCH (n:Person) WHERE n.age > 25 AND n.age < 35 RETURN count(n) AS cnt'
 Run-Test -Name "2.10 MATCH with WHERE OR" -Query "MATCH (n:Person) WHERE n.name = 'Alice' OR n.name = 'Bob' RETURN count(n) AS cnt"
 Run-Test -Name "2.11 MATCH with WHERE NOT" -Query 'MATCH (n:Person) WHERE NOT n.age > 35 RETURN count(n) AS cnt'
-Run-Test -Name "2.12 MATCH with WHERE IN" -Query "MATCH (n:Person) WHERE n.name IN ['Alice', 'Bob'] RETURN count(n) AS cnt"
-Run-Test -Name "2.13 MATCH with WHERE empty IN" -Query "MATCH (n:Person) WHERE n.name IN [] RETURN count(n) AS cnt"
+Run-Test -Name "2.12 MATCH with WHERE IN" -Query 'MATCH (n:Person) WHERE n.name IN [''Alice'', ''Bob''] RETURN count(n) AS cnt'
+Run-Test -Name "2.13 MATCH with WHERE empty IN" -Query 'MATCH (n:Person) WHERE n.name IN [] RETURN count(n) AS cnt'
 Run-Test -Name "2.14 MATCH with WHERE IS NULL" -Query "MATCH (n:Person) WHERE n.city IS NULL RETURN count(n) AS cnt"
 Run-Test -Name "2.15 MATCH with WHERE IS NOT NULL" -Query "MATCH (n:Person) WHERE n.age IS NOT NULL RETURN count(n) AS cnt"
 Run-Test -Name "2.16 MATCH with LIMIT" -Query "MATCH (n:Person) RETURN n.name AS name LIMIT 2"
@@ -372,15 +372,15 @@ Run-Test -Name "2.23 MATCH all properties" -Query "MATCH (n:Person {name: 'Alice
 Run-Test -Name "2.24 MATCH labels function" -Query "MATCH (n:Person) WHERE n.name = 'David' RETURN labels(n) AS lbls"
 Run-Test -Name "2.25 MATCH keys function" -Query "MATCH (n:Person {name: 'Alice'}) RETURN keys(n) AS ks"
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 3: AGGREGATION FUNCTIONS (25 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # Section 3 uses data from Section 1-2, but we need to ensure clean state
 Clear-Databases -SectionName "Section 3: Aggregation Functions"
 Setup-TestData -DataType "basic"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 3: Aggregation Functions (25 tests)        │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 3: Aggregation Functions (25 tests)        |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "3.01 COUNT all nodes" -Query "MATCH (n) RETURN count(n) AS cnt"
 Run-Test -Name "3.02 COUNT Person nodes" -Query "MATCH (n:Person) RETURN count(n) AS cnt"
@@ -408,13 +408,13 @@ Run-Test -Name "3.23 Aggregation with LIMIT" -Query "MATCH (n:Person) RETURN n.c
 Run-Test -Name "3.24 COLLECT with ORDER BY" -Query "MATCH (n:Person) RETURN collect(n.name) AS names ORDER BY names"
 Run-Test -Name "3.25 COUNT with multiple labels" -Query "MATCH (n:Person:Employee) RETURN count(n) AS cnt"
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 4: STRING FUNCTIONS (20 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Clear-Databases -SectionName "Section 4: String Functions"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 4: String Functions (20 tests)             │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 4: String Functions (20 tests)             |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "4.01 toLower function" -Query "RETURN toLower('HELLO') AS result"
 Run-Test -Name "4.02 toUpper function" -Query "RETURN toUpper('hello') AS result"
@@ -439,44 +439,44 @@ Run-Test -Name "4.18 WHERE ENDS WITH" -Query "MATCH (n:Person) WHERE n.name ENDS
 Run-Test -Name "4.19 WHERE CONTAINS" -Query "MATCH (n:Person) WHERE n.name CONTAINS 'li' RETURN count(n) AS cnt"
 Run-Test -Name "4.20 String comparison" -Query 'RETURN ''apple'' < ''banana'' AS result'
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 5: LIST/ARRAY OPERATIONS (20 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Clear-Databases -SectionName "Section 5: List/Array Operations"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 5: List/Array Operations (20 tests)        │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 5: List/Array Operations (20 tests)        |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
-Run-Test -Name "5.01 Return literal array" -Query "RETURN [1, 2, 3, 4, 5] AS numbers"
-Run-Test -Name "5.02 Array size" -Query "RETURN size([1, 2, 3]) AS length"
-Run-Test -Name "5.03 head function" -Query "RETURN head([1, 2, 3]) AS first"
-Run-Test -Name "5.04 tail function" -Query "RETURN tail([1, 2, 3]) AS rest"
-Run-Test -Name "5.05 last function" -Query "RETURN last([1, 2, 3]) AS final"
-Run-Test -Name "5.06 Array indexing" -Query "RETURN [1, 2, 3][0] AS first"
-Run-Test -Name "5.07 Array slicing" -Query "RETURN [1, 2, 3, 4, 5][1..3] AS slice"
-Run-Test -Name "5.08 Array concatenation" -Query "RETURN [1, 2] + [3, 4] AS combined"
-Run-Test -Name "5.09 IN operator with array" -Query "RETURN 2 IN [1, 2, 3] AS result"
-Run-Test -Name "5.10 reverse array" -Query "RETURN reverse([1, 2, 3]) AS reversed"
+Run-Test -Name "5.01 Return literal array" -Query 'RETURN [1, 2, 3, 4, 5] AS numbers'
+Run-Test -Name "5.02 Array size" -Query 'RETURN size([1, 2, 3]) AS length'
+Run-Test -Name "5.03 head function" -Query 'RETURN head([1, 2, 3]) AS first'
+Run-Test -Name "5.04 tail function" -Query 'RETURN tail([1, 2, 3]) AS rest'
+Run-Test -Name "5.05 last function" -Query 'RETURN last([1, 2, 3]) AS final'
+Run-Test -Name "5.06 Array indexing" -Query 'RETURN [1, 2, 3][0] AS first'
+Run-Test -Name "5.07 Array slicing" -Query 'RETURN [1, 2, 3, 4, 5][1..3] AS slice'
+Run-Test -Name "5.08 Array concatenation" -Query 'RETURN [1, 2] + [3, 4] AS combined'
+Run-Test -Name "5.09 IN operator with array" -Query 'RETURN 2 IN [1, 2, 3] AS result'
+Run-Test -Name "5.10 reverse array" -Query 'RETURN reverse([1, 2, 3]) AS reversed'
 Run-Test -Name "5.11 range function" -Query "RETURN range(1, 5) AS numbers"
 Run-Test -Name "5.12 range with step" -Query "RETURN range(0, 10, 2) AS evens"
-Run-Test -Name "5.13 Array with strings" -Query "RETURN ['a', 'b', 'c'] AS letters"
-Run-Test -Name "5.14 Empty array" -Query "RETURN [] AS empty"
-Run-Test -Name "5.15 Nested arrays" -Query "RETURN [[1, 2], [3, 4]] AS nested"
-Run-Test -Name "5.16 Array with mixed types" -Query "RETURN [1, 'two', true, null] AS mixed"
-Run-Test -Name "5.17 Array indexing negative" -Query "RETURN [1, 2, 3][-1] AS last"
+Run-Test -Name "5.13 Array with strings" -Query 'RETURN [''a'', ''b'', ''c''] AS letters'
+Run-Test -Name "5.14 Empty array" -Query 'RETURN [] AS empty'
+Run-Test -Name "5.15 Nested arrays" -Query 'RETURN [[1, 2], [3, 4]] AS nested'
+Run-Test -Name "5.16 Array with mixed types" -Query 'RETURN [1, ''two'', true, null] AS mixed'
+Run-Test -Name "5.17 Array indexing negative" -Query 'RETURN [1, 2, 3][-1] AS last'
 # Setup test data for property-based array tests
 Setup-TestData -DataType "basic"
 Run-Test -Name "5.18 Array length property" -Query "MATCH (n:Person {name: 'Alice'}) RETURN size(keys(n)) AS prop_count"
 Run-Test -Name "5.19 Array with aggregation" -Query "MATCH (n:Person) RETURN collect(n.age) AS ages"
-Run-Test -Name "5.20 Array filtering with WHERE IN" -Query "MATCH (n:Person) WHERE n.name IN ['Alice', 'Bob'] RETURN count(n) AS cnt"
+Run-Test -Name "5.20 Array filtering with WHERE IN" -Query 'MATCH (n:Person) WHERE n.name IN [''Alice'', ''Bob''] RETURN count(n) AS cnt'
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 6: MATHEMATICAL OPERATIONS (20 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Clear-Databases -SectionName "Section 6: Mathematical Operations"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 6: Mathematical Operations (20 tests)      │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 6: Mathematical Operations (20 tests)      |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "6.01 Addition" -Query "RETURN 5 + 3 AS result"
 Run-Test -Name "6.02 Subtraction" -Query "RETURN 10 - 4 AS result"
@@ -501,15 +501,15 @@ Run-Test -Name "6.18 Math with WHERE" -Query 'MATCH (n:Person) WHERE n.age * 2 >
 Run-Test -Name "6.19 Math in RETURN" -Query "MATCH (n:Person) RETURN n.age * 2 AS double_age LIMIT 1"
 Run-Test -Name "6.20 Math aggregation" -Query "MATCH (n:Person) RETURN sum(n.age) / count(n) AS avg_age"
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 7: RELATIONSHIPS (30 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Clear-Databases -SectionName "Section 7: Relationships"
 # Setup test data with relationships
 Setup-TestData -DataType "relationships"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 7: Relationships (30 tests)                │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 7: Relationships (30 tests)                |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "7.01 MATCH relationship" -Query "MATCH (a)-[r]->(b) RETURN count(r) AS cnt"
 Run-Test -Name "7.02 MATCH specific rel type" -Query "MATCH (a)-[r:KNOWS]->(b) RETURN count(r) AS cnt"
@@ -542,13 +542,13 @@ Run-Test -Name "7.28 Filter by rel property" -Query 'MATCH ()-[r]->() WHERE r.si
 Run-Test -Name "7.29 Return distinct rel types" -Query 'MATCH ()-[r]->() RETURN DISTINCT type(r) AS t ORDER BY t'
 Run-Test -Name "7.30 Complex relationship query" -Query "MATCH (a:Person)-[r:WORKS_AT]->(c:Company) RETURN a.name AS person, c.name AS company, r.since AS year ORDER BY year"
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 8: NULL HANDLING (15 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Clear-Databases -SectionName "Section 8: NULL Handling"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 8: NULL Handling (15 tests)                │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 8: NULL Handling (15 tests)                |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "8.01 Return NULL" -Query "RETURN null AS result"
 Run-Test -Name "8.02 IS NULL check" -Query "RETURN null IS NULL AS result"
@@ -566,15 +566,15 @@ Run-Test -Name "8.11 coalesce multiple" -Query 'RETURN coalesce(null, null, ''th
 Run-Test -Name "8.12 NULL in aggregation" -Query "MATCH (n:Person) RETURN count(n.city) AS cnt"
 Run-Test -Name "8.13 NULL property access" -Query "MATCH (n:Person {name: 'Alice'}) RETURN n.nonexistent AS result"
 Run-Test -Name "8.14 CASE with NULL" -Query "RETURN CASE WHEN null THEN 'yes' ELSE 'no' END AS result"
-Run-Test -Name "8.15 NULL in array" -Query "RETURN [1, null, 3] AS array"
+Run-Test -Name "8.15 NULL in array" -Query 'RETURN [1, null, 3] AS array'
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 9: CASE EXPRESSIONS (10 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Clear-Databases -SectionName "Section 9: CASE Expressions"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 9: CASE Expressions (10 tests)             │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 9: CASE Expressions (10 tests)             |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "9.01 Simple CASE" -Query 'RETURN CASE WHEN 5 > 3 THEN ''yes'' ELSE ''no'' END AS result'
 Run-Test -Name "9.02 CASE with multiple WHEN" -Query 'RETURN CASE WHEN 1 > 2 THEN ''a'' WHEN 2 > 1 THEN ''b'' ELSE ''c'' END AS result'
@@ -589,15 +589,15 @@ Run-Test -Name "9.08 Nested CASE" -Query "RETURN CASE WHEN true THEN CASE WHEN t
 Run-Test -Name "9.09 CASE in aggregation" -Query 'MATCH (n:Person) RETURN count(CASE WHEN n.age > 30 THEN 1 END) AS cnt'
 Run-Test -Name "9.10 CASE with ORDER BY" -Query 'MATCH (n:Person) RETURN n.name, CASE WHEN n.age > 30 THEN 1 ELSE 0 END AS flag ORDER BY flag, n.name LIMIT 3'
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # SECTION 10: UNION QUERIES (10 tests)
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Clear-Databases -SectionName "Section 10: UNION Queries"
 # Setup test data for UNION tests
 Setup-TestData -DataType "basic"
-Write-Host "`n┌─────────────────────────────────────────────────────┐" -ForegroundColor Yellow
-Write-Host "│ Section 10: UNION Queries (10 tests)               │" -ForegroundColor Yellow
-Write-Host "└─────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 10: UNION Queries (10 tests)               |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
 
 Run-Test -Name "10.01 UNION two queries" -Query "MATCH (n:Person) RETURN n.name AS name UNION MATCH (n:Company) RETURN n.name AS name"
 Run-Test -Name "10.02 UNION ALL" -Query "MATCH (n:Person) RETURN n.name AS name UNION ALL MATCH (n:Company) RETURN n.name AS name"
@@ -610,12 +610,12 @@ Run-Test -Name "10.08 UNION empty results" -Query "MATCH (n:NonExistent) RETURN 
 Run-Test -Name "10.09 UNION with different types" -Query "RETURN 1 AS val UNION RETURN 'text' AS val"
 Run-Test -Name "10.10 UNION with NULL" -Query "RETURN null AS val UNION RETURN 'value' AS val"
 
-#═══════════════════════════════════════════════════════════════════
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 # FINAL REPORT
-#═══════════════════════════════════════════════════════════════════
-Write-Host "`n╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║                     TEST SUMMARY                            ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
+Write-Host "`n+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
+Write-Host '|                     TEST SUMMARY                            |' -ForegroundColor Cyan
+Write-Host '+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +' -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Total Tests:   " -NoNewline
 Write-Host ($global:PassedTests + $global:FailedTests + $global:SkippedTests) -ForegroundColor White
@@ -645,31 +645,31 @@ Write-Host ""
 
 # Show failed tests if any
 if ($global:FailedTests -gt 0) {
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Red
-    Write-Host "║                      FAILED TESTS                           ║" -ForegroundColor Red
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+    Write-Host '+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +' -ForegroundColor Red
+    Write-Host '|                      FAILED TESTS                           |' -ForegroundColor Red
+    Write-Host '+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +' -ForegroundColor Red
     Write-Host ""
     
     $failedResults = $global:TestResults | Where-Object { $_.Status -eq "FAILED" }
     foreach ($test in $failedResults) {
-        Write-Host "❌ $($test.Name)" -ForegroundColor Red
+        Write-Host "ERROR $($test.Name)" -ForegroundColor Red
         Write-Host "   Query: $($test.Query)" -ForegroundColor Gray
-        Write-Host "   $($test.Message)" -ForegroundColor Yellow
+        Write-Host ('   ' + $test.Message) -ForegroundColor Yellow
         Write-Host ""
     }
 }
 
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║                    COMPATIBILITY STATUS                     ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host '+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +' -ForegroundColor Cyan
+Write-Host '|                    COMPATIBILITY STATUS                     |' -ForegroundColor Cyan
+Write-Host '+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +' -ForegroundColor Cyan
 Write-Host ""
 
 if ($passRate -ge 95) {
-    Write-Host "✅ EXCELLENT - Nexus has achieved high Neo4j compatibility!" -ForegroundColor Green
+    Write-Host 'OK EXCELLENT - Nexus has achieved high Neo4j compatibility!' -ForegroundColor Green
 } elseif ($passRate -ge 80) {
-    Write-Host "⚠️  GOOD - Nexus has good Neo4j compatibility with some issues." -ForegroundColor Yellow
+    Write-Host 'WARN  GOOD - Nexus has good Neo4j compatibility with some issues.' -ForegroundColor Yellow
 } else {
-    Write-Host "❌ NEEDS WORK - Nexus needs significant improvements for Neo4j compatibility." -ForegroundColor Red
+    Write-Host 'ERROR NEEDS WORK - Nexus needs significant improvements for Neo4j compatibility.' -ForegroundColor Red
 }
 Write-Host ""
 
