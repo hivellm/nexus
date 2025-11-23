@@ -422,6 +422,17 @@ The linked list structure is being built correctly, but traversal may be stoppin
 
   **Critical Question**: When line 657 reads `first_rel_ptr`, does it get the value 1 (from first relationship) or 0 (old value)?
 
+- **Observations from Test Results**:
+  - Relationships are created in **separate queries** (each with its own transaction)
+  - First relationship: Count = 1 ✓
+  - Second relationship: Count = 1 ✗ (should be 2)
+  - **Still failing after memory barriers**: Memory barriers did not resolve the issue
+
+- **New Hypothesis**:
+  Since relationships are created in separate queries/transactions, and `flush_async()` does nothing (just returns `Ok(())`), the writes may not be persisted before the second query reads. However, memory-mapped files should still be visible for reads in the same process, even if not persisted to disk.
+  
+  **Alternative Hypothesis**: The problem may not be visibility, but rather that when the second relationship reads the node, the `first_rel_ptr` is correctly 1, but `next_src_ptr` is being set incorrectly. Or the traversal is not following `next_src_ptr` correctly.
+
 The next investigation should focus on:
 1. Analyzing debug logs to see actual `next_src_ptr` values when creating relationships
 2. Verifying if traversal is following `next_src_ptr` when it's not 0

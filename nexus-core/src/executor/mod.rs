@@ -1915,13 +1915,11 @@ impl Executor {
             }
         }
 
-        // Phase 1 Deep Optimization: Use async flush for better performance
-        // For single CREATE operations, async flush is usually sufficient
-        // OS will handle page cache flushing automatically
-        // Only use sync flush when durability is critical (e.g., transaction commit)
-        // self.store_mut().flush()?; // Commented out for performance - OS will flush eventually
-        // For now, we'll still flush for safety, but consider making this configurable
-        self.store_mut().flush_async().ok(); // Use async flush for better performance
+        // CRITICAL FIX: Use synchronous flush after transaction commit
+        // This ensures writes are persisted and visible to subsequent queries
+        // Memory-mapped files need explicit flush to guarantee visibility across transactions
+        // Without this, the second relationship in a separate query may not see the first relationship's updates
+        self.store_mut().flush()?; // Synchronous flush for durability and visibility
 
         // Update label index with created nodes
         // Scan all nodes from the store that were created (iterate based on node IDs, not variables)
