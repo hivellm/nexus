@@ -3273,7 +3273,7 @@ impl Engine {
         // Store properties and get property pointer
         node_record.prop_ptr =
             if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-                self.storage.property_store.store_properties(
+                self.storage.property_store.write().unwrap().store_properties(
                     id,
                     storage::property_store::EntityType::Node,
                     properties,

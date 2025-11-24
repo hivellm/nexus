@@ -92,12 +92,26 @@ impl PropertyStore {
         entity_type: EntityType,
         properties: serde_json::Value,
     ) -> Result<u64> {
+        let key = (entity_id, entity_type);
+        println!(
+            "[DEBUG store_properties] Checking if properties exist: entity_id={}, entity_type={:?}, reverse_index size={}",
+            entity_id, entity_type, self.reverse_index.len()
+        );
         // Check if properties already exist for this entity
-        if let Some(&existing_ptr) = self.reverse_index.get(&(entity_id, entity_type)) {
+        if let Some(&existing_ptr) = self.reverse_index.get(&key) {
+            println!(
+                "[DEBUG store_properties] Properties already exist: entity_id={}, entity_type={:?}, existing_ptr={}, calling update_properties",
+                entity_id, entity_type, existing_ptr
+            );
             // Update existing properties - may return new offset if properties don't fit
             let actual_offset =
                 self.update_properties(existing_ptr, entity_id, entity_type, properties)?;
             return Ok(actual_offset);
+        } else {
+            println!(
+                "[DEBUG store_properties] Properties do NOT exist: entity_id={}, entity_type={:?}, creating new entry",
+                entity_id, entity_type
+            );
         }
 
         // Phase 1 Deep Optimization: Use to_string for small properties, to_writer for large
@@ -132,6 +146,10 @@ impl PropertyStore {
 
         // Write property entry
         let offset = self.next_offset;
+        println!(
+            "[DEBUG store_properties] BEFORE: entity_id={}, entity_type={:?}, next_offset={}, offset={}",
+            entity_id, entity_type, self.next_offset, offset
+        );
 
         // Phase 1 Deep Optimization: Batch writes to reduce mmap access overhead
         // Write header (entity_id + entity_type + data_size) in one operation
@@ -156,10 +174,20 @@ impl PropertyStore {
 
         // Update indexes
         self.index.insert(offset, (entity_id, entity_type));
-        self.reverse_index.insert((entity_id, entity_type), offset);
+        let key = (entity_id, entity_type);
+        self.reverse_index.insert(key, offset);
+        println!(
+            "[DEBUG store_properties] Stored properties: entity_id={}, entity_type={:?}, offset={}, reverse_index size={}",
+            entity_id, entity_type, offset, self.reverse_index.len()
+        );
 
         // Update next offset
+        let old_next_offset = self.next_offset;
         self.next_offset = offset + entry_size as u64;
+        println!(
+            "[DEBUG store_properties] AFTER: entity_id={}, entity_type={:?}, offset={}, entry_size={}, old_next_offset={}, new_next_offset={}",
+            entity_id, entity_type, offset, entry_size, old_next_offset, self.next_offset
+        );
 
         Ok(offset)
     }
@@ -170,9 +198,32 @@ impl PropertyStore {
         entity_id: u64,
         entity_type: EntityType,
     ) -> Result<Option<serde_json::Value>> {
-        if let Some(&property_ptr) = self.reverse_index.get(&(entity_id, entity_type)) {
+        let key = (entity_id, entity_type);
+        println!(
+            "[DEBUG load_properties] Looking up entity_id={}, entity_type={:?}, reverse_index size={}",
+            entity_id, entity_type, self.reverse_index.len()
+        );
+        
+        // DEBUG: Check if key exists
+        if let Some(&property_ptr) = self.reverse_index.get(&key) {
+            println!(
+                "[DEBUG load_properties] Found entry in reverse_index: entity_id={}, entity_type={:?}, property_ptr={}",
+                entity_id, entity_type, property_ptr
+            );
             self.load_properties_at_offset(property_ptr)
         } else {
+            println!(
+                "[DEBUG load_properties] NOT FOUND in reverse_index: entity_id={}, entity_type={:?}",
+                entity_id, entity_type
+            );
+            // DEBUG: List all entries for this entity_id (any type)
+            let node_key = (entity_id, EntityType::Node);
+            let rel_key = (entity_id, EntityType::Relationship);
+            println!(
+                "[DEBUG load_properties] Checking alternative keys: node_key exists={}, rel_key exists={}",
+                self.reverse_index.contains_key(&node_key),
+                self.reverse_index.contains_key(&rel_key)
+            );
             Ok(None)
         }
     }
@@ -232,6 +283,10 @@ impl PropertyStore {
         entity_type: EntityType,
         properties: serde_json::Value,
     ) -> Result<u64> {
+        println!(
+            "[DEBUG update_properties] Called: entity_id={}, entity_type={:?}, offset={}, next_offset={}",
+            entity_id, entity_type, offset, self.next_offset
+        );
         // Serialize new properties
         let serialized = serde_json::to_vec(&properties).map_err(Error::Json)?;
 
@@ -239,15 +294,27 @@ impl PropertyStore {
 
         // Read existing data size
         let existing_data_size = self.read_u32(offset + 9);
+        println!(
+            "[DEBUG update_properties] existing_data_size={}, new_data_size={}",
+            existing_data_size, new_data_size
+        );
 
         // If new data fits in existing space, update in place
         if new_data_size <= existing_data_size {
+            println!(
+                "[DEBUG update_properties] Updating in place: offset={}",
+                offset
+            );
             self.write_u32(offset + 9, new_data_size);
             self.write_bytes(offset + 13, &serialized);
             Ok(offset) // Return same offset
         } else {
             // Need to allocate new space
             let new_offset = self.next_offset;
+            println!(
+                "[DEBUG update_properties] Allocating new space: old_offset={}, new_offset={}",
+                offset, new_offset
+            );
             let entry_size = 8 + 1 + 4 + new_data_size as usize;
 
             self.ensure_capacity(new_offset + entry_size as u64)?;
@@ -278,13 +345,167 @@ impl PropertyStore {
         Ok(())
     }
 
-    /// Rebuild index from existing data
-    fn rebuild_index(&mut self) -> Result<()> {
+    /// Clear all properties and reset the store
+    pub fn clear_all(&mut self) -> Result<()> {
+        println!("[DEBUG PropertyStore::clear_all] Clearing all properties");
+        println!(
+            "[DEBUG PropertyStore::clear_all] BEFORE: next_offset={}, index size={}, reverse_index size={}",
+            self.next_offset,
+            self.index.len(),
+            self.reverse_index.len()
+        );
+        
+        // Clear indexes
         self.index.clear();
         self.reverse_index.clear();
         self.next_offset = 0;
 
+        // Truncate and zero out the property file
+        let property_file = self.path.join("properties.store");
+        if property_file.exists() {
+            println!("[DEBUG PropertyStore::clear_all] Truncating and zeroing property file");
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(true)
+                .open(&property_file)?;
+            
+            // Write initial size (1MB) filled with zeros
+            file.write_all(&[0u8; 1024 * 1024])?;
+            file.sync_all()?;
+            
+            // CRITICAL: Drop the file handle before recreating mmap to ensure changes are flushed
+            drop(file);
+            
+            // Reopen file for mmap
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&property_file)?;
+            
+            // Recreate memory mapping
+            self.mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+            println!("[DEBUG PropertyStore::clear_all] Recreated mmap, mmap.len()={}", self.mmap.len());
+        }
+
+        println!(
+            "[DEBUG PropertyStore::clear_all] AFTER: next_offset={}, index size={}, reverse_index size={}",
+            self.next_offset,
+            self.index.len(),
+            self.reverse_index.len()
+        );
+
+        Ok(())
+    }
+
+    /// Rebuild index from existing data
+    fn rebuild_index(&mut self) -> Result<()> {
+        // CRITICAL: Only rebuild if indexes are empty or if explicitly requested
+        // If indexes already have data, don't rebuild - this would reset next_offset incorrectly
+        if !self.index.is_empty() || !self.reverse_index.is_empty() {
+            println!(
+                "[DEBUG rebuild_index] SKIPPING: indexes already populated (index size={}, reverse_index size={}, next_offset={})",
+                self.index.len(),
+                self.reverse_index.len(),
+                self.next_offset
+            );
+            return Ok(());
+        }
+        
+        println!(
+            "[DEBUG rebuild_index] STARTING: mmap.len()={}, current next_offset={}",
+            self.mmap.len(),
+            self.next_offset
+        );
+        
+        // CRITICAL FIX: Check if file is empty (all zeros) - if so, don't rebuild
+        // This prevents rebuild_index from finding old data after clear_all() and resetting next_offset incorrectly
+        let first_13_bytes = &self.mmap[0..std::cmp::min(13, self.mmap.len())];
+        let is_empty = first_13_bytes.iter().all(|&b| b == 0);
+        
+        if is_empty {
+            println!(
+                "[DEBUG rebuild_index] SKIPPING: file is empty (all zeros), keeping next_offset=0"
+            );
+            self.next_offset = 0;
+            return Ok(());
+        }
+        
+        // CRITICAL FIX: If next_offset is already > 0, don't rebuild from file
+        // This prevents rebuild_index from resetting next_offset to old values when PropertyStore
+        // is recreated after nodes have already been created in the current session
+        // The next_offset should only be set from file scan if it's 0 (initial state)
+        if self.next_offset > 0 {
+            println!(
+                "[DEBUG rebuild_index] SKIPPING: next_offset already set to {} (not rebuilding from file to avoid reset)",
+                self.next_offset
+            );
+            // Still rebuild indexes for lookup, but preserve next_offset
+            let preserved_next_offset = self.next_offset;
+            self.index.clear();
+            self.reverse_index.clear();
+            
+            // Scan file to rebuild indexes, but don't update next_offset
+            let mut offset = 0;
+            while offset < self.mmap.len() as u64 && offset < preserved_next_offset {
+                if offset + 13 > self.mmap.len() as u64 {
+                    break;
+                }
+
+                let entity_id = self.read_u64(offset);
+                let entity_type_byte = self.read_u8(offset + 8);
+                let data_size = self.read_u32(offset + 9);
+
+                if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
+                    break;
+                }
+
+                let entity_type = match EntityType::from_u8(entity_type_byte) {
+                    Ok(et) => et,
+                    Err(_) => break,
+                };
+
+                let entry_size = 8 + 1 + 4 + data_size as usize;
+                if offset + entry_size as u64 > self.mmap.len() as u64 {
+                    break;
+                }
+
+                self.index.insert(offset, (entity_id, entity_type));
+                self.reverse_index.insert((entity_id, entity_type), offset);
+
+                offset += entry_size as u64;
+            }
+            
+            // Restore preserved next_offset
+            self.next_offset = preserved_next_offset;
+            println!(
+                "[DEBUG rebuild_index] COMPLETED: preserved next_offset={}, rebuilt index size={}, reverse_index size={}",
+                self.next_offset,
+                self.index.len(),
+                self.reverse_index.len()
+            );
+            return Ok(());
+        }
+        
+        let old_next_offset = self.next_offset;
+        let old_index_size = self.index.len();
+        let old_reverse_index_size = self.reverse_index.len();
+        
+        self.index.clear();
+        self.reverse_index.clear();
+        self.next_offset = 0;
+        
+        println!(
+            "[DEBUG rebuild_index] Cleared indexes: old_next_offset={}, old_index_size={}, old_reverse_index_size={}",
+            old_next_offset, old_index_size, old_reverse_index_size
+        );
+
+        // CRITICAL FIX: Track the maximum offset found in the file
+        // This helps detect if we're reading old data that shouldn't be used
         let mut offset = 0;
+        let mut max_valid_offset = 0;
+        let mut found_valid_entries = false;
+        
         while offset < self.mmap.len() as u64 {
             if offset + 13 > self.mmap.len() as u64 {
                 break;
@@ -297,7 +518,16 @@ impl PropertyStore {
             // Check if this looks like a valid entry (not all zeros)
             if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
                 // Found first empty entry, stop scanning
-                self.next_offset = offset;
+                println!(
+                    "[DEBUG rebuild_index] Found empty entry at offset={}, found_valid_entries={}, max_valid_offset={}",
+                    offset, found_valid_entries, max_valid_offset
+                );
+                // Only set next_offset if we found valid entries, otherwise keep it at 0
+                if found_valid_entries {
+                    self.next_offset = offset;
+                } else {
+                    self.next_offset = 0;
+                }
                 break;
             }
 
@@ -318,11 +548,31 @@ impl PropertyStore {
             // Update indexes
             self.index.insert(offset, (entity_id, entity_type));
             self.reverse_index.insert((entity_id, entity_type), offset);
+            
+            found_valid_entries = true;
+            max_valid_offset = offset + entry_size as u64;
 
             offset += entry_size as u64;
         }
 
-        self.next_offset = offset;
+        // CRITICAL FIX: Only update next_offset if we found valid entries
+        // If the file contains only old data (from previous runs), don't use it
+        // This prevents rebuild_index from resetting next_offset to old values
+        if found_valid_entries {
+            self.next_offset = offset;
+        } else {
+            // No valid entries found, keep next_offset at 0
+            self.next_offset = 0;
+            println!(
+                "[DEBUG rebuild_index] No valid entries found in file, keeping next_offset=0"
+            );
+        }
+        println!(
+            "[DEBUG rebuild_index] COMPLETED: final next_offset={}, index size={}, reverse_index size={}",
+            self.next_offset,
+            self.index.len(),
+            self.reverse_index.len()
+        );
         Ok(())
     }
 
@@ -718,7 +968,29 @@ mod tests {
 
 impl Clone for PropertyStore {
     fn clone(&self) -> Self {
-        // Clone by recreating from path (safe since property store is read-only for clones)
-        Self::new(self.path.clone()).expect("Failed to clone PropertyStore")
+        // CRITICAL FIX: Clone by preserving next_offset and indexes from the original
+        // This prevents rebuild_index() from resetting next_offset to old values when RecordStore is cloned
+        // Instead, we clone the indexes and next_offset directly, and only recreate the mmap
+        
+        let property_file = self.path.join("properties.store");
+        
+        // Open the same file (don't create new)
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&property_file)
+            .expect("Failed to open property file for clone");
+        
+        // Recreate memory mapping from the same file
+        let mmap = unsafe { MmapOptions::new().map_mut(&file).expect("Failed to map property file for clone") };
+        
+        // Clone indexes and preserve next_offset from original
+        Self {
+            path: self.path.clone(),
+            mmap,
+            next_offset: self.next_offset, // CRITICAL: Preserve next_offset from original
+            index: self.index.clone(),      // CRITICAL: Preserve index from original
+            reverse_index: self.reverse_index.clone(), // CRITICAL: Preserve reverse_index from original
+        }
     }
 }

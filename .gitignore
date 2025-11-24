@@ -56,3 +56,4 @@ test-*
 !test-*.ps1
 !test-*.ts
 !test-*.rs
+!test-*.sh
