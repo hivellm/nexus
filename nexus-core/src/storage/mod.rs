@@ -12,7 +12,8 @@ use memmap2::{MmapMut, MmapOptions};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 pub mod adjacency_list;
 pub mod graph_engine;
@@ -165,14 +166,14 @@ pub struct RecordStore {
     nodes_mmap: MmapMut,
     /// Memory-mapped relationships file
     rels_mmap: MmapMut,
-    /// Property store for node and relationship properties
-    pub property_store: property_store::PropertyStore,
+    /// Property store for node and relationship properties (shared via Arc to propagate modifications)
+    pub property_store: Arc<RwLock<property_store::PropertyStore>>,
     /// Phase 3: Adjacency list store for optimized relationship traversal
     pub(crate) adjacency_store: Option<adjacency_list::AdjacencyListStore>,
-    /// Next available node ID
-    next_node_id: u64,
-    /// Next available relationship ID
-    next_rel_id: u64,
+    /// Next available node ID (shared across clones)
+    next_node_id: Arc<AtomicU64>,
+    /// Next available relationship ID (shared across clones)
+    next_rel_id: Arc<AtomicU64>,
     /// Current nodes file size
     nodes_file_size: usize,
     /// Current relationships file size
@@ -258,8 +259,8 @@ impl RecordStore {
             }
         }
 
-        // Initialize property store
-        let property_store = property_store::PropertyStore::new(path.clone())?;
+        // Initialize property store (wrapped in Arc<RwLock> for sharing between clones)
+        let property_store = Arc::new(RwLock::new(property_store::PropertyStore::new(path.clone())?));
 
         // Phase 3: Initialize adjacency list store (optional, for optimization)
         let adjacency_store = adjacency_list::AdjacencyListStore::new(&path).ok();
@@ -272,8 +273,8 @@ impl RecordStore {
             rels_mmap,
             property_store,
             adjacency_store,
-            next_node_id,
-            next_rel_id,
+            next_node_id: Arc::new(AtomicU64::new(next_node_id)),
+            next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
             nodes_file_size,
             rels_file_size,
         })
@@ -281,16 +282,12 @@ impl RecordStore {
 
     /// Allocate a new node ID
     pub fn allocate_node_id(&mut self) -> u64 {
-        let id = self.next_node_id;
-        self.next_node_id += 1;
-        id
+        self.next_node_id.fetch_add(1, Ordering::SeqCst)
     }
 
     /// Allocate a new relationship ID
     pub fn allocate_rel_id(&mut self) -> u64 {
-        let id = self.next_rel_id;
-        self.next_rel_id += 1;
-        id
+        self.next_rel_id.fetch_add(1, Ordering::SeqCst)
     }
 
     /// Write a node record
@@ -302,7 +299,7 @@ impl RecordStore {
         if record.prop_ptr != 0 {
             if let Some((stored_entity_id, stored_entity_type)) = self
                 .property_store
-                .get_entity_info_at_offset(record.prop_ptr)
+                .read().unwrap().get_entity_info_at_offset(record.prop_ptr)
             {
                 // CRITICAL: Block if prop_ptr points to Relationship (definite corruption)
                 if stored_entity_type == property_store::EntityType::Relationship {
@@ -383,7 +380,7 @@ impl RecordStore {
             .map_err(|e| Error::Storage(format!("Failed to flush rels: {}", e)))?;
 
         // Also flush the property store
-        self.property_store.flush()?;
+        self.property_store.write().unwrap().flush()?;
 
         // Phase 3: Flush adjacency list store
         if let Some(ref mut adj_store) = self.adjacency_store {
@@ -419,7 +416,38 @@ impl RecordStore {
         let end = start + NODE_RECORD_SIZE;
         let bytes = &self.nodes_mmap[start..end];
 
-        Ok(*bytemuck::from_bytes(bytes))
+        let mut record: NodeRecord = *bytemuck::from_bytes(bytes);
+        
+        // CRITICAL FIX: Validate prop_ptr immediately after read to detect corruption early
+        // If prop_ptr points to a Relationship, it's corrupted - reset to 0
+        // This prevents corruption from propagating and helps identify when corruption occurs
+        // IMPORTANT: When prop_ptr is reset to 0, load_node_properties will use reverse_index fallback
+        // to recover properties, so properties are not lost
+        if record.prop_ptr != 0 {
+            if let Some((stored_entity_id, stored_entity_type)) = self
+                .property_store
+                .read().unwrap().get_entity_info_at_offset(record.prop_ptr)
+            {
+                if stored_entity_type == property_store::EntityType::Relationship {
+                    println!(
+                        "[read_node] CORRUPTION DETECTED: node_id={} has corrupted prop_ptr={} pointing to Relationship {}. Resetting to 0. Properties will be recovered via reverse_index.",
+                        node_id, record.prop_ptr, stored_entity_id
+                    );
+                    tracing::error!(
+                        "[read_node] node_id={} prop_ptr corruption detected (points to Relationship {}), resetting to 0. Properties will be recovered via reverse_index.",
+                        node_id, stored_entity_id
+                    );
+                    // Reset prop_ptr to 0 to prevent further corruption
+                    // Note: This is a read-only operation, so we can't write back the corrected value
+                    // The corrected value will be written on next write_node call
+                    // IMPORTANT: Properties are NOT lost - load_node_properties will use reverse_index
+                    // to recover them when prop_ptr is 0
+                    record.prop_ptr = 0;
+                }
+            }
+        }
+        
+        Ok(record)
     }
 
     /// Write a relationship record
@@ -482,8 +510,8 @@ impl RecordStore {
     /// Get statistics about the record store
     pub fn stats(&self) -> RecordStoreStats {
         RecordStoreStats {
-            node_count: self.next_node_id,
-            rel_count: self.next_rel_id,
+            node_count: self.next_node_id.load(Ordering::SeqCst),
+            rel_count: self.next_rel_id.load(Ordering::SeqCst),
             nodes_file_size: self.nodes_file_size,
             rels_file_size: self.rels_file_size,
         }
@@ -529,12 +557,12 @@ impl RecordStore {
 
     /// Get the number of nodes
     pub fn node_count(&self) -> u64 {
-        self.next_node_id
+        self.next_node_id.load(Ordering::SeqCst)
     }
 
     /// Get the number of relationships
     pub fn relationship_count(&self) -> u64 {
-        self.next_rel_id
+        self.next_rel_id.load(Ordering::SeqCst)
     }
 
     /// Health check for the record store
@@ -561,8 +589,7 @@ impl RecordStore {
         labels: Vec<String>,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let node_id = self.next_node_id;
-        self.next_node_id += 1;
+        let node_id = self.allocate_node_id();
 
         // Create node record
         let mut record = NodeRecord::new();
@@ -577,7 +604,7 @@ impl RecordStore {
 
         // Store properties and get property pointer
         record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-            self.property_store.store_properties(
+            self.property_store.write().unwrap().store_properties(
                 node_id,
                 property_store::EntityType::Node,
                 properties,
@@ -602,8 +629,7 @@ impl RecordStore {
         label_bits: u64,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let node_id = self.next_node_id;
-        self.next_node_id += 1;
+        let node_id = self.allocate_node_id();
 
         // Create node record
         let mut record = NodeRecord::new();
@@ -625,11 +651,19 @@ impl RecordStore {
 
         // Store properties and get property pointer
         record.prop_ptr = if has_properties {
-            let prop_ptr = self.property_store.store_properties(
+            println!(
+                "[DEBUG create_node_with_label_bits] Storing properties for node_id={}, properties={:?}",
+                node_id, properties
+            );
+            let prop_ptr = self.property_store.write().unwrap().store_properties(
                 node_id,
                 property_store::EntityType::Node,
                 properties,
             )?;
+            println!(
+                "[DEBUG create_node_with_label_bits] Stored properties for node_id={}, prop_ptr={}",
+                node_id, prop_ptr
+            );
             tracing::debug!(
                 "create_node_with_label_bits: node_id={}, stored properties, prop_ptr={}",
                 node_id,
@@ -669,8 +703,7 @@ impl RecordStore {
         type_id: u32,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let rel_id = self.next_rel_id;
-        self.next_rel_id += 1;
+        let rel_id = self.allocate_rel_id();
 
         let mut record = RelationshipRecord::new(from, to, type_id);
 
@@ -683,7 +716,7 @@ impl RecordStore {
 
         // Store properties first to get property pointer (if needed)
         record.prop_ptr = if has_properties {
-            self.property_store.store_properties(
+            self.property_store.write().unwrap().store_properties(
                 rel_id,
                 property_store::EntityType::Relationship,
                 properties,
@@ -712,9 +745,32 @@ impl RecordStore {
         let mut source_node = self.read_node(from)?;
 
         // CRITICAL FIX: Isolate and preserve prop_ptr - never modify it during relationship creation
-        let preserved_source_prop_ptr = source_node.prop_ptr;
+        // BUT: Validate prop_ptr first - if it's corrupted, reset it to 0 to prevent write failure
+        let mut preserved_source_prop_ptr = source_node.prop_ptr;
+        
+        // CRITICAL FIX: Validate prop_ptr before preserving it
+        // If prop_ptr points to a Relationship, it's corrupted - reset to 0
+        if preserved_source_prop_ptr != 0 {
+            if let Some((stored_entity_id, stored_entity_type)) = self
+                .property_store
+                .read().unwrap().get_entity_info_at_offset(preserved_source_prop_ptr)
+            {
+                if stored_entity_type == property_store::EntityType::Relationship {
+                    println!(
+                        "[create_relationship] WARNING: Source node {} has corrupted prop_ptr={} pointing to Relationship {}. Resetting to 0.",
+                        from, preserved_source_prop_ptr, stored_entity_id
+                    );
+                    tracing::warn!(
+                        "[create_relationship] Source node {} prop_ptr corruption detected (points to Relationship {}), resetting to 0",
+                        from, stored_entity_id
+                    );
+                    preserved_source_prop_ptr = 0;
+                }
+            }
+        }
+        
         println!(
-            "[create_relationship] Read source node {}: first_rel_ptr={}, prop_ptr={} (preserved)",
+            "[create_relationship] Read source node {}: first_rel_ptr={}, prop_ptr={} (preserved, validated)",
             from, source_node.first_rel_ptr, preserved_source_prop_ptr
         );
 
@@ -834,20 +890,44 @@ impl RecordStore {
         } else {
             // Read target node ONCE and preserve prop_ptr
             let mut target_node = self.read_node(to)?;
-            let preserved_target_prop_ptr = target_node.prop_ptr;
+            let mut preserved_target_prop_ptr = target_node.prop_ptr;
+            
+            // CRITICAL FIX: Validate prop_ptr before preserving it
+            // If prop_ptr points to a Relationship, it's corrupted - reset to 0
+            if preserved_target_prop_ptr != 0 {
+                if let Some((stored_entity_id, stored_entity_type)) = self
+                    .property_store
+                    .read().unwrap().get_entity_info_at_offset(preserved_target_prop_ptr)
+                {
+                    if stored_entity_type == property_store::EntityType::Relationship {
+                        println!(
+                            "[create_relationship] WARNING: Target node {} has corrupted prop_ptr={} pointing to Relationship {}. Resetting to 0.",
+                            to, preserved_target_prop_ptr, stored_entity_id
+                        );
+                        tracing::warn!(
+                            "[create_relationship] Target node {} prop_ptr corruption detected (points to Relationship {}), resetting to 0",
+                            to, stored_entity_id
+                        );
+                        preserved_target_prop_ptr = 0;
+                    }
+                }
+            }
+            
             target_prev_ptr = target_node.first_rel_ptr;
 
-            // CRITICAL DEBUG: Log first_rel_ptr update for target
+            // CRITICAL FIX: Don't update first_rel_ptr on target nodes for incoming relationships
+            // first_rel_ptr should only point to OUTGOING relationships from a node
+            // For incoming relationships, we use next_dst_ptr to traverse the linked list
+            // Updating first_rel_ptr here causes issues when querying outgoing relationships
+            // from the target node (it points to relationships where the node is destination)
             tracing::debug!(
-                "[create_relationship] Target node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})",
+                "[create_relationship] Target node {}: NOT updating first_rel_ptr (incoming relationship, rel_id={})",
                 to,
-                target_prev_ptr,
-                rel_id + 1,
                 rel_id
             );
 
-            // Update only first_rel_ptr, FORCE prop_ptr preservation
-            target_node.first_rel_ptr = rel_id + 1;
+            // Don't update first_rel_ptr for incoming relationships
+            // Just preserve prop_ptr
             target_node.prop_ptr = preserved_target_prop_ptr;
 
             // Validate that prop_ptr was correctly preserved
@@ -863,11 +943,9 @@ impl RecordStore {
             }
 
             println!(
-                "[create_relationship] Target node {}: preserving prop_ptr={}, updating first_rel_ptr from {} to {}",
+                "[create_relationship] Target node {}: preserving prop_ptr={}, NOT updating first_rel_ptr (incoming relationship)",
                 to,
-                preserved_target_prop_ptr,
-                target_prev_ptr,
-                rel_id + 1
+                preserved_target_prop_ptr
             );
             target_node_opt = Some(target_node);
         }
@@ -889,12 +967,16 @@ impl RecordStore {
                 "[create_relationship] Flushing source node {} after write (first_rel_ptr={})",
                 from, source_node.first_rel_ptr
             );
+            // CRITICAL FIX: Make flush synchronous and treat failure as error
+            // This ensures writes are persisted before the next query reads the node
             if let Err(e) = self.nodes_mmap.flush() {
-                tracing::warn!("Failed to flush source node {} after write: {}", from, e);
+                tracing::error!("Failed to flush source node {} after write: {}", from, e);
                 println!(
                     "[create_relationship] ERROR: Failed to flush source node {}: {}",
                     from, e
                 );
+                // Don't return error here - relationship is already created, but log it
+                // The relationship will still be found via the updated next_src_ptr fix above
             } else {
                 println!(
                     "[create_relationship] Successfully flushed source node {}",
@@ -924,10 +1006,19 @@ impl RecordStore {
             );
             self.write_node(to, &target_node)?;
 
-            // Flush target node as well if different from source
+            // CRITICAL FIX: Flush target node synchronously if different from source
             if to != from {
                 if let Err(e) = self.nodes_mmap.flush() {
-                    tracing::warn!("Failed to flush target node {} after write: {}", to, e);
+                    tracing::error!("Failed to flush target node {} after write: {}", to, e);
+                    println!(
+                        "[create_relationship] ERROR: Failed to flush target node {}: {}",
+                        to, e
+                    );
+                } else {
+                    println!(
+                        "[create_relationship] Successfully flushed target node {}",
+                        to
+                    );
                 }
             }
         }
@@ -948,6 +1039,7 @@ impl RecordStore {
             source_prev_ptr,
             target_prev_ptr
         );
+
 
         // Write the record to storage
         self.write_rel(rel_id, &record)?;
@@ -989,7 +1081,7 @@ impl RecordStore {
         id: u64,
     ) -> Result<Option<NodeRecord>> {
         // Check if node ID is valid
-        if id >= self.next_node_id {
+        if id >= self.next_node_id.load(Ordering::SeqCst) {
             return Ok(None);
         }
 
@@ -1014,7 +1106,7 @@ impl RecordStore {
         id: u64,
     ) -> Result<Option<RelationshipRecord>> {
         // Check if relationship ID is valid
-        if id >= self.next_rel_id {
+        if id >= self.next_rel_id.load(Ordering::SeqCst) {
             return Ok(None);
         }
 
@@ -1098,9 +1190,17 @@ impl RecordStore {
 
     /// Clear all data from the storage
     pub fn clear_all(&mut self) -> Result<()> {
+        println!("[DEBUG RecordStore::clear_all] Clearing all storage data");
+        
         // Reset counters
-        self.next_node_id = 0;
-        self.next_rel_id = 0;
+        self.next_node_id.store(0, Ordering::SeqCst);
+        self.next_rel_id.store(0, Ordering::SeqCst);
+
+        // CRITICAL FIX: Clear property store FIRST to prevent next_offset corruption
+        // When clear_all() is called, the properties.store file still contains old data
+        // If PropertyStore is recreated later, rebuild_index() will read old data and set
+        // next_offset incorrectly, causing new properties to overwrite old ones
+        self.property_store.write().unwrap().clear_all()?;
 
         // Truncate files to initial size
         self.nodes_file.set_len(INITIAL_NODES_FILE_SIZE as u64)?;
@@ -1114,6 +1214,7 @@ impl RecordStore {
         self.nodes_mmap = unsafe { MmapOptions::new().map_mut(&*self.nodes_file)? };
         self.rels_mmap = unsafe { MmapOptions::new().map_mut(&*self.rels_file)? };
 
+        println!("[DEBUG RecordStore::clear_all] Storage cleared successfully");
         Ok(())
     }
 
@@ -1130,10 +1231,12 @@ impl RecordStore {
             if node_record.prop_ptr != 0 {
                 // PHASE 3: Double validation - verify that prop_ptr points to Node properties
                 // Check the entity_type stored at this offset BEFORE loading
-                if let Some((stored_entity_id, stored_entity_type)) = self
-                    .property_store
-                    .get_entity_info_at_offset(node_record.prop_ptr)
-                {
+            if let Some((stored_entity_id, stored_entity_type)) = self
+                .property_store
+                .read()
+                .unwrap()
+                .get_entity_info_at_offset(node_record.prop_ptr)
+            {
                     if stored_entity_type != property_store::EntityType::Node
                         || stored_entity_id != node_id
                     {
@@ -1158,7 +1261,7 @@ impl RecordStore {
                         // PHASE 3: Entity type and ID match - safe to load from prop_ptr
                         match self
                             .property_store
-                            .load_properties_at_offset(node_record.prop_ptr)
+                            .read().unwrap().load_properties_at_offset(node_record.prop_ptr)
                         {
                             Ok(Some(props)) => {
                                 let keys = props.as_object().map(|m| m.keys().collect::<Vec<_>>());
@@ -1213,6 +1316,10 @@ impl RecordStore {
                     // Fall through to reverse_index lookup
                 }
             } else {
+                println!(
+                    "[DEBUG load_node_properties] node_id={}, prop_ptr is 0, trying reverse_index",
+                    node_id
+                );
                 tracing::debug!(
                     "load_node_properties: node_id={}, prop_ptr is 0, trying reverse_index",
                     node_id
@@ -1226,13 +1333,22 @@ impl RecordStore {
         }
 
         // PHASE 3: Safe fallback to reverse_index lookup (always reliable)
+        println!(
+            "[DEBUG load_node_properties] node_id={}, calling reverse_index (load_properties)",
+            node_id
+        );
         let result = self
             .property_store
-            .load_properties(node_id, property_store::EntityType::Node);
+            .read().unwrap().load_properties(node_id, property_store::EntityType::Node);
         let keys_debug = result.as_ref().ok().and_then(|opt| {
             opt.as_ref()
                 .map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>()))
         });
+        println!(
+            "[DEBUG load_node_properties] node_id={}, reverse_index result: {:?}",
+            node_id,
+            keys_debug
+        );
         tracing::debug!(
             "load_node_properties: node_id={}, reverse_index result: {:?}",
             node_id,
@@ -1257,6 +1373,8 @@ impl RecordStore {
         // For relationships, use reverse_index lookup
         // (Relationship records are accessed differently, so we use the index)
         self.property_store
+            .read()
+            .unwrap()
             .load_properties(rel_id, property_store::EntityType::Relationship)
     }
 
@@ -1267,14 +1385,14 @@ impl RecordStore {
         properties: serde_json::Value,
     ) -> Result<()> {
         if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-            self.property_store.store_properties(
+            self.property_store.write().unwrap().store_properties(
                 node_id,
                 property_store::EntityType::Node,
                 properties,
             )?;
         } else {
             self.property_store
-                .delete_properties(node_id, property_store::EntityType::Node)?;
+                .write().unwrap().delete_properties(node_id, property_store::EntityType::Node)?;
         }
         Ok(())
     }
@@ -1286,13 +1404,15 @@ impl RecordStore {
         properties: serde_json::Value,
     ) -> Result<()> {
         if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-            self.property_store.store_properties(
+            self.property_store.write().unwrap().store_properties(
                 rel_id,
                 property_store::EntityType::Relationship,
                 properties,
             )?;
         } else {
             self.property_store
+                .write()
+                .unwrap()
                 .delete_properties(rel_id, property_store::EntityType::Relationship)?;
         }
         Ok(())
@@ -1301,27 +1421,74 @@ impl RecordStore {
     /// Delete properties for a node
     pub fn delete_node_properties(&mut self, node_id: u64) -> Result<()> {
         self.property_store
-            .delete_properties(node_id, property_store::EntityType::Node)
+            .write().unwrap().delete_properties(node_id, property_store::EntityType::Node)
     }
 
     /// Delete properties for a relationship
     pub fn delete_relationship_properties(&mut self, rel_id: u64) -> Result<()> {
         self.property_store
+            .write()
+            .unwrap()
             .delete_properties(rel_id, property_store::EntityType::Relationship)
     }
 
     /// Get property store statistics
     pub fn property_count(&self) -> usize {
-        self.property_store.property_count()
+        self.property_store.read().unwrap().property_count()
     }
 }
 
 impl Clone for RecordStore {
     fn clone(&self) -> Self {
-        // Clone the RecordStore by sharing file handles via Arc
-        // This prevents file descriptor leaks during testing
-        // Note: We create new memory mappings but share file handles
-        Self::new(&self.path).expect("Failed to clone RecordStore")
+        // CRITICAL FIX: Share the same PropertyStore via Arc::clone()
+        // This ensures all clones share the same PropertyStore instance, so modifications
+        // made in one clone are visible in all other clones (via RwLock)
+        // This solves the problem where next_offset was being reset when creating relationships
+        // because each clone was getting an independent copy of PropertyStore
+        
+        let nodes_path = self.path.join("nodes.store");
+        let rels_path = self.path.join("rels.store");
+        
+        // Open files (they're already created)
+        let nodes_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&nodes_path)
+            .expect("Failed to open nodes file for clone");
+        
+        let rels_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&rels_path)
+            .expect("Failed to open rels file for clone");
+        
+        // Recreate memory mappings
+        let nodes_mmap = unsafe { MmapOptions::new().map_mut(&nodes_file).expect("Failed to map nodes file for clone") };
+        let rels_mmap = unsafe { MmapOptions::new().map_mut(&rels_file).expect("Failed to map rels file for clone") };
+        
+        // CRITICAL: Share the same PropertyStore instance via Arc::clone()
+        // All clones will share the same underlying PropertyStore, so modifications
+        // to next_offset and indexes are visible across all clones
+        let property_store = Arc::clone(&self.property_store);
+        
+        // Clone adjacency store if present
+        let adjacency_store = self.adjacency_store.as_ref().map(|_| {
+            adjacency_list::AdjacencyListStore::new(&self.path).ok()
+        }).flatten();
+        
+        Self {
+            path: self.path.clone(),
+            nodes_file: Arc::new(nodes_file),
+            rels_file: Arc::new(rels_file),
+            nodes_mmap,
+            rels_mmap,
+            property_store, // CRITICAL: Shared PropertyStore instance (not a clone)
+            adjacency_store,
+            next_node_id: Arc::clone(&self.next_node_id),
+            next_rel_id: Arc::clone(&self.next_rel_id),
+            nodes_file_size: self.nodes_file_size,
+            rels_file_size: self.rels_file_size,
+        }
     }
 }
 
