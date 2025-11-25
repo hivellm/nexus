@@ -4716,7 +4716,8 @@ mod tests {
 
     #[test]
     fn test_get_graph_statistics() {
-        let mut engine = Engine::new().unwrap();
+        // Use isolated engine to ensure clean state
+        let mut engine = create_isolated_engine().unwrap();
 
         // Create some nodes with different labels
         let _node1 = engine

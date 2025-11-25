@@ -1078,7 +1078,7 @@ mod tests {
 
     #[test]
     fn test_catalog_creation() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
         let metadata = catalog.get_metadata().unwrap();
         assert_eq!(metadata.version, 1);
         assert_eq!(metadata.page_size, 8192);
@@ -1086,7 +1086,7 @@ mod tests {
 
     #[test]
     fn test_label_creation() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let person_id = catalog.get_or_create_label("Person").unwrap();
         let company_id = catalog.get_or_create_label("Company").unwrap();
@@ -1100,7 +1100,7 @@ mod tests {
 
     #[test]
     fn test_label_name_lookup() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let id = catalog.get_or_create_label("Person").unwrap();
         let name = catalog.get_label_name(id).unwrap();
@@ -1110,7 +1110,7 @@ mod tests {
 
     #[test]
     fn test_type_creation() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let knows_id = catalog.get_or_create_type("KNOWS").unwrap();
         let works_at_id = catalog.get_or_create_type("WORKS_AT").unwrap();
@@ -1123,7 +1123,7 @@ mod tests {
 
     #[test]
     fn test_key_creation() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let name_id = catalog.get_or_create_key("name").unwrap();
         let age_id = catalog.get_or_create_key("age").unwrap();
@@ -1212,7 +1212,7 @@ mod tests {
 
     #[test]
     fn test_type_name_lookup() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let id = catalog.get_or_create_type("KNOWS").unwrap();
         let name = catalog.get_type_name(id).unwrap();
@@ -1222,7 +1222,7 @@ mod tests {
 
     #[test]
     fn test_key_name_lookup() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let id = catalog.get_or_create_key("name").unwrap();
         let name = catalog.get_key_name(id).unwrap();
@@ -1232,7 +1232,7 @@ mod tests {
 
     #[test]
     fn test_nonexistent_label_lookup() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let name = catalog.get_label_name(999).unwrap();
         assert_eq!(name, None);
@@ -1240,7 +1240,7 @@ mod tests {
 
     #[test]
     fn test_nonexistent_type_lookup() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let name = catalog.get_type_name(999).unwrap();
         assert_eq!(name, None);
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[test]
     fn test_nonexistent_key_lookup() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let name = catalog.get_key_name(999).unwrap();
         assert_eq!(name, None);
@@ -1256,7 +1256,7 @@ mod tests {
 
     #[test]
     fn test_metadata_update() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let mut metadata = catalog.get_metadata().unwrap();
         assert_eq!(metadata.epoch, 0);
@@ -1289,7 +1289,7 @@ mod tests {
 
     #[test]
     fn test_decrement_nonexistent_count() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Decrementing non-existent count should not panic
         catalog.decrement_node_count(999).unwrap();
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn test_decrement_to_zero() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let label_id = catalog.get_or_create_label("Person").unwrap();
 
@@ -1318,7 +1318,8 @@ mod tests {
 
     #[test]
     fn test_multiple_labels_and_types() {
-        let (catalog, _dir) = create_test_catalog();
+        // Use isolated catalog to ensure clean state
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Create multiple labels
         let labels = vec!["Person", "Company", "Product", "Location"];
@@ -1394,7 +1395,7 @@ mod tests {
 
     #[test]
     fn test_sync_operation() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         catalog.get_or_create_label("Person").unwrap();
         catalog.sync().unwrap();
@@ -1418,7 +1419,7 @@ mod tests {
 
     #[test]
     fn test_metadata_initialization() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let metadata = catalog.get_metadata().unwrap();
         assert_eq!(metadata.version, 1);
@@ -1488,7 +1489,7 @@ mod tests {
 
     #[test]
     fn test_mixed_operations() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Mix labels, types, and keys
         let p1 = catalog.get_or_create_label("Person").unwrap();
@@ -1535,7 +1536,7 @@ mod tests {
 
     #[test]
     fn test_multiple_increments() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let label_id = catalog.get_or_create_label("Person").unwrap();
         let type_id = catalog.get_or_create_type("KNOWS").unwrap();
@@ -1553,7 +1554,7 @@ mod tests {
 
     #[test]
     fn test_get_labels_from_bitmap() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Create some labels
         let person_id = catalog.get_or_create_label("Person").unwrap();
@@ -1571,7 +1572,7 @@ mod tests {
 
     #[test]
     fn test_get_labels_from_empty_bitmap() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Test with empty bitmap
         let labels = catalog.get_labels_from_bitmap(0).unwrap();
@@ -1580,7 +1581,7 @@ mod tests {
 
     #[test]
     fn test_get_label_id() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Create a label
         let person_id = catalog.get_or_create_label("Person").unwrap();
@@ -1592,7 +1593,7 @@ mod tests {
 
     #[test]
     fn test_get_label_id_nonexistent() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Test getting ID for non-existent label
         let result = catalog.get_label_id("Nonexistent");
@@ -1602,7 +1603,7 @@ mod tests {
 
     #[test]
     fn test_get_label_id_by_id() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Test the identity function
         let test_id = 5;
@@ -1612,7 +1613,7 @@ mod tests {
 
     #[test]
     fn test_udf_storage() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let signature = crate::udf::UdfSignature {
             name: "test_udf".to_string(),
@@ -1647,7 +1648,7 @@ mod tests {
 
     #[test]
     fn test_procedure_storage() {
-        let (catalog, _dir) = create_test_catalog();
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         let signature = crate::graph::procedures::ProcedureSignature {
             name: "custom.test".to_string(),
