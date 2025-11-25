@@ -1,4 +1,4 @@
-//! Comprehensive Integration (S2S) tests for Authentication & Authorization
+﻿//! Comprehensive Integration (S2S) tests for Authentication & Authorization
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -127,11 +127,11 @@ async fn test_complete_authentication_flow() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -307,16 +307,16 @@ async fn test_complete_authentication_flow() {
         }
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -326,11 +326,11 @@ async fn test_api_key_lifecycle() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -507,16 +507,16 @@ async fn test_api_key_lifecycle() {
         }
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -526,11 +526,11 @@ async fn test_permission_enforcement() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -679,16 +679,16 @@ async fn test_permission_enforcement() {
         }
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -698,11 +698,11 @@ async fn test_rate_limiting() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -810,16 +810,16 @@ async fn test_rate_limiting() {
         tracing::info!("  Made {} successful requests", success_count);
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -829,11 +829,11 @@ async fn test_user_permission_cascade() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -1005,16 +1005,16 @@ async fn test_user_permission_cascade() {
         }
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -1024,11 +1024,11 @@ async fn test_audit_log_generation() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -1114,17 +1114,17 @@ async fn test_audit_log_generation() {
         }
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
     tracing::info!("Note: Audit log files should be checked manually at logs/audit/");
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -1134,11 +1134,11 @@ async fn test_root_user_disable_flow() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -1300,19 +1300,19 @@ async fn test_root_user_disable_flow() {
         }
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
     tracing::info!(
         "Note: Root disable flow depends on NEXUS_DISABLE_ROOT_AFTER_SETUP configuration"
     );
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

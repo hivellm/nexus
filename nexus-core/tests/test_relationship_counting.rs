@@ -94,39 +94,39 @@ fn test_relationship_type_filtering() -> Result<(), Error> {
     // Check nodes created
     let nodes_result =
         engine.execute_cypher("MATCH (n) RETURN labels(n) AS labels, n.name AS name")?;
-    etracing::info!("Nodes created: {}", nodes_result.rows.len());
+    tracing::info!("Nodes created: {}", nodes_result.rows.len());
     for row in &nodes_result.rows {
-        etracing::info!("  - {:?}: {:?}", row.values[0], row.values[1]);
+        tracing::info!("  - {:?}: {:?}", row.values[0], row.values[1]);
     }
 
     // Create different relationship types
-    etracing::info!("\nCreating KNOWS relationship...");
+    tracing::info!("\nCreating KNOWS relationship...");
     engine.execute_cypher(
         "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
     )?;
-    etracing::info!("KNOWS created");
+    tracing::info!("KNOWS created");
 
-    etracing::info!("\nCreating WORKS_AT relationship 1...");
+    tracing::info!("\nCreating WORKS_AT relationship 1...");
     engine.execute_cypher(
         "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(c)",
     )?;
-    etracing::info!("WORKS_AT 1 created");
+    tracing::info!("WORKS_AT 1 created");
 
-    etracing::info!("\nCreating WORKS_AT relationship 2...");
+    tracing::info!("\nCreating WORKS_AT relationship 2...");
     engine.execute_cypher(
         "MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT]->(c)",
     )?;
-    etracing::info!("WORKS_AT 2 created");
+    tracing::info!("WORKS_AT 2 created");
 
     engine.refresh_executor()?;
 
     // Debug: Check all relationships
     let debug_result = engine.execute_cypher("MATCH ()-[r]->() RETURN type(r) AS rel_type")?;
-    etracing::info!("\nAll relationships after creation:");
+    tracing::info!("\nAll relationships after creation:");
     for row in &debug_result.rows {
-        etracing::info!("  - {:?}", row.values[0]);
+        tracing::info!("  - {:?}", row.values[0]);
     }
-    etracing::info!("Total relationships: {}", debug_result.rows.len());
+    tracing::info!("Total relationships: {}", debug_result.rows.len());
 
     // Test filtering by relationship type using type() function
     let result = engine.execute_cypher(

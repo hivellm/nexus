@@ -128,7 +128,7 @@ fn test_array_literal_indexing() -> Result<(), Error> {
     let result = engine.execute_cypher("RETURN ['a', 'b', 'c'][1] AS element")?;
 
     assert_eq!(result.rows.len(), 1);
-    etracing::info!("Result value: {:?}", result.rows[0].values[0]);
+    tracing::info!("Result value: {:?}", result.rows[0].values[0]);
 
     if result.rows[0].values[0].is_null() {
         panic!("Result is null, array indexing is not working");

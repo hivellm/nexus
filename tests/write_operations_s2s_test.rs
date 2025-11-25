@@ -106,12 +106,12 @@ async fn test_write_operations_s2s() {
     // Wait for server to be available
     tracing::info!("Aguardando servidor iniciar...");
     if !wait_for_server(&server_url, 10).await {
-        etracing::info!("Servidor não iniciou após 10 tentativas");
-        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
+        tracing::info!("Servidor não iniciou após 10 tentativas");
+        tracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
     tracing::info!("Servidor está pronto!");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -124,7 +124,7 @@ async fn test_write_operations_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Test 1: MERGE creates node when missing
     if test_query_success(
@@ -275,14 +275,14 @@ async fn test_write_operations_s2s() {
         failed += 1;
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("==========================================");
     tracing::info!("Test Summary");
     tracing::info!("==========================================");
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total: {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed == 0 {
         tracing::info!("ALL TESTS PASSED!");

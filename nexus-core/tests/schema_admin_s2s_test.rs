@@ -1,4 +1,4 @@
-//! End-to-end (S2S) tests for Schema Administration commands via HTTP API
+﻿//! End-to-end (S2S) tests for Schema Administration commands via HTTP API
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -131,11 +131,11 @@ async fn test_schema_admin_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test schema_admin_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test schema_admin_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -143,7 +143,7 @@ async fn test_schema_admin_s2s() {
     tracing::info!("==========================================");
     tracing::info!("Schema Administration S2S Tests");
     tracing::info!("==========================================");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -228,7 +228,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Constraint Management Tests
     tracing::info!("--- Constraint Management Tests ---");
@@ -299,7 +299,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Transaction Commands Tests
     tracing::info!("--- Transaction Commands Tests ---");
@@ -359,7 +359,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Database Management Tests (should return error indicating server-level execution needed)
     tracing::info!("--- Database Management Tests (Server-level) ---");
@@ -432,7 +432,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // User Management Tests (should return error indicating server-level execution needed)
     tracing::info!("--- User Management Tests (Server-level) ---");
@@ -547,7 +547,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Summary
     tracing::info!("==========================================");
@@ -556,7 +556,7 @@ async fn test_schema_admin_s2s() {
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total: {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed == 0 {
         tracing::info!("All tests passed!");

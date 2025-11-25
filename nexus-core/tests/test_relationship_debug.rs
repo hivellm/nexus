@@ -1,4 +1,4 @@
-// BUG DISCOVERED: CREATE Duplication Bug #2
+﻿// BUG DISCOVERED: CREATE Duplication Bug #2
 //
 // SYMPTOMS:
 // - CREATE statements say they create nodes with IDs: 1, 2, 3
@@ -38,55 +38,55 @@ fn test_simple_relationship_creation() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
 
     // Check initial state
-    etracing::info!("\n=== Initial State ===");
+    tracing::info!("\n=== Initial State ===");
     let initial_nodes =
         engine.execute_cypher("MATCH (n) RETURN id(n) AS id, labels(n) AS labels")?;
-    etracing::info!("Initial nodes: {}", initial_nodes.rows.len());
+    tracing::info!("Initial nodes: {}", initial_nodes.rows.len());
     for row in &initial_nodes.rows {
-        etracing::info!("  - ID: {:?}, Labels: {:?}", row.values[0], row.values[1]);
+        tracing::info!("  - ID: {:?}, Labels: {:?}", row.values[0], row.values[1]);
     }
 
     // Create nodes one by one (without RETURN to avoid duplication)
-    etracing::info!("\n=== Creating Nodes ===");
-    etracing::info!("Creating Alice...");
+    tracing::info!("\n=== Creating Nodes ===");
+    tracing::info!("Creating Alice...");
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
 
-    etracing::info!("\nCreating Bob...");
+    tracing::info!("\nCreating Bob...");
     engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
 
-    etracing::info!("\nCreating Company...");
+    tracing::info!("\nCreating Company...");
     engine.execute_cypher("CREATE (:Company {name: 'Acme'})")?;
 
     engine.refresh_executor()?;
 
     // Try different queries to find the Company node
-    etracing::info!("\n=== Final State ===");
-    etracing::info!("\n--- Query 1: MATCH (n) ---");
+    tracing::info!("\n=== Final State ===");
+    tracing::info!("\n--- Query 1: MATCH (n) ---");
     let nodes = engine
         .execute_cypher("MATCH (n) RETURN id(n) AS id, n.name AS name, labels(n) AS labels")?;
     for row in &nodes.rows {
-        etracing::info!(
+        tracing::info!(
             "  - ID: {:?}, Name: {:?}, Labels: {:?}",
             row.values[0],
             row.values[1],
             row.values[2]
         );
     }
-    etracing::info!("Total from MATCH (n): {}", nodes.rows.len());
+    tracing::info!("Total from MATCH (n): {}", nodes.rows.len());
 
-    etracing::info!("\n--- Query 2: MATCH (c:Company) ---");
+    tracing::info!("\n--- Query 2: MATCH (c:Company) ---");
     let companies = engine.execute_cypher("MATCH (c:Company) RETURN c.name AS name")?;
     for row in &companies.rows {
-        etracing::info!("  - Company: {:?}", row.values[0]);
+        tracing::info!("  - Company: {:?}", row.values[0]);
     }
-    etracing::info!("Total companies: {}", companies.rows.len());
+    tracing::info!("Total companies: {}", companies.rows.len());
 
-    etracing::info!("\n--- Query 3: MATCH (p:Person) ---");
+    tracing::info!("\n--- Query 3: MATCH (p:Person) ---");
     let persons = engine.execute_cypher("MATCH (p:Person) RETURN p.name AS name")?;
     for row in &persons.rows {
-        etracing::info!("  - Person: {:?}", row.values[0]);
+        tracing::info!("  - Person: {:?}", row.values[0]);
     }
-    etracing::info!("Total persons: {}", persons.rows.len());
+    tracing::info!("Total persons: {}", persons.rows.len());
 
     assert_eq!(
         nodes.rows.len(),

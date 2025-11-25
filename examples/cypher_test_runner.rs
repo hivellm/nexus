@@ -312,8 +312,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
-        etracing::info!("Usage: {} <server_url> [test_suite.json]", args[0]);
-        etracing::info!("Example: {} http://localhost:3000 examples/cypher_tests/test_suite.json", args[0]);
+        tracing::info!("Usage: {} <server_url> [test_suite.json]", args[0]);
+        tracing::info!("Example: {} http://localhost:3000 examples/cypher_tests/test_suite.json", args[0]);
         std::process::exit(1);
     }
     
@@ -325,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     
     if !test_suite_path.exists() {
-        etracing::info!("Test suite file not found: {}", test_suite_path.display());
+        tracing::info!("Test suite file not found: {}", test_suite_path.display());
         std::process::exit(1);
     }
     

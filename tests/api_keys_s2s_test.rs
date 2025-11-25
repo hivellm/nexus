@@ -139,8 +139,8 @@ async fn test_api_keys_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        etracing::info!("ERROR: Server not available at {}", server_url);
-        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
+        tracing::info!("ERROR: Server not available at {}", server_url);
+        tracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
 
@@ -148,7 +148,7 @@ async fn test_api_keys_s2s() {
     tracing::info!("==========================================");
     tracing::info!("API Key Management S2S Tests");
     tracing::info!("==========================================");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -223,7 +223,7 @@ async fn test_api_keys_s2s() {
     }
 
     // Test SHOW API KEYS via Cypher
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- SHOW API KEYS (Cypher) Tests ---");
     if test_query_success(&client, &server_url, "SHOW API KEYS", "SHOW API KEYS").await {
         passed += 1;
@@ -245,7 +245,7 @@ async fn test_api_keys_s2s() {
     }
 
     // Test REST API endpoints
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- REST API Endpoints Tests ---");
 
     // POST /auth/keys - Create API key
@@ -436,17 +436,17 @@ async fn test_api_keys_s2s() {
     }
 
     // Summary
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("==========================================");
     tracing::info!("Test Summary");
     tracing::info!("==========================================");
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total:  {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed > 0 {
-        etracing::info!("Some tests failed!");
+        tracing::info!("Some tests failed!");
         std::process::exit(1);
     }
 }

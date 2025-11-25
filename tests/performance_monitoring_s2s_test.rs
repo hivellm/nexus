@@ -164,8 +164,8 @@ async fn test_performance_monitoring_s2s() {
 
     // Wait for server to be available
     if !wait_for_server(&server_url, 10).await {
-        etracing::info!("ERROR: Server not available at {}", server_url);
-        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
+        tracing::info!("ERROR: Server not available at {}", server_url);
+        tracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
 
@@ -173,7 +173,7 @@ async fn test_performance_monitoring_s2s() {
     tracing::info!("==========================================");
     tracing::info!("Performance Monitoring S2S Tests");
     tracing::info!("==========================================");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -522,10 +522,10 @@ async fn test_performance_monitoring_s2s() {
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total:  {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed > 0 {
-        etracing::info!("Some tests failed!");
+        tracing::info!("Some tests failed!");
         std::process::exit(1);
     } else {
         tracing::info!("All tests passed!");

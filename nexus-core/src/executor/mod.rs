@@ -2416,16 +2416,17 @@ impl Executor {
 
             for row in &rows {
                 // Extract ALL node IDs from row to create composite key
-                // This ensures rows with different combinations are kept separate
-                let mut row_node_ids = Vec::new();
+                // CRITICAL FIX: Include variable names in the key to differentiate between
+                // rows like (p1=Alice, p2=Bob) and (p1=Bob, p2=Alice)
+                let mut var_id_pairs: Vec<(String, u64)> = Vec::new();
                 let mut found_node_id: Option<u64> = None;
 
-                // First pass: collect all node IDs in the row
+                // First pass: collect (variable_name, node_id) pairs
                 for var_name in row.keys() {
                     if let Some(Value::Object(obj)) = row.get(var_name) {
                         if let Some(Value::Number(id)) = obj.get("_nexus_id") {
                             if let Some(node_id) = id.as_u64() {
-                                row_node_ids.push(node_id);
+                                var_id_pairs.push((var_name.clone(), node_id));
                                 // Remember the first node ID we found for logging
                                 if found_node_id.is_none() {
                                     found_node_id = Some(node_id);
@@ -2435,9 +2436,17 @@ impl Executor {
                     }
                 }
 
-                // Create composite key from all node IDs (sorted for consistency)
-                row_node_ids.sort();
-                let row_key = format!("{:?}", row_node_ids);
+                // Sort by variable name for consistent key generation
+                // This ensures the key order is deterministic
+                var_id_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+                // Create composite key with variable names and IDs
+                // Format: "var1=id1,var2=id2,..." to differentiate (p1=1,p2=2) from (p1=2,p2=1)
+                let row_key = var_id_pairs
+                    .iter()
+                    .map(|(var, id)| format!("{}={}", var, id))
+                    .collect::<Vec<_>>()
+                    .join(",");
 
                 // Check if we've seen this exact combination before
                 let is_duplicate = !seen_row_keys.insert(row_key);
@@ -5501,55 +5510,23 @@ impl Executor {
         let mut tx = tx_mgr.begin_write()?;
 
         // For each row in the MATCH result, create the pattern
-        tracing::warn!(
-            "execute_create_with_context: processing {} rows",
-            current_rows.len()
-        );
         for row in current_rows.iter() {
-            tracing::warn!(
-                "execute_create_with_context: row keys={:?}",
-                row.keys().collect::<Vec<_>>()
-            );
             let mut node_ids: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
 
             // First, resolve existing node variables from the row
             for (var_name, var_value) in row {
-                tracing::warn!(
-                    "execute_create_with_context: checking var={}, value type={}",
-                    var_name,
-                    match var_value {
-                        JsonValue::Object(_) => "Object",
-                        JsonValue::String(_) => "String",
-                        JsonValue::Number(_) => "Number",
-                        JsonValue::Array(_) => "Array",
-                        JsonValue::Bool(_) => "Bool",
-                        JsonValue::Null => "Null",
-                    }
-                );
                 if let JsonValue::Object(obj) = var_value {
-                    tracing::warn!(
-                        "execute_create_with_context: obj keys={:?}",
-                        obj.keys().collect::<Vec<_>>()
-                    );
                     if let Some(JsonValue::Number(id)) = obj.get("_nexus_id") {
                         if let Some(node_id) = id.as_u64() {
-                            tracing::warn!(
+                            tracing::debug!(
                                 "execute_create_with_context: extracted node_id={} for var={}",
                                 node_id,
                                 var_name,
                             );
                             node_ids.insert(var_name.clone(), node_id);
                         }
-                    } else {
-                        tracing::warn!("execute_create_with_context: no _nexus_id in obj");
                     }
-                } else {
-                    tracing::warn!(
-                        "execute_create_with_context: var {} is not Object, value={:?}",
-                        var_name,
-                        var_value
-                    );
                 }
             }
 

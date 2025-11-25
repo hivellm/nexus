@@ -214,7 +214,7 @@ async fn test_umicp_graph_visualize() {
 
     let visualize_response = handler.handle_request(visualize_request).await;
     if visualize_response.error.is_some() {
-        etracing::info!("Visualization error: {:?}", visualize_response.error);
+        tracing::info!("Visualization error: {:?}", visualize_response.error);
     }
     assert!(
         visualize_response.result.is_some(),

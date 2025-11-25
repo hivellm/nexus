@@ -278,7 +278,7 @@ async fn test_detailed_comparison_simple_return() {
     tracing::info!("\n=== Detailed Comparison: Simple RETURN ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -288,8 +288,8 @@ async fn test_detailed_comparison_simple_return() {
     let nexus_result = match execute_nexus_query(query, None).await {
         Ok(result) => result,
         Err(e) => {
-            etracing::info!("ERROR: Nexus server error: {}", e);
-            etracing::info!("Skipping test - Nexus server not available or returned error");
+            tracing::info!("ERROR: Nexus server error: {}", e);
+            tracing::info!("Skipping test - Nexus server not available or returned error");
             return;
         }
     };
@@ -322,7 +322,7 @@ async fn test_detailed_comparison_value_types() {
     tracing::info!("\n=== Detailed Comparison: Value Types ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -355,8 +355,8 @@ async fn test_detailed_comparison_value_types() {
                 }
             },
             Err(e) => {
-                etracing::info!("ERROR: Nexus server error: {}", e);
-                etracing::info!("Skipping test - Nexus server not available or returned error");
+                tracing::info!("ERROR: Nexus server error: {}", e);
+                tracing::info!("Skipping test - Nexus server not available or returned error");
                 return;
             }
         }
@@ -373,7 +373,7 @@ async fn test_comprehensive_compatibility() {
     tracing::info!("\n=== Comprehensive Nexus vs Neo4j Compatibility Test ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -460,7 +460,7 @@ async fn test_aggregation_functions() {
     tracing::info!("\n=== Testing Aggregation Functions ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -522,7 +522,7 @@ async fn test_mathematical_operations() {
     tracing::info!("\n=== Testing Mathematical Operations ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -588,7 +588,7 @@ async fn test_string_functions() {
     tracing::info!("\n=== Testing String Functions ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -651,7 +651,7 @@ async fn test_comparison_operators() {
     tracing::info!("\n=== Testing Comparison Operators ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -717,7 +717,7 @@ async fn test_logical_operators() {
     tracing::info!("\n=== Testing Logical Operators ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -781,7 +781,7 @@ async fn test_case_expressions() {
     tracing::info!("\n=== Testing CASE Expressions ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -849,7 +849,7 @@ async fn test_datetime_functions() {
     tracing::info!("\n=== Testing Date/Time Functions ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -926,7 +926,7 @@ async fn test_list_operations() {
     tracing::info!("\n=== Testing List Operations ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -992,7 +992,7 @@ async fn test_order_by_and_limit() {
     tracing::info!("\n=== Testing ORDER BY and LIMIT ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1053,7 +1053,7 @@ async fn test_distinct() {
     tracing::info!("\n=== Testing DISTINCT ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1113,7 +1113,7 @@ async fn test_union_operations() {
     tracing::info!("\n=== Testing UNION Operations ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1176,7 +1176,7 @@ async fn test_where_clauses() {
     tracing::info!("\n=== Testing WHERE Clauses ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1243,7 +1243,7 @@ async fn test_multiple_columns() {
     tracing::info!("\n=== Testing Multiple Columns ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1306,7 +1306,7 @@ async fn test_complex_expressions() {
     tracing::info!("\n=== Testing Complex Expressions ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1376,7 +1376,7 @@ async fn test_parameterized_queries() {
     tracing::info!("\n=== Testing Parameterized Queries ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1478,7 +1478,7 @@ async fn test_type_coercion() {
     tracing::info!("\n=== Testing Type Coercion ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1538,7 +1538,7 @@ async fn test_null_handling() {
     tracing::info!("\n=== Testing Null Handling ===");
 
     if !check_nexus_available().await {
-        etracing::info!("WARNING: Nexus server not available");
+        tracing::info!("WARNING: Nexus server not available");
         return;
     }
 

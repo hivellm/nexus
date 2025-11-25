@@ -49,7 +49,6 @@ coverage/
 *.tmp
 *.bak
 
-
 # Test binaries
 test-*
 *.o
@@ -57,3 +56,7 @@ test-*
 !test-*.ts
 !test-*.rs
 !test-*.sh
+
+# Secrets
+secrets/
+secrets/*.txt

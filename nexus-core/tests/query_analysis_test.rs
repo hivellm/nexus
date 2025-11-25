@@ -1,4 +1,4 @@
-use nexus_core::Engine;
+﻿use nexus_core::Engine;
 use serde_json::Value;
 
 fn create_engine() -> Engine {
@@ -27,7 +27,7 @@ fn test_explain_simple_query() {
 
     if result.is_err() {
         // EXPLAIN may not be supported yet - accept this as valid
-        etracing::info!("WARNING: EXPLAIN not yet implemented");
+        tracing::info!("WARNING: EXPLAIN not yet implemented");
         return;
     }
 
@@ -58,7 +58,7 @@ fn test_explain_with_where() {
 
     if result.is_err() {
         // EXPLAIN may not be supported yet - accept this as valid
-        etracing::info!("WARNING: EXPLAIN not yet implemented");
+        tracing::info!("WARNING: EXPLAIN not yet implemented");
         return;
     }
 
@@ -85,7 +85,7 @@ fn test_profile_simple_query() {
 
     if result.is_err() {
         // PROFILE may not be supported yet - accept this as valid
-        etracing::info!("WARNING: PROFILE not yet implemented");
+        tracing::info!("WARNING: PROFILE not yet implemented");
         return;
     }
 
@@ -120,7 +120,7 @@ fn test_profile_with_where() {
 
     if result.is_err() {
         // PROFILE may not be supported yet - accept this as valid
-        etracing::info!("WARNING: PROFILE not yet implemented");
+        tracing::info!("WARNING: PROFILE not yet implemented");
         return;
     }
 
@@ -146,7 +146,7 @@ fn test_explain_create_query() {
 
     if result.is_err() {
         // EXPLAIN may not be supported yet - accept this as valid
-        etracing::info!("WARNING: EXPLAIN not yet implemented");
+        tracing::info!("WARNING: EXPLAIN not yet implemented");
         return;
     }
 
@@ -170,7 +170,7 @@ fn test_profile_create_query() {
 
     if result.is_err() {
         // PROFILE may not be supported yet - accept this as valid
-        etracing::info!("WARNING: PROFILE not yet implemented");
+        tracing::info!("WARNING: PROFILE not yet implemented");
         return;
     }
 

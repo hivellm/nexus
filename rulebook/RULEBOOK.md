@@ -1871,4 +1871,3 @@ If your project previously used OpenSpec:
 See `/rulebook/tasks/` directory for examples of correctly formatted tasks.
 
 <!-- RULEBOOK:END -->
-

@@ -1,4 +1,4 @@
-//! End-to-end (S2S) tests for Authentication & User Management via HTTP API
+﻿//! End-to-end (S2S) tests for Authentication & User Management via HTTP API
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -76,11 +76,11 @@ async fn test_auth_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test auth_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test auth_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
@@ -88,7 +88,7 @@ async fn test_auth_s2s() {
     tracing::info!("==========================================");
     tracing::info!("Authentication & User Management S2S Tests");
     tracing::info!("==========================================");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -223,7 +223,7 @@ async fn test_auth_s2s() {
     }
 
     // Test Permission Management via REST API
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- Permission Management (REST API) Tests ---");
 
     // POST /auth/users/{username}/permissions - Grant permissions
@@ -370,7 +370,7 @@ async fn test_auth_s2s() {
     }
 
     // Test REST Endpoint Protection
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- REST Endpoint Protection Tests ---");
 
     // Check if authentication is enabled by trying to access a protected endpoint
@@ -456,28 +456,28 @@ async fn test_auth_s2s() {
     // Test rate limiting headers (if rate limiting is enabled)
     // This test assumes a valid API key exists
     // In a real scenario, you would create an API key first and use it
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- Rate Limiting Headers Tests ---");
     tracing::info!("Note: Rate limiting headers test requires a valid API key");
     tracing::info!("This test is skipped if no valid key is available");
 
     // Summary
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("==========================================");
     tracing::info!("Test Summary");
     tracing::info!("==========================================");
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total:  {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed > 0 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
             passed,
             failed
         );
-        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
