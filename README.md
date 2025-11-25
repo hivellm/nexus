@@ -6,7 +6,7 @@
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Status](https://img.shields.io/badge/status-v0.11.0%20%7C%20All%20Tests%20Passing-success.svg)
-![Tests](https://img.shields.io/badge/tests-2209%20passing-success.svg)
+![Tests](https://img.shields.io/badge/tests-1478%2B%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -43,13 +43,13 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
   - ✅ **AllNodesScan Operator**: Dedicated operator for `MATCH (n)` without label filter
   - ⚠️ **Not Yet Supported**: Advanced procedures (CALL), Constraints (UNIQUE, EXISTS), Advanced indexes (FULL-TEXT, POINT), Complete geospatial support, APOC procedures
   - ⚠️ **Known Limitations**: Multi-label + relationship duplication (workaround: use DISTINCT), MATCH...CREATE via Engine API
-  - 📊 **Test Results**: 96.5% test pass rate (112/116 compatibility tests) + 100% direct server comparison (221+ tests)
+  - 📊 **Test Results**: 100% compatibility test pass rate (195/195 tests) + 1268+ unit tests passing
   - 🔧 **Compatibility Fixes**: 9/23 critical issues fixed (39.1% progress) - Phase 1 & 2 complete
   - See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complete test details
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting (129 unit tests)
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
 - ✅ **Official SDKs** - Rust, Python, and TypeScript SDKs available
-- ✅ **2209+ Tests Passing** - 100% success rate, 70%+ coverage
+- ✅ **1478+ Tests Passing** - 100% success rate, 70%+ coverage
 - ✅ **42,000+ Lines** - Production-grade Rust codebase
 - ✅ **v0.11.0 Improvements** - Windows path fixes, AsyncWalWriter improvements, cache performance optimizations
 
@@ -481,7 +481,7 @@ LIMIT 5
 ### **Compatibility & Testing**
 
 - ✅ [**Neo4j Compatibility Report**](docs/NEO4J_COMPATIBILITY_REPORT.md) - Comprehensive compatibility analysis
-  - 96.5% compatibility (112/116 core tests) + 100% direct server comparison (221+ tests)
+  - 100% compatibility (195/195 tests) + 1268+ unit tests passing
   - Recent fixes: 9/23 critical issues resolved (Phase 1 & 2 complete)
 - 📊 [**User Guide**](docs/USER_GUIDE.md) - Complete usage guide with examples
 - 🔐 [**Authentication Guide**](docs/AUTHENTICATION.md) - Security and authentication setup
@@ -972,8 +972,8 @@ curl -X POST http://replica:15475/replication/promote \
 
 ### **Requirements**
 
-- ✅ **2209+ tests passing** (100% success rate, 70%+ coverage)
-- ✅ **96.5% compatibility** (112/116 core tests) + 100% direct server comparison (221+ tests)
+- ✅ **1478+ tests passing** (100% success rate, 70%+ coverage)
+- ✅ **100% Neo4j compatibility** (195/195 tests) + 1268+ unit tests
 - ✅ Unit, integration, and E2E tests with cross-compatibility validation
 
 ### **Running Tests**
