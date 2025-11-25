@@ -5767,19 +5767,40 @@ impl Executor {
                                                         source_var,
                                                         target_var
                                                     );
-                                                    let _rel_id =
+                                                    let rel_id =
                                                         self.store_mut().create_relationship(
                                                             &mut tx, *source_id, *target_id,
                                                             type_id, properties,
                                                         )?;
                                                     tracing::debug!(
                                                         "execute_create_with_context: relationship created successfully, rel_id={}",
-                                                        _rel_id
+                                                        rel_id
                                                     );
                                                     println!(
                                                         "[execute_create_with_context] Relationship created successfully: rel_id={}, source_id={}, target_id={}",
-                                                        _rel_id, source_id, target_id
+                                                        rel_id, source_id, target_id
                                                     );
+
+                                                    // CRITICAL FIX: Populate relationship variable if specified
+                                                    // This ensures that queries like CREATE (a)-[r:KNOWS]->(b) RETURN r work correctly
+                                                    if let Some(rel_var) = &rel.variable {
+                                                        if !rel_var.is_empty() {
+                                                            let rel_info = RelationshipInfo {
+                                                                id: rel_id,
+                                                                source_id: *source_id,
+                                                                target_id: *target_id,
+                                                                type_id,
+                                                            };
+                                                            if let Ok(rel_value) = self.read_relationship_as_value(&rel_info) {
+                                                                // Store relationship in context for RETURN clause
+                                                                context.variables.insert(rel_var.clone(), rel_value);
+                                                                println!(
+                                                                    "[execute_create_with_context] Populated relationship variable '{}' with rel_id={}",
+                                                                    rel_var, rel_id
+                                                                );
+                                                            }
+                                                        }
+                                                    }
 
                                                     // Locks are released when guards are dropped
 
