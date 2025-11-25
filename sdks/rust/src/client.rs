@@ -1,4 +1,4 @@
-//! Nexus client implementation
+﻿//! Nexus client implementation
 
 use crate::error::{NexusError, Result};
 use crate::models::*;
@@ -149,7 +149,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let result = client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None).await?;
-    /// println!("Found {} rows", result.rows.len());
+    /// tracing::info!("Found {} rows", result.rows.len());
     /// # Ok(())
     /// # }
     /// ```
@@ -183,7 +183,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let stats = client.get_stats().await?;
-    /// println!("Total nodes: {}", stats.catalog.node_count);
+    /// tracing::info!("Total nodes: {}", stats.catalog.node_count);
     /// # Ok(())
     /// # }
     /// ```
@@ -209,7 +209,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let healthy = client.health_check().await?;
-    /// println!("Server is healthy: {}", healthy);
+    /// tracing::info!("Server is healthy: {}", healthy);
     /// # Ok(())
     /// # }
     /// ```

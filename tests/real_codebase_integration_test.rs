@@ -1,4 +1,4 @@
-//! Real Codebase Integration Tests for Nexus Graph Database
+﻿//! Real Codebase Integration Tests for Nexus Graph Database
 //!
 //! These tests verify the complete system functionality using real datasets:
 //! - Knowledge Graph dataset (scientific entities and relationships)
@@ -30,6 +30,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tower::ServiceExt;
+use tracing;
 
 /// Test server setup with real data loading capabilities
 struct RealDataTestServer {
@@ -128,8 +129,8 @@ impl RealDataTestServer {
         let content = std::fs::read_to_string(dataset_path)?;
         let dataset: Value = serde_json::from_str(&content)?;
         
-        println!("Loading dataset: {}", dataset["name"].as_str().unwrap_or("Unknown"));
-        println!("Description: {}", dataset["description"].as_str().unwrap_or(""));
+        tracing::info!("Loading dataset: {}", dataset["name"].as_str().unwrap_or("Unknown"));
+        tracing::info!("Description: {}", dataset["description"].as_str().unwrap_or(""));
         
         let mut stats = DatasetStats {
             name: dataset["name"].as_str().unwrap_or("Unknown").to_string(),
@@ -142,7 +143,7 @@ impl RealDataTestServer {
         
         // Load nodes
         if let Some(nodes) = dataset["nodes"].as_array() {
-            println!("Loading {} nodes...", nodes.len());
+            tracing::info!("Loading {} nodes...", nodes.len());
             let node_stats = self.load_nodes(nodes).await?;
             stats.nodes_loaded = node_stats.nodes_loaded;
             stats.labels_created = node_stats.labels_created;
@@ -151,18 +152,18 @@ impl RealDataTestServer {
         
         // Load relationships
         if let Some(relationships) = dataset["relationships"].as_array() {
-            println!("Loading {} relationships...", relationships.len());
+            tracing::info!("Loading {} relationships...", relationships.len());
             let rel_stats = self.load_relationships(relationships).await?;
             stats.relationships_loaded = rel_stats.relationships_loaded;
             stats.types_created = rel_stats.types_created;
         }
         
-        println!("Dataset loaded successfully!");
-        println!("  Nodes: {}", stats.nodes_loaded);
-        println!("  Relationships: {}", stats.relationships_loaded);
-        println!("  Labels: {}", stats.labels_created);
-        println!("  Types: {}", stats.types_created);
-        println!("  Vectors: {}", stats.vectors_indexed);
+        tracing::info!("Dataset loaded successfully!");
+        tracing::info!("  Nodes: {}", stats.nodes_loaded);
+        tracing::info!("  Relationships: {}", stats.relationships_loaded);
+        tracing::info!("  Labels: {}", stats.labels_created);
+        tracing::info!("  Types: {}", stats.types_created);
+        tracing::info!("  Vectors: {}", stats.vectors_indexed);
         
         Ok(stats)
     }
@@ -386,7 +387,7 @@ async fn test_knowledge_graph_dataset_loading() {
     
     let dataset_path = Path::new("examples/datasets/knowledge_graph.json");
     if !dataset_path.exists() {
-        println!("Skipping test - dataset file not found: {:?}", dataset_path);
+        tracing::info!("Skipping test - dataset file not found: {:?}", dataset_path);
         return;
     }
     
@@ -399,12 +400,12 @@ async fn test_knowledge_graph_dataset_loading() {
     assert!(stats.types_created > 0, "Should have created relationship types");
     assert!(stats.vectors_indexed > 0, "Should have indexed vectors");
     
-    println!("Knowledge Graph dataset loaded successfully:");
-    println!("  Nodes: {}", stats.nodes_loaded);
-    println!("  Relationships: {}", stats.relationships_loaded);
-    println!("  Labels: {}", stats.labels_created);
-    println!("  Types: {}", stats.types_created);
-    println!("  Vectors: {}", stats.vectors_indexed);
+    tracing::info!("Knowledge Graph dataset loaded successfully:");
+    tracing::info!("  Nodes: {}", stats.nodes_loaded);
+    tracing::info!("  Relationships: {}", stats.relationships_loaded);
+    tracing::info!("  Labels: {}", stats.labels_created);
+    tracing::info!("  Types: {}", stats.types_created);
+    tracing::info!("  Vectors: {}", stats.vectors_indexed);
 }
 
 #[tokio::test]
@@ -413,7 +414,7 @@ async fn test_knowledge_graph_cypher_queries() {
     
     let dataset_path = Path::new("examples/datasets/knowledge_graph.json");
     if !dataset_path.exists() {
-        println!("Skipping test - dataset file not found: {:?}", dataset_path);
+        tracing::info!("Skipping test - dataset file not found: {:?}", dataset_path);
         return;
     }
     
@@ -430,14 +431,14 @@ async fn test_knowledge_graph_cypher_queries() {
     ];
     
     for (query, description) in queries {
-        println!("Testing query: {}", description);
+        tracing::info!("Testing query: {}", description);
         
         let result = server.execute_cypher(query, HashMap::new()).await;
         
         match result {
             Ok(response) => {
                 assert_eq!(response.status, "success");
-                println!("  ✅ {} - {} results in {}ms", 
+                tracing::info!("  ✅ {} - {} results in {}ms", 
                     description, response.results.len(), response.execution_time_ms);
                 
                 // Verify we got some results for most queries
@@ -446,7 +447,7 @@ async fn test_knowledge_graph_cypher_queries() {
                 }
             }
             Err(e) => {
-                println!("  ❌ {} - Error: {}", description, e);
+                tracing::info!("  ❌ {} - Error: {}", description, e);
                 // For now, we'll allow some queries to fail as the executor might not be fully implemented
                 // In a real implementation, all queries should pass
             }
@@ -460,7 +461,7 @@ async fn test_knowledge_graph_vector_search() {
     
     let dataset_path = Path::new("examples/datasets/knowledge_graph.json");
     if !dataset_path.exists() {
-        println!("Skipping test - dataset file not found: {:?}", dataset_path);
+        tracing::info!("Skipping test - dataset file not found: {:?}", dataset_path);
         return;
     }
     
@@ -476,13 +477,13 @@ async fn test_knowledge_graph_vector_search() {
         Ok(response) => {
             assert_eq!(response["status"], "success");
             let results = response["results"].as_array().unwrap();
-            println!("Vector search returned {} results", results.len());
+            tracing::info!("Vector search returned {} results", results.len());
             
             // Should return some results
             assert!(results.len() > 0, "Vector search should return results");
         }
         Err(e) => {
-            println!("Vector search failed: {}", e);
+            tracing::info!("Vector search failed: {}", e);
             // For now, we'll allow this to fail as KNN might not be fully implemented
         }
     }
@@ -498,7 +499,7 @@ async fn test_social_network_dataset_loading() {
     
     let dataset_path = Path::new("examples/datasets/social_network.json");
     if !dataset_path.exists() {
-        println!("Skipping test - dataset file not found: {:?}", dataset_path);
+        tracing::info!("Skipping test - dataset file not found: {:?}", dataset_path);
         return;
     }
     
@@ -510,11 +511,11 @@ async fn test_social_network_dataset_loading() {
     assert!(stats.labels_created > 0, "Should have created labels");
     assert!(stats.types_created > 0, "Should have created relationship types");
     
-    println!("Social Network dataset loaded successfully:");
-    println!("  Nodes: {}", stats.nodes_loaded);
-    println!("  Relationships: {}", stats.relationships_loaded);
-    println!("  Labels: {}", stats.labels_created);
-    println!("  Types: {}", stats.types_created);
+    tracing::info!("Social Network dataset loaded successfully:");
+    tracing::info!("  Nodes: {}", stats.nodes_loaded);
+    tracing::info!("  Relationships: {}", stats.relationships_loaded);
+    tracing::info!("  Labels: {}", stats.labels_created);
+    tracing::info!("  Types: {}", stats.types_created);
 }
 
 #[tokio::test]
@@ -523,7 +524,7 @@ async fn test_social_network_cypher_queries() {
     
     let dataset_path = Path::new("examples/datasets/social_network.json");
     if !dataset_path.exists() {
-        println!("Skipping test - dataset file not found: {:?}", dataset_path);
+        tracing::info!("Skipping test - dataset file not found: {:?}", dataset_path);
         return;
     }
     
@@ -541,18 +542,18 @@ async fn test_social_network_cypher_queries() {
     ];
     
     for (query, description) in queries {
-        println!("Testing query: {}", description);
+        tracing::info!("Testing query: {}", description);
         
         let result = server.execute_cypher(query, HashMap::new()).await;
         
         match result {
             Ok(response) => {
                 assert_eq!(response.status, "success");
-                println!("  ✅ {} - {} results in {}ms", 
+                tracing::info!("  ✅ {} - {} results in {}ms", 
                     description, response.results.len(), response.execution_time_ms);
             }
             Err(e) => {
-                println!("  ❌ {} - Error: {}", description, e);
+                tracing::info!("  ❌ {} - Error: {}", description, e);
                 // For now, we'll allow some queries to fail as the executor might not be fully implemented
             }
         }
@@ -582,14 +583,14 @@ async fn test_cypher_test_suite_integration() {
     // Load and run the test suite
     let test_suite_path = Path::new("examples/cypher_tests/test_suite.json");
     if !test_suite_path.exists() {
-        println!("Skipping test - test suite file not found: {:?}", test_suite_path);
+        tracing::info!("Skipping test - test suite file not found: {:?}", test_suite_path);
         return;
     }
     
     let content = std::fs::read_to_string(test_suite_path)?;
     let test_suite: Value = serde_json::from_str(&content)?;
     
-    println!("Running Cypher test suite: {}", test_suite["name"].as_str().unwrap_or("Unknown"));
+    tracing::info!("Running Cypher test suite: {}", test_suite["name"].as_str().unwrap_or("Unknown"));
     
     let mut total_tests = 0;
     let mut passed_tests = 0;
@@ -598,7 +599,7 @@ async fn test_cypher_test_suite_integration() {
     if let Some(categories) = test_suite["test_categories"].as_array() {
         for category in categories {
             let category_name = category["name"].as_str().unwrap_or("Unknown");
-            println!("\n=== {} ===", category_name);
+            tracing::info!("\n=== {} ===", category_name);
             
             if let Some(tests) = category["tests"].as_array() {
                 for test in tests {
@@ -639,21 +640,21 @@ async fn test_cypher_test_suite_integration() {
                     
                     if passed {
                         passed_tests += 1;
-                        println!("  ✅ {} - {}", test_name, description);
+                        tracing::info!("  ✅ {} - {}", test_name, description);
                     } else {
                         failed_tests += 1;
-                        println!("  ❌ {} - {} - {}", test_name, description, error_msg.unwrap_or("Unknown error".to_string()));
+                        tracing::info!("  ❌ {} - {} - {}", test_name, description, error_msg.unwrap_or("Unknown error".to_string()));
                     }
                 }
             }
         }
     }
     
-    println!("\n=== Test Suite Summary ===");
-    println!("Total tests: {}", total_tests);
-    println!("Passed: {} ({:.1}%)", passed_tests, 
+    tracing::info!("\n=== Test Suite Summary ===");
+    tracing::info!("Total tests: {}", total_tests);
+    tracing::info!("Passed: {} ({:.1}%)", passed_tests, 
         passed_tests as f64 / total_tests as f64 * 100.0);
-    println!("Failed: {} ({:.1}%)", failed_tests,
+    tracing::info!("Failed: {} ({:.1}%)", failed_tests,
         failed_tests as f64 / total_tests as f64 * 100.0);
     
     // For now, we'll allow some tests to fail as the executor might not be fully implemented
@@ -691,7 +692,7 @@ async fn test_performance_with_real_data() {
     ];
     
     for (name, query, target_qps) in performance_tests {
-        println!("Running performance test: {}", name);
+        tracing::info!("Running performance test: {}", name);
         
         let iterations = 100;
         let mut total_time = Duration::new(0, 0);
@@ -724,10 +725,10 @@ async fn test_performance_with_real_data() {
         
         let success_rate = success_count as f64 / iterations as f64;
         
-        println!("  Target QPS: {}", target_qps);
-        println!("  Actual QPS: {:.2}", actual_qps);
-        println!("  Avg time: {:.2}ms", avg_time_ms);
-        println!("  Success rate: {:.1}%", success_rate * 100.0);
+        tracing::info!("  Target QPS: {}", target_qps);
+        tracing::info!("  Actual QPS: {:.2}", actual_qps);
+        tracing::info!("  Avg time: {:.2}ms", avg_time_ms);
+        tracing::info!("  Success rate: {:.1}%", success_rate * 100.0);
         
         // For now, we'll just log the results
         // In a real implementation, we might want to assert performance thresholds
@@ -786,11 +787,11 @@ async fn test_concurrent_queries_with_real_data() {
     let avg_duration = total_duration / concurrent_requests as u32;
     let success_rate = success_count as f64 / concurrent_requests as f64;
     
-    println!("Concurrent query test results:");
-    println!("  Total requests: {}", concurrent_requests);
-    println!("  Successful: {}", success_count);
-    println!("  Success rate: {:.1}%", success_rate * 100.0);
-    println!("  Average duration: {:?}", avg_duration);
+    tracing::info!("Concurrent query test results:");
+    tracing::info!("  Total requests: {}", concurrent_requests);
+    tracing::info!("  Successful: {}", success_count);
+    tracing::info!("  Success rate: {:.1}%", success_rate * 100.0);
+    tracing::info!("  Average duration: {:?}", avg_duration);
     
     assert!(success_count > 0, "Should have some successful concurrent queries");
 }
@@ -818,23 +819,23 @@ async fn test_error_handling_with_real_data() {
     ];
     
     for (description, query, should_fail) in error_tests {
-        println!("Testing error case: {}", description);
+        tracing::info!("Testing error case: {}", description);
         
         let result = server.execute_cypher(query, HashMap::new()).await;
         
         match result {
             Ok(response) => {
                 if should_fail {
-                    println!("  ❌ Expected query to fail but it succeeded");
+                    tracing::info!("  ❌ Expected query to fail but it succeeded");
                 } else {
-                    println!("  ✅ Query succeeded as expected");
+                    tracing::info!("  ✅ Query succeeded as expected");
                 }
             }
             Err(e) => {
                 if should_fail {
-                    println!("  ✅ Query failed as expected: {}", e);
+                    tracing::info!("  ✅ Query failed as expected: {}", e);
                 } else {
-                    println!("  ❌ Query failed unexpectedly: {}", e);
+                    tracing::info!("  ❌ Query failed unexpectedly: {}", e);
                 }
             }
         }
@@ -852,7 +853,7 @@ async fn test_data_consistency_after_loading() {
     // Load dataset
     let dataset_path = Path::new("examples/datasets/knowledge_graph.json");
     if !dataset_path.exists() {
-        println!("Skipping test - dataset file not found: {:?}", dataset_path);
+        tracing::info!("Skipping test - dataset file not found: {:?}", dataset_path);
         return;
     }
     
@@ -867,7 +868,7 @@ async fn test_data_consistency_after_loading() {
     ];
     
     for (description, query) in consistency_queries {
-        println!("Checking consistency: {}", description);
+        tracing::info!("Checking consistency: {}", description);
         
         let result = server.execute_cypher(query, HashMap::new()).await;
         
@@ -876,14 +877,14 @@ async fn test_data_consistency_after_loading() {
                 if let Some(first_row) = response.results.first() {
                     if let Some(count_value) = first_row.first() {
                         if let Some(count) = count_value.as_u64() {
-                            println!("  ✅ {}: {}", description, count);
+                            tracing::info!("  ✅ {}: {}", description, count);
                             assert!(count > 0, "{} should be greater than 0", description);
                         }
                     }
                 }
             }
             Err(e) => {
-                println!("  ❌ {} failed: {}", description, e);
+                tracing::info!("  ❌ {} failed: {}", description, e);
                 // For now, we'll allow some queries to fail
             }
         }
@@ -921,7 +922,7 @@ async fn test_memory_usage_with_large_dataset() {
         total_relationships += stats.relationships_loaded;
     }
     
-    println!("Loaded total: {} nodes, {} relationships", total_nodes, total_relationships);
+    tracing::info!("Loaded total: {} nodes, {} relationships", total_nodes, total_relationships);
     
     // Test that we can still perform queries after loading large datasets
     let test_queries = vec![
@@ -935,11 +936,11 @@ async fn test_memory_usage_with_large_dataset() {
         
         match result {
             Ok(response) => {
-                println!("✅ Query succeeded: {}", query);
+                tracing::info!("✅ Query succeeded: {}", query);
                 assert_eq!(response.status, "success");
             }
             Err(e) => {
-                println!("❌ Query failed: {} - {}", query, e);
+                tracing::info!("❌ Query failed: {} - {}", query, e);
                 // For now, we'll allow some queries to fail
             }
         }
@@ -966,11 +967,11 @@ fn check_dataset_availability() -> (bool, bool, bool) {
 fn print_test_environment() {
     let (kg, sn, ts) = check_dataset_availability();
     
-    println!("=== Test Environment ===");
-    println!("Knowledge Graph dataset: {}", if kg { "✅ Available" } else { "❌ Missing" });
-    println!("Social Network dataset: {}", if sn { "✅ Available" } else { "❌ Missing" });
-    println!("Cypher test suite: {}", if ts { "✅ Available" } else { "❌ Missing" });
-    println!("========================");
+    tracing::info!("=== Test Environment ===");
+    tracing::info!("Knowledge Graph dataset: {}", if kg { "✅ Available" } else { "❌ Missing" });
+    tracing::info!("Social Network dataset: {}", if sn { "✅ Available" } else { "❌ Missing" });
+    tracing::info!("Cypher test suite: {}", if ts { "✅ Available" } else { "❌ Missing" });
+    tracing::info!("========================");
 }
 
 #[tokio::test]

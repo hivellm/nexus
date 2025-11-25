@@ -1,4 +1,4 @@
-//! Hierarchical Call Graph Layout Example
+﻿//! Hierarchical Call Graph Layout Example
 //!
 //! This example demonstrates how to use the hierarchical call graph layout
 //! to visualize function call hierarchies in a more organized and readable way.
@@ -9,26 +9,27 @@ use nexus_core::graph::correlation::{
     NodeType, hierarchical_layout::HierarchicalCallGraphConfig,
 };
 use std::collections::HashMap;
+use tracing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🔗 Hierarchical Call Graph Layout Example");
-    println!("==========================================");
+    tracing::info!("🔗 Hierarchical Call Graph Layout Example");
+    tracing::info!("==========================================");
 
     // Create a sample call graph
     let mut graph = create_sample_call_graph()?;
 
-    println!("📊 Original Graph Statistics:");
+    tracing::info!("📊 Original Graph Statistics:");
     print_graph_statistics(&graph);
 
     // Apply hierarchical layout with default configuration
-    println!("\n🎯 Applying hierarchical layout (default configuration)...");
+    tracing::info!("\n🎯 Applying hierarchical layout (default configuration)...");
     graph.apply_hierarchical_layout()?;
 
-    println!("✅ Hierarchical layout applied successfully!");
+    tracing::info!("✅ Hierarchical layout applied successfully!");
     print_node_positions(&graph);
 
     // Create a new graph with custom hierarchical layout configuration
-    println!("\n🎨 Creating graph with custom hierarchical layout...");
+    tracing::info!("\n🎨 Creating graph with custom hierarchical layout...");
     let custom_config = HierarchicalCallGraphConfig {
         level_spacing: 150.0,
         node_spacing: 100.0,
@@ -43,11 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut custom_graph = create_sample_call_graph()?;
     custom_graph.apply_hierarchical_layout_with_config(custom_config)?;
 
-    println!("✅ Custom hierarchical layout applied!");
+    tracing::info!("✅ Custom hierarchical layout applied!");
     print_node_positions(&custom_graph);
 
     // Demonstrate CallGraphBuilder with hierarchical layout and recursive call detection
-    println!(
+    tracing::info!(
         "\n🏗️  Using CallGraphBuilder with hierarchical layout and recursive call detection..."
     );
     let builder = CallGraphBuilder::new_with_hierarchical_layout("Sample Call Graph".to_string())
@@ -55,44 +56,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source_data = create_sample_source_data();
     let built_graph = builder.build(&source_data)?;
 
-    println!("✅ Graph built with hierarchical layout and recursive call detection!");
+    tracing::info!("✅ Graph built with hierarchical layout and recursive call detection!");
     print_node_positions(&built_graph);
 
     // Show recursive call statistics
     let recursive_stats = built_graph.get_recursive_call_statistics();
-    println!("\n📊 Recursive Call Statistics:");
-    println!(
+    tracing::info!("\n📊 Recursive Call Statistics:");
+    tracing::info!(
         "  • Total recursive functions: {}",
         recursive_stats.total_recursive_functions
     );
-    println!(
+    tracing::info!(
         "  • Direct recursion count: {}",
         recursive_stats.direct_recursion_count
     );
-    println!(
+    tracing::info!(
         "  • Indirect recursion count: {}",
         recursive_stats.indirect_recursion_count
     );
-    println!(
+    tracing::info!(
         "  • Mutual recursion count: {}",
         recursive_stats.mutual_recursion_count
     );
-    println!("  • Recursive edges: {}", recursive_stats.recursive_edges);
-    println!(
+    tracing::info!("  • Recursive edges: {}", recursive_stats.recursive_edges);
+    tracing::info!(
         "  • Recursion percentage: {:.1}%",
         recursive_stats.recursion_percentage
     );
-    println!(
+    tracing::info!(
         "  • Max recursion depth: {}",
         recursive_stats.max_recursion_depth
     );
 
     // Export the graph
-    println!("\n📤 Exporting graph to JSON...");
+    tracing::info!("\n📤 Exporting graph to JSON...");
     let json = graph.to_json()?;
-    println!("✅ Graph exported to JSON ({} characters)", json.len());
+    tracing::info!("✅ Graph exported to JSON ({} characters)", json.len());
 
-    println!("\n🎉 Example completed successfully!");
+    tracing::info!("\n🎉 Example completed successfully!");
     Ok(())
 }
 
@@ -270,20 +271,20 @@ fn create_sample_source_data() -> nexus_core::graph::correlation::GraphSourceDat
 
 fn print_graph_statistics(graph: &CorrelationGraph) {
     let stats = graph.statistics();
-    println!("  • Total nodes: {}", stats.node_count);
-    println!("  • Total edges: {}", stats.edge_count);
-    println!("  • Average degree: {:.2}", stats.avg_degree);
-    println!("  • Max degree: {}", stats.max_degree);
-    println!("  • Graph density: {:.2}", stats.graph_density);
+    tracing::info!("  • Total nodes: {}", stats.node_count);
+    tracing::info!("  • Total edges: {}", stats.edge_count);
+    tracing::info!("  • Average degree: {:.2}", stats.avg_degree);
+    tracing::info!("  • Max degree: {}", stats.max_degree);
+    tracing::info!("  • Graph density: {:.2}", stats.graph_density);
 }
 
 fn print_node_positions(graph: &CorrelationGraph) {
-    println!("  📍 Node Positions:");
+    tracing::info!("  📍 Node Positions:");
     for node in &graph.nodes {
         if let Some((x, y)) = node.position {
-            println!("    • {}: ({:.1}, {:.1})", node.label, x, y);
+            tracing::info!("    • {}: ({:.1}, {:.1})", node.label, x, y);
         } else {
-            println!("    • {}: (not positioned)", node.label);
+            tracing::info!("    • {}: (not positioned)", node.label);
         }
     }
 }

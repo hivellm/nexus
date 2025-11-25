@@ -1,4 +1,4 @@
-//! Data operations (nodes and relationships)
+﻿//! Data operations (nodes and relationships)
 
 use crate::client::NexusClient;
 use crate::error::{NexusError, Result};
@@ -143,7 +143,7 @@ impl NexusClient {
     /// let mut properties = HashMap::new();
     /// properties.insert("name".to_string(), Value::String("Alice".to_string()));
     /// let response = client.create_node(vec!["Person".to_string()], properties).await?;
-    /// println!("Created node with ID: {}", response.node_id);
+    /// tracing::info!("Created node with ID: {}", response.node_id);
     /// # Ok(())
     /// # }
     /// ```
@@ -192,7 +192,7 @@ impl NexusClient {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.get_node(0).await?; // Replace 0 with an actual node ID
     /// if let Some(node) = response.node {
-    ///     println!("Retrieved node: {:?}", node);
+    ///     tracing::info!("Retrieved node: {:?}", node);
     /// }
     /// # Ok(())
     /// # }
@@ -241,7 +241,7 @@ impl NexusClient {
     /// let mut properties = HashMap::new();
     /// properties.insert("name".to_string(), Value::String("Bob".to_string()));
     /// let response = client.update_node(0, properties).await?; // Replace 0 with an actual node ID
-    /// println!("Update node result: {}", response.message);
+    /// tracing::info!("Update node result: {}", response.message);
     /// # Ok(())
     /// # }
     /// ```
@@ -292,7 +292,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.delete_node(0).await?; // Replace 0 with an actual node ID
-    /// println!("Delete result: {}", response.message);
+    /// tracing::info!("Delete result: {}", response.message);
     /// # Ok(())
     /// # }
     /// ```
@@ -342,7 +342,7 @@ impl NexusClient {
     /// let mut properties = HashMap::new();
     /// properties.insert("weight".to_string(), Value::Float(1.5));
     /// let response = client.create_relationship(1, 2, "KNOWS".to_string(), properties).await?;
-    /// println!("Created relationship with ID: {}", response.rel_id);
+    /// tracing::info!("Created relationship with ID: {}", response.rel_id);
     /// # Ok(())
     /// # }
     /// ```
@@ -401,7 +401,7 @@ impl NexusClient {
     /// let mut properties = HashMap::new();
     /// properties.insert("weight".to_string(), Value::Float(2.0));
     /// let response = client.update_relationship(1, properties).await?;
-    /// println!("Update relationship result: {}", response.message);
+    /// tracing::info!("Update relationship result: {}", response.message);
     /// # Ok(())
     /// # }
     /// ```
@@ -448,7 +448,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.delete_relationship(1).await?;
-    /// println!("Delete relationship result: {}", response.message);
+    /// tracing::info!("Delete relationship result: {}", response.message);
     /// # Ok(())
     /// # }
     /// ```

@@ -223,6 +223,71 @@ impl Engine {
         Ok(engine)
     }
 
+    /// Create engine with isolated catalog (bypasses test sharing)
+    ///
+    /// WARNING: Use sparingly - each call creates a new LMDB environment.
+    /// Only use for tests that absolutely require data isolation.
+    #[cfg(test)]
+    pub fn with_isolated_catalog<P: AsRef<std::path::Path>>(data_dir: P) -> Result<Self> {
+        let data_dir = data_dir.as_ref();
+        std::fs::create_dir_all(data_dir)?;
+
+        // Initialize catalog with isolated path
+        let catalog =
+            catalog::Catalog::with_isolated_path(data_dir.join("catalog.mdb"), 100 * 1024 * 1024)?;
+
+        // Initialize record stores
+        let storage = storage::RecordStore::new(data_dir)?;
+
+        // Initialize page cache
+        let page_cache = page_cache::PageCache::new(1024)?;
+
+        // Initialize WAL
+        let wal = wal::Wal::new(data_dir.join("wal.log"))?;
+
+        // Initialize async WAL writer
+        let async_wal_writer = Some(wal::AsyncWalWriter::new(
+            wal.clone(),
+            wal::AsyncWalConfig::default(),
+        )?);
+
+        // Initialize transaction manager
+        let transaction_manager = transaction::TransactionManager::new()?;
+        let transaction_manager_arc = Arc::new(RwLock::new(transaction_manager));
+
+        // Initialize session manager
+        let session_manager = session::SessionManager::new(transaction_manager_arc.clone());
+
+        // Initialize index manager
+        let indexes = index::IndexManager::new(data_dir.join("indexes"))?;
+
+        // Initialize executor
+        let executor =
+            executor::Executor::new(&catalog, &storage, &indexes.label_index, &indexes.knn_index)?;
+
+        // Initialize multi-layer cache system
+        let cache_config = cache::CacheConfig::default();
+        let cache = cache::MultiLayerCache::new(cache_config)?;
+
+        let mut engine = Engine {
+            catalog,
+            storage,
+            page_cache,
+            wal,
+            async_wal_writer,
+            transaction_manager: transaction_manager_arc,
+            session_manager,
+            indexes,
+            executor,
+            cache,
+            _temp_dir: None,
+        };
+
+        engine.rebuild_indexes_from_storage()?;
+
+        Ok(engine)
+    }
+
     /// Warm up the cache system for better initial performance
     /// This should be called after engine creation if cache warming is desired
     /// Note: This can be expensive and should be done in background for production
@@ -3273,11 +3338,11 @@ impl Engine {
         // Store properties and get property pointer
         node_record.prop_ptr =
             if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-                self.storage.property_store.write().unwrap().store_properties(
-                    id,
-                    storage::property_store::EntityType::Node,
-                    properties,
-                )?
+                self.storage
+                    .property_store
+                    .write()
+                    .unwrap()
+                    .store_properties(id, storage::property_store::EntityType::Node, properties)?
             } else {
                 0
             };
@@ -3871,6 +3936,13 @@ struct NodeWriteState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Create an Engine with isolated storage (bypasses test sharing)
+    /// Use sparingly - each call creates new LMDB environments
+    fn create_isolated_engine() -> Result<Engine> {
+        let temp_dir = tempfile::tempdir()?;
+        Engine::with_isolated_catalog(temp_dir.path())
+    }
 
     #[test]
     fn test_error_storage() {
@@ -4679,19 +4751,20 @@ mod tests {
 
     #[test]
     fn test_clear_all_data() {
-        let mut engine = Engine::new().unwrap();
+        // Use isolated engine for clear data test
+        let mut engine = create_isolated_engine().unwrap();
 
         // Create some data
         let _node1 = engine
             .create_node(
-                vec!["Person".to_string()],
+                vec!["ClearPerson".to_string()],
                 serde_json::Value::Object(serde_json::Map::new()),
             )
             .unwrap();
 
         let _node2 = engine
             .create_node(
-                vec!["Company".to_string()],
+                vec!["ClearCompany".to_string()],
                 serde_json::Value::Object(serde_json::Map::new()),
             )
             .unwrap();

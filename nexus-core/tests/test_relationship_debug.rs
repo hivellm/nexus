@@ -25,6 +25,7 @@
 
 use nexus_core::{Engine, Error};
 use tempfile::TempDir;
+use tracing;
 
 fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
     let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
@@ -37,53 +38,55 @@ fn test_simple_relationship_creation() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
 
     // Check initial state
-    eprintln!("\n=== Initial State ===");
+    etracing::info!("\n=== Initial State ===");
     let initial_nodes =
         engine.execute_cypher("MATCH (n) RETURN id(n) AS id, labels(n) AS labels")?;
-    eprintln!("Initial nodes: {}", initial_nodes.rows.len());
+    etracing::info!("Initial nodes: {}", initial_nodes.rows.len());
     for row in &initial_nodes.rows {
-        eprintln!("  - ID: {:?}, Labels: {:?}", row.values[0], row.values[1]);
+        etracing::info!("  - ID: {:?}, Labels: {:?}", row.values[0], row.values[1]);
     }
 
     // Create nodes one by one (without RETURN to avoid duplication)
-    eprintln!("\n=== Creating Nodes ===");
-    eprintln!("Creating Alice...");
+    etracing::info!("\n=== Creating Nodes ===");
+    etracing::info!("Creating Alice...");
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
 
-    eprintln!("\nCreating Bob...");
+    etracing::info!("\nCreating Bob...");
     engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
 
-    eprintln!("\nCreating Company...");
+    etracing::info!("\nCreating Company...");
     engine.execute_cypher("CREATE (:Company {name: 'Acme'})")?;
 
     engine.refresh_executor()?;
 
     // Try different queries to find the Company node
-    eprintln!("\n=== Final State ===");
-    eprintln!("\n--- Query 1: MATCH (n) ---");
+    etracing::info!("\n=== Final State ===");
+    etracing::info!("\n--- Query 1: MATCH (n) ---");
     let nodes = engine
         .execute_cypher("MATCH (n) RETURN id(n) AS id, n.name AS name, labels(n) AS labels")?;
     for row in &nodes.rows {
-        eprintln!(
+        etracing::info!(
             "  - ID: {:?}, Name: {:?}, Labels: {:?}",
-            row.values[0], row.values[1], row.values[2]
+            row.values[0],
+            row.values[1],
+            row.values[2]
         );
     }
-    eprintln!("Total from MATCH (n): {}", nodes.rows.len());
+    etracing::info!("Total from MATCH (n): {}", nodes.rows.len());
 
-    eprintln!("\n--- Query 2: MATCH (c:Company) ---");
+    etracing::info!("\n--- Query 2: MATCH (c:Company) ---");
     let companies = engine.execute_cypher("MATCH (c:Company) RETURN c.name AS name")?;
     for row in &companies.rows {
-        eprintln!("  - Company: {:?}", row.values[0]);
+        etracing::info!("  - Company: {:?}", row.values[0]);
     }
-    eprintln!("Total companies: {}", companies.rows.len());
+    etracing::info!("Total companies: {}", companies.rows.len());
 
-    eprintln!("\n--- Query 3: MATCH (p:Person) ---");
+    etracing::info!("\n--- Query 3: MATCH (p:Person) ---");
     let persons = engine.execute_cypher("MATCH (p:Person) RETURN p.name AS name")?;
     for row in &persons.rows {
-        eprintln!("  - Person: {:?}", row.values[0]);
+        etracing::info!("  - Person: {:?}", row.values[0]);
     }
-    eprintln!("Total persons: {}", persons.rows.len());
+    etracing::info!("Total persons: {}", persons.rows.len());
 
     assert_eq!(
         nodes.rows.len(),

@@ -1,12 +1,13 @@
-use nexus_core::storage::RecordStore;
+﻿use nexus_core::storage::RecordStore;
 use tempfile::TempDir;
+use tracing;
 
 #[test]
 fn test_storage_initial_node_count() {
     let temp_dir = TempDir::new().unwrap();
     let store = RecordStore::new(temp_dir.path()).unwrap();
 
-    println!("Initial node_count: {}", store.node_count());
+    tracing::info!("Initial node_count: {}", store.node_count());
 
     assert_eq!(
         store.node_count(),

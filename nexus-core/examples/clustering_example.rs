@@ -1,4 +1,4 @@
-//! Node Clustering and Grouping Example
+﻿//! Node Clustering and Grouping Example
 //!
 //! This example demonstrates various clustering algorithms and grouping strategies
 //! available in the Nexus graph database engine.
@@ -7,17 +7,18 @@ use nexus_core::{
     ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, DistanceMetric, FeatureStrategy,
     LinkageType, PropertyValue, SimpleGraph,
 };
+use tracing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Nexus Node Clustering and Grouping Example ===\n");
+    tracing::info!("=== Nexus Node Clustering and Grouping Example ===\n");
 
     // Create a sample graph with diverse nodes
     let graph = create_sample_graph()?;
-    println!("Created sample graph with {} nodes", graph.node_count()?);
+    tracing::info!("Created sample graph with {} nodes", graph.node_count()?);
 
     // Example 1: Label-based grouping
-    println!("\n1. Label-based Grouping");
-    println!("========================");
+    tracing::info!("\n1. Label-based Grouping");
+    tracing::info!("========================");
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::LabelBased,
         feature_strategy: FeatureStrategy::LabelBased,
@@ -29,8 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_clustering_result(&result);
 
     // Example 2: Property-based grouping
-    println!("\n2. Property-based Grouping (by department)");
-    println!("===========================================");
+    tracing::info!("\n2. Property-based Grouping (by department)");
+    tracing::info!("===========================================");
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::PropertyBased {
             property_key: "department".to_string(),
@@ -46,8 +47,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_clustering_result(&result);
 
     // Example 3: K-means clustering
-    println!("\n3. K-means Clustering (k=3)");
-    println!("===========================");
+    tracing::info!("\n3. K-means Clustering (k=3)");
+    tracing::info!("===========================");
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::KMeans {
             k: 3,
@@ -62,8 +63,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_clustering_result(&result);
 
     // Example 4: Hierarchical clustering
-    println!("\n4. Hierarchical Clustering");
-    println!("==========================");
+    tracing::info!("\n4. Hierarchical Clustering");
+    tracing::info!("==========================");
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::Hierarchical {
             linkage: LinkageType::Average,
@@ -77,8 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_clustering_result(&result);
 
     // Example 5: Community detection
-    println!("\n5. Community Detection");
-    println!("=====================");
+    tracing::info!("\n5. Community Detection");
+    tracing::info!("=====================");
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::CommunityDetection,
         feature_strategy: FeatureStrategy::Structural,
@@ -90,8 +91,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_clustering_result(&result);
 
     // Example 6: DBSCAN clustering
-    println!("\n6. DBSCAN Clustering");
-    println!("===================");
+    tracing::info!("\n6. DBSCAN Clustering");
+    tracing::info!("===================");
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::DBSCAN {
             eps: 2.0,
@@ -106,8 +107,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_clustering_result(&result);
 
     // Example 7: Combined feature strategy
-    println!("\n7. Combined Feature Strategy Clustering");
-    println!("=======================================");
+    tracing::info!("\n7. Combined Feature Strategy Clustering");
+    tracing::info!("=======================================");
     let config = ClusteringConfig {
         algorithm: ClusteringAlgorithm::KMeans {
             k: 2,
@@ -130,8 +131,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_clustering_result(&result);
 
     // Example 8: Different distance metrics comparison
-    println!("\n8. Distance Metrics Comparison");
-    println!("==============================");
+    tracing::info!("\n8. Distance Metrics Comparison");
+    tracing::info!("==============================");
     let distance_metrics = vec![
         (DistanceMetric::Euclidean, "Euclidean"),
         (DistanceMetric::Manhattan, "Manhattan"),
@@ -152,14 +153,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let engine = ClusteringEngine::new(config);
         let result = engine.cluster(&graph)?;
-        println!("\n{} Distance:", name);
-        println!("  Clusters: {}", result.clusters.len());
-        println!("  Silhouette Score: {:.3}", result.metrics.silhouette_score);
-        println!("  WCSS: {:.3}", result.metrics.wcss);
-        println!("  BCSS: {:.3}", result.metrics.bcss);
+        tracing::info!("\n{} Distance:", name);
+        tracing::info!("  Clusters: {}", result.clusters.len());
+        tracing::info!("  Silhouette Score: {:.3}", result.metrics.silhouette_score);
+        tracing::info!("  WCSS: {:.3}", result.metrics.wcss);
+        tracing::info!("  BCSS: {:.3}", result.metrics.bcss);
     }
 
-    println!("\n=== Clustering Example Complete ===");
+    tracing::info!("\n=== Clustering Example Complete ===");
     Ok(())
 }
 
@@ -346,31 +347,31 @@ fn create_sample_graph() -> Result<SimpleGraph, Box<dyn std::error::Error>> {
 
 /// Print clustering results in a formatted way
 fn print_clustering_result(result: &nexus_core::ClusteringResult) {
-    println!("  Algorithm: {:?}", result.algorithm);
-    println!("  Clusters: {}", result.clusters.len());
-    println!("  Iterations: {}", result.iterations);
-    println!("  Converged: {}", result.converged);
-    println!("  Quality Metrics:");
-    println!(
+    tracing::info!("  Algorithm: {:?}", result.algorithm);
+    tracing::info!("  Clusters: {}", result.clusters.len());
+    tracing::info!("  Iterations: {}", result.iterations);
+    tracing::info!("  Converged: {}", result.converged);
+    tracing::info!("  Quality Metrics:");
+    tracing::info!(
         "    Silhouette Score: {:.3}",
         result.metrics.silhouette_score
     );
-    println!("    WCSS: {:.3}", result.metrics.wcss);
-    println!("    BCSS: {:.3}", result.metrics.bcss);
-    println!(
+    tracing::info!("    WCSS: {:.3}", result.metrics.wcss);
+    tracing::info!("    BCSS: {:.3}", result.metrics.bcss);
+    tracing::info!(
         "    Calinski-Harabasz: {:.3}",
         result.metrics.calinski_harabasz
     );
-    println!("    Davies-Bouldin: {:.3}", result.metrics.davies_bouldin);
+    tracing::info!("    Davies-Bouldin: {:.3}", result.metrics.davies_bouldin);
 
-    println!("  Cluster Details:");
+    tracing::info!("  Cluster Details:");
     for (i, cluster) in result.clusters.iter().enumerate() {
-        println!("    Cluster {}: {} nodes", i, cluster.size());
+        tracing::info!("    Cluster {}: {} nodes", i, cluster.size());
         if let Some(centroid) = &cluster.centroid {
-            println!("      Centroid: {:?}", centroid);
+            tracing::info!("      Centroid: {:?}", centroid);
         }
         if !cluster.metadata.is_empty() {
-            println!("      Metadata: {:?}", cluster.metadata);
+            tracing::info!("      Metadata: {:?}", cluster.metadata);
         }
     }
 }

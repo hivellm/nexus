@@ -1,10 +1,11 @@
-//! Vectorizer Mock Tests for Nexus
+﻿//! Vectorizer Mock Tests for Nexus
 //!
 //! These tests verify the mock vectorizer implementation and basic integration.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing;
 // use thiserror::Error;
 
 // ============================================================================
@@ -429,7 +430,7 @@ async fn test_vectorizer_concurrent_access() {
     for handle in handles {
         match handle.await.unwrap() {
             Ok(_) => success_count += 1,
-            Err(e) => println!("Search failed: {:?}", e),
+            Err(e) => tracing::info!("Search failed: {:?}", e),
         }
     }
 
@@ -591,7 +592,7 @@ async fn test_vectorizer_performance_metrics() {
     }
 
     let elapsed = start.elapsed();
-    println!("Performed 10 searches in {:?}", elapsed);
+    tracing::info!("Performed 10 searches in {:?}", elapsed);
 
     // Should be fast (under 1 second for 10 searches)
     assert!(elapsed.as_secs() < 1);

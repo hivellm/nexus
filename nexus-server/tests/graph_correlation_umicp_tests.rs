@@ -1,7 +1,8 @@
-//! Comprehensive tests for UMICP Graph Correlation methods
+﻿//! Comprehensive tests for UMICP Graph Correlation methods
 
 use nexus_server::api::graph_correlation_umicp::{GraphUmicpHandler, UmicpRequest};
 use serde_json::json;
+use tracing;
 
 #[tokio::test]
 async fn test_umicp_graph_generate() {
@@ -213,7 +214,7 @@ async fn test_umicp_graph_visualize() {
 
     let visualize_response = handler.handle_request(visualize_request).await;
     if visualize_response.error.is_some() {
-        eprintln!("Visualization error: {:?}", visualize_response.error);
+        etracing::info!("Visualization error: {:?}", visualize_response.error);
     }
     assert!(
         visualize_response.result.is_some(),

@@ -12,6 +12,7 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {
@@ -117,15 +118,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("{}: PASSED", test_name);
+                tracing::info!("{}: PASSED", test_name);
                 true
             } else {
-                println!("{}: FAILED - Error: {:?}", test_name, response.error);
+                tracing::info!("{}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("{}: FAILED - Request error: {}", test_name, e);
+            tracing::info!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -137,26 +138,26 @@ async fn test_api_keys_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test api_keys_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test api_keys_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("Server is available at {}", server_url);
-    println!("==========================================");
-    println!("API Key Management S2S Tests");
-    println!("==========================================");
-    println!();
+    tracing::info!("Server is available at {}", server_url);
+    tracing::info!("==========================================");
+    tracing::info!("API Key Management S2S Tests");
+    tracing::info!("==========================================");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Test CREATE API KEY via Cypher
-    println!("--- CREATE API KEY (Cypher) Tests ---");
+    tracing::info!("--- CREATE API KEY (Cypher) Tests ---");
     if test_query_success(
         &client,
         &server_url,
@@ -224,8 +225,8 @@ async fn test_api_keys_s2s() {
     }
 
     // Test SHOW API KEYS via Cypher
-    println!();
-    println!("--- SHOW API KEYS (Cypher) Tests ---");
+    tracing::info!();
+    tracing::info!("--- SHOW API KEYS (Cypher) Tests ---");
     if test_query_success(&client, &server_url, "SHOW API KEYS", "SHOW API KEYS").await {
         passed += 1;
     } else {
@@ -246,8 +247,8 @@ async fn test_api_keys_s2s() {
     }
 
     // Test REST API endpoints
-    println!();
-    println!("--- REST API Endpoints Tests ---");
+    tracing::info!();
+    tracing::info!("--- REST API Endpoints Tests ---");
 
     // POST /auth/keys - Create API key
     let create_request = CreateApiKeyRequest {
@@ -267,11 +268,11 @@ async fn test_api_keys_s2s() {
             if response.status().is_success() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(api_key) => {
-                        println!("POST /auth/keys: PASSED");
+                        tracing::info!("POST /auth/keys: PASSED");
                         if api_key.key.starts_with("nx_") && api_key.name == "testkey_rest_s2s" {
                             // Valid API key
                         } else {
-                            println!("API key validation failed");
+                            tracing::info!("API key validation failed");
                             failed += 1;
                         }
                         passed += 1;
@@ -286,19 +287,19 @@ async fn test_api_keys_s2s() {
                                 if get_response.status().is_success() {
                                     match get_response.json::<ApiKeyResponse>().await {
                                         Ok(key_info) => {
-                                            println!("GET /auth/keys/{{key_id}}: PASSED");
+                                            tracing::info!("GET /auth/keys/{{key_id}}: PASSED");
                                             if key_info.id == api_key.id
                                                 && key_info.name == api_key.name
                                             {
                                                 // Key info matches
                                             } else {
-                                                println!("API key info mismatch");
+                                                tracing::info!("API key info mismatch");
                                                 failed += 1;
                                             }
                                             passed += 1;
                                         }
                                         Err(e) => {
-                                            println!(
+                                            tracing::info!(
                                                 "GET /auth/keys/{{key_id}}: FAILED - Parse error: {}",
                                                 e
                                             );
@@ -306,7 +307,7 @@ async fn test_api_keys_s2s() {
                                         }
                                     }
                                 } else {
-                                    println!(
+                                    tracing::info!(
                                         "GET /auth/keys/{{key_id}}: FAILED - Status: {}",
                                         get_response.status()
                                     );
@@ -314,7 +315,7 @@ async fn test_api_keys_s2s() {
                                 }
                             }
                             Err(e) => {
-                                println!(
+                                tracing::info!(
                                     "GET /auth/keys/{{key_id}}: FAILED - Request error: {}",
                                     e
                                 );
@@ -335,10 +336,10 @@ async fn test_api_keys_s2s() {
                         {
                             Ok(revoke_response) => {
                                 if revoke_response.status().is_success() {
-                                    println!("POST /auth/keys/{{key_id}}/revoke: PASSED");
+                                    tracing::info!("POST /auth/keys/{{key_id}}/revoke: PASSED");
                                     passed += 1;
                                 } else {
-                                    println!(
+                                    tracing::info!(
                                         "POST /auth/keys/{{key_id}}/revoke: FAILED - Status: {}",
                                         revoke_response.status()
                                     );
@@ -346,7 +347,7 @@ async fn test_api_keys_s2s() {
                                 }
                             }
                             Err(e) => {
-                                println!(
+                                tracing::info!(
                                     "POST /auth/keys/{{key_id}}/revoke: FAILED - Request error: {}",
                                     e
                                 );
@@ -362,10 +363,10 @@ async fn test_api_keys_s2s() {
                         {
                             Ok(delete_response) => {
                                 if delete_response.status().is_success() {
-                                    println!("DELETE /auth/keys/{{key_id}}: PASSED");
+                                    tracing::info!("DELETE /auth/keys/{{key_id}}: PASSED");
                                     passed += 1;
                                 } else {
-                                    println!(
+                                    tracing::info!(
                                         "DELETE /auth/keys/{{key_id}}: FAILED - Status: {}",
                                         delete_response.status()
                                     );
@@ -373,7 +374,7 @@ async fn test_api_keys_s2s() {
                                 }
                             }
                             Err(e) => {
-                                println!(
+                                tracing::info!(
                                     "DELETE /auth/keys/{{key_id}}: FAILED - Request error: {}",
                                     e
                                 );
@@ -382,17 +383,17 @@ async fn test_api_keys_s2s() {
                         }
                     }
                     Err(e) => {
-                        println!("POST /auth/keys: FAILED - Parse error: {}", e);
+                        tracing::info!("POST /auth/keys: FAILED - Parse error: {}", e);
                         failed += 1;
                     }
                 }
             } else {
-                println!("POST /auth/keys: FAILED - Status: {}", response.status());
+                tracing::info!("POST /auth/keys: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("POST /auth/keys: FAILED - Request error: {}", e);
+            tracing::info!("POST /auth/keys: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -403,25 +404,25 @@ async fn test_api_keys_s2s() {
             if response.status().is_success() {
                 match response.json::<ApiKeysResponse>().await {
                     Ok(keys_response) => {
-                        println!("GET /auth/keys: PASSED");
+                        tracing::info!("GET /auth/keys: PASSED");
                         if keys_response.keys.is_empty() {
-                            println!("No API keys returned");
+                            tracing::info!("No API keys returned");
                             failed += 1;
                         }
                         passed += 1;
                     }
                     Err(e) => {
-                        println!("GET /auth/keys: FAILED - Parse error: {}", e);
+                        tracing::info!("GET /auth/keys: FAILED - Parse error: {}", e);
                         failed += 1;
                     }
                 }
             } else {
-                println!("GET /auth/keys: FAILED - Status: {}", response.status());
+                tracing::info!("GET /auth/keys: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("GET /auth/keys: FAILED - Request error: {}", e);
+            tracing::info!("GET /auth/keys: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -439,16 +440,16 @@ async fn test_api_keys_s2s() {
             if response.status().is_success() {
                 match response.json::<ApiKeysResponse>().await {
                     Ok(_keys_response) => {
-                        println!("GET /auth/keys?username=...: PASSED");
+                        tracing::info!("GET /auth/keys?username=...: PASSED");
                         passed += 1;
                     }
                     Err(e) => {
-                        println!("GET /auth/keys?username=...: FAILED - Parse error: {}", e);
+                        tracing::info!("GET /auth/keys?username=...: FAILED - Parse error: {}", e);
                         failed += 1;
                     }
                 }
             } else {
-                println!(
+                tracing::info!(
                     "GET /auth/keys?username=...: FAILED - Status: {}",
                     response.status()
                 );
@@ -456,27 +457,28 @@ async fn test_api_keys_s2s() {
             }
         }
         Err(e) => {
-            println!("GET /auth/keys?username=...: FAILED - Request error: {}", e);
+            tracing::info!("GET /auth/keys?username=...: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Summary
-    println!();
-    println!("==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
-    println!("Total:  {}", passed + failed);
-    println!();
+    tracing::info!();
+    tracing::info!("==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Passed: {}", passed);
+    tracing::info!("Failed: {}", failed);
+    tracing::info!("Total:  {}", passed + failed);
+    tracing::info!();
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

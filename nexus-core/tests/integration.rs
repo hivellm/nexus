@@ -445,8 +445,8 @@ fn test_node_insert_performance() {
     let elapsed = start.elapsed();
     let throughput = count as f64 / elapsed.as_secs_f64();
 
-    println!("Node insert: {} nodes in {:?}", count, elapsed);
-    println!("Throughput: {:.0} nodes/sec", throughput);
+    tracing::info!("Node insert: {} nodes in {:?}", count, elapsed);
+    tracing::info!("Throughput: {:.0} nodes/sec", throughput);
 
     // Should be fast (> 10K inserts/sec)
     assert!(throughput > 10_000.0, "Throughput too low: {}", throughput);
@@ -476,8 +476,8 @@ fn test_node_read_performance() {
     let elapsed = start.elapsed();
     let throughput = count as f64 / elapsed.as_secs_f64();
 
-    println!("Node read: {} nodes in {:?}", count, elapsed);
-    println!("Throughput: {:.0} nodes/sec", throughput);
+    tracing::info!("Node read: {} nodes in {:?}", count, elapsed);
+    tracing::info!("Throughput: {:.0} nodes/sec", throughput);
 
     // Should be very fast (> 100K reads/sec)
     assert!(throughput > 100_000.0, "Throughput too low: {}", throughput);
@@ -520,6 +520,7 @@ fn test_checkpoint_integration() {
 fn test_concurrent_transactions() {
     use std::sync::Arc;
     use std::thread;
+    use tracing;
 
     let dir = TempDir::new().unwrap();
     let store = Arc::new(parking_lot::Mutex::new(

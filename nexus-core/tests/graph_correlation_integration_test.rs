@@ -1,4 +1,4 @@
-#![allow(unexpected_cfgs)]
+﻿#![allow(unexpected_cfgs)]
 #![cfg(FALSE)]
 //! Integration tests for Graph Correlation Analysis
 //!
@@ -11,6 +11,7 @@
 use nexus_core::graph::correlation::{
     GraphCorrelationManager, GraphSourceData, GraphType, NodeType,
 };
+use tracing;
 
 /// Helper function to create realistic Rust code source data
 fn create_rust_project_data() -> GraphSourceData {
@@ -41,7 +42,7 @@ fn create_rust_project_data() -> GraphSourceData {
     // handlers.rs - business logic
     source_data.add_file(
         "src/handlers.rs".to_string(),
-        "use crate::utils::{validate_input, format_output};\npub fn process() {\n    let input = \"hello\";\n    if validate_input(input) {\n        let output = format_output(input);\n        println!(\"{}\", output);\n    }\n}".to_string(),
+        "use crate::utils::{validate_input, format_output};\npub fn process() {\n    let input = \"hello\";\n    if validate_input(input) {\n        let output = format_output(input);\n        tracing::info!(\"{}\", output);\n    }\n}".to_string(),
     );
     source_data.add_functions("src/handlers.rs".to_string(), vec!["process".to_string()]);
     source_data.add_imports(
@@ -75,7 +76,7 @@ fn test_call_graph_integration() {
         .any(|n| n.label.contains("main") && n.node_type == NodeType::Function);
     assert!(has_main, "Call graph should include main function");
 
-    println!(
+    tracing::info!(
         "Call graph integration test passed: {} nodes, {} edges",
         graph.nodes.len(),
         graph.edges.len()
@@ -102,7 +103,7 @@ fn test_dependency_graph_integration() {
     let has_modules = graph.nodes.iter().any(|n| n.node_type == NodeType::Module);
     assert!(has_modules, "Dependency graph should have module nodes");
 
-    println!(
+    tracing::info!(
         "Dependency graph integration test passed: {} nodes, {} edges",
         graph.nodes.len(),
         graph.edges.len()
@@ -143,7 +144,7 @@ fn test_multiple_graph_types() {
         "Different graphs should have different structures"
     );
 
-    println!("Multiple graph types test passed");
+    tracing::info!("Multiple graph types test passed");
 }
 
 /// Test graph with circular dependencies
@@ -185,7 +186,7 @@ fn test_circular_dependencies() {
     );
     assert!(graph.nodes.len() >= 3, "Should have at least 3 functions");
 
-    println!(
+    tracing::info!(
         "Circular dependencies test passed: {} nodes, {} edges",
         graph.nodes.len(),
         graph.edges.len()
@@ -230,7 +231,7 @@ fn test_large_scale_graph() {
         "Large graph should have many edges"
     );
 
-    println!(
+    tracing::info!(
         "Large-scale graph test passed: {} nodes, {} edges",
         graph.nodes.len(),
         graph.edges.len()
@@ -264,7 +265,7 @@ fn test_graph_filtering() {
 
     assert!(shallow_nodes_count > 0, "Should find shallow nodes");
 
-    println!(
+    tracing::info!(
         "Graph filtering test passed: {} filtered nodes found",
         filtered_nodes.len()
     );
@@ -286,12 +287,12 @@ fn test_empty_source_data() {
                 0,
                 "Empty source should produce empty graph"
             );
-            println!("Empty source data handled gracefully");
+            tracing::info!("Empty source data handled gracefully");
         }
         Err(e) => {
             // Error is acceptable for empty source
             assert!(e.to_string().contains("No source"));
-            println!("Empty source data correctly rejected: {}", e);
+            tracing::info!("Empty source data correctly rejected: {}", e);
         }
     }
 }
@@ -325,9 +326,9 @@ fn test_graph_statistics() {
     assert!(function_count > 0, "Should have functions");
     assert!(module_count > 0, "Module count should be positive");
 
-    println!("Graph statistics test passed:");
-    println!("  Total nodes: {}", node_count);
-    println!("  Total edges: {}", edge_count);
-    println!("  Functions: {}", function_count);
-    println!("  Modules: {}", module_count);
+    tracing::info!("Graph statistics test passed:");
+    tracing::info!("  Total nodes: {}", node_count);
+    tracing::info!("  Total edges: {}", edge_count);
+    tracing::info!("  Functions: {}", function_count);
+    tracing::info!("  Modules: {}", module_count);
 }

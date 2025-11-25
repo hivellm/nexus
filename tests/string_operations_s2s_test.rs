@@ -1,4 +1,4 @@
-//! End-to-end (S2S) tests for Cypher string operations via HTTP API
+﻿//! End-to-end (S2S) tests for Cypher string operations via HTTP API
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -12,6 +12,7 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {
@@ -89,15 +90,15 @@ async fn test_query_count(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if let Some(error) = response.error {
-                println!("✗ {}: FAILED - Error: {}", test_name, error);
+                tracing::info!("✗ {}: FAILED - Error: {}", test_name, error);
                 false
             } else {
                 let actual_count = response.rows.len();
                 if actual_count == expected_count {
-                    println!("✓ {}: PASSED", test_name);
+                    tracing::info!("✓ {}: PASSED", test_name);
                     true
                 } else {
-                    println!(
+                    tracing::info!(
                         "✗ {}: FAILED - Expected {} rows, got {}",
                         test_name, expected_count, actual_count
                     );
@@ -106,7 +107,7 @@ async fn test_query_count(
             }
         }
         Err(e) => {
-            println!("✗ {}: FAILED - Request error: {}", test_name, e);
+            tracing::info!("✗ {}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -117,34 +118,34 @@ async fn test_string_operations_s2s() {
     let server_url = get_server_url();
 
     // Wait for server to be available
-    println!("Waiting for server at {}...", server_url);
+    tracing::info!("Waiting for server at {}...", server_url);
     if !wait_for_server(&server_url, 30).await {
-        eprintln!("ERROR: Server not available at {}", server_url);
-        eprintln!("Please start the server first: cargo run --release --bin nexus-server");
+        etracing::info!("ERROR: Server not available at {}", server_url);
+        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
-    println!("✅ Server is ready");
-    println!();
+    tracing::info!("✅ Server is ready");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Setup test data
-    println!("=== Setting up test data ===");
+    tracing::info!("=== Setting up test data ===");
     let setup_query = "CREATE (n1:Person {name: 'Alice Smith', email: 'alice@example.com', bio: 'Software engineer'}),
                        (n2:Person {name: 'Bob Johnson', email: 'bob@other.com', bio: 'Marketing specialist'}),
                        (n3:Person {name: 'Charlie Brown', email: 'charlie@example.com', phone: '123-456-7890'})
                        RETURN count(n1) AS total";
     if execute_query(&client, &server_url, setup_query).await.is_ok() {
-        println!("✅ Test data created");
+        tracing::info!("✅ Test data created");
     } else {
-        println!("⚠️  Failed to create test data (may already exist)");
+        tracing::info!("⚠️  Failed to create test data (may already exist)");
     }
-    println!();
+    tracing::info!();
 
     // STARTS WITH tests
-    println!("=== Testing STARTS WITH ===");
+    tracing::info!("=== Testing STARTS WITH ===");
     if test_query_count(
         &client,
         &server_url,
@@ -186,10 +187,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // ENDS WITH tests
-    println!("=== Testing ENDS WITH ===");
+    tracing::info!("=== Testing ENDS WITH ===");
     if test_query_count(
         &client,
         &server_url,
@@ -217,10 +218,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // CONTAINS tests
-    println!("=== Testing CONTAINS ===");
+    tracing::info!("=== Testing CONTAINS ===");
     if test_query_count(
         &client,
         &server_url,
@@ -262,10 +263,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Regex tests
-    println!("=== Testing Regex (=~) ===");
+    tracing::info!("=== Testing Regex (=~) ===");
     if test_query_count(
         &client,
         &server_url,
@@ -307,10 +308,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Combined operators tests
-    println!("=== Testing Combined Operators ===");
+    tracing::info!("=== Testing Combined Operators ===");
     if test_query_count(
         &client,
         &server_url,
@@ -338,25 +339,25 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Summary
-    println!("==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Total Tests: {}", passed + failed);
-    println!("Passed: {}", passed);
+    tracing::info!("==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Total Tests: {}", passed + failed);
+    tracing::info!("Passed: {}", passed);
     if failed > 0 {
-        println!("Failed: {}", failed);
+        tracing::info!("Failed: {}", failed);
     } else {
-        println!("Failed: 0");
+        tracing::info!("Failed: 0");
     }
-    println!();
+    tracing::info!();
 
     if failed == 0 {
-        println!("✅ ALL TESTS PASSED!");
+        tracing::info!("✅ ALL TESTS PASSED!");
     } else {
-        println!("❌ SOME TESTS FAILED");
+        tracing::info!("❌ SOME TESTS FAILED");
         std::process::exit(1);
     }
 }

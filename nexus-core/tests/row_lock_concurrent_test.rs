@@ -1,9 +1,10 @@
-//! Tests for row-level locking and concurrent access patterns
+﻿//! Tests for row-level locking and concurrent access patterns
 
 use nexus_core::storage::row_lock::{ResourceId, RowLockManager};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tracing;
 
 #[test]
 fn test_concurrent_writes_to_different_nodes() {
@@ -664,13 +665,13 @@ fn test_lock_contention_high_load() {
     if successes == num_threads {
         // All locks succeeded - system handled contention well
         // This is acceptable behavior, just log it
-        println!(
+        tracing::info!(
             "All {} locks succeeded under high contention - system handled load well",
             num_threads
         );
     } else {
         // Some timeouts occurred as expected
-        println!(
+        tracing::info!(
             "{} out of {} locks succeeded, {} timed out (expected under high contention)",
             successes,
             num_threads,

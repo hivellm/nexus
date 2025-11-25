@@ -1,4 +1,4 @@
-//! Nexus Rust SDK
+﻿//! Nexus Rust SDK
 //!
 //! Official Rust SDK for Nexus graph database.
 //!
@@ -15,7 +15,7 @@
 //!     // Execute a Cypher query
 //!     let result = client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None).await?;
 //!
-//!     println!("Found {} rows", result.rows.len());
+//!     tracing::info!("Found {} rows", result.rows.len());
 //!     Ok(())
 //! }
 //! ```

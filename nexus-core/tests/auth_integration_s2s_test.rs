@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LoginRequest {
@@ -126,17 +127,17 @@ async fn test_complete_authentication_flow() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("==========================================");
-    println!("Complete Authentication Flow Test");
-    println!("==========================================");
+    tracing::info!("==========================================");
+    tracing::info!("Complete Authentication Flow Test");
+    tracing::info!("==========================================");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -160,16 +161,16 @@ async fn test_complete_authentication_flow() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("User created: {}", username);
+                tracing::info!("User created: {}", username);
                 passed += 1;
             } else {
-                println!("Failed to create user: {}", response.status());
+                tracing::info!("Failed to create user: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("Failed to create user: {}", e);
+            tracing::info!("Failed to create user: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -191,24 +192,24 @@ async fn test_complete_authentication_flow() {
             if response.status().is_success() {
                 match response.json::<LoginResponse>().await {
                     Ok(login_data) => {
-                        println!("Login successful, got JWT tokens");
+                        tracing::info!("Login successful, got JWT tokens");
                         passed += 1;
                         login_data
                     }
                     Err(e) => {
-                        println!("Failed to parse login response: {}", e);
+                        tracing::info!("Failed to parse login response: {}", e);
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("Login failed: {}", response.status());
+                tracing::info!("Login failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("Login request failed: {}", e);
+            tracing::info!("Login request failed: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -230,15 +231,15 @@ async fn test_complete_authentication_flow() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("Authenticated API call successful");
+                tracing::info!("Authenticated API call successful");
                 passed += 1;
             } else {
-                println!("Authenticated API call failed: {}", response.status());
+                tracing::info!("Authenticated API call failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("Authenticated API call error: {}", e);
+            tracing::info!("Authenticated API call error: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -258,7 +259,7 @@ async fn test_complete_authentication_flow() {
             if response.status().is_success() {
                 match response.json::<RefreshTokenResponse>().await {
                     Ok(refresh_data) => {
-                        println!("Token refresh successful");
+                        tracing::info!("Token refresh successful");
                         passed += 1;
 
                         // Step 5: Use refreshed token
@@ -277,44 +278,45 @@ async fn test_complete_authentication_flow() {
                         {
                             Ok(response) => {
                                 if response.status().is_success() {
-                                    println!("Refreshed token works");
+                                    tracing::info!("Refreshed token works");
                                     passed += 1;
                                 } else {
-                                    println!("Refreshed token failed: {}", response.status());
+                                    tracing::info!("Refreshed token failed: {}", response.status());
                                     let _ = failed; // Track failures for debugging
                                 }
                             }
                             Err(e) => {
-                                println!("Refreshed token error: {}", e);
+                                tracing::info!("Refreshed token error: {}", e);
                                 let _ = failed; // Track failures for debugging
                             }
                         }
                     }
                     Err(e) => {
-                        println!("Failed to parse refresh response: {}", e);
+                        tracing::info!("Failed to parse refresh response: {}", e);
                         let _ = failed; // Track failures for debugging
                     }
                 }
             } else {
-                println!("Token refresh failed: {}", response.status());
+                tracing::info!("Token refresh failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("Token refresh request failed: {}", e);
+            tracing::info!("Token refresh request failed: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
 
-    println!();
-    println!("Test Summary: {} passed, {} failed", passed, failed);
+    tracing::info!();
+    tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -324,17 +326,17 @@ async fn test_api_key_lifecycle() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("==========================================");
-    println!("API Key Lifecycle Test");
-    println!("==========================================");
+    tracing::info!("==========================================");
+    tracing::info!("API Key Lifecycle Test");
+    tracing::info!("==========================================");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -356,10 +358,10 @@ async fn test_api_key_lifecycle() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("User created");
+        tracing::info!("User created");
         passed += 1;
     } else {
-        println!("Failed to create user");
+        tracing::info!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -382,24 +384,24 @@ async fn test_api_key_lifecycle() {
             if response.status().is_success() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(key_data) => {
-                        println!("API key created: {}", key_data.id);
+                        tracing::info!("API key created: {}", key_data.id);
                         passed += 1;
                         key_data
                     }
                     Err(e) => {
-                        println!("Failed to parse API key response: {}", e);
+                        tracing::info!("Failed to parse API key response: {}", e);
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("Failed to create API key: {}", response.status());
+                tracing::info!("Failed to create API key: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("API key creation request failed: {}", e);
+            tracing::info!("API key creation request failed: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -418,15 +420,15 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("API key authentication successful");
+                tracing::info!("API key authentication successful");
                 passed += 1;
             } else {
-                println!("API key authentication failed: {}", response.status());
+                tracing::info!("API key authentication failed: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("API key authentication error: {}", e);
+            tracing::info!("API key authentication error: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -444,15 +446,15 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("API key revoked");
+                tracing::info!("API key revoked");
                 passed += 1;
             } else {
-                println!("Failed to revoke API key: {}", response.status());
+                tracing::info!("Failed to revoke API key: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("Revoke API key request failed: {}", e);
+            tracing::info!("Revoke API key request failed: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -470,16 +472,16 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status() == 401 || response.status() == 403 {
-                println!("Revoked key correctly rejected");
+                tracing::info!("Revoked key correctly rejected");
                 passed += 1;
             } else {
-                println!("Revoked key should be rejected, got: {}", response.status());
+                tracing::info!("Revoked key should be rejected, got: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(_) => {
             // Network error is also acceptable for rejected requests
-            println!("Revoked key rejected (network error)");
+            tracing::info!("Revoked key rejected (network error)");
             passed += 1;
         }
     }
@@ -492,28 +494,29 @@ async fn test_api_key_lifecycle() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("API key deleted");
+                tracing::info!("API key deleted");
                 passed += 1;
             } else {
-                println!("Failed to delete API key: {}", response.status());
+                tracing::info!("Failed to delete API key: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("Delete API key request failed: {}", e);
+            tracing::info!("Delete API key request failed: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
 
-    println!();
-    println!("Test Summary: {} passed, {} failed", passed, failed);
+    tracing::info!();
+    tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -523,17 +526,17 @@ async fn test_permission_enforcement() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("==========================================");
-    println!("Permission Enforcement Test");
-    println!("==========================================");
+    tracing::info!("==========================================");
+    tracing::info!("Permission Enforcement Test");
+    tracing::info!("==========================================");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -555,7 +558,7 @@ async fn test_permission_enforcement() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("Failed to create user");
+        tracing::info!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -576,7 +579,7 @@ async fn test_permission_enforcement() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("Failed to grant permissions");
+        tracing::info!("Failed to grant permissions");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -600,19 +603,19 @@ async fn test_permission_enforcement() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(key_data) => key_data,
                     Err(_) => {
-                        println!("Failed to parse API key");
+                        tracing::info!("Failed to parse API key");
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("Failed to create API key");
+                tracing::info!("Failed to create API key");
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(_) => {
-            println!("API key creation failed");
+            tracing::info!("API key creation failed");
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -631,10 +634,10 @@ async fn test_permission_enforcement() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("READ operation allowed");
+                tracing::info!("READ operation allowed");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "READ operation should be allowed, got: {}",
                     response.status()
                 );
@@ -642,7 +645,7 @@ async fn test_permission_enforcement() {
             }
         }
         Err(e) => {
-            println!("READ operation error: {}", e);
+            tracing::info!("READ operation error: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -660,10 +663,10 @@ async fn test_permission_enforcement() {
     {
         Ok(response) => {
             if response.status() == 403 {
-                println!("WRITE operation correctly denied (403)");
+                tracing::info!("WRITE operation correctly denied (403)");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "WRITE operation should be denied, got: {}",
                     response.status()
                 );
@@ -672,19 +675,20 @@ async fn test_permission_enforcement() {
         }
         Err(_) => {
             // Network error might indicate rejection
-            println!("? WRITE operation rejected (check manually)");
+            tracing::info!("? WRITE operation rejected (check manually)");
         }
     }
 
-    println!();
-    println!("Test Summary: {} passed, {} failed", passed, failed);
+    tracing::info!();
+    tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -694,17 +698,17 @@ async fn test_rate_limiting() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("==========================================");
-    println!("Rate Limiting Test");
-    println!("==========================================");
+    tracing::info!("==========================================");
+    tracing::info!("Rate Limiting Test");
+    tracing::info!("==========================================");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -726,7 +730,7 @@ async fn test_rate_limiting() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("Failed to create user");
+        tracing::info!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -749,19 +753,19 @@ async fn test_rate_limiting() {
                 match response.json::<CreateApiKeyResponse>().await {
                     Ok(key_data) => key_data,
                     Err(_) => {
-                        println!("Failed to parse API key");
+                        tracing::info!("Failed to parse API key");
                         let _ = failed; // Track failures for debugging
                         return;
                     }
                 }
             } else {
-                println!("Failed to create API key");
+                tracing::info!("Failed to create API key");
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(_) => {
-            println!("API key creation failed");
+            tracing::info!("API key creation failed");
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -785,7 +789,7 @@ async fn test_rate_limiting() {
             Ok(response) => {
                 if response.status() == 429 {
                     rate_limited = true;
-                    println!("Rate limit triggered at request {}", i + 1);
+                    tracing::info!("Rate limit triggered at request {}", i + 1);
                     passed += 1;
                     break;
                 } else if response.status().is_success() {
@@ -799,22 +803,23 @@ async fn test_rate_limiting() {
     }
 
     if rate_limited {
-        println!("Rate limiting is working");
+        tracing::info!("Rate limiting is working");
         passed += 1;
     } else {
-        println!("? Rate limiting not triggered (may be configured with high limits)");
-        println!("  Made {} successful requests", success_count);
+        tracing::info!("? Rate limiting not triggered (may be configured with high limits)");
+        tracing::info!("  Made {} successful requests", success_count);
     }
 
-    println!();
-    println!("Test Summary: {} passed, {} failed", passed, failed);
+    tracing::info!();
+    tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -824,17 +829,17 @@ async fn test_user_permission_cascade() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("==========================================");
-    println!("User Permission Cascade Test");
-    println!("==========================================");
+    tracing::info!("==========================================");
+    tracing::info!("User Permission Cascade Test");
+    tracing::info!("==========================================");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -859,7 +864,7 @@ async fn test_user_permission_cascade() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("Failed to create user");
+        tracing::info!("Failed to create user");
         return;
     }
 
@@ -879,10 +884,10 @@ async fn test_user_permission_cascade() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("Permissions granted");
+        tracing::info!("Permissions granted");
         passed += 1;
     } else {
-        println!("Failed to grant permissions");
+        tracing::info!("Failed to grant permissions");
         return;
     }
 
@@ -909,23 +914,23 @@ async fn test_user_permission_cascade() {
                             if perm_strs.contains(&"READ".to_string())
                                 && perm_strs.contains(&"WRITE".to_string())
                             {
-                                println!("Permissions verified");
+                                tracing::info!("Permissions verified");
                                 passed += 1;
                             } else {
-                                println!("Permissions not as expected");
+                                tracing::info!("Permissions not as expected");
                                 let _ = failed; // Track failures for debugging
                             }
                         }
                     }
                     Err(_) => {
-                        println!("Failed to parse permissions");
+                        tracing::info!("Failed to parse permissions");
                         let _ = failed; // Track failures for debugging
                     }
                 }
             }
         }
         Err(_) => {
-            println!("Failed to get permissions");
+            tracing::info!("Failed to get permissions");
             let _ = failed; // Track failures for debugging
         }
     }
@@ -941,15 +946,15 @@ async fn test_user_permission_cascade() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("WRITE permission revoked");
+                tracing::info!("WRITE permission revoked");
                 passed += 1;
             } else {
-                println!("Failed to revoke permission");
+                tracing::info!("Failed to revoke permission");
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(_) => {
-            println!("Revoke permission request failed");
+            tracing::info!("Revoke permission request failed");
             let _ = failed; // Track failures for debugging
         }
     }
@@ -977,38 +982,39 @@ async fn test_user_permission_cascade() {
                             if perm_strs.contains(&"READ".to_string())
                                 && !perm_strs.contains(&"WRITE".to_string())
                             {
-                                println!(
+                                tracing::info!(
                                     "Permission cascade verified (READ remains, WRITE removed)"
                                 );
                                 passed += 1;
                             } else {
-                                println!("Permission cascade not as expected");
+                                tracing::info!("Permission cascade not as expected");
                                 let _ = failed; // Track failures for debugging
                             }
                         }
                     }
                     Err(_) => {
-                        println!("Failed to parse permissions after revoke");
+                        tracing::info!("Failed to parse permissions after revoke");
                         let _ = failed; // Track failures for debugging
                     }
                 }
             }
         }
         Err(_) => {
-            println!("Failed to verify permissions after revoke");
+            tracing::info!("Failed to verify permissions after revoke");
             let _ = failed; // Track failures for debugging
         }
     }
 
-    println!();
-    println!("Test Summary: {} passed, {} failed", passed, failed);
+    tracing::info!();
+    tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -1018,17 +1024,17 @@ async fn test_audit_log_generation() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("==========================================");
-    println!("Audit Log Generation Test");
-    println!("==========================================");
+    tracing::info!("==========================================");
+    tracing::info!("Audit Log Generation Test");
+    tracing::info!("==========================================");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -1050,10 +1056,10 @@ async fn test_audit_log_generation() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("User created (audit log should be generated)");
+        tracing::info!("User created (audit log should be generated)");
         passed += 1;
     } else {
-        println!("Failed to create user");
+        tracing::info!("Failed to create user");
         let _ = failed; // Track failures for debugging
         return;
     }
@@ -1072,10 +1078,10 @@ async fn test_audit_log_generation() {
         .map(|r| r.status().is_success())
         .unwrap_or(false)
     {
-        println!("Login successful (audit log should be generated)");
+        tracing::info!("Login successful (audit log should be generated)");
         passed += 1;
     } else {
-        println!("Login failed");
+        tracing::info!("Login failed");
         let _ = failed; // Track failures for debugging
     }
 
@@ -1095,29 +1101,30 @@ async fn test_audit_log_generation() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("API key created (audit log should be generated)");
+                tracing::info!("API key created (audit log should be generated)");
                 passed += 1;
             } else {
-                println!("Failed to create API key");
+                tracing::info!("Failed to create API key");
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(_) => {
-            println!("API key creation failed");
+            tracing::info!("API key creation failed");
             let _ = failed; // Track failures for debugging
         }
     }
 
-    println!();
-    println!("Test Summary: {} passed, {} failed", passed, failed);
-    println!("Note: Audit log files should be checked manually at logs/audit/");
+    tracing::info!();
+    tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
+    tracing::info!("Note: Audit log files should be checked manually at logs/audit/");
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }
@@ -1127,19 +1134,19 @@ async fn test_root_user_disable_flow() {
     let server_url = get_server_url();
 
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_integration_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("==========================================");
-    println!("Root User Disable Flow Test");
-    println!("==========================================");
-    println!("Note: This test requires root user to be enabled");
-    println!("      and NEXUS_DISABLE_ROOT_AFTER_SETUP=true");
+    tracing::info!("==========================================");
+    tracing::info!("Root User Disable Flow Test");
+    tracing::info!("==========================================");
+    tracing::info!("Note: This test requires root user to be enabled");
+    tracing::info!("      and NEXUS_DISABLE_ROOT_AFTER_SETUP=true");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -1162,17 +1169,17 @@ async fn test_root_user_disable_flow() {
             if response.status().is_success() {
                 match response.json::<LoginResponse>().await {
                     Ok(login_data) => {
-                        println!("Root user login successful");
+                        tracing::info!("Root user login successful");
                         passed += 1;
                         Some(login_data.access_token)
                     }
                     Err(_) => {
-                        println!("? Root user may be disabled or credentials incorrect");
+                        tracing::info!("? Root user may be disabled or credentials incorrect");
                         None
                     }
                 }
             } else {
-                println!(
+                tracing::info!(
                     "? Root user may be disabled (status: {})",
                     response.status()
                 );
@@ -1180,7 +1187,7 @@ async fn test_root_user_disable_flow() {
             }
         }
         Err(_) => {
-            println!("? Root user login failed (may be disabled)");
+            tracing::info!("? Root user login failed (may be disabled)");
             None
         }
     };
@@ -1212,16 +1219,16 @@ async fn test_root_user_disable_flow() {
     match create_admin_response {
         Ok(response) => {
             if response.status().is_success() {
-                println!("Admin user created");
+                tracing::info!("Admin user created");
                 passed += 1;
             } else {
-                println!("Failed to create admin user: {}", response.status());
+                tracing::info!("Failed to create admin user: {}", response.status());
                 let _ = failed; // Track failures for debugging
                 return;
             }
         }
         Err(e) => {
-            println!("Failed to create admin user: {}", e);
+            tracing::info!("Failed to create admin user: {}", e);
             let _ = failed; // Track failures for debugging
             return;
         }
@@ -1256,15 +1263,15 @@ async fn test_root_user_disable_flow() {
     match grant_response {
         Ok(response) => {
             if response.status().is_success() {
-                println!("Admin permission granted");
+                tracing::info!("Admin permission granted");
                 passed += 1;
             } else {
-                println!("Failed to grant admin permission: {}", response.status());
+                tracing::info!("Failed to grant admin permission: {}", response.status());
                 let _ = failed; // Track failures for debugging
             }
         }
         Err(e) => {
-            println!("Failed to grant admin permission: {}", e);
+            tracing::info!("Failed to grant admin permission: {}", e);
             let _ = failed; // Track failures for debugging
         }
     }
@@ -1279,30 +1286,33 @@ async fn test_root_user_disable_flow() {
     match root_login_after {
         Ok(response) => {
             if response.status() == 403 || response.status() == 401 {
-                println!("Root user correctly disabled after admin creation");
+                tracing::info!("Root user correctly disabled after admin creation");
                 passed += 1;
             } else if response.status().is_success() {
-                println!("? Root user still enabled (auto-disable may not be configured)");
-                println!("  This is OK if NEXUS_DISABLE_ROOT_AFTER_SETUP=false");
+                tracing::info!("? Root user still enabled (auto-disable may not be configured)");
+                tracing::info!("  This is OK if NEXUS_DISABLE_ROOT_AFTER_SETUP=false");
             } else {
-                println!("? Root login status unclear: {}", response.status());
+                tracing::info!("? Root login status unclear: {}", response.status());
             }
         }
         Err(_) => {
-            println!("? Root login failed (may indicate disable)");
+            tracing::info!("? Root login failed (may indicate disable)");
         }
     }
 
-    println!();
-    println!("Test Summary: {} passed, {} failed", passed, failed);
-    println!("Note: Root disable flow depends on NEXUS_DISABLE_ROOT_AFTER_SETUP configuration");
+    tracing::info!();
+    tracing::info!("Test Summary: {} passed, {} failed", passed, failed);
+    tracing::info!(
+        "Note: Root disable flow depends on NEXUS_DISABLE_ROOT_AFTER_SETUP configuration"
+    );
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

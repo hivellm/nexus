@@ -1,4 +1,4 @@
-//! Call Graph Filtering and Search Example
+﻿//! Call Graph Filtering and Search Example
 //!
 //! This example demonstrates the comprehensive filtering and search capabilities
 //! for call graphs, including node filtering, edge filtering, text search,
@@ -9,44 +9,45 @@ use nexus_core::graph::correlation::{
     GraphType, NodeFilter, NodeType, PathSearch, RecursiveCallConfig,
 };
 use std::collections::HashMap;
+use tracing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🔍 Call Graph Filtering and Search Example");
-    println!("==========================================");
+    tracing::info!("🔍 Call Graph Filtering and Search Example");
+    tracing::info!("==========================================");
 
     // Create a sample call graph
     let graph = create_sample_call_graph()?;
-    println!(
+    tracing::info!(
         "📊 Created sample call graph with {} nodes and {} edges",
         graph.nodes.len(),
         graph.edges.len()
     );
 
     // Demonstrate node filtering
-    println!("\n🎯 Node Filtering Examples:");
+    tracing::info!("\n🎯 Node Filtering Examples:");
     demonstrate_node_filtering(&graph)?;
 
     // Demonstrate edge filtering
-    println!("\n🔗 Edge Filtering Examples:");
+    tracing::info!("\n🔗 Edge Filtering Examples:");
     demonstrate_edge_filtering(&graph)?;
 
     // Demonstrate text search
-    println!("\n🔍 Text Search Examples:");
+    tracing::info!("\n🔍 Text Search Examples:");
     demonstrate_text_search(&graph)?;
 
     // Demonstrate path finding
-    println!("\n🛤️  Path Finding Examples:");
+    tracing::info!("\n🛤️  Path Finding Examples:");
     demonstrate_path_finding(&graph)?;
 
     // Demonstrate advanced filtering
-    println!("\n⚡ Advanced Filtering Examples:");
+    tracing::info!("\n⚡ Advanced Filtering Examples:");
     demonstrate_advanced_filtering(&graph)?;
 
     // Demonstrate recursive call detection
-    println!("\n🔄 Recursive Call Detection:");
+    tracing::info!("\n🔄 Recursive Call Detection:");
     demonstrate_recursive_calls(&graph)?;
 
-    println!("\n🎉 Example completed successfully!");
+    tracing::info!("\n🎉 Example completed successfully!");
     Ok(())
 }
 
@@ -273,26 +274,26 @@ fn demonstrate_node_filtering(graph: &CorrelationGraph) -> Result<(), Box<dyn st
     let filter = CallGraphFilter::new(graph.clone());
 
     // Filter by node type
-    println!("  📋 Functions only:");
+    tracing::info!("  📋 Functions only:");
     let functions = filter.get_nodes_by_type(NodeType::Function);
-    println!("    Found {} functions", functions.len());
+    tracing::info!("    Found {} functions", functions.len());
     for func in functions.iter().take(3) {
-        println!("      • {}", func.label);
+        tracing::info!("      • {}", func.label);
     }
 
     // Filter by label contains
-    println!("  🔍 Functions containing 'auth':");
+    tracing::info!("  🔍 Functions containing 'auth':");
     let auth_filter = NodeFilter {
         label_contains: Some(vec!["auth".to_string()]),
         ..Default::default()
     };
     let auth_functions = filter.filter_nodes(&auth_filter)?;
     for func in &auth_functions {
-        println!("      • {} ({})", func.label, func.id);
+        tracing::info!("      • {} ({})", func.label, func.id);
     }
 
     // Filter by metadata
-    println!("  🏷️  Functions with high complexity (>3):");
+    tracing::info!("  🏷️  Functions with high complexity (>3):");
     let complexity_filter = NodeFilter {
         metadata: Some(HashMap::from([(
             "function_type".to_string(),
@@ -316,7 +317,7 @@ fn demonstrate_node_filtering(graph: &CorrelationGraph) -> Result<(), Box<dyn st
         })
         .collect();
     for func in &high_complexity {
-        println!(
+        tracing::info!(
             "      • {} (complexity: {})",
             func.label,
             func.metadata
@@ -326,10 +327,10 @@ fn demonstrate_node_filtering(graph: &CorrelationGraph) -> Result<(), Box<dyn st
     }
 
     // Filter by module
-    println!("  📁 Functions in auth.rs:");
+    tracing::info!("  📁 Functions in auth.rs:");
     let auth_module_functions = filter.get_nodes_by_module("auth.rs");
     for func in &auth_module_functions {
-        println!("      • {}", func.label);
+        tracing::info!("      • {}", func.label);
     }
 
     Ok(())
@@ -339,11 +340,11 @@ fn demonstrate_edge_filtering(graph: &CorrelationGraph) -> Result<(), Box<dyn st
     let filter = CallGraphFilter::new(graph.clone());
 
     // Filter by edge type
-    println!("  📞 Call edges only:");
+    tracing::info!("  📞 Call edges only:");
     let call_edges = filter.get_edges_by_type(EdgeType::Calls);
-    println!("    Found {} call edges", call_edges.len());
+    tracing::info!("    Found {} call edges", call_edges.len());
     for edge in call_edges.iter().take(5) {
-        println!(
+        tracing::info!(
             "      • {} -> {} ({})",
             edge.source.split(':').next_back().unwrap_or(&edge.source),
             edge.target.split(':').next_back().unwrap_or(&edge.target),
@@ -352,11 +353,11 @@ fn demonstrate_edge_filtering(graph: &CorrelationGraph) -> Result<(), Box<dyn st
     }
 
     // Filter by recursive calls
-    println!("  🔄 Recursive call edges:");
+    tracing::info!("  🔄 Recursive call edges:");
     let recursive_edges = filter.get_recursive_calls();
-    println!("    Found {} recursive calls", recursive_edges.len());
+    tracing::info!("    Found {} recursive calls", recursive_edges.len());
     for edge in &recursive_edges {
-        println!(
+        tracing::info!(
             "      • {} -> {} (recursive)",
             edge.source.split(':').next_back().unwrap_or(&edge.source),
             edge.target.split(':').next_back().unwrap_or(&edge.target)
@@ -364,13 +365,13 @@ fn demonstrate_edge_filtering(graph: &CorrelationGraph) -> Result<(), Box<dyn st
     }
 
     // Filter by weight range
-    println!("  ⚖️  Edges with weight > 0.5:");
+    tracing::info!("  ⚖️  Edges with weight > 0.5:");
     let weight_filter = EdgeFilter {
         weight_range: Some((0.5, 1.0)),
         ..Default::default()
     };
     let weighted_edges = filter.filter_edges(&weight_filter)?;
-    println!("    Found {} edges with weight > 0.5", weighted_edges.len());
+    tracing::info!("    Found {} edges with weight > 0.5", weighted_edges.len());
 
     Ok(())
 }
@@ -379,7 +380,7 @@ fn demonstrate_text_search(graph: &CorrelationGraph) -> Result<(), Box<dyn std::
     let filter = CallGraphFilter::new(graph.clone());
 
     // Search for "auth" in labels
-    println!("  🔍 Searching for 'auth' in labels:");
+    tracing::info!("  🔍 Searching for 'auth' in labels:");
     let search = CallGraphSearch {
         query: "auth".to_string(),
         search_labels: true,
@@ -389,13 +390,13 @@ fn demonstrate_text_search(graph: &CorrelationGraph) -> Result<(), Box<dyn std::
         ..Default::default()
     };
     let result = filter.search(&search)?;
-    println!("    Found {} matches", result.total_matches);
+    tracing::info!("    Found {} matches", result.total_matches);
     for node in &result.matching_nodes {
-        println!("      • {} ({})", node.label, node.id);
+        tracing::info!("      • {} ({})", node.label, node.id);
     }
 
     // Search for "config" in metadata
-    println!("  🔍 Searching for 'config' in metadata:");
+    tracing::info!("  🔍 Searching for 'config' in metadata:");
     let search = CallGraphSearch {
         query: "config".to_string(),
         search_labels: false,
@@ -405,13 +406,13 @@ fn demonstrate_text_search(graph: &CorrelationGraph) -> Result<(), Box<dyn std::
         ..Default::default()
     };
     let result = filter.search(&search)?;
-    println!("    Found {} matches", result.total_matches);
+    tracing::info!("    Found {} matches", result.total_matches);
     for node in &result.matching_nodes {
-        println!("      • {} ({})", node.label, node.id);
+        tracing::info!("      • {} ({})", node.label, node.id);
     }
 
     // Search for functions only
-    println!("  🔍 Searching for 'user' in function names only:");
+    tracing::info!("  🔍 Searching for 'user' in function names only:");
     let search = CallGraphSearch {
         query: "user".to_string(),
         search_labels: true,
@@ -422,9 +423,9 @@ fn demonstrate_text_search(graph: &CorrelationGraph) -> Result<(), Box<dyn std::
         ..Default::default()
     };
     let result = filter.search(&search)?;
-    println!("    Found {} matches", result.total_matches);
+    tracing::info!("    Found {} matches", result.total_matches);
     for node in &result.matching_nodes {
-        println!("      • {} ({})", node.label, node.id);
+        tracing::info!("      • {} ({})", node.label, node.id);
     }
 
     Ok(())
@@ -434,7 +435,7 @@ fn demonstrate_path_finding(graph: &CorrelationGraph) -> Result<(), Box<dyn std:
     let filter = CallGraphFilter::new(graph.clone());
 
     // Find paths from main to specific functions
-    println!("  🛤️  Paths from main to database functions:");
+    tracing::info!("  🛤️  Paths from main to database functions:");
     let path_search = PathSearch {
         start_node: Some("func:main.rs:main".to_string()),
         end_node: Some("func:database.rs:get_user".to_string()),
@@ -442,30 +443,30 @@ fn demonstrate_path_finding(graph: &CorrelationGraph) -> Result<(), Box<dyn std:
         ..Default::default()
     };
     let paths = filter.find_paths(&path_search)?;
-    println!("    Found {} paths", paths.len());
+    tracing::info!("    Found {} paths", paths.len());
     for (i, path) in paths.iter().enumerate().take(3) {
-        println!("      Path {}: {}", i + 1, path);
+        tracing::info!("      Path {}: {}", i + 1, path);
     }
 
     // Find all paths from a specific function
-    println!("  🛤️  All paths from login function:");
+    tracing::info!("  🛤️  All paths from login function:");
     let path_search = PathSearch {
         start_node: Some("func:auth.rs:login".to_string()),
         max_length: Some(3),
         ..Default::default()
     };
     let paths = filter.find_paths(&path_search)?;
-    println!("    Found {} paths", paths.len());
+    tracing::info!("    Found {} paths", paths.len());
     for (i, path) in paths.iter().enumerate().take(5) {
-        println!("      Path {}: {}", i + 1, path);
+        tracing::info!("      Path {}: {}", i + 1, path);
     }
 
     // Find call chains
-    println!("  🔗 Call chain from main:");
+    tracing::info!("  🔗 Call chain from main:");
     let call_chains = filter.get_call_chain("func:main.rs:main")?;
-    println!("    Found {} call chains", call_chains.len());
+    tracing::info!("    Found {} call chains", call_chains.len());
     for (i, chain) in call_chains.iter().enumerate().take(3) {
-        println!("      Chain {}: {}", i + 1, chain);
+        tracing::info!("      Chain {}: {}", i + 1, chain);
     }
 
     Ok(())
@@ -477,7 +478,7 @@ fn demonstrate_advanced_filtering(
     let filter = CallGraphFilter::new(graph.clone());
 
     // Complex node filter
-    println!("  ⚡ Complex node filtering (auth functions with high complexity):");
+    tracing::info!("  ⚡ Complex node filtering (auth functions with high complexity):");
     let complex_filter = NodeFilter {
         node_types: Some(vec![NodeType::Function]),
         label_contains: Some(vec!["auth".to_string()]),
@@ -493,11 +494,11 @@ fn demonstrate_advanced_filtering(
             .metadata
             .get("complexity")
             .unwrap_or(&serde_json::Value::Null);
-        println!("      • {} (complexity: {})", func.label, complexity);
+        tracing::info!("      • {} (complexity: {})", func.label, complexity);
     }
 
     // Complex edge filter
-    println!("  ⚡ Complex edge filtering (call edges with specific metadata):");
+    tracing::info!("  ⚡ Complex edge filtering (call edges with specific metadata):");
     let edge_filter = EdgeFilter {
         edge_types: Some(vec![EdgeType::Calls]),
         metadata: Some(HashMap::from([(
@@ -507,16 +508,16 @@ fn demonstrate_advanced_filtering(
         ..Default::default()
     };
     let call_edges = filter.filter_edges(&edge_filter)?;
-    println!(
+    tracing::info!(
         "    Found {} call edges with specific metadata",
         call_edges.len()
     );
 
     // Connected nodes
-    println!("  🔗 Nodes connected to main:");
+    tracing::info!("  🔗 Nodes connected to main:");
     let connected = filter.get_connected_nodes("func:main.rs:main")?;
     for node in &connected {
-        println!("      • {} ({:?})", node.label, node.node_type);
+        tracing::info!("      • {} ({:?})", node.label, node.node_type);
     }
 
     Ok(())
@@ -527,42 +528,42 @@ fn demonstrate_recursive_calls(graph: &CorrelationGraph) -> Result<(), Box<dyn s
 
     // Get recursive call statistics
     let recursive_stats = graph.get_recursive_call_statistics();
-    println!("  📊 Recursive Call Statistics:");
-    println!(
+    tracing::info!("  📊 Recursive Call Statistics:");
+    tracing::info!(
         "    • Total recursive functions: {}",
         recursive_stats.total_recursive_functions
     );
-    println!(
+    tracing::info!(
         "    • Direct recursion count: {}",
         recursive_stats.direct_recursion_count
     );
-    println!(
+    tracing::info!(
         "    • Indirect recursion count: {}",
         recursive_stats.indirect_recursion_count
     );
-    println!(
+    tracing::info!(
         "    • Mutual recursion count: {}",
         recursive_stats.mutual_recursion_count
     );
-    println!("    • Recursive edges: {}", recursive_stats.recursive_edges);
-    println!(
+    tracing::info!("    • Recursive edges: {}", recursive_stats.recursive_edges);
+    tracing::info!(
         "    • Recursion percentage: {:.1}%",
         recursive_stats.recursion_percentage
     );
-    println!(
+    tracing::info!(
         "    • Max recursion depth: {}",
         recursive_stats.max_recursion_depth
     );
 
     // Find recursive functions
-    println!("  🔄 Recursive functions found:");
+    tracing::info!("  🔄 Recursive functions found:");
     let recursive_edges = filter.get_recursive_calls();
     let mut recursive_functions = std::collections::HashSet::new();
     for edge in &recursive_edges {
         recursive_functions.insert(edge.source.split(':').next_back().unwrap_or(&edge.source));
     }
     for func in &recursive_functions {
-        println!("      • {}", func);
+        tracing::info!("      • {}", func);
     }
 
     Ok(())

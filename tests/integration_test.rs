@@ -1,4 +1,4 @@
-//! Integration tests for Nexus graph database
+﻿//! Integration tests for Nexus graph database
 //!
 //! These tests verify the complete system functionality across all storage layers.
 
@@ -442,8 +442,8 @@ fn test_node_insert_performance() {
     let elapsed = start.elapsed();
     let throughput = count as f64 / elapsed.as_secs_f64();
 
-    println!("Node insert: {} nodes in {:?}", count, elapsed);
-    println!("Throughput: {:.0} nodes/sec", throughput);
+    tracing::info!("Node insert: {} nodes in {:?}", count, elapsed);
+    tracing::info!("Throughput: {:.0} nodes/sec", throughput);
 
     // Should be fast (> 10K inserts/sec)
     assert!(throughput > 10_000.0, "Throughput too low: {}", throughput);
@@ -473,8 +473,8 @@ fn test_node_read_performance() {
     let elapsed = start.elapsed();
     let throughput = count as f64 / elapsed.as_secs_f64();
 
-    println!("Node read: {} nodes in {:?}", count, elapsed);
-    println!("Throughput: {:.0} nodes/sec", throughput);
+    tracing::info!("Node read: {} nodes in {:?}", count, elapsed);
+    tracing::info!("Throughput: {:.0} nodes/sec", throughput);
 
     // Should be very fast (> 100K reads/sec)
     assert!(throughput > 100_000.0, "Throughput too low: {}", throughput);
@@ -1515,9 +1515,9 @@ async fn test_api_performance_health_check() {
     let elapsed = start.elapsed();
     let throughput = total_requests as f64 / elapsed.as_secs_f64();
     
-    println!("Health check performance: {} requests in {:?}", total_requests, elapsed);
-    println!("Throughput: {:.0} requests/sec", throughput);
-    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    tracing::info!("Health check performance: {} requests in {:?}", total_requests, elapsed);
+    tracing::info!("Throughput: {:.0} requests/sec", throughput);
+    tracing::info!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
     
     assert_eq!(success_count, total_requests);
     assert!(throughput > 1000.0, "Throughput too low: {:.0} req/sec", throughput);
@@ -1639,9 +1639,9 @@ async fn test_api_performance_cypher_queries() {
     let elapsed = start.elapsed();
     let throughput = total_requests as f64 / elapsed.as_secs_f64();
     
-    println!("Cypher query performance: {} requests in {:?}", total_requests, elapsed);
-    println!("Throughput: {:.0} requests/sec", throughput);
-    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    tracing::info!("Cypher query performance: {} requests in {:?}", total_requests, elapsed);
+    tracing::info!("Throughput: {:.0} requests/sec", throughput);
+    tracing::info!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
     
     assert_eq!(success_count, total_requests);
     assert!(throughput > 100.0, "Throughput too low: {:.0} req/sec", throughput);
@@ -1766,9 +1766,9 @@ async fn test_api_performance_concurrent_requests() {
     let elapsed = start.elapsed();
     let throughput = concurrent_requests as f64 / elapsed.as_secs_f64();
     
-    println!("Concurrent requests performance: {} requests in {:?}", concurrent_requests, elapsed);
-    println!("Throughput: {:.0} requests/sec", throughput);
-    println!("Success rate: {:.1}%", (success_count as f64 / concurrent_requests as f64) * 100.0);
+    tracing::info!("Concurrent requests performance: {} requests in {:?}", concurrent_requests, elapsed);
+    tracing::info!("Throughput: {:.0} requests/sec", throughput);
+    tracing::info!("Success rate: {:.1}%", (success_count as f64 / concurrent_requests as f64) * 100.0);
     
     assert_eq!(success_count, concurrent_requests);
     assert!(throughput > 100.0, "Throughput too low: {:.0} req/sec", throughput);
@@ -1894,10 +1894,10 @@ async fn test_api_performance_large_payloads() {
     let throughput = total_requests as f64 / elapsed.as_secs_f64();
     let payload_size = serde_json::to_vec(&knn_body).unwrap().len();
     
-    println!("Large payload performance: {} requests in {:?}", total_requests, elapsed);
-    println!("Throughput: {:.0} requests/sec", throughput);
-    println!("Payload size: {} bytes", payload_size);
-    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    tracing::info!("Large payload performance: {} requests in {:?}", total_requests, elapsed);
+    tracing::info!("Throughput: {:.0} requests/sec", throughput);
+    tracing::info!("Payload size: {} bytes", payload_size);
+    tracing::info!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
     
     assert_eq!(success_count, total_requests);
     assert!(throughput > 10.0, "Throughput too low: {:.0} req/sec", throughput);
@@ -1922,6 +1922,7 @@ async fn test_api_performance_mixed_workload() {
         storage::RecordStore,
     };
     use nexus_server::{api, main::NexusServer};
+use tracing;
 
     // Create test server
     let temp_dir = TempDir::new().unwrap();
@@ -2056,9 +2057,9 @@ async fn test_api_performance_mixed_workload() {
     let elapsed = start.elapsed();
     let throughput = total_requests as f64 / elapsed.as_secs_f64();
     
-    println!("Mixed workload performance: {} requests in {:?}", total_requests, elapsed);
-    println!("Throughput: {:.0} requests/sec", throughput);
-    println!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
+    tracing::info!("Mixed workload performance: {} requests in {:?}", total_requests, elapsed);
+    tracing::info!("Throughput: {:.0} requests/sec", throughput);
+    tracing::info!("Success rate: {:.1}%", (success_count as f64 / total_requests as f64) * 100.0);
     
     assert_eq!(success_count, total_requests);
     assert!(throughput > 50.0, "Throughput too low: {:.0} req/sec", throughput);

@@ -1,4 +1,4 @@
-use nexus_core::graph::correlation::{
+﻿use nexus_core::graph::correlation::{
     CorrelationGraph, EdgeType, GraphNode, GraphEdge, NodeType, RecursiveCallConfig
 };
 use std::collections::HashMap;
@@ -33,13 +33,13 @@ fn main() {
     let config = RecursiveCallConfig::default();
     let recursive_info = graph.detect_recursive_calls(&config).unwrap();
     
-    println!("Recursive info: {:?}", recursive_info);
+    tracing::info!("Recursive info: {:?}", recursive_info);
     
     if let Some(info) = recursive_info.get("func:factorial") {
-        println!("Factorial is recursive: {}", info.is_recursive);
-        println!("Direct recursion: {}", info.direct_recursion);
-        println!("Indirect recursion: {}", info.indirect_recursion);
-        println!("Recursion type: {:?}", info.recursion_type);
-        println!("Cycle functions: {:?}", info.cycle_functions);
+        tracing::info!("Factorial is recursive: {}", info.is_recursive);
+        tracing::info!("Direct recursion: {}", info.direct_recursion);
+        tracing::info!("Indirect recursion: {}", info.indirect_recursion);
+        tracing::info!("Recursion type: {:?}", info.recursion_type);
+        tracing::info!("Cycle functions: {:?}", info.cycle_functions);
     }
 }

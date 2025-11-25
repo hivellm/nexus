@@ -1,6 +1,7 @@
-use nexus_core::Engine;
+﻿use nexus_core::Engine;
 use nexus_core::error::Error;
 use tempfile::TempDir;
+use tracing;
 
 fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
     let temp_dir =
@@ -17,7 +18,7 @@ fn test_count_star_without_match() -> Result<(), Error> {
     let result = engine.execute_cypher("RETURN count(*) AS count")?;
 
     assert_eq!(result.rows.len(), 1, "Should return exactly one row");
-    println!("Result: {:?}", result.rows[0].values);
+    tracing::info!("Result: {:?}", result.rows[0].values);
     if let Some(count_val) = result.rows[0].values.first() {
         if count_val.is_null() {
             panic!("count(*) returned null, expected 1");
@@ -43,7 +44,7 @@ fn test_sum_literal_without_match() -> Result<(), Error> {
     let result = engine.execute_cypher("RETURN sum(1) AS sum_val")?;
 
     assert_eq!(result.rows.len(), 1, "Should return exactly one row");
-    println!("Result: {:?}", result.rows[0].values);
+    tracing::info!("Result: {:?}", result.rows[0].values);
     if let Some(sum_val) = result.rows[0].values.first() {
         if sum_val.is_null() {
             panic!("sum(1) returned null, expected 1");
@@ -65,7 +66,7 @@ fn test_avg_literal_without_match() -> Result<(), Error> {
     let result = engine.execute_cypher("RETURN avg(10) AS avg_val")?;
 
     assert_eq!(result.rows.len(), 1, "Should return exactly one row");
-    println!("Result: {:?}", result.rows[0].values);
+    tracing::info!("Result: {:?}", result.rows[0].values);
     if let Some(avg_val) = result.rows[0].values.first() {
         if avg_val.is_null() {
             panic!("avg(10) returned null, expected 10.0");
@@ -91,7 +92,7 @@ fn test_min_literal_without_match() -> Result<(), Error> {
     let result = engine.execute_cypher("RETURN min(5) AS min_val")?;
 
     assert_eq!(result.rows.len(), 1, "Should return exactly one row");
-    println!("Result: {:?}", result.rows[0].values);
+    tracing::info!("Result: {:?}", result.rows[0].values);
     if let Some(min_val) = result.rows[0].values.first() {
         if min_val.is_null() {
             panic!("min(5) returned null, expected 5");
@@ -113,7 +114,7 @@ fn test_max_literal_without_match() -> Result<(), Error> {
     let result = engine.execute_cypher("RETURN max(15) AS max_val")?;
 
     assert_eq!(result.rows.len(), 1, "Should return exactly one row");
-    println!("Result: {:?}", result.rows[0].values);
+    tracing::info!("Result: {:?}", result.rows[0].values);
     if let Some(max_val) = result.rows[0].values.first() {
         if max_val.is_null() {
             panic!("max(15) returned null, expected 15");
@@ -139,7 +140,7 @@ fn test_collect_literal_without_match() -> Result<(), Error> {
     let result = engine.execute_cypher("RETURN collect(1) AS collected")?;
 
     assert_eq!(result.rows.len(), 1, "Should return exactly one row");
-    println!("Result: {:?}", result.rows[0].values);
+    tracing::info!("Result: {:?}", result.rows[0].values);
     if let Some(collected_val) = result.rows[0].values.first() {
         if collected_val.is_null() {
             panic!("collect(1) returned null, expected [1]");

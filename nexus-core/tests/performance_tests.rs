@@ -70,7 +70,7 @@ async fn test_rate_limiting_under_high_load() {
     let allowed_count = results.iter().filter(|r| r.allowed).count();
     assert!(allowed_count > 0, "Some requests should be allowed");
 
-    println!(
+    tracing::info!(
         "Rate limiting performance: {} requests in {:?} ({:.2} req/s)",
         results.len(),
         elapsed,
@@ -120,9 +120,10 @@ async fn test_authentication_middleware_overhead() {
         avg_time_per_request
     );
 
-    println!(
+    tracing::info!(
         "Authentication middleware overhead: {:?} per request ({} iterations) - Note: Argon2 is intentionally slow for security",
-        avg_time_per_request, iterations
+        avg_time_per_request,
+        iterations
     );
 }
 
@@ -172,9 +173,10 @@ async fn test_audit_logging_performance() {
         avg_time_per_log
     );
 
-    println!(
+    tracing::info!(
         "Audit logging performance: {:?} per log entry ({} iterations)",
-        avg_time_per_log, iterations
+        avg_time_per_log,
+        iterations
     );
 }
 
@@ -190,6 +192,7 @@ fn test_jwt_validation_performance() {
     let jwt_manager = JwtManager::new(config);
 
     use nexus_core::auth::User;
+    use tracing;
     let user = User::new("user123".to_string(), "testuser".to_string());
 
     // Generate token
@@ -214,9 +217,10 @@ fn test_jwt_validation_performance() {
         avg_time_per_validation
     );
 
-    println!(
+    tracing::info!(
         "JWT validation performance: {:?} per validation ({} iterations)",
-        avg_time_per_validation, iterations
+        avg_time_per_validation,
+        iterations
     );
 }
 
@@ -270,9 +274,10 @@ async fn test_api_key_lookup_performance() {
         avg_time_per_lookup
     );
 
-    println!(
+    tracing::info!(
         "API key lookup performance: {:?} per lookup ({} iterations) - Note: Argon2 is intentionally slow for security",
-        avg_time_per_lookup, iterations
+        avg_time_per_lookup,
+        iterations
     );
 }
 
@@ -329,8 +334,10 @@ async fn test_concurrent_authentication_performance() {
         elapsed
     );
 
-    println!(
+    tracing::info!(
         "Concurrent authentication performance: {:?} total for {} requests ({:?} avg) - Note: Argon2 is intentionally slow for security",
-        elapsed, concurrent_requests, avg_time_per_request
+        elapsed,
+        concurrent_requests,
+        avg_time_per_request
     );
 }

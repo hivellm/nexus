@@ -1,4 +1,4 @@
-use nexus_core::catalog::Catalog;
+﻿use nexus_core::catalog::Catalog;
 use nexus_core::executor::Executor;
 use nexus_core::index::{LabelIndex, KnnIndex};
 use nexus_protocol::rest::{NodeIngest, RelIngest, IngestRequest};
@@ -44,26 +44,26 @@ impl DatasetLoader {
         let content = std::fs::read_to_string(dataset_path)?;
         let dataset: Value = serde_json::from_str(&content)?;
         
-        println!("Loading dataset: {}", dataset["name"].as_str().unwrap_or("Unknown"));
-        println!("Description: {}", dataset["description"].as_str().unwrap_or(""));
+        tracing::info!("Loading dataset: {}", dataset["name"].as_str().unwrap_or("Unknown"));
+        tracing::info!("Description: {}", dataset["description"].as_str().unwrap_or(""));
         
         // Load nodes
         if let Some(nodes) = dataset["nodes"].as_array() {
-            println!("Loading {} nodes...", nodes.len());
+            tracing::info!("Loading {} nodes...", nodes.len());
             self.load_nodes(nodes).await?;
         }
         
         // Load relationships
         if let Some(relationships) = dataset["relationships"].as_array() {
-            println!("Loading {} relationships...", relationships.len());
+            tracing::info!("Loading {} relationships...", relationships.len());
             self.load_relationships(relationships).await?;
         }
         
         // Print statistics
         if let Some(stats) = dataset["statistics"].as_object() {
-            println!("\nDataset Statistics:");
+            tracing::info!("\nDataset Statistics:");
             for (key, value) in stats {
-                println!("  {}: {}", key, value);
+                tracing::info!("  {}: {}", key, value);
             }
         }
         
@@ -155,7 +155,7 @@ impl DatasetLoader {
     async fn execute_ingestion(&self, request: IngestRequest) -> Result<(), Box<dyn std::error::Error>> {
         // This is a simplified version - in a real implementation,
         // you would use the actual ingestion endpoint logic
-        println!("Executing ingestion: {} nodes, {} relationships", 
+        tracing::info!("Executing ingestion: {} nodes, {} relationships", 
                 request.nodes.len(), request.relationships.len());
         
         // For now, just simulate the ingestion
@@ -193,6 +193,7 @@ impl DatasetLoader {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+use tracing;
     
     #[tokio::test]
     async fn test_load_social_network_dataset() {
@@ -229,26 +230,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() != 2 {
-        eprintln!("Usage: {} <dataset.json>", args[0]);
-        eprintln!("Available datasets:");
-        eprintln!("  examples/datasets/social_network.json");
-        eprintln!("  examples/datasets/knowledge_graph.json");
+        etracing::info!("Usage: {} <dataset.json>", args[0]);
+        etracing::info!("Available datasets:");
+        etracing::info!("  examples/datasets/social_network.json");
+        etracing::info!("  examples/datasets/knowledge_graph.json");
         std::process::exit(1);
     }
     
     let dataset_path = PathBuf::from(&args[1]);
     
     if !dataset_path.exists() {
-        eprintln!("Dataset file not found: {}", dataset_path.display());
+        etracing::info!("Dataset file not found: {}", dataset_path.display());
         std::process::exit(1);
     }
     
     let loader = DatasetLoader::new().await?;
     loader.load_dataset(&dataset_path).await?;
     
-    println!("\nDataset loaded successfully!");
+    tracing::info!("\nDataset loaded successfully!");
     let stats = loader.get_stats().await?;
-    println!("Final statistics: {}", serde_json::to_string_pretty(&stats)?);
+    tracing::info!("Final statistics: {}", serde_json::to_string_pretty(&stats)?);
     
     Ok(())
 }

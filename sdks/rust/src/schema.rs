@@ -1,4 +1,4 @@
-//! Schema management operations
+﻿//! Schema management operations
 
 use crate::client::NexusClient;
 use crate::error::{NexusError, Result};
@@ -79,7 +79,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.create_label("Person".to_string()).await?;
-    /// println!("Create label result: {}", response.message);
+    /// tracing::info!("Create label result: {}", response.message);
     /// # Ok(())
     /// # }
     /// ```
@@ -119,7 +119,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.list_labels().await?;
-    /// println!("Labels: {:?}", response.labels);
+    /// tracing::info!("Labels: {:?}", response.labels);
     /// # Ok(())
     /// # }
     /// ```
@@ -161,7 +161,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.create_rel_type("KNOWS".to_string()).await?;
-    /// println!("Create rel type result: {}", response.message);
+    /// tracing::info!("Create rel type result: {}", response.message);
     /// # Ok(())
     /// # }
     /// ```
@@ -201,7 +201,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.list_rel_types().await?;
-    /// println!("Relationship types: {:?}", response.types);
+    /// tracing::info!("Relationship types: {:?}", response.types);
     /// # Ok(())
     /// # }
     /// ```

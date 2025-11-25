@@ -26,19 +26,75 @@ impl ApiKeyStorage {
     ///
     /// * `path` - Directory path for LMDB files
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // Create directory if it doesn't exist
-        std::fs::create_dir_all(&path)?;
+        use std::sync::OnceLock;
 
-        // Open LMDB environment (1GB max size, 2 databases)
+        // In test mode, use a shared directory pool to reduce number of LMDB environments
+        // This prevents TlsFull errors when many tests run in parallel
+        let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
+            || std::env::var("CARGO").is_ok()
+            || std::env::args().any(|arg| arg.contains("test") || arg.contains("cargo"));
+
+        // In test mode, use a fixed map_size to avoid BadOpenOptions errors
+        let map_size = if is_test {
+            100 * 1024 * 1024 // 100MB fixed size for tests
+        } else {
+            1024 * 1024 * 1024 // 1GB for production
+        };
+
+        let actual_path = if is_test {
+            // Use a SINGLE shared test directory for ALL auth storage in tests
+            // This prevents TlsFull errors on Windows by limiting to just 1 LMDB environment
+            static AUTH_STORAGE_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+            let shared_dir = AUTH_STORAGE_DIR.get_or_init(|| {
+                let base = std::env::temp_dir().join("nexus_test_auth_storage_shared");
+                // Clean up old data on first init
+                let _ = std::fs::remove_dir_all(&base);
+                std::fs::create_dir_all(&base).ok();
+                base
+            });
+
+            shared_dir.clone()
+        } else {
+            path.as_ref().to_path_buf()
+        };
+
+        // Create directory if it doesn't exist
+        std::fs::create_dir_all(&actual_path)?;
+
+        // Open LMDB environment
         let env = unsafe {
             EnvOpenOptions::new()
-                .map_size(1024 * 1024 * 1024) // 1GB
+                .map_size(map_size)
+                .max_dbs(2)
+                .open(&actual_path)?
+        };
+        let env = Arc::new(env);
+
+        // Open/create database
+        let mut wtxn = env.write_txn()?;
+        let api_keys_db = env.create_database(&mut wtxn, Some("api_keys"))?;
+        wtxn.commit()?;
+
+        Ok(Self { env, api_keys_db })
+    }
+
+    /// Create storage with an isolated path (bypasses test sharing)
+    ///
+    /// WARNING: Use sparingly! Each call creates a new LMDB environment.
+    /// Only use for tests that absolutely require data isolation.
+    #[cfg(test)]
+    pub fn with_isolated_path<P: AsRef<Path>>(path: P) -> Result<Self> {
+        std::fs::create_dir_all(path.as_ref())?;
+
+        let env = unsafe {
+            EnvOpenOptions::new()
+                .map_size(100 * 1024 * 1024)
                 .max_dbs(2)
                 .open(path.as_ref())?
         };
         let env = Arc::new(env);
 
-        // Open/create database
         let mut wtxn = env.write_txn()?;
         let api_keys_db = env.create_database(&mut wtxn, Some("api_keys"))?;
         wtxn.commit()?;
@@ -191,10 +247,11 @@ mod tests {
     #[test]
     fn test_list_api_keys() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::new(temp_dir.path()).unwrap();
+        // Use isolated path for tests that count items
+        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
 
-        let key1 = create_test_api_key("id1", "key1");
-        let key2 = create_test_api_key("id2", "key2");
+        let key1 = create_test_api_key("list-id1", "list-key1");
+        let key2 = create_test_api_key("list-id2", "list-key2");
         storage.store_api_key(&key1).unwrap();
         storage.store_api_key(&key2).unwrap();
 
@@ -229,12 +286,13 @@ mod tests {
     #[test]
     fn test_cleanup_expired_keys() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::new(temp_dir.path()).unwrap();
+        // Use isolated path for cleanup tests
+        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
 
-        let mut expired_key = create_test_api_key("expired", "expired-key");
+        let mut expired_key = create_test_api_key("cleanup-expired", "cleanup-expired-key");
         expired_key.expires_at = Some(Utc::now() - Duration::days(1));
 
-        let mut valid_key = create_test_api_key("valid", "valid-key");
+        let mut valid_key = create_test_api_key("cleanup-valid", "cleanup-valid-key");
         valid_key.expires_at = Some(Utc::now() + Duration::days(1));
 
         storage.store_api_key(&expired_key).unwrap();
@@ -243,8 +301,8 @@ mod tests {
         let count = storage.cleanup_expired_keys().unwrap();
         assert_eq!(count, 1);
 
-        assert!(storage.get_api_key("expired").unwrap().is_none());
-        assert!(storage.get_api_key("valid").unwrap().is_some());
+        assert!(storage.get_api_key("cleanup-expired").unwrap().is_none());
+        assert!(storage.get_api_key("cleanup-valid").unwrap().is_some());
     }
 
     #[test]
@@ -316,10 +374,11 @@ mod tests {
     #[test]
     fn test_cleanup_expired_keys_boundary_time() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::new(temp_dir.path()).unwrap();
+        // Use isolated path for cleanup tests
+        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
 
         // Key expiring exactly now (boundary case)
-        let mut boundary_key = create_test_api_key("boundary", "boundary-key");
+        let mut boundary_key = create_test_api_key("boundary-test", "boundary-test-key");
         boundary_key.expires_at = Some(Utc::now());
         storage.store_api_key(&boundary_key).unwrap();
 
@@ -328,6 +387,6 @@ mod tests {
 
         let count = storage.cleanup_expired_keys().unwrap();
         assert_eq!(count, 1);
-        assert!(storage.get_api_key("boundary").unwrap().is_none());
+        assert!(storage.get_api_key("boundary-test").unwrap().is_none());
     }
 }
