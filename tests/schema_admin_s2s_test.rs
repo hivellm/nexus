@@ -130,8 +130,8 @@ async fn test_schema_admin_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        etracing::info!("ERROR: Server not available at {}", server_url);
-        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
+        tracing::info!("ERROR: Server not available at {}", server_url);
+        tracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
 
@@ -139,7 +139,7 @@ async fn test_schema_admin_s2s() {
     tracing::info!("==========================================");
     tracing::info!("Schema Administration S2S Tests");
     tracing::info!("==========================================");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -210,7 +210,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Constraint Management Tests
     tracing::info!("--- Constraint Management Tests ---");
@@ -281,7 +281,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Transaction Commands Tests
     tracing::info!("--- Transaction Commands Tests ---");
@@ -343,7 +343,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Database Management Tests (now working via server-level execution)
     tracing::info!("--- Database Management Tests (Server-level) ---");
@@ -424,7 +424,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // User Management Tests (now working via server-level execution)
     tracing::info!("--- User Management Tests (Server-level) ---");
@@ -588,7 +588,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Additional Database Management error cases
     tracing::info!("--- Database Management Error Cases ---");
@@ -663,7 +663,7 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Test GRANT/REVOKE to roles
     tracing::info!("--- Role Permission Tests ---");
@@ -698,7 +698,7 @@ async fn test_schema_admin_s2s() {
         tracing::info!("⚠ REVOKE from role: Role may not exist (expected)");
         passed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Summary
     tracing::info!("==========================================");
@@ -707,7 +707,7 @@ async fn test_schema_admin_s2s() {
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total: {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed == 0 {
         tracing::info!("All tests passed!");

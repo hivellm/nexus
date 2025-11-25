@@ -120,12 +120,12 @@ async fn test_string_operations_s2s() {
     // Wait for server to be available
     tracing::info!("Waiting for server at {}...", server_url);
     if !wait_for_server(&server_url, 30).await {
-        etracing::info!("ERROR: Server not available at {}", server_url);
-        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
+        tracing::info!("ERROR: Server not available at {}", server_url);
+        tracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
     tracing::info!("✅ Server is ready");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -142,7 +142,7 @@ async fn test_string_operations_s2s() {
     } else {
         tracing::info!("⚠️  Failed to create test data (may already exist)");
     }
-    tracing::info!();
+    tracing::info!("");
 
     // STARTS WITH tests
     tracing::info!("=== Testing STARTS WITH ===");
@@ -187,7 +187,7 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // ENDS WITH tests
     tracing::info!("=== Testing ENDS WITH ===");
@@ -218,7 +218,7 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // CONTAINS tests
     tracing::info!("=== Testing CONTAINS ===");
@@ -263,7 +263,7 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Regex tests
     tracing::info!("=== Testing Regex (=~) ===");
@@ -308,7 +308,7 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Combined operators tests
     tracing::info!("=== Testing Combined Operators ===");
@@ -339,7 +339,7 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Summary
     tracing::info!("==========================================");
@@ -352,7 +352,7 @@ async fn test_string_operations_s2s() {
     } else {
         tracing::info!("Failed: 0");
     }
-    tracing::info!();
+    tracing::info!("");
 
     if failed == 0 {
         tracing::info!("✅ ALL TESTS PASSED!");

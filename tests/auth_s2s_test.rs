@@ -76,8 +76,8 @@ async fn test_auth_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        etracing::info!("ERROR: Server not available at {}", server_url);
-        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
+        tracing::info!("ERROR: Server not available at {}", server_url);
+        tracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
 
@@ -85,7 +85,7 @@ async fn test_auth_s2s() {
     tracing::info!("==========================================");
     tracing::info!("Authentication & User Management S2S Tests");
     tracing::info!("==========================================");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -185,7 +185,7 @@ async fn test_auth_s2s() {
     }
 
     // Test Permission Management via REST API
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- Permission Management (REST API) Tests ---");
 
     // POST /auth/users/{username}/permissions - Grant permissions
@@ -306,7 +306,7 @@ async fn test_auth_s2s() {
     }
 
     // Test REST Endpoint Protection
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- REST Endpoint Protection Tests ---");
 
     // Test protected endpoint without authentication
@@ -367,23 +367,23 @@ async fn test_auth_s2s() {
     // Test rate limiting headers (if rate limiting is enabled)
     // This test assumes a valid API key exists
     // In a real scenario, you would create an API key first and use it
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("--- Rate Limiting Headers Tests ---");
     tracing::info!("Note: Rate limiting headers test requires a valid API key");
     tracing::info!("This test is skipped if no valid key is available");
 
     // Summary
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("==========================================");
     tracing::info!("Test Summary");
     tracing::info!("==========================================");
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total:  {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed > 0 {
-        etracing::info!("Some tests failed!");
+        tracing::info!("Some tests failed!");
         std::process::exit(1);
     }
 }

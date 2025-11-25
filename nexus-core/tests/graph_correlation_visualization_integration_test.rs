@@ -280,14 +280,14 @@ fn test_visualization_pipeline_large_graph() {
         "Graph should have at least some nodes"
     );
     if graph.nodes.len() <= 10 {
-        etracing::info!(
+        tracing::info!(
             "WARNING: Large graph has only {} nodes (expected >10) - graph generation may not detect all functions",
             graph.nodes.len()
         );
     }
     // Edges may be empty if relationships are not detected - still test visualization
     if graph.edges.is_empty() {
-        etracing::info!("WARNING: Large graph has no edges - relationships may not be detected");
+        tracing::info!("WARNING: Large graph has no edges - relationships may not be detected");
     }
 
     let config = VisualizationConfig {

@@ -230,17 +230,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() != 2 {
-        etracing::info!("Usage: {} <dataset.json>", args[0]);
-        etracing::info!("Available datasets:");
-        etracing::info!("  examples/datasets/social_network.json");
-        etracing::info!("  examples/datasets/knowledge_graph.json");
+        tracing::info!("Usage: {} <dataset.json>", args[0]);
+        tracing::info!("Available datasets:");
+        tracing::info!("  examples/datasets/social_network.json");
+        tracing::info!("  examples/datasets/knowledge_graph.json");
         std::process::exit(1);
     }
     
     let dataset_path = PathBuf::from(&args[1]);
     
     if !dataset_path.exists() {
-        etracing::info!("Dataset file not found: {}", dataset_path.display());
+        tracing::info!("Dataset file not found: {}", dataset_path.display());
         std::process::exit(1);
     }
     

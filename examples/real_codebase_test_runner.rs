@@ -994,7 +994,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("🚀 Nexus Real Codebase Integration Test Runner");
     tracing::info!("==============================================");
     tracing::info!("Server URL: {}", base_url);
-    tracing::info!();
+    tracing::info!("");
     
     let mut runner = RealCodebaseTestRunner::new(base_url);
     let results = runner.run_all_tests().await?;

@@ -108,12 +108,12 @@ async fn test_advanced_features_s2s() {
     // Wait for server to be available
     tracing::info!("Waiting for server at {}...", server_url);
     if !wait_for_server(&server_url, 30).await {
-        etracing::info!("ERROR: Server not available at {}", server_url);
-        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
+        tracing::info!("ERROR: Server not available at {}", server_url);
+        tracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
     tracing::info!("✅ Server is ready");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -141,7 +141,7 @@ CREATE
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // CASE Expressions Tests
     tracing::info!("=== CASE Expressions - Complex Scenarios ===");
@@ -195,7 +195,7 @@ LIMIT 5
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // FOREACH Tests
     tracing::info!("=== FOREACH - Complex Scenarios ===");
@@ -217,7 +217,7 @@ RETURN COUNT(p) AS processed_count
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // EXISTS Tests
     tracing::info!("=== EXISTS - Complex Scenarios ===");
@@ -262,7 +262,7 @@ LIMIT 5
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Map Projections Tests
     tracing::info!("=== Map Projections - Complex Scenarios ===");
@@ -286,7 +286,7 @@ LIMIT 3
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // List Comprehensions Tests
     tracing::info!("=== List Comprehensions - Complex Scenarios ===");
@@ -306,7 +306,7 @@ LIMIT 3
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Pattern Comprehensions Tests
     tracing::info!("=== Pattern Comprehensions - Complex Scenarios ===");
@@ -326,7 +326,7 @@ LIMIT 3
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Summary
     tracing::info!("==========================================");
@@ -335,7 +335,7 @@ LIMIT 3
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total: {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed == 0 {
         tracing::info!("✅ ALL TESTS PASSED!");

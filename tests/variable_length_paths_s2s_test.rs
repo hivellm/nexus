@@ -129,7 +129,7 @@ async fn test_variable_length_paths_zero_or_more() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -154,7 +154,7 @@ async fn test_variable_length_paths_one_or_more() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -179,7 +179,7 @@ async fn test_variable_length_paths_exact_length() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -204,7 +204,7 @@ async fn test_variable_length_paths_range() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -231,7 +231,7 @@ async fn test_variable_length_paths_zero_or_one() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -254,7 +254,7 @@ async fn test_variable_length_paths_with_relationship_variable() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -279,7 +279,7 @@ async fn test_variable_length_paths_no_path_found() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -305,7 +305,7 @@ async fn test_variable_length_paths_bidirectional() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -330,7 +330,7 @@ async fn test_shortest_path_function() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -359,7 +359,7 @@ async fn test_all_shortest_paths_function() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        etracing::info!("Server not available, skipping test");
+        tracing::info!("Server not available, skipping test");
         return;
     }
 

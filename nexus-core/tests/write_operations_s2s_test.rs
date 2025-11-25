@@ -1,4 +1,4 @@
-//! End-to-end (S2S) tests for Cypher write operations via HTTP API
+﻿//! End-to-end (S2S) tests for Cypher write operations via HTTP API
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -106,15 +106,15 @@ async fn test_write_operations_s2s() {
     // Wait for server to be available
     tracing::info!("Aguardando servidor iniciar...");
     if !wait_for_server(&server_url, 5).await {
-        etracing::info!("WARNING: Server not available at {}", server_url);
-        etracing::info!("WARNING: Skipping S2S test. To run this test:");
-        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
-        etracing::info!("   2. Run: cargo test --features s2s --test write_operations_s2s_test");
-        etracing::info!("WARNING: This test is ignored when server is not available.");
+        tracing::info!("WARNING: Server not available at {}", server_url);
+        tracing::info!("WARNING: Skipping S2S test. To run this test:");
+        tracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        tracing::info!("   2. Run: cargo test --features s2s --test write_operations_s2s_test");
+        tracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
     tracing::info!("Servidor está pronto!");
-    tracing::info!();
+    tracing::info!("");
 
     let client = reqwest::Client::new();
     let mut passed = 0;
@@ -134,7 +134,7 @@ async fn test_write_operations_s2s() {
     } else {
         failed += 1;
     }
-    tracing::info!();
+    tracing::info!("");
 
     // Test 1: MERGE creates node when missing
     if test_query_success(
@@ -285,14 +285,14 @@ async fn test_write_operations_s2s() {
         failed += 1;
     }
 
-    tracing::info!();
+    tracing::info!("");
     tracing::info!("==========================================");
     tracing::info!("Test Summary");
     tracing::info!("==========================================");
     tracing::info!("Passed: {}", passed);
     tracing::info!("Failed: {}", failed);
     tracing::info!("Total: {}", passed + failed);
-    tracing::info!();
+    tracing::info!("");
 
     if failed == 0 {
         tracing::info!("ALL TESTS PASSED!");

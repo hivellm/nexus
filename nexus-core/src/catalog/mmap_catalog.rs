@@ -162,6 +162,27 @@ impl MmapCatalog {
             key_id_cache.insert(*id, name.clone());
         }
 
+        // Recalculate counters from existing IDs to ensure consistency
+        // This prevents issues if the saved counters are incorrect
+        let next_label_id = data
+            .label_name_to_id
+            .values()
+            .max()
+            .map(|&max_id| max_id + 1)
+            .unwrap_or(0);
+        let next_type_id = data
+            .type_name_to_id
+            .values()
+            .max()
+            .map(|&max_id| max_id + 1)
+            .unwrap_or(0);
+        let next_key_id = data
+            .key_name_to_id
+            .values()
+            .max()
+            .map(|&max_id| max_id + 1)
+            .unwrap_or(0);
+
         Ok(Self {
             file_path,
             mmap,
@@ -172,9 +193,9 @@ impl MmapCatalog {
             type_id_cache,
             key_name_cache,
             key_id_cache,
-            next_label_id: Arc::new(RwLock::new(data.next_label_id)),
-            next_type_id: Arc::new(RwLock::new(data.next_type_id)),
-            next_key_id: Arc::new(RwLock::new(data.next_key_id)),
+            next_label_id: Arc::new(RwLock::new(next_label_id)),
+            next_type_id: Arc::new(RwLock::new(next_type_id)),
+            next_key_id: Arc::new(RwLock::new(next_key_id)),
         })
     }
 
