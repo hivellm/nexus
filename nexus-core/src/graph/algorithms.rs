@@ -1437,30 +1437,43 @@ mod tests {
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(temp_dir.path()).unwrap();
+        // Use isolated catalog to avoid data contamination from other tests
+        let mut engine = Engine::with_isolated_catalog(temp_dir.path()).unwrap();
 
-        // Create some test data
+        // Create some test data - use single query for reliability
         engine
-            .execute_cypher("CREATE (n1:Person {name: 'Alice'}) RETURN n1")
+            .execute_cypher("CREATE (n1:AlgPerson {name: 'Alice'})-[:KNOWS_ALG {weight: 1.5}]->(n2:AlgPerson {name: 'Bob'}) RETURN n1, n2")
             .unwrap();
-        engine
-            .execute_cypher("CREATE (n2:Person {name: 'Bob'}) RETURN n2")
-            .unwrap();
-        engine.execute_cypher("MATCH (n1:Person {name: 'Alice'}), (n2:Person {name: 'Bob'}) CREATE (n1)-[:KNOWS {weight: 1.5}]->(n2) RETURN n1, n2").unwrap();
+
+        // Verify relationship was created
+        let rel_count = engine.storage.relationship_count();
+        assert!(
+            rel_count >= 1,
+            "Expected at least 1 relationship, got {}",
+            rel_count
+        );
 
         // Convert to algorithm graph
         let graph = Graph::from_engine(&engine, Some("weight")).unwrap();
 
         // Verify nodes were added (at least 2 nodes)
         let nodes = graph.get_nodes();
-        assert!(nodes.len() >= 2);
+        assert!(
+            nodes.len() >= 2,
+            "Expected at least 2 nodes, got {}",
+            nodes.len()
+        );
 
         // Verify edges were added (at least 1 edge)
         let mut total_edges = 0;
         for node_id in &nodes {
             total_edges += graph.get_neighbors(*node_id).len();
         }
-        assert!(total_edges >= 1);
+        assert!(
+            total_edges >= 1,
+            "Expected at least 1 edge, got {}",
+            total_edges
+        );
 
         // Verify weight property is used if present
         for node_id in &nodes {

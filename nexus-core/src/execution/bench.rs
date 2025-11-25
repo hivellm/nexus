@@ -6,6 +6,7 @@
 use crate::execution::columnar::{ColumnarResult, DataType};
 use crate::execution::operators::{VectorizedOperators, VectorizedWhereExecutor, VectorizedCondition, VectorizedValue};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use tracing;
 
 /// Benchmark vectorized WHERE filtering performance
 pub fn bench_vectorized_where_filter(c: &mut Criterion) {
@@ -201,8 +202,8 @@ mod tests {
         assert_eq!(vectorized_result.row_count, interpreted_mask.iter().filter(|&&x| x).count());
 
         // Vectorized should be reasonably fast (though may not be faster in debug mode)
-        println!("Interpreted time: {:?}", interpreted_time);
-        println!("Vectorized time: {:?}", vectorized_time);
-        println!("Vectorized results: {}", vectorized_result.row_count);
+        tracing::info!("Interpreted time: {:?}", interpreted_time);
+        tracing::info!("Vectorized time: {:?}", vectorized_time);
+        tracing::info!("Vectorized results: {}", vectorized_result.row_count);
     }
 }

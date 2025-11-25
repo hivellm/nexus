@@ -1,4 +1,4 @@
-//! Performance monitoring operations
+﻿//! Performance monitoring operations
 
 use crate::client::NexusClient;
 use crate::error::{NexusError, Result};
@@ -121,8 +121,8 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let stats = client.get_query_statistics().await?;
-    /// println!("Total queries: {}", stats.statistics.total_queries);
-    /// println!("Average execution time: {}ms", stats.statistics.average_execution_time_ms);
+    /// tracing::info!("Total queries: {}", stats.statistics.total_queries);
+    /// tracing::info!("Average execution time: {}ms", stats.statistics.average_execution_time_ms);
     /// # Ok(())
     /// # }
     /// ```
@@ -160,9 +160,9 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let slow_queries = client.get_slow_queries().await?;
-    /// println!("Found {} slow queries", slow_queries.count);
+    /// tracing::info!("Found {} slow queries", slow_queries.count);
     /// for query in slow_queries.queries {
-    ///     println!("Query: {} ({}ms)", query.query, query.execution_time_ms);
+    ///     tracing::info!("Query: {} ({}ms)", query.query, query.execution_time_ms);
     /// }
     /// # Ok(())
     /// # }
@@ -201,8 +201,8 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let cache_stats = client.get_plan_cache_statistics().await?;
-    /// println!("Cached plans: {}", cache_stats.cached_plans);
-    /// println!("Hit rate: {:.2}%", cache_stats.hit_rate * 100.0);
+    /// tracing::info!("Cached plans: {}", cache_stats.cached_plans);
+    /// tracing::info!("Hit rate: {:.2}%", cache_stats.hit_rate * 100.0);
     /// # Ok(())
     /// # }
     /// ```
@@ -240,7 +240,7 @@ impl NexusClient {
     /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
     /// # let client = NexusClient::new("http://localhost:15474")?;
     /// let response = client.clear_plan_cache().await?;
-    /// println!("Plan cache cleared: {:?}", response);
+    /// tracing::info!("Plan cache cleared: {:?}", response);
     /// # Ok(())
     /// # }
     /// ```

@@ -76,29 +76,30 @@ async fn test_auth_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test auth_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test auth_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("Server is available at {}", server_url);
-    println!("==========================================");
-    println!("Authentication & User Management S2S Tests");
-    println!("==========================================");
-    println!();
+    tracing::info!("Server is available at {}", server_url);
+    tracing::info!("==========================================");
+    tracing::info!("Authentication & User Management S2S Tests");
+    tracing::info!("==========================================");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Test User CRUD Operations via REST API
-    println!("--- User CRUD Operations (REST API) Tests ---");
+    tracing::info!("--- User CRUD Operations (REST API) Tests ---");
 
     // Generate unique username to avoid conflicts from previous test runs
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tracing;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -125,23 +126,23 @@ async fn test_auth_s2s() {
                         && user.email == Some("testuser@example.com".to_string())
                         && user.is_active
                     {
-                        println!("POST /auth/users: PASSED");
+                        tracing::info!("POST /auth/users: PASSED");
                         passed += 1;
                     } else {
-                        println!("POST /auth/users: FAILED - Response validation failed");
+                        tracing::info!("POST /auth/users: FAILED - Response validation failed");
                         failed += 1;
                     }
                 } else {
-                    println!("POST /auth/users: FAILED - Invalid response format");
+                    tracing::info!("POST /auth/users: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("POST /auth/users: FAILED - Status: {}", response.status());
+                tracing::info!("POST /auth/users: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("POST /auth/users: FAILED - Request error: {}", e);
+            tracing::info!("POST /auth/users: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -161,23 +162,23 @@ async fn test_auth_s2s() {
                             .iter()
                             .any(|u| u.username == test_username)
                     {
-                        println!("GET /auth/users: PASSED");
+                        tracing::info!("GET /auth/users: PASSED");
                         passed += 1;
                     } else {
-                        println!("GET /auth/users: FAILED - User not found in list");
+                        tracing::info!("GET /auth/users: FAILED - User not found in list");
                         failed += 1;
                     }
                 } else {
-                    println!("GET /auth/users: FAILED - Invalid response format");
+                    tracing::info!("GET /auth/users: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("GET /auth/users: FAILED - Status: {}", response.status());
+                tracing::info!("GET /auth/users: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("GET /auth/users: FAILED - Request error: {}", e);
+            tracing::info!("GET /auth/users: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -192,18 +193,20 @@ async fn test_auth_s2s() {
             if response.status().is_success() {
                 if let Ok(user) = response.json::<UserResponse>().await {
                     if user.username == test_username {
-                        println!("GET /auth/users/{{username}}: PASSED");
+                        tracing::info!("GET /auth/users/{{username}}: PASSED");
                         passed += 1;
                     } else {
-                        println!("GET /auth/users/{{username}}: FAILED - Username mismatch");
+                        tracing::info!("GET /auth/users/{{username}}: FAILED - Username mismatch");
                         failed += 1;
                     }
                 } else {
-                    println!("GET /auth/users/{{username}}: FAILED - Invalid response format");
+                    tracing::info!(
+                        "GET /auth/users/{{username}}: FAILED - Invalid response format"
+                    );
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "GET /auth/users/{{username}}: FAILED - Status: {}",
                     response.status()
                 );
@@ -211,7 +214,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "GET /auth/users/{{username}}: FAILED - Request error: {}",
                 e
             );
@@ -220,8 +223,8 @@ async fn test_auth_s2s() {
     }
 
     // Test Permission Management via REST API
-    println!();
-    println!("--- Permission Management (REST API) Tests ---");
+    tracing::info!();
+    tracing::info!("--- Permission Management (REST API) Tests ---");
 
     // POST /auth/users/{username}/permissions - Grant permissions
     let grant_request = UpdatePermissionsRequest {
@@ -239,10 +242,10 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("POST /auth/users/{{username}}/permissions: PASSED");
+                tracing::info!("POST /auth/users/{{username}}/permissions: PASSED");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "POST /auth/users/{{username}}/permissions: FAILED - Status: {}",
                     response.status()
                 );
@@ -250,7 +253,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "POST /auth/users/{{username}}/permissions: FAILED - Request error: {}",
                 e
             );
@@ -276,22 +279,22 @@ async fn test_auth_s2s() {
                     if perms_upper.contains(&"READ".to_string())
                         && perms_upper.contains(&"WRITE".to_string())
                     {
-                        println!("GET /auth/users/{{username}}/permissions: PASSED");
+                        tracing::info!("GET /auth/users/{{username}}/permissions: PASSED");
                         passed += 1;
                     } else {
-                        println!(
+                        tracing::info!(
                             "GET /auth/users/{{username}}/permissions: FAILED - Missing expected permissions"
                         );
                         failed += 1;
                     }
                 } else {
-                    println!(
+                    tracing::info!(
                         "GET /auth/users/{{username}}/permissions: FAILED - Invalid response format"
                     );
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "GET /auth/users/{{username}}/permissions: FAILED - Status: {}",
                     response.status()
                 );
@@ -299,7 +302,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "GET /auth/users/{{username}}/permissions: FAILED - Request error: {}",
                 e
             );
@@ -318,10 +321,12 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("DELETE /auth/users/{{username}}/permissions/{{permission}}: PASSED");
+                tracing::info!(
+                    "DELETE /auth/users/{{username}}/permissions/{{permission}}: PASSED"
+                );
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Status: {}",
                     response.status()
                 );
@@ -329,7 +334,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Request error: {}",
                 e
             );
@@ -345,10 +350,10 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("DELETE /auth/users/{{username}}: PASSED");
+                tracing::info!("DELETE /auth/users/{{username}}: PASSED");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "DELETE /auth/users/{{username}}: FAILED - Status: {}",
                     response.status()
                 );
@@ -356,7 +361,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "DELETE /auth/users/{{username}}: FAILED - Request error: {}",
                 e
             );
@@ -365,8 +370,8 @@ async fn test_auth_s2s() {
     }
 
     // Test REST Endpoint Protection
-    println!();
-    println!("--- REST Endpoint Protection Tests ---");
+    tracing::info!();
+    tracing::info!("--- REST Endpoint Protection Tests ---");
 
     // Check if authentication is enabled by trying to access a protected endpoint
     // If auth is disabled, these tests will be skipped
@@ -394,10 +399,10 @@ async fn test_auth_s2s() {
         {
             Ok(response) => {
                 if response.status() == 401 {
-                    println!("Protected endpoint returns 401 without auth: PASSED");
+                    tracing::info!("Protected endpoint returns 401 without auth: PASSED");
                     passed += 1;
                 } else {
-                    println!(
+                    tracing::info!(
                         "Protected endpoint without auth: FAILED - Expected 401, got {}",
                         response.status()
                     );
@@ -405,7 +410,7 @@ async fn test_auth_s2s() {
                 }
             }
             Err(e) => {
-                println!(
+                tracing::info!(
                     "Protected endpoint without auth: FAILED - Request error: {}",
                     e
                 );
@@ -425,10 +430,10 @@ async fn test_auth_s2s() {
         {
             Ok(response) => {
                 if response.status() == 401 {
-                    println!("Protected endpoint returns 401 with invalid key: PASSED");
+                    tracing::info!("Protected endpoint returns 401 with invalid key: PASSED");
                     passed += 1;
                 } else {
-                    println!(
+                    tracing::info!(
                         "Protected endpoint with invalid key: FAILED - Expected 401, got {}",
                         response.status()
                     );
@@ -436,7 +441,7 @@ async fn test_auth_s2s() {
                 }
             }
             Err(e) => {
-                println!(
+                tracing::info!(
                     "Protected endpoint with invalid key: FAILED - Request error: {}",
                     e
                 );
@@ -444,34 +449,35 @@ async fn test_auth_s2s() {
             }
         }
     } else {
-        println!("WARNING: Authentication is disabled - skipping endpoint protection tests");
-        println!("  (To test endpoint protection, enable auth with NEXUS_AUTH_ENABLED=true)");
+        tracing::info!("WARNING: Authentication is disabled - skipping endpoint protection tests");
+        tracing::info!("  (To test endpoint protection, enable auth with NEXUS_AUTH_ENABLED=true)");
     }
 
     // Test rate limiting headers (if rate limiting is enabled)
     // This test assumes a valid API key exists
     // In a real scenario, you would create an API key first and use it
-    println!();
-    println!("--- Rate Limiting Headers Tests ---");
-    println!("Note: Rate limiting headers test requires a valid API key");
-    println!("This test is skipped if no valid key is available");
+    tracing::info!();
+    tracing::info!("--- Rate Limiting Headers Tests ---");
+    tracing::info!("Note: Rate limiting headers test requires a valid API key");
+    tracing::info!("This test is skipped if no valid key is available");
 
     // Summary
-    println!();
-    println!("==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
-    println!("Total:  {}", passed + failed);
-    println!();
+    tracing::info!();
+    tracing::info!("==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Passed: {}", passed);
+    tracing::info!("Failed: {}", failed);
+    tracing::info!("Total:  {}", passed + failed);
+    tracing::info!();
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

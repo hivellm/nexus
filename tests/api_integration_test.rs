@@ -1,4 +1,4 @@
-//! API Integration Tests for Nexus Server
+﻿//! API Integration Tests for Nexus Server
 //!
 //! These tests verify the complete HTTP API functionality including:
 //! - REST endpoints
@@ -127,6 +127,7 @@ async fn create_mcp_router(nexus_server: Arc<NexusServer>) -> anyhow::Result<Rou
     use hyper_util::service::TowerToHyperService;
     use rmcp::transport::streamable_http_server::StreamableHttpService;
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use tracing;
 
     let server = nexus_server.clone();
     let streamable_service = StreamableHttpService::new(
@@ -861,8 +862,8 @@ async fn test_health_check_performance() {
     let elapsed = start.elapsed();
     let throughput = total_requests as f64 / elapsed.as_secs_f64();
     
-    println!("Health check performance: {} requests in {:?}", total_requests, elapsed);
-    println!("Throughput: {:.0} requests/sec", throughput);
+    tracing::info!("Health check performance: {} requests in {:?}", total_requests, elapsed);
+    tracing::info!("Throughput: {:.0} requests/sec", throughput);
     
     assert_eq!(success_count, total_requests);
     assert!(throughput > 1000.0, "Throughput too low: {:.0} req/sec", throughput);

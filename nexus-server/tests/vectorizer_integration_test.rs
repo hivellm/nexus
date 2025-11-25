@@ -1,4 +1,4 @@
-//! Vectorizer Integration Tests for Nexus
+﻿//! Vectorizer Integration Tests for Nexus
 //!
 //! These tests verify the complete integration between Nexus and the vectorizer system,
 //! including MCP client, caching, and hybrid search functionality.
@@ -24,6 +24,7 @@ use nexus_protocol::mcp::McpClient;
 use nexus_server::NexusServer;
 use nexus_server::api;
 use nexus_server::config::RootUserConfig;
+use tracing;
 // use thiserror::Error;
 
 // ============================================================================
@@ -828,7 +829,7 @@ async fn test_vectorizer_performance_metrics() {
     }
 
     let elapsed = start.elapsed();
-    println!(
+    tracing::info!(
         "Performed 10 searches and cache operations in {:?}",
         elapsed
     );
@@ -869,7 +870,7 @@ async fn test_vectorizer_concurrent_access() {
     for handle in handles {
         match handle.await.unwrap() {
             Ok(_) => success_count += 1,
-            Err(e) => println!("Search failed: {:?}", e),
+            Err(e) => tracing::info!("Search failed: {:?}", e),
         }
     }
 

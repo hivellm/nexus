@@ -14,6 +14,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use tempfile;
+use tracing;
 
 pub mod adjacency_list;
 pub mod graph_engine;
@@ -260,7 +262,9 @@ impl RecordStore {
         }
 
         // Initialize property store (wrapped in Arc<RwLock> for sharing between clones)
-        let property_store = Arc::new(RwLock::new(property_store::PropertyStore::new(path.clone())?));
+        let property_store = Arc::new(RwLock::new(property_store::PropertyStore::new(
+            path.clone(),
+        )?));
 
         // Phase 3: Initialize adjacency list store (optional, for optimization)
         let adjacency_store = adjacency_list::AdjacencyListStore::new(&path).ok();
@@ -299,7 +303,9 @@ impl RecordStore {
         if record.prop_ptr != 0 {
             if let Some((stored_entity_id, stored_entity_type)) = self
                 .property_store
-                .read().unwrap().get_entity_info_at_offset(record.prop_ptr)
+                .read()
+                .unwrap()
+                .get_entity_info_at_offset(record.prop_ptr)
             {
                 // CRITICAL: Block if prop_ptr points to Relationship (definite corruption)
                 if stored_entity_type == property_store::EntityType::Relationship {
@@ -307,11 +313,10 @@ impl RecordStore {
                         "PHASE 2 VALIDATION FAILED: prop_ptr for node {} points to Relationship {} - this is corruption!",
                         node_id, stored_entity_id
                     );
-                    println!("[write_node] FATAL ERROR: {}", error_msg);
                     tracing::error!("{}", error_msg);
                     return Err(Error::Storage(error_msg));
                 }
-                
+
                 // If prop_ptr points to a different Node, warn but allow
                 // This may be test code or will be corrected by load_node_properties fallback
                 if stored_entity_id != node_id {
@@ -417,7 +422,7 @@ impl RecordStore {
         let bytes = &self.nodes_mmap[start..end];
 
         let mut record: NodeRecord = *bytemuck::from_bytes(bytes);
-        
+
         // CRITICAL FIX: Validate prop_ptr immediately after read to detect corruption early
         // If prop_ptr points to a Relationship, it's corrupted - reset to 0
         // This prevents corruption from propagating and helps identify when corruption occurs
@@ -426,16 +431,15 @@ impl RecordStore {
         if record.prop_ptr != 0 {
             if let Some((stored_entity_id, stored_entity_type)) = self
                 .property_store
-                .read().unwrap().get_entity_info_at_offset(record.prop_ptr)
+                .read()
+                .unwrap()
+                .get_entity_info_at_offset(record.prop_ptr)
             {
                 if stored_entity_type == property_store::EntityType::Relationship {
-                    println!(
-                        "[read_node] CORRUPTION DETECTED: node_id={} has corrupted prop_ptr={} pointing to Relationship {}. Resetting to 0. Properties will be recovered via reverse_index.",
-                        node_id, record.prop_ptr, stored_entity_id
-                    );
                     tracing::error!(
                         "[read_node] node_id={} prop_ptr corruption detected (points to Relationship {}), resetting to 0. Properties will be recovered via reverse_index.",
-                        node_id, stored_entity_id
+                        node_id,
+                        stored_entity_id
                     );
                     // Reset prop_ptr to 0 to prevent further corruption
                     // Note: This is a read-only operation, so we can't write back the corrected value
@@ -446,7 +450,7 @@ impl RecordStore {
                 }
             }
         }
-        
+
         Ok(record)
     }
 
@@ -651,19 +655,11 @@ impl RecordStore {
 
         // Store properties and get property pointer
         record.prop_ptr = if has_properties {
-            println!(
-                "[DEBUG create_node_with_label_bits] Storing properties for node_id={}, properties={:?}",
-                node_id, properties
-            );
             let prop_ptr = self.property_store.write().unwrap().store_properties(
                 node_id,
                 property_store::EntityType::Node,
                 properties,
             )?;
-            println!(
-                "[DEBUG create_node_with_label_bits] Stored properties for node_id={}, prop_ptr={}",
-                node_id, prop_ptr
-            );
             tracing::debug!(
                 "create_node_with_label_bits: node_id={}, stored properties, prop_ptr={}",
                 node_id,
@@ -738,41 +734,31 @@ impl RecordStore {
         std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
         // PHASE 1: Read source node ONCE at the beginning and preserve prop_ptr
-        println!(
-            "[create_relationship] About to read source node {} for rel_id {}",
-            from, rel_id
-        );
         let mut source_node = self.read_node(from)?;
 
         // CRITICAL FIX: Isolate and preserve prop_ptr - never modify it during relationship creation
         // BUT: Validate prop_ptr first - if it's corrupted, reset it to 0 to prevent write failure
         let mut preserved_source_prop_ptr = source_node.prop_ptr;
-        
+
         // CRITICAL FIX: Validate prop_ptr before preserving it
         // If prop_ptr points to a Relationship, it's corrupted - reset to 0
         if preserved_source_prop_ptr != 0 {
             if let Some((stored_entity_id, stored_entity_type)) = self
                 .property_store
-                .read().unwrap().get_entity_info_at_offset(preserved_source_prop_ptr)
+                .read()
+                .unwrap()
+                .get_entity_info_at_offset(preserved_source_prop_ptr)
             {
                 if stored_entity_type == property_store::EntityType::Relationship {
-                    println!(
-                        "[create_relationship] WARNING: Source node {} has corrupted prop_ptr={} pointing to Relationship {}. Resetting to 0.",
-                        from, preserved_source_prop_ptr, stored_entity_id
-                    );
                     tracing::warn!(
                         "[create_relationship] Source node {} prop_ptr corruption detected (points to Relationship {}), resetting to 0",
-                        from, stored_entity_id
+                        from,
+                        stored_entity_id
                     );
                     preserved_source_prop_ptr = 0;
                 }
             }
         }
-        
-        println!(
-            "[create_relationship] Read source node {}: first_rel_ptr={}, prop_ptr={} (preserved, validated)",
-            from, source_node.first_rel_ptr, preserved_source_prop_ptr
-        );
 
         source_prev_ptr = source_node.first_rel_ptr;
 
@@ -780,11 +766,6 @@ impl RecordStore {
         // try to find the actual first_rel_ptr by scanning existing relationships
         // This handles the case where mmap synchronization fails between queries
         if source_prev_ptr == 0 && rel_id > 0 {
-            println!(
-                "[create_relationship] WARNING: first_rel_ptr is 0 but rel_id={} > 0, attempting to find actual first_rel_ptr for node {}",
-                rel_id, from
-            );
-
             // Scan backwards to find the most recent relationship for this node
             // CRITICAL FIX: Since 'from' is the SOURCE node for the new relationship,
             // we must only look for relationships where src_id == from (not dst_id == from)
@@ -799,24 +780,16 @@ impl RecordStore {
                         // We only care about OUTGOING relationships (src_id == from)
                         let check_src_id = rel_record.src_id;
                         let check_dst_id = rel_record.dst_id;
-                        println!(
-                            "[create_relationship] Scan check: rel_id={}, src={}, dst={}, node={}",
-                            check_rel_id, check_src_id, check_dst_id, from
-                        );
                         // CRITICAL: Only consider relationships where this node is the SOURCE
                         if check_src_id == from {
                             found_rel_id = Some(check_rel_id);
-                            println!(
-                                "[create_relationship] Found previous OUTGOING relationship: rel_id={}, src={}, dst={}",
-                                check_rel_id, check_src_id, check_dst_id
-                            );
                             break;
                         }
                     }
                 }
                 // Limit scan to avoid performance issues - only scan last 100 relationships
                 if scanned_count >= 100 {
-                    println!(
+                    tracing::debug!(
                         "[create_relationship] Scan limit reached (100 relationships), stopping"
                     );
                     break;
@@ -826,12 +799,13 @@ impl RecordStore {
             // If we found a previous relationship, use it as the prev_ptr
             if let Some(prev_rel_id) = found_rel_id {
                 source_prev_ptr = prev_rel_id + 1;
-                println!(
+                tracing::debug!(
                     "[create_relationship] Corrected source_prev_ptr from 0 to {} (prev_rel_id={})",
-                    source_prev_ptr, prev_rel_id
+                    source_prev_ptr,
+                    prev_rel_id
                 );
             } else {
-                println!(
+                tracing::debug!(
                     "[create_relationship] No previous relationship found after scanning {} relationships, keeping source_prev_ptr=0",
                     scanned_count
                 );
@@ -839,13 +813,6 @@ impl RecordStore {
         }
 
         // CRITICAL DEBUG: Log first_rel_ptr update
-        println!(
-            "[create_relationship] Source node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})",
-            from,
-            source_prev_ptr,
-            rel_id + 1,
-            rel_id
-        );
         tracing::debug!(
             "[create_relationship] Source node {}: old first_rel_ptr={}, new first_rel_ptr={} (rel_id={})",
             from,
@@ -861,9 +828,11 @@ impl RecordStore {
 
         // Validate that prop_ptr was correctly preserved
         if source_node.prop_ptr != preserved_source_prop_ptr {
-            println!(
+            tracing::error!(
                 "[create_relationship] FATAL ERROR: Source node {} prop_ptr corruption detected! Expected {}, got {}",
-                from, preserved_source_prop_ptr, source_node.prop_ptr
+                from,
+                preserved_source_prop_ptr,
+                source_node.prop_ptr
             );
             return Err(Error::Storage(format!(
                 "prop_ptr corruption detected for node {}",
@@ -871,7 +840,7 @@ impl RecordStore {
             )));
         }
 
-        println!(
+        tracing::debug!(
             "[create_relationship] Source node {}: preserving prop_ptr={}, updating first_rel_ptr from {} to {}",
             from,
             preserved_source_prop_ptr,
@@ -891,28 +860,27 @@ impl RecordStore {
             // Read target node ONCE and preserve prop_ptr
             let mut target_node = self.read_node(to)?;
             let mut preserved_target_prop_ptr = target_node.prop_ptr;
-            
+
             // CRITICAL FIX: Validate prop_ptr before preserving it
             // If prop_ptr points to a Relationship, it's corrupted - reset to 0
             if preserved_target_prop_ptr != 0 {
                 if let Some((stored_entity_id, stored_entity_type)) = self
                     .property_store
-                    .read().unwrap().get_entity_info_at_offset(preserved_target_prop_ptr)
+                    .read()
+                    .unwrap()
+                    .get_entity_info_at_offset(preserved_target_prop_ptr)
                 {
                     if stored_entity_type == property_store::EntityType::Relationship {
-                        println!(
-                            "[create_relationship] WARNING: Target node {} has corrupted prop_ptr={} pointing to Relationship {}. Resetting to 0.",
-                            to, preserved_target_prop_ptr, stored_entity_id
-                        );
                         tracing::warn!(
                             "[create_relationship] Target node {} prop_ptr corruption detected (points to Relationship {}), resetting to 0",
-                            to, stored_entity_id
+                            to,
+                            stored_entity_id
                         );
                         preserved_target_prop_ptr = 0;
                     }
                 }
             }
-            
+
             target_prev_ptr = target_node.first_rel_ptr;
 
             // CRITICAL FIX: Don't update first_rel_ptr on target nodes for incoming relationships
@@ -932,9 +900,11 @@ impl RecordStore {
 
             // Validate that prop_ptr was correctly preserved
             if target_node.prop_ptr != preserved_target_prop_ptr {
-                println!(
+                tracing::error!(
                     "[create_relationship] FATAL ERROR: Target node {} prop_ptr corruption detected! Expected {}, got {}",
-                    to, preserved_target_prop_ptr, target_node.prop_ptr
+                    to,
+                    preserved_target_prop_ptr,
+                    target_node.prop_ptr
                 );
                 return Err(Error::Storage(format!(
                     "prop_ptr corruption detected for node {}",
@@ -942,7 +912,7 @@ impl RecordStore {
                 )));
             }
 
-            println!(
+            tracing::debug!(
                 "[create_relationship] Target node {}: preserving prop_ptr={}, NOT updating first_rel_ptr (incoming relationship)",
                 to,
                 preserved_target_prop_ptr
@@ -963,40 +933,22 @@ impl RecordStore {
             // for subsequent relationship creations in separate queries
             // This is essential when creating multiple relationships to the same node
             // in separate MATCH...CREATE statements
-            println!(
+            tracing::debug!(
                 "[create_relationship] Flushing source node {} after write (first_rel_ptr={})",
-                from, source_node.first_rel_ptr
+                from,
+                source_node.first_rel_ptr
             );
             // CRITICAL FIX: Make flush synchronous and treat failure as error
             // This ensures writes are persisted before the next query reads the node
             if let Err(e) = self.nodes_mmap.flush() {
                 tracing::error!("Failed to flush source node {} after write: {}", from, e);
-                println!(
-                    "[create_relationship] ERROR: Failed to flush source node {}: {}",
-                    from, e
-                );
                 // Don't return error here - relationship is already created, but log it
                 // The relationship will still be found via the updated next_src_ptr fix above
-            } else {
-                println!(
-                    "[create_relationship] Successfully flushed source node {}",
-                    from
-                );
             }
             // CRITICAL FIX: Memory barrier after flush to ensure writes are visible to subsequent reads
             // This is essential when creating multiple relationships in separate transactions
             // Without this, the second transaction might read stale values from CPU cache
             std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
-
-            // CRITICAL FIX: Force CPU cache invalidation by reading back the value immediately
-            // This ensures the CPU cache is synchronized with the mmap memory
-            let _verify = self.read_node(from);
-            if let Ok(verify_node) = _verify {
-                println!(
-                    "[create_relationship] Verification read after flush: node {} has first_rel_ptr={}",
-                    from, verify_node.first_rel_ptr
-                );
-            }
         }
         if let Some(target_node) = target_node_opt {
             tracing::debug!(
@@ -1010,15 +962,6 @@ impl RecordStore {
             if to != from {
                 if let Err(e) = self.nodes_mmap.flush() {
                     tracing::error!("Failed to flush target node {} after write: {}", to, e);
-                    println!(
-                        "[create_relationship] ERROR: Failed to flush target node {}: {}",
-                        to, e
-                    );
-                } else {
-                    println!(
-                        "[create_relationship] Successfully flushed target node {}",
-                        to
-                    );
                 }
             }
         }
@@ -1027,10 +970,6 @@ impl RecordStore {
         record.next_dst_ptr = target_prev_ptr;
 
         // CRITICAL DEBUG: Log linked list construction
-        println!(
-            "[create_relationship] Relationship {}: src={}, dst={}, next_src_ptr={}, next_dst_ptr={}",
-            rel_id, from, to, source_prev_ptr, target_prev_ptr
-        );
         tracing::debug!(
             "[create_relationship] Relationship {}: src={}, dst={}, next_src_ptr={}, next_dst_ptr={}",
             rel_id,
@@ -1039,7 +978,6 @@ impl RecordStore {
             source_prev_ptr,
             target_prev_ptr
         );
-
 
         // Write the record to storage
         self.write_rel(rel_id, &record)?;
@@ -1190,8 +1128,8 @@ impl RecordStore {
 
     /// Clear all data from the storage
     pub fn clear_all(&mut self) -> Result<()> {
-        println!("[DEBUG RecordStore::clear_all] Clearing all storage data");
-        
+        tracing::debug!("[RecordStore::clear_all] Clearing all storage data");
+
         // Reset counters
         self.next_node_id.store(0, Ordering::SeqCst);
         self.next_rel_id.store(0, Ordering::SeqCst);
@@ -1202,19 +1140,64 @@ impl RecordStore {
         // next_offset incorrectly, causing new properties to overwrite old ones
         self.property_store.write().unwrap().clear_all()?;
 
-        // Truncate files to initial size
+        // CRITICAL FIX: Drop memory mappings before truncating files
+        // On Windows, you cannot truncate a file that has a memory-mapped section open
+        // Create temporary empty files to replace the mappings
+        let temp_dir = tempfile::tempdir()?;
+        let temp_nodes_path = temp_dir.path().join("nodes.tmp");
+        let temp_rels_path = temp_dir.path().join("rels.tmp");
+
+        // Create temporary empty files and keep them open
+        let mut temp_nodes_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&temp_nodes_path)?;
+        temp_nodes_file.set_len(INITIAL_NODES_FILE_SIZE as u64)?;
+        let temp_nodes_mmap = unsafe { MmapOptions::new().map_mut(&temp_nodes_file)? };
+
+        let mut temp_rels_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&temp_rels_path)?;
+        temp_rels_file.set_len(INITIAL_RELS_FILE_SIZE as u64)?;
+        let temp_rels_mmap = unsafe { MmapOptions::new().map_mut(&temp_rels_file)? };
+
+        // Replace old mappings with temporary ones (drops old mappings)
+        // Keep temp files and mappings alive until after truncation
+        let _old_nodes_mmap = std::mem::replace(&mut self.nodes_mmap, temp_nodes_mmap);
+        let _old_rels_mmap = std::mem::replace(&mut self.rels_mmap, temp_rels_mmap);
+
+        // Drop old mappings explicitly
+        drop(_old_nodes_mmap);
+        drop(_old_rels_mmap);
+
+        // Now we can truncate the original files (mappings are closed)
         self.nodes_file.set_len(INITIAL_NODES_FILE_SIZE as u64)?;
         self.rels_file.set_len(INITIAL_RELS_FILE_SIZE as u64)?;
+
+        // Zero out the files
+        self.nodes_file
+            .write_all(&vec![0u8; INITIAL_NODES_FILE_SIZE])?;
+        self.rels_file
+            .write_all(&vec![0u8; INITIAL_RELS_FILE_SIZE])?;
+        self.nodes_file.sync_all()?;
+        self.rels_file.sync_all()?;
 
         // Update file sizes
         self.nodes_file_size = INITIAL_NODES_FILE_SIZE;
         self.rels_file_size = INITIAL_RELS_FILE_SIZE;
 
-        // Recreate memory mappings
+        // Recreate memory mappings from original files
         self.nodes_mmap = unsafe { MmapOptions::new().map_mut(&*self.nodes_file)? };
         self.rels_mmap = unsafe { MmapOptions::new().map_mut(&*self.rels_file)? };
 
-        println!("[DEBUG RecordStore::clear_all] Storage cleared successfully");
+        // Drop temporary files and mappings (temp_dir will be dropped at end of scope)
+        drop(temp_nodes_file);
+        drop(temp_rels_file);
+
+        tracing::debug!("[RecordStore::clear_all] Storage cleared successfully");
         Ok(())
     }
 
@@ -1231,24 +1214,16 @@ impl RecordStore {
             if node_record.prop_ptr != 0 {
                 // PHASE 3: Double validation - verify that prop_ptr points to Node properties
                 // Check the entity_type stored at this offset BEFORE loading
-            if let Some((stored_entity_id, stored_entity_type)) = self
-                .property_store
-                .read()
-                .unwrap()
-                .get_entity_info_at_offset(node_record.prop_ptr)
-            {
+                if let Some((stored_entity_id, stored_entity_type)) = self
+                    .property_store
+                    .read()
+                    .unwrap()
+                    .get_entity_info_at_offset(node_record.prop_ptr)
+                {
                     if stored_entity_type != property_store::EntityType::Node
                         || stored_entity_id != node_id
                     {
                         // PHASE 3: Prop_ptr corruption detected - fallback to reverse_index
-                        println!(
-                            "[TRACE] load_node_properties: PHASE 3 VALIDATION FAILED - node_id={} prop_ptr={} points to wrong entity! Expected Node {}, but found {:?} entity {}. Using reverse_index fallback",
-                            node_id,
-                            node_record.prop_ptr,
-                            node_id,
-                            stored_entity_type,
-                            stored_entity_id
-                        );
                         tracing::warn!(
                             "load_node_properties: node_id={} prop_ptr={} points to wrong entity (type={:?}, id={}), using reverse_index instead",
                             node_id,
@@ -1261,7 +1236,9 @@ impl RecordStore {
                         // PHASE 3: Entity type and ID match - safe to load from prop_ptr
                         match self
                             .property_store
-                            .read().unwrap().load_properties_at_offset(node_record.prop_ptr)
+                            .read()
+                            .unwrap()
+                            .load_properties_at_offset(node_record.prop_ptr)
                         {
                             Ok(Some(props)) => {
                                 let keys = props.as_object().map(|m| m.keys().collect::<Vec<_>>());
@@ -1274,9 +1251,11 @@ impl RecordStore {
                                 // PHASE 3: Additional validation - check for relationship-like properties
                                 if let Some(obj) = props.as_object() {
                                     if obj.contains_key("since") || obj.contains_key("type") {
-                                        println!(
-                                            "[TRACE] load_node_properties: PHASE 3 WARNING - node_id={} prop_ptr={} returned relationship-like properties: {:?}. Falling back to reverse_index",
-                                            node_id, node_record.prop_ptr, keys
+                                        tracing::warn!(
+                                            "load_node_properties: node_id={} prop_ptr={} returned relationship-like properties: {:?}. Falling back to reverse_index",
+                                            node_id,
+                                            node_record.prop_ptr,
+                                            keys
                                         );
                                         // Fall through to reverse_index - properties look wrong
                                     } else {
@@ -1304,10 +1283,6 @@ impl RecordStore {
                         }
                     }
                 } else {
-                    println!(
-                        "[TRACE] load_node_properties: PHASE 3 WARNING - node_id={} prop_ptr={} not found in property_store, falling back to reverse_index",
-                        node_id, node_record.prop_ptr
-                    );
                     tracing::warn!(
                         "load_node_properties: node_id={} prop_ptr={} not found in property_store",
                         node_id,
@@ -1316,10 +1291,6 @@ impl RecordStore {
                     // Fall through to reverse_index lookup
                 }
             } else {
-                println!(
-                    "[DEBUG load_node_properties] node_id={}, prop_ptr is 0, trying reverse_index",
-                    node_id
-                );
                 tracing::debug!(
                     "load_node_properties: node_id={}, prop_ptr is 0, trying reverse_index",
                     node_id
@@ -1333,22 +1304,15 @@ impl RecordStore {
         }
 
         // PHASE 3: Safe fallback to reverse_index lookup (always reliable)
-        println!(
-            "[DEBUG load_node_properties] node_id={}, calling reverse_index (load_properties)",
-            node_id
-        );
         let result = self
             .property_store
-            .read().unwrap().load_properties(node_id, property_store::EntityType::Node);
+            .read()
+            .unwrap()
+            .load_properties(node_id, property_store::EntityType::Node);
         let keys_debug = result.as_ref().ok().and_then(|opt| {
             opt.as_ref()
                 .map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>()))
         });
-        println!(
-            "[DEBUG load_node_properties] node_id={}, reverse_index result: {:?}",
-            node_id,
-            keys_debug
-        );
         tracing::debug!(
             "load_node_properties: node_id={}, reverse_index result: {:?}",
             node_id,
@@ -1358,9 +1322,10 @@ impl RecordStore {
         if let Ok(Some(props)) = &result {
             if let Some(obj) = props.as_object() {
                 if obj.contains_key("since") || obj.contains_key("type") {
-                    println!(
-                        "[TRACE] load_node_properties: PHASE 3 CRITICAL WARNING - node_id={} reverse_index has relationship-like properties: {:?}. This indicates severe data corruption!",
-                        node_id, keys_debug
+                    tracing::warn!(
+                        "load_node_properties: node_id={} reverse_index has relationship-like properties: {:?}. This indicates severe data corruption!",
+                        node_id,
+                        keys_debug
                     );
                 }
             }
@@ -1392,7 +1357,9 @@ impl RecordStore {
             )?;
         } else {
             self.property_store
-                .write().unwrap().delete_properties(node_id, property_store::EntityType::Node)?;
+                .write()
+                .unwrap()
+                .delete_properties(node_id, property_store::EntityType::Node)?;
         }
         Ok(())
     }
@@ -1421,7 +1388,9 @@ impl RecordStore {
     /// Delete properties for a node
     pub fn delete_node_properties(&mut self, node_id: u64) -> Result<()> {
         self.property_store
-            .write().unwrap().delete_properties(node_id, property_store::EntityType::Node)
+            .write()
+            .unwrap()
+            .delete_properties(node_id, property_store::EntityType::Node)
     }
 
     /// Delete properties for a relationship
@@ -1445,37 +1414,47 @@ impl Clone for RecordStore {
         // made in one clone are visible in all other clones (via RwLock)
         // This solves the problem where next_offset was being reset when creating relationships
         // because each clone was getting an independent copy of PropertyStore
-        
+
         let nodes_path = self.path.join("nodes.store");
         let rels_path = self.path.join("rels.store");
-        
+
         // Open files (they're already created)
         let nodes_file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&nodes_path)
             .expect("Failed to open nodes file for clone");
-        
+
         let rels_file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&rels_path)
             .expect("Failed to open rels file for clone");
-        
+
         // Recreate memory mappings
-        let nodes_mmap = unsafe { MmapOptions::new().map_mut(&nodes_file).expect("Failed to map nodes file for clone") };
-        let rels_mmap = unsafe { MmapOptions::new().map_mut(&rels_file).expect("Failed to map rels file for clone") };
-        
+        let nodes_mmap = unsafe {
+            MmapOptions::new()
+                .map_mut(&nodes_file)
+                .expect("Failed to map nodes file for clone")
+        };
+        let rels_mmap = unsafe {
+            MmapOptions::new()
+                .map_mut(&rels_file)
+                .expect("Failed to map rels file for clone")
+        };
+
         // CRITICAL: Share the same PropertyStore instance via Arc::clone()
         // All clones will share the same underlying PropertyStore, so modifications
         // to next_offset and indexes are visible across all clones
         let property_store = Arc::clone(&self.property_store);
-        
+
         // Clone adjacency store if present
-        let adjacency_store = self.adjacency_store.as_ref().map(|_| {
-            adjacency_list::AdjacencyListStore::new(&self.path).ok()
-        }).flatten();
-        
+        let adjacency_store = self
+            .adjacency_store
+            .as_ref()
+            .map(|_| adjacency_list::AdjacencyListStore::new(&self.path).ok())
+            .flatten();
+
         Self {
             path: self.path.clone(),
             nodes_file: Arc::new(nodes_file),

@@ -1,9 +1,10 @@
-use nexus_protocol::rest::{CypherRequest, CypherResponse};
+﻿use nexus_protocol::rest::{CypherRequest, CypherResponse};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
+use tracing;
 
 /// Cypher test executor for running test suites
 pub struct CypherTestExecutor {
@@ -25,8 +26,8 @@ impl CypherTestExecutor {
         let content = std::fs::read_to_string(test_suite_path)?;
         let test_suite: Value = serde_json::from_str(&content)?;
         
-        println!("Running test suite: {}", test_suite["name"].as_str().unwrap_or("Unknown"));
-        println!("Description: {}", test_suite["description"].as_str().unwrap_or(""));
+        tracing::info!("Running test suite: {}", test_suite["name"].as_str().unwrap_or("Unknown"));
+        tracing::info!("Description: {}", test_suite["description"].as_str().unwrap_or(""));
         
         let mut results = TestSuiteResults {
             suite_name: test_suite["name"].as_str().unwrap_or("Unknown").to_string(),
@@ -40,7 +41,7 @@ impl CypherTestExecutor {
         if let Some(categories) = test_suite["test_categories"].as_array() {
             for category in categories {
                 let category_name = category["name"].as_str().unwrap_or("Unknown");
-                println!("\n=== {} ===", category_name);
+                tracing::info!("\n=== {} ===", category_name);
                 
                 let mut category_result = CategoryResults {
                     name: category_name.to_string(),
@@ -61,14 +62,14 @@ impl CypherTestExecutor {
                         
                         // Print test result
                         let status = if test_result.passed { "✅ PASS" } else { "❌ FAIL" };
-                        println!("  {} {} - {}", status, test_result.name, test_result.description);
+                        tracing::info!("  {} {} - {}", status, test_result.name, test_result.description);
                         
                         if !test_result.passed {
-                            println!("    Error: {}", test_result.error.unwrap_or("Unknown error".to_string()));
+                            tracing::info!("    Error: {}", test_result.error.unwrap_or("Unknown error".to_string()));
                         }
                         
                         if let Some(execution_time) = test_result.execution_time_ms {
-                            println!("    Execution time: {}ms", execution_time);
+                            tracing::info!("    Execution time: {}ms", execution_time);
                         }
                     }
                 }
@@ -186,7 +187,7 @@ impl CypherTestExecutor {
         let mut results = Vec::new();
         
         for (name, query, target_qps) in benchmarks {
-            println!("Running benchmark: {}", name);
+            tracing::info!("Running benchmark: {}", name);
             
             let request = CypherRequest {
                 query: query.to_string(),
@@ -235,10 +236,10 @@ impl CypherTestExecutor {
             
             results.push(result);
             
-            println!("  Target QPS: {}", target_qps);
-            println!("  Actual QPS: {:.2}", actual_qps);
-            println!("  Avg time: {:.2}ms", avg_time_ms);
-            println!("  Success rate: {:.1}%", result.success_rate * 100.0);
+            tracing::info!("  Target QPS: {}", target_qps);
+            tracing::info!("  Actual QPS: {:.2}", actual_qps);
+            tracing::info!("  Avg time: {:.2}ms", avg_time_ms);
+            tracing::info!("  Success rate: {:.1}%", result.success_rate * 100.0);
         }
         
         Ok(results)
@@ -288,19 +289,19 @@ pub struct BenchmarkResult {
 impl TestSuiteResults {
     /// Print a summary of test results
     pub fn print_summary(&self) {
-        println!("\n=== Test Suite Summary ===");
-        println!("Suite: {}", self.suite_name);
-        println!("Total tests: {}", self.total_tests);
-        println!("Passed: {} ({:.1}%)", self.passed_tests, 
+        tracing::info!("\n=== Test Suite Summary ===");
+        tracing::info!("Suite: {}", self.suite_name);
+        tracing::info!("Total tests: {}", self.total_tests);
+        tracing::info!("Passed: {} ({:.1}%)", self.passed_tests, 
                 self.passed_tests as f64 / self.total_tests as f64 * 100.0);
-        println!("Failed: {} ({:.1}%)", self.failed_tests,
+        tracing::info!("Failed: {} ({:.1}%)", self.failed_tests,
                 self.failed_tests as f64 / self.total_tests as f64 * 100.0);
         
-        println!("\n=== Category Breakdown ===");
+        tracing::info!("\n=== Category Breakdown ===");
         for category in &self.category_results {
             let passed = category.tests.iter().filter(|t| t.passed).count();
             let total = category.tests.len();
-            println!("{}: {}/{} passed", category.name, passed, total);
+            tracing::info!("{}: {}/{} passed", category.name, passed, total);
         }
     }
 }
@@ -311,8 +312,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
-        eprintln!("Usage: {} <server_url> [test_suite.json]", args[0]);
-        eprintln!("Example: {} http://localhost:3000 examples/cypher_tests/test_suite.json", args[0]);
+        etracing::info!("Usage: {} <server_url> [test_suite.json]", args[0]);
+        etracing::info!("Example: {} http://localhost:3000 examples/cypher_tests/test_suite.json", args[0]);
         std::process::exit(1);
     }
     
@@ -324,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     
     if !test_suite_path.exists() {
-        eprintln!("Test suite file not found: {}", test_suite_path.display());
+        etracing::info!("Test suite file not found: {}", test_suite_path.display());
         std::process::exit(1);
     }
     
@@ -335,11 +336,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     results.print_summary();
     
     // Run performance benchmarks
-    println!("\n=== Performance Benchmarks ===");
+    tracing::info!("\n=== Performance Benchmarks ===");
     let benchmarks = executor.run_performance_benchmarks().await?;
     
     for benchmark in benchmarks {
-        println!("{}: {:.2} QPS (target: {})", 
+        tracing::info!("{}: {:.2} QPS (target: {})", 
                 benchmark.name, benchmark.actual_qps, benchmark.target_qps);
     }
     

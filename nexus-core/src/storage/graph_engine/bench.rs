@@ -6,6 +6,7 @@
 use super::engine::GraphStorageEngine;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
+use tracing;
 
 /// Simple benchmark results
 pub struct BenchResults {
@@ -345,9 +346,9 @@ mod tests {
         }
 
         // Print results for manual inspection
-        println!("Benchmark Results:");
+        tracing::info!("Benchmark Results:");
         for result in &results {
-            println!(
+            tracing::info!(
                 "{}: {} iterations, avg {:.2}ms, throughput {:.0} ops/sec",
                 result.operation,
                 result.iterations,
@@ -373,9 +374,9 @@ mod tests {
         }
 
         // Print comprehensive results
-        println!("Comprehensive Benchmark Results:");
+        tracing::info!("Comprehensive Benchmark Results:");
         for result in &results {
-            println!(
+            tracing::info!(
                 "{}: {} iterations, avg {:.3}ms, throughput {:.0} ops/sec",
                 result.operation,
                 result.iterations,
@@ -405,11 +406,11 @@ mod tests {
             ); // Should be reasonably fast even in CI
         }
 
-        println!("Performance Comparison Results:");
-        println!("Note: Current LMDB performance is ~20 ops/sec for CREATE Relationship");
-        println!("      Graph Engine shows dramatic improvement potential");
+        tracing::info!("Performance Comparison Results:");
+        tracing::info!("Note: Current LMDB performance is ~20 ops/sec for CREATE Relationship");
+        tracing::info!("      Graph Engine shows dramatic improvement potential");
         for result in &results {
-            println!(
+            tracing::info!(
                 "{}: {} iterations, avg {:.3}ms, throughput {:.0} ops/sec",
                 result.operation,
                 result.iterations,
@@ -418,8 +419,8 @@ mod tests {
             );
 
             if result.operation.contains("CREATE Relationship") {
-                println!("      → Expected LMDB: ~20 ops/sec (57.33ms avg)");
-                println!(
+                tracing::info!("      → Expected LMDB: ~20 ops/sec (57.33ms avg)");
+                tracing::info!(
                     "      → Graph Engine: {:.0} ops/sec → {:.1}x faster!",
                     result.throughput,
                     result.throughput / 20.0

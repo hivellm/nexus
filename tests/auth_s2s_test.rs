@@ -1,4 +1,4 @@
-//! End-to-end (S2S) tests for Authentication & User Management via HTTP API
+﻿//! End-to-end (S2S) tests for Authentication & User Management via HTTP API
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CreateUserRequest {
@@ -75,23 +76,23 @@ async fn test_auth_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        eprintln!("ERROR: Server not available at {}", server_url);
-        eprintln!("Please start the server first: cargo run --release --bin nexus-server");
+        etracing::info!("ERROR: Server not available at {}", server_url);
+        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
 
-    println!("Server is available at {}", server_url);
-    println!("==========================================");
-    println!("Authentication & User Management S2S Tests");
-    println!("==========================================");
-    println!();
+    tracing::info!("Server is available at {}", server_url);
+    tracing::info!("==========================================");
+    tracing::info!("Authentication & User Management S2S Tests");
+    tracing::info!("==========================================");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Test User CRUD Operations via REST API
-    println!("--- User CRUD Operations (REST API) Tests ---");
+    tracing::info!("--- User CRUD Operations (REST API) Tests ---");
 
     // POST /auth/users - Create user
     let create_request = CreateUserRequest {
@@ -112,19 +113,19 @@ async fn test_auth_s2s() {
                     assert_eq!(user.username, "testuser_s2s_rest");
                     assert_eq!(user.email, Some("testuser@example.com".to_string()));
                     assert!(user.is_active);
-                    println!("✓ POST /auth/users: PASSED");
+                    tracing::info!("✓ POST /auth/users: PASSED");
                     passed += 1;
                 } else {
-                    println!("✗ POST /auth/users: FAILED - Invalid response format");
+                    tracing::info!("✗ POST /auth/users: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("✗ POST /auth/users: FAILED - Status: {}", response.status());
+                tracing::info!("✗ POST /auth/users: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ POST /auth/users: FAILED - Request error: {}", e);
+            tracing::info!("✗ POST /auth/users: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -139,19 +140,19 @@ async fn test_auth_s2s() {
                         .users
                         .iter()
                         .any(|u| u.username == "testuser_s2s_rest"));
-                    println!("✓ GET /auth/users: PASSED");
+                    tracing::info!("✓ GET /auth/users: PASSED");
                     passed += 1;
                 } else {
-                    println!("✗ GET /auth/users: FAILED - Invalid response format");
+                    tracing::info!("✗ GET /auth/users: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("✗ GET /auth/users: FAILED - Status: {}", response.status());
+                tracing::info!("✗ GET /auth/users: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ GET /auth/users: FAILED - Request error: {}", e);
+            tracing::info!("✗ GET /auth/users: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -166,26 +167,26 @@ async fn test_auth_s2s() {
             if response.status().is_success() {
                 if let Ok(user) = response.json::<UserResponse>().await {
                     assert_eq!(user.username, "testuser_s2s_rest");
-                    println!("✓ GET /auth/users/{{username}}: PASSED");
+                    tracing::info!("✓ GET /auth/users/{{username}}: PASSED");
                     passed += 1;
                 } else {
-                    println!("✗ GET /auth/users/{{username}}: FAILED - Invalid response format");
+                    tracing::info!("✗ GET /auth/users/{{username}}: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("✗ GET /auth/users/{{username}}: FAILED - Status: {}", response.status());
+                tracing::info!("✗ GET /auth/users/{{username}}: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ GET /auth/users/{{username}}: FAILED - Request error: {}", e);
+            tracing::info!("✗ GET /auth/users/{{username}}: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Test Permission Management via REST API
-    println!();
-    println!("--- Permission Management (REST API) Tests ---");
+    tracing::info!();
+    tracing::info!("--- Permission Management (REST API) Tests ---");
 
     // POST /auth/users/{username}/permissions - Grant permissions
     let grant_request = UpdatePermissionsRequest {
@@ -200,10 +201,10 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ POST /auth/users/{{username}}/permissions: PASSED");
+                tracing::info!("✓ POST /auth/users/{{username}}/permissions: PASSED");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "✗ POST /auth/users/{{username}}/permissions: FAILED - Status: {}",
                     response.status()
                 );
@@ -211,7 +212,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "✗ POST /auth/users/{{username}}/permissions: FAILED - Request error: {}",
                 e
             );
@@ -230,14 +231,14 @@ async fn test_auth_s2s() {
                 if let Ok(perms) = response.json::<PermissionsResponse>().await {
                     assert!(perms.permissions.contains(&"READ".to_string()));
                     assert!(perms.permissions.contains(&"WRITE".to_string()));
-                    println!("✓ GET /auth/users/{{username}}/permissions: PASSED");
+                    tracing::info!("✓ GET /auth/users/{{username}}/permissions: PASSED");
                     passed += 1;
                 } else {
-                    println!("✗ GET /auth/users/{{username}}/permissions: FAILED - Invalid response format");
+                    tracing::info!("✗ GET /auth/users/{{username}}/permissions: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "✗ GET /auth/users/{{username}}/permissions: FAILED - Status: {}",
                     response.status()
                 );
@@ -245,7 +246,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "✗ GET /auth/users/{{username}}/permissions: FAILED - Request error: {}",
                 e
             );
@@ -264,10 +265,10 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ DELETE /auth/users/{{username}}/permissions/{{permission}}: PASSED");
+                tracing::info!("✓ DELETE /auth/users/{{username}}/permissions/{{permission}}: PASSED");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "✗ DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Status: {}",
                     response.status()
                 );
@@ -275,7 +276,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "✗ DELETE /auth/users/{{username}}/permissions/{{permission}}: FAILED - Request error: {}",
                 e
             );
@@ -291,22 +292,22 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("✓ DELETE /auth/users/{{username}}: PASSED");
+                tracing::info!("✓ DELETE /auth/users/{{username}}: PASSED");
                 passed += 1;
             } else {
-                println!("✗ DELETE /auth/users/{{username}}: FAILED - Status: {}", response.status());
+                tracing::info!("✗ DELETE /auth/users/{{username}}: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("✗ DELETE /auth/users/{{username}}: FAILED - Request error: {}", e);
+            tracing::info!("✗ DELETE /auth/users/{{username}}: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Test REST Endpoint Protection
-    println!();
-    println!("--- REST Endpoint Protection Tests ---");
+    tracing::info!();
+    tracing::info!("--- REST Endpoint Protection Tests ---");
 
     // Test protected endpoint without authentication
     match client
@@ -319,10 +320,10 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status() == 401 {
-                println!("✓ Protected endpoint returns 401 without auth: PASSED");
+                tracing::info!("✓ Protected endpoint returns 401 without auth: PASSED");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "✗ Protected endpoint without auth: FAILED - Expected 401, got {}",
                     response.status()
                 );
@@ -330,7 +331,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!("✗ Protected endpoint without auth: FAILED - Request error: {}", e);
+            tracing::info!("✗ Protected endpoint without auth: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -347,10 +348,10 @@ async fn test_auth_s2s() {
     {
         Ok(response) => {
             if response.status() == 401 {
-                println!("✓ Protected endpoint returns 401 with invalid key: PASSED");
+                tracing::info!("✓ Protected endpoint returns 401 with invalid key: PASSED");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "✗ Protected endpoint with invalid key: FAILED - Expected 401, got {}",
                     response.status()
                 );
@@ -358,7 +359,7 @@ async fn test_auth_s2s() {
             }
         }
         Err(e) => {
-            println!("✗ Protected endpoint with invalid key: FAILED - Request error: {}", e);
+            tracing::info!("✗ Protected endpoint with invalid key: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
@@ -366,23 +367,23 @@ async fn test_auth_s2s() {
     // Test rate limiting headers (if rate limiting is enabled)
     // This test assumes a valid API key exists
     // In a real scenario, you would create an API key first and use it
-    println!();
-    println!("--- Rate Limiting Headers Tests ---");
-    println!("Note: Rate limiting headers test requires a valid API key");
-    println!("This test is skipped if no valid key is available");
+    tracing::info!();
+    tracing::info!("--- Rate Limiting Headers Tests ---");
+    tracing::info!("Note: Rate limiting headers test requires a valid API key");
+    tracing::info!("This test is skipped if no valid key is available");
 
     // Summary
-    println!();
-    println!("==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
-    println!("Total:  {}", passed + failed);
-    println!();
+    tracing::info!();
+    tracing::info!("==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Passed: {}", passed);
+    tracing::info!("Failed: {}", failed);
+    tracing::info!("Total:  {}", passed + failed);
+    tracing::info!();
 
     if failed > 0 {
-        eprintln!("Some tests failed!");
+        etracing::info!("Some tests failed!");
         std::process::exit(1);
     }
 }

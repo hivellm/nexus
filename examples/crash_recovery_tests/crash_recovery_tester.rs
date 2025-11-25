@@ -1,4 +1,4 @@
-use nexus_core::catalog::Catalog;
+﻿use nexus_core::catalog::Catalog;
 use nexus_core::executor::Executor;
 use nexus_core::index::{LabelIndex, KnnIndex};
 use nexus_core::storage::RecordStore;
@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::RwLock;
+use tracing;
 
 /// Crash recovery test scenarios
 pub struct CrashRecoveryTester {
@@ -24,7 +25,7 @@ impl CrashRecoveryTester {
     
     /// Test scenario 1: WAL recovery after crash during write transaction
     pub async fn test_wal_recovery_during_write(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Testing WAL recovery during write transaction...");
+        tracing::info!("Testing WAL recovery during write transaction...");
         
         // Create initial state
         let catalog = Arc::new(RwLock::new(Catalog::new(self.temp_dir.path())?));
@@ -66,7 +67,7 @@ impl CrashRecoveryTester {
         
         // Replay WAL entries
         let entries = recovered_wal.read().await.get_all_entries()?;
-        println!("Recovered {} WAL entries", entries.len());
+        tracing::info!("Recovered {} WAL entries", entries.len());
         
         // Verify recovery
         assert_eq!(entries.len(), 3);
@@ -74,13 +75,13 @@ impl CrashRecoveryTester {
         assert!(matches!(entries[1], nexus_core::wal::WalEntry::CreateNode { .. }));
         assert!(matches!(entries[2], nexus_core::wal::WalEntry::SetProperty { .. }));
         
-        println!("✅ WAL recovery test passed");
+        tracing::info!("✅ WAL recovery test passed");
         Ok(())
     }
     
     /// Test scenario 2: Catalog recovery after corruption
     pub async fn test_catalog_recovery_after_corruption(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Testing catalog recovery after corruption...");
+        tracing::info!("Testing catalog recovery after corruption...");
         
         // Create initial catalog with some data
         let catalog_path = self.temp_dir.path().join("catalog");
@@ -93,7 +94,7 @@ impl CrashRecoveryTester {
         let type_id = catalog.write().await.get_or_create_type("FOLLOWS")?;
         let key_id = catalog.write().await.get_or_create_key("name")?;
         
-        println!("Created label_id: {}, type_id: {}, key_id: {}", label_id, type_id, key_id);
+        tracing::info!("Created label_id: {}, type_id: {}, key_id: {}", label_id, type_id, key_id);
         
         // Simulate corruption by closing the catalog
         drop(catalog);
@@ -110,13 +111,13 @@ impl CrashRecoveryTester {
         assert_eq!(recovered_type_id, Some(type_id));
         assert_eq!(recovered_key_id, Some(key_id));
         
-        println!("✅ Catalog recovery test passed");
+        tracing::info!("✅ Catalog recovery test passed");
         Ok(())
     }
     
     /// Test scenario 3: Index recovery after crash
     pub async fn test_index_recovery_after_crash(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Testing index recovery after crash...");
+        tracing::info!("Testing index recovery after crash...");
         
         // Create indexes with some data
         let label_index = Arc::new(RwLock::new(LabelIndex::new()));
@@ -137,7 +138,7 @@ impl CrashRecoveryTester {
         let label_stats_before = label_index.read().await.get_stats();
         let knn_stats_before = knn_index.read().await.get_stats();
         
-        println!("Before crash - Label index: {} nodes, KNN index: {} vectors", 
+        tracing::info!("Before crash - Label index: {} nodes, KNN index: {} vectors", 
                 label_stats_before.total_nodes, knn_stats_before.total_vectors);
         
         // Simulate crash by dropping indexes
@@ -164,13 +165,13 @@ impl CrashRecoveryTester {
         assert_eq!(label_stats_after.total_nodes, label_stats_before.total_nodes);
         assert_eq!(knn_stats_after.total_vectors, knn_stats_before.total_vectors);
         
-        println!("✅ Index recovery test passed");
+        tracing::info!("✅ Index recovery test passed");
         Ok(())
     }
     
     /// Test scenario 4: Partial transaction recovery
     pub async fn test_partial_transaction_recovery(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Testing partial transaction recovery...");
+        tracing::info!("Testing partial transaction recovery...");
         
         let catalog = Arc::new(RwLock::new(Catalog::new(self.temp_dir.path())?));
         let wal = Arc::new(RwLock::new(Wal::new(self.temp_dir.path().join("wal.log"))?));
@@ -218,13 +219,13 @@ impl CrashRecoveryTester {
         let has_commit = entries.iter().any(|entry| matches!(entry, nexus_core::wal::WalEntry::CommitTx { .. }));
         assert!(!has_commit);
         
-        println!("✅ Partial transaction recovery test passed");
+        tracing::info!("✅ Partial transaction recovery test passed");
         Ok(())
     }
     
     /// Test scenario 5: Concurrent transaction recovery
     pub async fn test_concurrent_transaction_recovery(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Testing concurrent transaction recovery...");
+        tracing::info!("Testing concurrent transaction recovery...");
         
         let catalog = Arc::new(RwLock::new(Catalog::new(self.temp_dir.path())?));
         let wal = Arc::new(RwLock::new(Wal::new(self.temp_dir.path().join("wal.log"))?));
@@ -279,13 +280,13 @@ impl CrashRecoveryTester {
         assert_eq!(begin_count, 2);
         assert_eq!(commit_count, 1);
         
-        println!("✅ Concurrent transaction recovery test passed");
+        tracing::info!("✅ Concurrent transaction recovery test passed");
         Ok(())
     }
     
     /// Run all crash recovery tests
     pub async fn run_all_tests(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("=== Crash Recovery Test Suite ===");
+        tracing::info!("=== Crash Recovery Test Suite ===");
         
         self.test_wal_recovery_during_write().await?;
         self.test_catalog_recovery_after_corruption().await?;
@@ -293,7 +294,7 @@ impl CrashRecoveryTester {
         self.test_partial_transaction_recovery().await?;
         self.test_concurrent_transaction_recovery().await?;
         
-        println!("\n✅ All crash recovery tests passed!");
+        tracing::info!("\n✅ All crash recovery tests passed!");
         Ok(())
     }
 }
@@ -312,7 +313,7 @@ impl CrashRecoveryPerformanceTester {
     
     /// Test WAL recovery performance with large number of entries
     pub async fn test_wal_recovery_performance(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Testing WAL recovery performance...");
+        tracing::info!("Testing WAL recovery performance...");
         
         let wal_path = self.temp_dir.path().join("wal.log");
         let wal = Arc::new(RwLock::new(Wal::new(&wal_path)?));
@@ -332,7 +333,7 @@ impl CrashRecoveryPerformanceTester {
         }
         
         let write_time = start_time.elapsed();
-        println!("Wrote {} entries in {:?}", num_entries, write_time);
+        tracing::info!("Wrote {} entries in {:?}", num_entries, write_time);
         
         // Simulate crash
         drop(wal);
@@ -343,14 +344,14 @@ impl CrashRecoveryPerformanceTester {
         let entries = recovered_wal.read().await.get_all_entries()?;
         let recovery_time = recovery_start.elapsed();
         
-        println!("Recovered {} entries in {:?}", entries.len(), recovery_time);
+        tracing::info!("Recovered {} entries in {:?}", entries.len(), recovery_time);
         
         // Performance targets
         let write_qps = num_entries as f64 / write_time.as_secs_f64();
         let recovery_qps = num_entries as f64 / recovery_time.as_secs_f64();
         
-        println!("Write QPS: {:.0}", write_qps);
-        println!("Recovery QPS: {:.0}", recovery_qps);
+        tracing::info!("Write QPS: {:.0}", write_qps);
+        tracing::info!("Recovery QPS: {:.0}", recovery_qps);
         
         // Verify all entries were recovered
         assert_eq!(entries.len(), num_entries);
@@ -359,7 +360,7 @@ impl CrashRecoveryPerformanceTester {
         assert!(write_qps > 1000.0, "Write QPS too low: {:.0}", write_qps);
         assert!(recovery_qps > 500.0, "Recovery QPS too low: {:.0}", recovery_qps);
         
-        println!("✅ WAL recovery performance test passed");
+        tracing::info!("✅ WAL recovery performance test passed");
         Ok(())
     }
 }
@@ -371,11 +372,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = args.collect();
     
     if args.len() > 1 && args[1] == "performance" {
-        println!("Running crash recovery performance tests...");
+        tracing::info!("Running crash recovery performance tests...");
         let tester = CrashRecoveryPerformanceTester::new()?;
         tester.test_wal_recovery_performance().await?;
     } else {
-        println!("Running crash recovery functional tests...");
+        tracing::info!("Running crash recovery functional tests...");
         let tester = CrashRecoveryTester::new()?;
         tester.run_all_tests().await?;
     }

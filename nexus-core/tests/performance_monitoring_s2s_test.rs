@@ -19,6 +19,7 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {
@@ -163,26 +164,28 @@ async fn test_performance_monitoring_s2s() {
 
     // Wait for server to be available
     if !wait_for_server(&server_url, 5).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test performance_monitoring_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!(
+            "   2. Run: cargo test --features s2s --test performance_monitoring_s2s_test"
+        );
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
 
-    println!("Server is available at {}", server_url);
-    println!("==========================================");
-    println!("Performance Monitoring S2S Tests");
-    println!("==========================================");
-    println!();
+    tracing::info!("Server is available at {}", server_url);
+    tracing::info!("==========================================");
+    tracing::info!("Performance Monitoring S2S Tests");
+    tracing::info!("==========================================");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Test 1: Get initial query statistics
-    println!("--- Test 1: Query Statistics Endpoint ---");
+    tracing::info!("--- Test 1: Query Statistics Endpoint ---");
     match client
         .get(format!("{}/performance/statistics", server_url))
         .send()
@@ -191,19 +194,19 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
-                    println!("GET /performance/statistics: PASSED");
-                    println!("  Total queries: {}", stats.statistics.total_queries);
-                    println!(
+                    tracing::info!("GET /performance/statistics: PASSED");
+                    tracing::info!("  Total queries: {}", stats.statistics.total_queries);
+                    tracing::info!(
                         "  Average time: {}ms",
                         stats.statistics.average_execution_time_ms
                     );
                     passed += 1;
                 } else {
-                    println!("GET /performance/statistics: FAILED - Invalid response format");
+                    tracing::info!("GET /performance/statistics: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "GET /performance/statistics: FAILED - Status: {}",
                     response.status()
                 );
@@ -211,13 +214,13 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!("GET /performance/statistics: FAILED - Request error: {}", e);
+            tracing::info!("GET /performance/statistics: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Test 2: Execute queries and verify statistics are collected
-    println!("\n--- Test 2: Query Execution and Statistics Collection ---");
+    tracing::info!("\n--- Test 2: Query Execution and Statistics Collection ---");
     let queries = vec![
         "MATCH (n) RETURN n LIMIT 10",
         "CREATE (n:Test {name: 'test1'}) RETURN n",
@@ -227,10 +230,10 @@ async fn test_performance_monitoring_s2s() {
     for query in &queries {
         match execute_query(&client, &server_url, query).await {
             Ok(_) => {
-                println!("Query executed: {}", query);
+                tracing::info!("Query executed: {}", query);
             }
             Err(e) => {
-                println!("Query failed: {} - Error: {}", query, e);
+                tracing::info!("Query failed: {} - Error: {}", query, e);
                 failed += 1;
             }
         }
@@ -248,14 +251,14 @@ async fn test_performance_monitoring_s2s() {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
                     if stats.statistics.total_queries >= queries.len() as u64 {
-                        println!("Statistics collection: PASSED");
-                        println!(
+                        tracing::info!("Statistics collection: PASSED");
+                        tracing::info!(
                             "  Total queries recorded: {}",
                             stats.statistics.total_queries
                         );
                         passed += 1;
                     } else {
-                        println!(
+                        tracing::info!(
                             "Statistics collection: FAILED - Expected at least {} queries, got {}",
                             queries.len(),
                             stats.statistics.total_queries
@@ -263,11 +266,11 @@ async fn test_performance_monitoring_s2s() {
                         failed += 1;
                     }
                 } else {
-                    println!("Statistics collection: FAILED - Invalid response format");
+                    tracing::info!("Statistics collection: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "Statistics collection: FAILED - Status: {}",
                     response.status()
                 );
@@ -275,23 +278,23 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!("Statistics collection: FAILED - Request error: {}", e);
+            tracing::info!("Statistics collection: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Test 3: Slow query logging
-    println!("\n--- Test 3: Slow Query Logging ---");
+    tracing::info!("\n--- Test 3: Slow Query Logging ---");
 
     // Execute a slow query (simulated by a complex query)
     let slow_query = "MATCH (a)-[*1..3]-(b) RETURN a, b LIMIT 100";
     match execute_query(&client, &server_url, slow_query).await {
         Ok(_) => {
-            println!("Slow query executed");
+            tracing::info!("Slow query executed");
         }
         Err(_) => {
             // Query might fail, but that's ok for testing
-            println!("  Slow query execution completed (may have failed)");
+            tracing::info!("  Slow query execution completed (may have failed)");
         }
     }
 
@@ -305,15 +308,17 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(slow_queries) = response.json::<SlowQueriesResponse>().await {
-                    println!("GET /performance/slow-queries: PASSED");
-                    println!("  Slow queries logged: {}", slow_queries.count);
+                    tracing::info!("GET /performance/slow-queries: PASSED");
+                    tracing::info!("  Slow queries logged: {}", slow_queries.count);
                     passed += 1;
                 } else {
-                    println!("GET /performance/slow-queries: FAILED - Invalid response format");
+                    tracing::info!(
+                        "GET /performance/slow-queries: FAILED - Invalid response format"
+                    );
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "GET /performance/slow-queries: FAILED - Status: {}",
                     response.status()
                 );
@@ -321,7 +326,7 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "GET /performance/slow-queries: FAILED - Request error: {}",
                 e
             );
@@ -330,7 +335,7 @@ async fn test_performance_monitoring_s2s() {
     }
 
     // Test 4: Slow query analysis
-    println!("\n--- Test 4: Slow Query Analysis ---");
+    tracing::info!("\n--- Test 4: Slow Query Analysis ---");
     match client
         .get(format!("{}/performance/slow-queries/analysis", server_url))
         .send()
@@ -339,25 +344,26 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(analysis) = response.json::<SlowQueryAnalysisResponse>().await {
-                    println!("GET /performance/slow-queries/analysis: PASSED");
-                    println!("  Patterns analyzed: {}", analysis.total_patterns);
+                    tracing::info!("GET /performance/slow-queries/analysis: PASSED");
+                    tracing::info!("  Patterns analyzed: {}", analysis.total_patterns);
                     for item in &analysis.analyses {
-                        println!(
+                        tracing::info!(
                             "  Pattern: {} ({} occurrences)",
-                            item.pattern, item.occurrences
+                            item.pattern,
+                            item.occurrences
                         );
-                        println!("    Avg time: {:.2}ms", item.avg_execution_time_ms);
-                        println!("    Recommendations: {}", item.recommendations.len());
+                        tracing::info!("    Avg time: {:.2}ms", item.avg_execution_time_ms);
+                        tracing::info!("    Recommendations: {}", item.recommendations.len());
                     }
                     passed += 1;
                 } else {
-                    println!(
+                    tracing::info!(
                         "GET /performance/slow-queries/analysis: FAILED - Invalid response format"
                     );
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "GET /performance/slow-queries/analysis: FAILED - Status: {}",
                     response.status()
                 );
@@ -365,7 +371,7 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "GET /performance/slow-queries/analysis: FAILED - Request error: {}",
                 e
             );
@@ -374,7 +380,7 @@ async fn test_performance_monitoring_s2s() {
     }
 
     // Test 5: Plan cache statistics
-    println!("\n--- Test 5: Plan Cache Statistics ---");
+    tracing::info!("\n--- Test 5: Plan Cache Statistics ---");
     match client
         .get(format!("{}/performance/plan-cache", server_url))
         .send()
@@ -383,17 +389,17 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(cache_stats) = response.json::<PlanCacheStatisticsResponse>().await {
-                    println!("GET /performance/plan-cache: PASSED");
-                    println!("  Cached plans: {}", cache_stats.cached_plans);
-                    println!("  Hit rate: {:.2}%", cache_stats.hit_rate * 100.0);
-                    println!("  Memory usage: {} bytes", cache_stats.current_memory_bytes);
+                    tracing::info!("GET /performance/plan-cache: PASSED");
+                    tracing::info!("  Cached plans: {}", cache_stats.cached_plans);
+                    tracing::info!("  Hit rate: {:.2}%", cache_stats.hit_rate * 100.0);
+                    tracing::info!("  Memory usage: {} bytes", cache_stats.current_memory_bytes);
                     passed += 1;
                 } else {
-                    println!("GET /performance/plan-cache: FAILED - Invalid response format");
+                    tracing::info!("GET /performance/plan-cache: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "GET /performance/plan-cache: FAILED - Status: {}",
                     response.status()
                 );
@@ -401,13 +407,13 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!("GET /performance/plan-cache: FAILED - Request error: {}", e);
+            tracing::info!("GET /performance/plan-cache: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Test 6: Clear plan cache
-    println!("\n--- Test 6: Clear Plan Cache ---");
+    tracing::info!("\n--- Test 6: Clear Plan Cache ---");
     match client
         .post(format!("{}/performance/plan-cache/clear", server_url))
         .send()
@@ -415,10 +421,10 @@ async fn test_performance_monitoring_s2s() {
     {
         Ok(response) => {
             if response.status().is_success() {
-                println!("POST /performance/plan-cache/clear: PASSED");
+                tracing::info!("POST /performance/plan-cache/clear: PASSED");
                 passed += 1;
             } else {
-                println!(
+                tracing::info!(
                     "POST /performance/plan-cache/clear: FAILED - Status: {}",
                     response.status()
                 );
@@ -426,7 +432,7 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "POST /performance/plan-cache/clear: FAILED - Request error: {}",
                 e
             );
@@ -445,32 +451,32 @@ async fn test_performance_monitoring_s2s() {
             if response.status().is_success() {
                 if let Ok(cache_stats) = response.json::<PlanCacheStatisticsResponse>().await {
                     if cache_stats.cached_plans == 0 {
-                        println!("Plan cache cleared: PASSED");
+                        tracing::info!("Plan cache cleared: PASSED");
                         passed += 1;
                     } else {
-                        println!(
+                        tracing::info!(
                             "Plan cache cleared: FAILED - Expected 0 plans, got {}",
                             cache_stats.cached_plans
                         );
                         failed += 1;
                     }
                 } else {
-                    println!("Plan cache cleared: FAILED - Invalid response format");
+                    tracing::info!("Plan cache cleared: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!("Plan cache cleared: FAILED - Status: {}", response.status());
+                tracing::info!("Plan cache cleared: FAILED - Status: {}", response.status());
                 failed += 1;
             }
         }
         Err(e) => {
-            println!("Plan cache cleared: FAILED - Request error: {}", e);
+            tracing::info!("Plan cache cleared: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Test 7: Verify metrics are collected during query execution
-    println!("\n--- Test 7: Automatic Metrics Collection ---");
+    tracing::info!("\n--- Test 7: Automatic Metrics Collection ---");
 
     // Get initial statistics
     let initial_total = match client
@@ -510,24 +516,27 @@ async fn test_performance_monitoring_s2s() {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
                     if stats.statistics.total_queries > initial_total {
-                        println!("Automatic metrics collection: PASSED");
-                        println!(
+                        tracing::info!("Automatic metrics collection: PASSED");
+                        tracing::info!(
                             "  Queries before: {}, Queries after: {}",
-                            initial_total, stats.statistics.total_queries
+                            initial_total,
+                            stats.statistics.total_queries
                         );
                         passed += 1;
                     } else {
-                        println!(
+                        tracing::info!(
                             "Automatic metrics collection: FAILED - Statistics did not increase"
                         );
                         failed += 1;
                     }
                 } else {
-                    println!("Automatic metrics collection: FAILED - Invalid response format");
+                    tracing::info!(
+                        "Automatic metrics collection: FAILED - Invalid response format"
+                    );
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "Automatic metrics collection: FAILED - Status: {}",
                     response.status()
                 );
@@ -535,7 +544,7 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!(
+            tracing::info!(
                 "Automatic metrics collection: FAILED - Request error: {}",
                 e
             );
@@ -544,7 +553,7 @@ async fn test_performance_monitoring_s2s() {
     }
 
     // Test 8: Pattern statistics
-    println!("\n--- Test 8: Query Pattern Statistics ---");
+    tracing::info!("\n--- Test 8: Query Pattern Statistics ---");
     match client
         .get(format!("{}/performance/statistics", server_url))
         .send()
@@ -553,21 +562,23 @@ async fn test_performance_monitoring_s2s() {
         Ok(response) => {
             if response.status().is_success() {
                 if let Ok(stats) = response.json::<QueryStatisticsResponse>().await {
-                    println!("Query pattern statistics: PASSED");
-                    println!("  Patterns tracked: {}", stats.patterns.len());
+                    tracing::info!("Query pattern statistics: PASSED");
+                    tracing::info!("  Patterns tracked: {}", stats.patterns.len());
                     for pattern in &stats.patterns {
-                        println!(
+                        tracing::info!(
                             "  Pattern: {} (count: {}, avg: {:.2}ms)",
-                            pattern.pattern, pattern.count, pattern.avg_time_ms
+                            pattern.pattern,
+                            pattern.count,
+                            pattern.avg_time_ms
                         );
                     }
                     passed += 1;
                 } else {
-                    println!("Query pattern statistics: FAILED - Invalid response format");
+                    tracing::info!("Query pattern statistics: FAILED - Invalid response format");
                     failed += 1;
                 }
             } else {
-                println!(
+                tracing::info!(
                     "Query pattern statistics: FAILED - Status: {}",
                     response.status()
                 );
@@ -575,28 +586,29 @@ async fn test_performance_monitoring_s2s() {
             }
         }
         Err(e) => {
-            println!("Query pattern statistics: FAILED - Request error: {}", e);
+            tracing::info!("Query pattern statistics: FAILED - Request error: {}", e);
             failed += 1;
         }
     }
 
     // Summary
-    println!("\n==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
-    println!("Total:  {}", passed + failed);
-    println!();
+    tracing::info!("\n==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Passed: {}", passed);
+    tracing::info!("Failed: {}", failed);
+    tracing::info!("Total:  {}", passed + failed);
+    tracing::info!();
 
     if failed > 0 {
-        eprintln!(
+        etracing::info!(
             "WARNING: Some tests failed ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        eprintln!("WARNING: Note: Some features may not be fully implemented yet.");
+        etracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     } else {
-        println!("All tests passed!");
+        tracing::info!("All tests passed!");
     }
 }

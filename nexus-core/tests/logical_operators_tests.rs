@@ -1,6 +1,7 @@
 /// Tests for complex logical operators (AND, OR, NOT combinations)
 use nexus_core::{Engine, Error};
 use tempfile::TempDir;
+use tracing;
 
 fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
     let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
@@ -112,7 +113,7 @@ fn test_not_with_complex_expression() -> Result<(), Error> {
         "MATCH (n:TestPerson2) WHERE n.age = 25 AND n.city = 'NYC' RETURN count(n) AS count",
     )?;
     let condition_count = condition_result.rows[0].values[0].as_i64().unwrap();
-    println!(
+    tracing::info!(
         "Condition (age=25 AND city='NYC') matched: {} nodes",
         condition_count
     );
@@ -124,9 +125,11 @@ fn test_not_with_complex_expression() -> Result<(), Error> {
     )?;
     assert!(!result.rows.is_empty(), "Should return at least 1 row");
     let count = result.rows[0].values[0].as_i64().unwrap();
-    println!(
+    tracing::info!(
         "NOT query returned count: {} (total: {}, condition matched: {})",
-        count, total_count, condition_count
+        count,
+        total_count,
+        condition_count
     );
 
     // If condition matched at least 1 node, NOT should match fewer than total
@@ -181,7 +184,7 @@ fn test_logical_operators_in_return() -> Result<(), Error> {
             assert!(val.as_bool().unwrap());
         } else {
             // AND may not be implemented in RETURN yet - skip this test
-            println!("AND operator in RETURN not yet implemented, skipping");
+            tracing::info!("AND operator in RETURN not yet implemented, skipping");
         }
     }
 
@@ -192,7 +195,7 @@ fn test_logical_operators_in_return() -> Result<(), Error> {
         if val.as_bool().is_some() {
             assert!(val.as_bool().unwrap());
         } else {
-            println!("OR operator in RETURN not yet implemented, skipping");
+            tracing::info!("OR operator in RETURN not yet implemented, skipping");
         }
     }
 
@@ -203,7 +206,7 @@ fn test_logical_operators_in_return() -> Result<(), Error> {
         if val.as_bool().is_some() {
             assert!(val.as_bool().unwrap());
         } else {
-            println!("NOT operator in RETURN not yet implemented, skipping");
+            tracing::info!("NOT operator in RETURN not yet implemented, skipping");
         }
     }
 

@@ -1,4 +1,4 @@
-//! Detailed Neo4j Result Comparison Tests
+﻿//! Detailed Neo4j Result Comparison Tests
 //!
 //! These tests compare query results between Nexus and Neo4j to ensure identical return values.
 //! Requires both servers to be running:
@@ -8,6 +8,7 @@
 use reqwest::Client;
 use serde_json::json;
 use std::collections::HashMap;
+use tracing;
 
 // Helper function to execute query on Nexus via REST API
 async fn execute_nexus_query(
@@ -274,10 +275,10 @@ fn compare_results(
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_detailed_comparison_simple_return() {
-    println!("\n=== Detailed Comparison: Simple RETURN ===");
+    tracing::info!("\n=== Detailed Comparison: Simple RETURN ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -287,8 +288,8 @@ async fn test_detailed_comparison_simple_return() {
     let nexus_result = match execute_nexus_query(query, None).await {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("ERROR: Nexus server error: {}", e);
-            eprintln!("Skipping test - Nexus server not available or returned error");
+            etracing::info!("ERROR: Nexus server error: {}", e);
+            etracing::info!("Skipping test - Nexus server not available or returned error");
             return;
         }
     };
@@ -297,16 +298,16 @@ async fn test_detailed_comparison_simple_return() {
     match execute_neo4j_query(query, None).await {
         Ok(neo4j_result) => {
             let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
-            println!("\n{}", report);
+            tracing::info!("\n{}", report);
             if compatible {
-                println!("COMPATIBLE: Nexus and Neo4j return identical results!");
+                tracing::info!("COMPATIBLE: Nexus and Neo4j return identical results!");
             } else {
-                println!("INCOMPATIBLE: {}", report);
+                tracing::info!("INCOMPATIBLE: {}", report);
             }
             assert!(compatible, "Results should be compatible");
         }
         Err(e) => {
-            println!("WARNING: Neo4j not available: {}", e);
+            tracing::info!("WARNING: Neo4j not available: {}", e);
         }
     }
 }
@@ -318,10 +319,10 @@ async fn test_detailed_comparison_simple_return() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_detailed_comparison_value_types() {
-    println!("\n=== Detailed Comparison: Value Types ===");
+    tracing::info!("\n=== Detailed Comparison: Value Types ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -336,26 +337,26 @@ async fn test_detailed_comparison_value_types() {
     ];
 
     for (query, description) in test_cases {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         match execute_nexus_query(query, None).await {
             Ok(nexus_result) => match execute_neo4j_query(query, None).await {
                 Ok(neo4j_result) => {
                     let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                     if compatible {
-                        println!("Compatible");
+                        tracing::info!("Compatible");
                     } else {
-                        println!("Incompatible: {}", report);
+                        tracing::info!("Incompatible: {}", report);
                     }
                 }
                 Err(e) => {
-                    println!("WARNING: Neo4j error: {}", e);
+                    tracing::info!("WARNING: Neo4j error: {}", e);
                 }
             },
             Err(e) => {
-                eprintln!("ERROR: Nexus server error: {}", e);
-                eprintln!("Skipping test - Nexus server not available or returned error");
+                etracing::info!("ERROR: Nexus server error: {}", e);
+                etracing::info!("Skipping test - Nexus server not available or returned error");
                 return;
             }
         }
@@ -369,10 +370,10 @@ async fn test_detailed_comparison_value_types() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_comprehensive_compatibility() {
-    println!("\n=== Comprehensive Nexus vs Neo4j Compatibility Test ===");
+    tracing::info!("\n=== Comprehensive Nexus vs Neo4j Compatibility Test ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -394,21 +395,21 @@ async fn test_comprehensive_compatibility() {
     let mut skipped_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- {} ---", description);
+        tracing::info!("Query: {}", query);
 
         // Nexus
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => {
                 if result.get("error").is_some() {
-                    println!("Nexus: Error");
+                    tracing::info!("Nexus: Error");
                     skipped_count += 1;
                     continue;
                 }
                 result
             }
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 skipped_count += 1;
                 continue;
             }
@@ -419,33 +420,33 @@ async fn test_comprehensive_compatibility() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("COMPATIBLE");
+                    tracing::info!("COMPATIBLE");
                     compatible_count += 1;
                 } else {
-                    println!("INCOMPATIBLE: {}", report.lines().next().unwrap_or(""));
+                    tracing::info!("INCOMPATIBLE: {}", report.lines().next().unwrap_or(""));
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 skipped_count += 1;
             }
         }
     }
 
-    println!("\n=== Compatibility Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
-    println!("Skipped: {}", skipped_count);
-    println!(
+    tracing::info!("\n=== Compatibility Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
+    tracing::info!("Skipped: {}", skipped_count);
+    tracing::info!(
         "Total tested: {}",
         compatible_count + incompatible_count + skipped_count
     );
 
     if incompatible_count == 0 && compatible_count > 0 {
-        println!("\nFULL COMPATIBILITY: All tested queries return identical results!");
+        tracing::info!("\nFULL COMPATIBILITY: All tested queries return identical results!");
     } else if incompatible_count > 0 {
-        println!("\nWARNING: PARTIAL COMPATIBILITY: Some queries return different results");
+        tracing::info!("\nWARNING: PARTIAL COMPATIBILITY: Some queries return different results");
     }
 }
 
@@ -456,10 +457,10 @@ async fn test_comprehensive_compatibility() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_aggregation_functions() {
-    println!("\n=== Testing Aggregation Functions ===");
+    tracing::info!("\n=== Testing Aggregation Functions ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -476,13 +477,13 @@ async fn test_aggregation_functions() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -492,23 +493,23 @@ async fn test_aggregation_functions() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Aggregation Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Aggregation Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test mathematical operations
@@ -518,10 +519,10 @@ async fn test_aggregation_functions() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_mathematical_operations() {
-    println!("\n=== Testing Mathematical Operations ===");
+    tracing::info!("\n=== Testing Mathematical Operations ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -542,13 +543,13 @@ async fn test_mathematical_operations() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -558,23 +559,23 @@ async fn test_mathematical_operations() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Mathematical Operations Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Mathematical Operations Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test string functions
@@ -584,10 +585,10 @@ async fn test_mathematical_operations() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_string_functions() {
-    println!("\n=== Testing String Functions ===");
+    tracing::info!("\n=== Testing String Functions ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -605,13 +606,13 @@ async fn test_string_functions() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -621,23 +622,23 @@ async fn test_string_functions() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== String Functions Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== String Functions Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test comparison operators
@@ -647,10 +648,10 @@ async fn test_string_functions() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_comparison_operators() {
-    println!("\n=== Testing Comparison Operators ===");
+    tracing::info!("\n=== Testing Comparison Operators ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -671,13 +672,13 @@ async fn test_comparison_operators() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -687,23 +688,23 @@ async fn test_comparison_operators() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Comparison Operators Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Comparison Operators Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test logical operators
@@ -713,10 +714,10 @@ async fn test_comparison_operators() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_logical_operators() {
-    println!("\n=== Testing Logical Operators ===");
+    tracing::info!("\n=== Testing Logical Operators ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -735,13 +736,13 @@ async fn test_logical_operators() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -751,23 +752,23 @@ async fn test_logical_operators() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Logical Operators Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Logical Operators Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test CASE expressions
@@ -777,10 +778,10 @@ async fn test_logical_operators() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_case_expressions() {
-    println!("\n=== Testing CASE Expressions ===");
+    tracing::info!("\n=== Testing CASE Expressions ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -803,13 +804,13 @@ async fn test_case_expressions() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -819,23 +820,23 @@ async fn test_case_expressions() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== CASE Expressions Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== CASE Expressions Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test date/time functions
@@ -845,10 +846,10 @@ async fn test_case_expressions() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_datetime_functions() {
-    println!("\n=== Testing Date/Time Functions ===");
+    tracing::info!("\n=== Testing Date/Time Functions ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -864,13 +865,13 @@ async fn test_datetime_functions() {
     let mut skipped_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 skipped_count += 1;
                 continue;
             }
@@ -895,24 +896,24 @@ async fn test_datetime_functions() {
                     .unwrap_or(false);
 
                 if nexus_has_result && neo4j_has_result {
-                    println!("Both return results (values differ by time)");
+                    tracing::info!("Both return results (values differ by time)");
                     compatible_count += 1;
                 } else {
-                    println!("Result structure mismatch");
+                    tracing::info!("Result structure mismatch");
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 skipped_count += 1;
             }
         }
     }
 
-    println!("\n=== Date/Time Functions Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
-    println!("Skipped: {}", skipped_count);
+    tracing::info!("\n=== Date/Time Functions Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
+    tracing::info!("Skipped: {}", skipped_count);
 }
 
 /// Test list operations
@@ -922,10 +923,10 @@ async fn test_datetime_functions() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_list_operations() {
-    println!("\n=== Testing List Operations ===");
+    tracing::info!("\n=== Testing List Operations ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -946,13 +947,13 @@ async fn test_list_operations() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -962,23 +963,23 @@ async fn test_list_operations() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== List Operations Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== List Operations Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test ORDER BY and LIMIT
@@ -988,10 +989,10 @@ async fn test_list_operations() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_order_by_and_limit() {
-    println!("\n=== Testing ORDER BY and LIMIT ===");
+    tracing::info!("\n=== Testing ORDER BY and LIMIT ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1007,13 +1008,13 @@ async fn test_order_by_and_limit() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1023,23 +1024,23 @@ async fn test_order_by_and_limit() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== ORDER BY and LIMIT Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== ORDER BY and LIMIT Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test DISTINCT
@@ -1049,10 +1050,10 @@ async fn test_order_by_and_limit() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_distinct() {
-    println!("\n=== Testing DISTINCT ===");
+    tracing::info!("\n=== Testing DISTINCT ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1067,13 +1068,13 @@ async fn test_distinct() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1083,23 +1084,23 @@ async fn test_distinct() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== DISTINCT Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== DISTINCT Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test UNION operations
@@ -1109,10 +1110,10 @@ async fn test_distinct() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_union_operations() {
-    println!("\n=== Testing UNION Operations ===");
+    tracing::info!("\n=== Testing UNION Operations ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1130,13 +1131,13 @@ async fn test_union_operations() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1146,23 +1147,23 @@ async fn test_union_operations() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== UNION Operations Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== UNION Operations Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test WHERE clauses
@@ -1172,10 +1173,10 @@ async fn test_union_operations() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_where_clauses() {
-    println!("\n=== Testing WHERE Clauses ===");
+    tracing::info!("\n=== Testing WHERE Clauses ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1197,13 +1198,13 @@ async fn test_where_clauses() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1213,23 +1214,23 @@ async fn test_where_clauses() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== WHERE Clauses Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== WHERE Clauses Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test multiple columns
@@ -1239,10 +1240,10 @@ async fn test_where_clauses() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_multiple_columns() {
-    println!("\n=== Testing Multiple Columns ===");
+    tracing::info!("\n=== Testing Multiple Columns ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1260,13 +1261,13 @@ async fn test_multiple_columns() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1276,23 +1277,23 @@ async fn test_multiple_columns() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Multiple Columns Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Multiple Columns Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test complex expressions
@@ -1302,10 +1303,10 @@ async fn test_multiple_columns() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_complex_expressions() {
-    println!("\n=== Testing Complex Expressions ===");
+    tracing::info!("\n=== Testing Complex Expressions ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1330,13 +1331,13 @@ async fn test_complex_expressions() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1346,23 +1347,23 @@ async fn test_complex_expressions() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Complex Expressions Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Complex Expressions Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test parameterized queries
@@ -1372,10 +1373,10 @@ async fn test_complex_expressions() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_parameterized_queries() {
-    println!("\n=== Testing Parameterized Queries ===");
+    tracing::info!("\n=== Testing Parameterized Queries ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1432,13 +1433,13 @@ async fn test_parameterized_queries() {
     let mut incompatible_count = 0;
 
     for (query, params, description) in test_cases {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, params.clone()).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1448,23 +1449,23 @@ async fn test_parameterized_queries() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Parameterized Queries Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Parameterized Queries Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test type coercion
@@ -1474,10 +1475,10 @@ async fn test_parameterized_queries() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_type_coercion() {
-    println!("\n=== Testing Type Coercion ===");
+    tracing::info!("\n=== Testing Type Coercion ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1492,13 +1493,13 @@ async fn test_type_coercion() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1508,23 +1509,23 @@ async fn test_type_coercion() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Type Coercion Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Type Coercion Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }
 
 /// Test null handling
@@ -1534,10 +1535,10 @@ async fn test_type_coercion() {
     ignore = "Slow test - enable with --features slow-tests"
 )]
 async fn test_null_handling() {
-    println!("\n=== Testing Null Handling ===");
+    tracing::info!("\n=== Testing Null Handling ===");
 
     if !check_nexus_available().await {
-        eprintln!("WARNING: Nexus server not available");
+        etracing::info!("WARNING: Nexus server not available");
         return;
     }
 
@@ -1555,13 +1556,13 @@ async fn test_null_handling() {
     let mut incompatible_count = 0;
 
     for (query, description) in queries {
-        println!("\n--- Testing {} ---", description);
-        println!("Query: {}", query);
+        tracing::info!("\n--- Testing {} ---", description);
+        tracing::info!("Query: {}", query);
 
         let nexus_result = match execute_nexus_query(query, None).await {
             Ok(result) => result,
             Err(e) => {
-                println!("Nexus: Error: {}", e);
+                tracing::info!("Nexus: Error: {}", e);
                 incompatible_count += 1;
                 continue;
             }
@@ -1571,21 +1572,21 @@ async fn test_null_handling() {
             Ok(neo4j_result) => {
                 let (compatible, report) = compare_results(&nexus_result, &neo4j_result);
                 if compatible {
-                    println!("Compatible");
+                    tracing::info!("Compatible");
                     compatible_count += 1;
                 } else {
-                    println!("Incompatible: {}", report);
+                    tracing::info!("Incompatible: {}", report);
                     incompatible_count += 1;
                 }
             }
             Err(e) => {
-                println!("Neo4j: Error: {}", e);
+                tracing::info!("Neo4j: Error: {}", e);
                 incompatible_count += 1;
             }
         }
     }
 
-    println!("\n=== Null Handling Summary ===");
-    println!("Compatible: {}", compatible_count);
-    println!("Incompatible: {}", incompatible_count);
+    tracing::info!("\n=== Null Handling Summary ===");
+    tracing::info!("Compatible: {}", compatible_count);
+    tracing::info!("Incompatible: {}", incompatible_count);
 }

@@ -12,6 +12,7 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {
@@ -89,24 +90,26 @@ async fn test_query_count(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if let Some(error) = response.error {
-                println!("{}: FAILED - Error: {}", test_name, error);
+                tracing::info!("{}: FAILED - Error: {}", test_name, error);
                 false
             } else {
                 let actual_count = response.rows.len();
                 if actual_count == expected_count {
-                    println!("{}: PASSED", test_name);
+                    tracing::info!("{}: PASSED", test_name);
                     true
                 } else {
-                    println!(
+                    tracing::info!(
                         "{}: FAILED - Expected {} rows, got {}",
-                        test_name, expected_count, actual_count
+                        test_name,
+                        expected_count,
+                        actual_count
                     );
                     false
                 }
             }
         }
         Err(e) => {
-            println!("{}: FAILED - Request error: {}", test_name, e);
+            tracing::info!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -117,24 +120,24 @@ async fn test_string_operations_s2s() {
     let server_url = get_server_url();
 
     // Wait for server to be available
-    println!("Waiting for server at {}...", server_url);
+    tracing::info!("Waiting for server at {}...", server_url);
     if !wait_for_server(&server_url, 5).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test string_operations_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test string_operations_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
-    println!("Server is ready");
-    println!();
+    tracing::info!("Server is ready");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Setup test data
-    println!("=== Setting up test data ===");
+    tracing::info!("=== Setting up test data ===");
     let setup_query = "CREATE (n1:Person {name: 'Alice Smith', email: 'alice@example.com', bio: 'Software engineer'}),
                        (n2:Person {name: 'Bob Johnson', email: 'bob@other.com', bio: 'Marketing specialist'}),
                        (n3:Person {name: 'Charlie Brown', email: 'charlie@example.com', phone: '123-456-7890'})
@@ -143,14 +146,14 @@ async fn test_string_operations_s2s() {
         .await
         .is_ok()
     {
-        println!("Test data created");
+        tracing::info!("Test data created");
     } else {
-        println!("WARNING: Failed to create test data (may already exist)");
+        tracing::info!("WARNING: Failed to create test data (may already exist)");
     }
-    println!();
+    tracing::info!();
 
     // STARTS WITH tests
-    println!("=== Testing STARTS WITH ===");
+    tracing::info!("=== Testing STARTS WITH ===");
     if test_query_count(
         &client,
         &server_url,
@@ -192,10 +195,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // ENDS WITH tests
-    println!("=== Testing ENDS WITH ===");
+    tracing::info!("=== Testing ENDS WITH ===");
     if test_query_count(
         &client,
         &server_url,
@@ -223,10 +226,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // CONTAINS tests
-    println!("=== Testing CONTAINS ===");
+    tracing::info!("=== Testing CONTAINS ===");
     if test_query_count(
         &client,
         &server_url,
@@ -268,10 +271,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Regex tests
-    println!("=== Testing Regex (=~) ===");
+    tracing::info!("=== Testing Regex (=~) ===");
     if test_query_count(
         &client,
         &server_url,
@@ -313,10 +316,10 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Combined operators tests
-    println!("=== Testing Combined Operators ===");
+    tracing::info!("=== Testing Combined Operators ===");
     if test_query_count(
         &client,
         &server_url,
@@ -344,29 +347,30 @@ async fn test_string_operations_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Summary
-    println!("==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Total Tests: {}", passed + failed);
-    println!("Passed: {}", passed);
+    tracing::info!("==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Total Tests: {}", passed + failed);
+    tracing::info!("Passed: {}", passed);
     if failed > 0 {
-        println!("Failed: {}", failed);
+        tracing::info!("Failed: {}", failed);
     } else {
-        println!("Failed: 0");
+        tracing::info!("Failed: 0");
     }
-    println!();
+    tracing::info!();
 
     if failed == 0 {
-        println!("ALL TESTS PASSED!");
+        tracing::info!("ALL TESTS PASSED!");
     } else {
-        println!(
+        tracing::info!(
             "WARNING: SOME TESTS FAILED ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        println!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
         // Don't panic - just warn about failures
     }
 }

@@ -1,4 +1,4 @@
-//! End-to-end (S2S) tests for Schema Administration commands via HTTP API
+﻿//! End-to-end (S2S) tests for Schema Administration commands via HTTP API
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {
@@ -76,15 +77,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("✓ {}: PASSED", test_name);
+                tracing::info!("✓ {}: PASSED", test_name);
                 true
             } else {
-                println!("✗ {}: FAILED - Error: {:?}", test_name, response.error);
+                tracing::info!("✗ {}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("✗ {}: FAILED - Request error: {}", test_name, e);
+            tracing::info!("✗ {}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -102,22 +103,22 @@ async fn test_query_error(
         Ok(response) => {
             if let Some(error) = response.error {
                 if error.contains(expected_pattern) {
-                    println!("✓ {}: PASSED (expected error)", test_name);
+                    tracing::info!("✓ {}: PASSED (expected error)", test_name);
                     true
                 } else {
-                    println!(
+                    tracing::info!(
                         "✗ {}: FAILED - Expected error pattern '{}', got: {}",
                         test_name, expected_pattern, error
                     );
                     false
                 }
             } else {
-                println!("✗ {}: FAILED - Expected error but got success", test_name);
+                tracing::info!("✗ {}: FAILED - Expected error but got success", test_name);
                 false
             }
         }
         Err(e) => {
-            println!("✗ {}: FAILED - Request error: {}", test_name, e);
+            tracing::info!("✗ {}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -129,23 +130,23 @@ async fn test_schema_admin_s2s() {
 
     // Check if server is available
     if !check_server_available(&server_url).await {
-        eprintln!("ERROR: Server not available at {}", server_url);
-        eprintln!("Please start the server first: cargo run --release --bin nexus-server");
+        etracing::info!("ERROR: Server not available at {}", server_url);
+        etracing::info!("Please start the server first: cargo run --release --bin nexus-server");
         std::process::exit(1);
     }
 
-    println!("Server is available at {}", server_url);
-    println!("==========================================");
-    println!("Schema Administration S2S Tests");
-    println!("==========================================");
-    println!();
+    tracing::info!("Server is available at {}", server_url);
+    tracing::info!("==========================================");
+    tracing::info!("Schema Administration S2S Tests");
+    tracing::info!("==========================================");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Index Management Tests
-    println!("--- Index Management Tests ---");
+    tracing::info!("--- Index Management Tests ---");
     if test_query_success(&client, &server_url, "CREATE INDEX basic", "CREATE INDEX ON :Person(name)").await {
         passed += 1;
     } else {
@@ -209,10 +210,10 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Constraint Management Tests
-    println!("--- Constraint Management Tests ---");
+    tracing::info!("--- Constraint Management Tests ---");
     if test_query_error(
         &client,
         &server_url,
@@ -280,10 +281,10 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Transaction Commands Tests
-    println!("--- Transaction Commands Tests ---");
+    tracing::info!("--- Transaction Commands Tests ---");
     if test_query_success(&client, &server_url, "BEGIN transaction", "BEGIN").await {
         passed += 1;
     } else {
@@ -342,10 +343,10 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Database Management Tests (now working via server-level execution)
-    println!("--- Database Management Tests (Server-level) ---");
+    tracing::info!("--- Database Management Tests (Server-level) ---");
     if test_query_success(
         &client,
         &server_url,
@@ -423,10 +424,10 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // User Management Tests (now working via server-level execution)
-    println!("--- User Management Tests (Server-level) ---");
+    tracing::info!("--- User Management Tests (Server-level) ---");
     if test_query_success(
         &client,
         &server_url,
@@ -587,10 +588,10 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Additional Database Management error cases
-    println!("--- Database Management Error Cases ---");
+    tracing::info!("--- Database Management Error Cases ---");
     if test_query_error(
         &client,
         &server_url,
@@ -662,10 +663,10 @@ async fn test_schema_admin_s2s() {
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Test GRANT/REVOKE to roles
-    println!("--- Role Permission Tests ---");
+    tracing::info!("--- Role Permission Tests ---");
     // First create a role (we'll need to do this via RBAC directly or add role creation)
     // For now, test with existing default roles if they exist
     if test_query_success(
@@ -679,7 +680,7 @@ async fn test_schema_admin_s2s() {
         passed += 1;
     } else {
         // If role doesn't exist, that's expected - don't fail
-        println!("⚠ GRANT to role: Role may not exist (expected)");
+        tracing::info!("⚠ GRANT to role: Role may not exist (expected)");
         passed += 1;
     }
 
@@ -694,24 +695,24 @@ async fn test_schema_admin_s2s() {
         passed += 1;
     } else {
         // If role doesn't exist, that's expected - don't fail
-        println!("⚠ REVOKE from role: Role may not exist (expected)");
+        tracing::info!("⚠ REVOKE from role: Role may not exist (expected)");
         passed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Summary
-    println!("==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
-    println!("Total: {}", passed + failed);
-    println!();
+    tracing::info!("==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Passed: {}", passed);
+    tracing::info!("Failed: {}", failed);
+    tracing::info!("Total: {}", passed + failed);
+    tracing::info!();
 
     if failed == 0 {
-        println!("All tests passed!");
+        tracing::info!("All tests passed!");
     } else {
-        println!("Some tests failed!");
+        tracing::info!("Some tests failed!");
         std::process::exit(1);
     }
 }

@@ -82,6 +82,7 @@ use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing;
 
 /// Cypher query
 #[derive(Debug, Clone)]
@@ -869,13 +870,13 @@ impl Executor {
         }
 
         // Execute the plan using traditional operator-based execution
-        println!(
-            "[TRACE] Starting query execution, creating new ExecutionContext for query: {}",
+        tracing::trace!(
+            "Starting query execution, creating new ExecutionContext for query: {}",
             query.cypher
         );
         let mut context = ExecutionContext::new(query.params.clone(), self.shared.cache.clone());
-        println!(
-            "[TRACE] New ExecutionContext created: variables.len()={}, result_set.rows.len()={}",
+        tracing::trace!(
+            "New ExecutionContext created: variables.len()={}, result_set.rows.len()={}",
             context.variables.len(),
             context.result_set.rows.len()
         );
@@ -1113,74 +1114,88 @@ impl Executor {
                     }
 
                     // Check if there are existing rows from MATCH
-                    // Prioritize result_set.rows over variables (variables get moved to rows after MATCH)
-                    println!(
-                        "[execute_operator CREATE] Checking for existing rows: result_set.rows.len()={}, variables.len()={}",
+                    // CRITICAL FIX: For MATCH...CREATE, we need to preserve variables even after Filter
+                    // because CREATE needs the matched nodes. If result_set.rows is empty (e.g., after RETURN count(*)),
+                    // we must use context.variables which should still contain the matched nodes.
+                    tracing::debug!(
+                        "CREATE operator: checking for existing rows. result_set.rows={}, variables={:?}",
                         context.result_set.rows.len(),
-                        context.variables.len()
+                        context.variables.keys().collect::<Vec<_>>()
                     );
+
                     let existing_rows = if !context.result_set.rows.is_empty() {
                         // Convert result_set.rows to HashMap format
                         let columns = context.result_set.columns.clone();
-                        println!(
-                            "[execute_operator CREATE] Using result_set.rows with {} rows, columns: {:?}",
-                            context.result_set.rows.len(),
-                            columns
-                        );
-                        let rows = context
+                        let rows: Vec<_> = context
                             .result_set
                             .rows
                             .iter()
                             .map(|row| self.row_to_map(row, &columns))
-                            .collect::<Vec<_>>();
-                        println!(
-                            "[execute_operator CREATE] Converted {} rows from result_set",
-                            rows.len()
+                            .collect();
+
+                        tracing::debug!(
+                            "CREATE operator: converted {} rows from result_set.rows, columns={:?}",
+                            rows.len(),
+                            columns
                         );
-                        rows
+
+                        // Check if rows contain node variables (not just aggregation results)
+                        let has_node_variables = rows.iter().any(|row| {
+                            row.values().any(|v| {
+                                if let serde_json::Value::Object(obj) = v {
+                                    obj.contains_key("_nexus_id") && !obj.contains_key("type")
+                                } else {
+                                    false
+                                }
+                            })
+                        });
+
+                        tracing::debug!(
+                            "CREATE operator: has_node_variables={}",
+                            has_node_variables
+                        );
+
+                        if has_node_variables {
+                            rows
+                        } else {
+                            // result_set.rows only contains aggregation results, use context.variables
+                            tracing::debug!(
+                                "CREATE operator: result_set.rows has no node variables, materializing from variables"
+                            );
+                            self.materialize_rows_from_variables(&context)
+                        }
                     } else {
-                        println!(
-                            "[execute_operator CREATE] result_set.rows is empty, using materialize_rows_from_variables"
+                        // No rows in result_set - materialize from variables
+                        tracing::debug!(
+                            "CREATE operator: result_set.rows is empty, materializing from variables"
                         );
-                        let rows = self.materialize_rows_from_variables(&context);
-                        println!(
-                            "[execute_operator CREATE] materialize_rows_from_variables returned {} rows",
-                            rows.len()
+                        let materialized = self.materialize_rows_from_variables(&context);
+                        tracing::debug!(
+                            "CREATE operator: materialized {} rows from variables",
+                            materialized.len()
                         );
-                        rows
+                        materialized
                     };
 
-                    println!(
-                        "[execute_operator CREATE] existing_rows.len()={}",
-                        existing_rows.len()
-                    );
                     if existing_rows.is_empty() {
                         // CRITICAL FIX: Don't execute CREATE standalone when Filter removed all rows
                         // This happens when Filter incorrectly evaluates predicates and removes valid rows
                         // Instead, skip CREATE to avoid creating wrong relationships
-                        println!(
-                            "[execute_operator CREATE] No existing rows - skipping CREATE (Filter removed all rows from MATCH)"
+                        tracing::warn!(
+                            "CREATE operator: existing_rows is empty, skipping CREATE. result_set.rows={}, variables={:?}",
+                            context.result_set.rows.len(),
+                            context.variables.keys().collect::<Vec<_>>()
                         );
-                        // Don't execute CREATE standalone - this would create wrong relationships
-                        // The issue is that Filter removed valid rows, not that there were no matches
                         continue;
                     }
 
-                    // CREATE with MATCH context - use existing implementation
-                    println!(
-                        "[execute_operator CREATE] Executing CREATE with {} existing rows from MATCH",
+                    tracing::debug!(
+                        "CREATE operator: found {} existing rows from MATCH, proceeding with CREATE",
                         existing_rows.len()
                     );
-                    for (idx, row) in existing_rows.iter().enumerate() {
-                        println!(
-                            "[execute_operator CREATE] Row {} has {} variables: {:?}",
-                            idx,
-                            row.len(),
-                            row.keys().collect::<Vec<_>>()
-                        );
-                    }
+
+                    // CREATE with MATCH context - use existing implementation
                     self.execute_create_with_context(&mut context, pattern)?;
-                    println!("[execute_operator CREATE] CREATE with context completed");
 
                     // If no RETURN clause follows, result_set is already populated above
                     // If RETURN follows, Project operator will handle it
@@ -2064,7 +2079,6 @@ impl Executor {
     fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
         // Always use label_index - label_id 0 is valid (it's the first label)
         let bitmap = self.label_index().get_nodes(label_id)?;
-        println!("[DEBUG execute_node_by_label] label_id={}, bitmap_len={}, bitmap={:?}", label_id, bitmap.len(), bitmap);
 
         // CRITICAL FIX: Deduplicate node IDs to avoid returning duplicate nodes
         // Use HashSet to track seen node IDs since bitmap should already be unique
@@ -2074,7 +2088,6 @@ impl Executor {
 
         for node_id in bitmap.iter() {
             let node_id_u64 = node_id as u64;
-            // println!("[DEBUG execute_node_by_label] Processing node_id={}", node_id_u64);
 
             // Skip if we've already seen this node ID (shouldn't happen, but safety check)
             if !seen_node_ids.insert(node_id_u64) {
@@ -2084,16 +2097,12 @@ impl Executor {
             // Skip deleted nodes
             if let Ok(node_record) = self.store().read_node(node_id_u64) {
                 if node_record.is_deleted() {
-                    println!("[DEBUG execute_node_by_label] node_id={} is deleted", node_id_u64);
                     continue;
                 }
             }
 
             match self.read_node_as_value(node_id_u64)? {
-                Value::Null => {
-                    println!("[DEBUG execute_node_by_label] node_id={} read as Null", node_id_u64);
-                    continue;
-                },
+                Value::Null => continue,
                 value => results.push(value),
             }
         }
@@ -2107,14 +2116,12 @@ impl Executor {
 
         // Get the total number of nodes from the store
         let total_nodes = self.store().node_count();
-        println!("[DEBUG execute_all_nodes_scan] Scanning total_nodes={}", total_nodes);
 
         // Scan all node IDs from 0 to total_nodes-1
         for node_id in 0..total_nodes {
             // Skip deleted nodes
             if let Ok(node_record) = self.store().read_node(node_id) {
                 if node_record.is_deleted() {
-                    println!("[DEBUG execute_all_nodes_scan] node_id={} is deleted", node_id);
                     continue;
                 }
 
@@ -2122,16 +2129,13 @@ impl Executor {
                 match self.read_node_as_value(node_id)? {
                     Value::Null => continue,
                     value => {
-                        println!("[DEBUG execute_all_nodes_scan] Found node_id={}", node_id);
                         results.push(value);
-                    },
+                    }
                 }
             } else {
-                println!("[DEBUG execute_all_nodes_scan] Failed to read node_id={}", node_id);
             }
         }
-        
-        println!("[DEBUG execute_all_nodes_scan] Returning {} nodes", results.len());
+
         Ok(results)
     }
 
@@ -2297,19 +2301,9 @@ impl Executor {
 
     /// Execute Filter operator with index optimization
     fn execute_filter(&self, context: &mut ExecutionContext, predicate: &str) -> Result<()> {
-        println!(
-            "[execute_filter] Executing filter with predicate: '{}', result_set.rows.len()={}, variables.len()={}",
-            predicate,
-            context.result_set.rows.len(),
-            context.variables.len()
-        );
         // Try index-based filtering first (optimization for Phase 5)
         if let Some(optimized_rows) = self.try_index_based_filter(context, predicate)? {
             // Index-based filtering succeeded, use optimized results
-            println!(
-                "[execute_filter] Index-based filter succeeded, returning {} rows",
-                optimized_rows.len()
-            );
             context.result_set.rows = optimized_rows;
             return Ok(());
         }
@@ -2444,7 +2438,7 @@ impl Executor {
                 // Create composite key from all node IDs (sorted for consistency)
                 row_node_ids.sort();
                 let row_key = format!("{:?}", row_node_ids);
-                
+
                 // Check if we've seen this exact combination before
                 let is_duplicate = !seen_row_keys.insert(row_key);
 
@@ -2467,54 +2461,24 @@ impl Executor {
                         };
                         var_types.push((var_name.clone(), var_type));
                     }
-                    println!(
-                        "[TRACE] execute_filter: checking row variables for relationships before evaluation: {:?}, has_relationships={}",
-                        var_types, has_relationships_in_row
-                    );
-
-                    // DEBUG: Log what's actually in the row
-                    println!(
-                        "[execute_filter] Row has {} variables: {:?}",
-                        row.len(),
-                        row.keys().collect::<Vec<_>>()
-                    );
-                    for (var_name, var_value) in row {
-                        if let Value::Object(obj) = var_value {
-                            if let Some(Value::Number(id)) = obj.get("_nexus_id") {
-                                println!(
-                                    "[execute_filter] Variable {} has _nexus_id={}",
-                                    var_name, id
-                                );
-                                // Check if it's a node or relationship
-                                if obj.contains_key("type") || obj.contains_key("since") {
-                                    println!(
-                                        "[execute_filter] WARNING: Variable {} appears to be a RELATIONSHIP, not a node! Object: {:?}",
-                                        var_name, obj
-                                    );
-                                } else {
-                                    println!(
-                                        "[execute_filter] Variable {} appears to be a NODE. Object keys: {:?}",
-                                        var_name,
-                                        obj.keys().collect::<Vec<_>>()
-                                    );
-                                }
-                            }
-                        }
-                    }
                     // CRITICAL FIX: Extract variable name from predicate for correct logging
                     // Try to extract the variable from PropertyAccess expressions (e.g., "p1.name")
                     let predicate_var_name = match &expr {
-                        parser::Expression::PropertyAccess { variable, .. } => Some(variable.clone()),
+                        parser::Expression::PropertyAccess { variable, .. } => {
+                            Some(variable.clone())
+                        }
                         parser::Expression::BinaryOp { left, .. } => {
                             // For binary ops like "p1.name = 'Alice'", extract from left side
                             match left.as_ref() {
-                                parser::Expression::PropertyAccess { variable, .. } => Some(variable.clone()),
+                                parser::Expression::PropertyAccess { variable, .. } => {
+                                    Some(variable.clone())
+                                }
                                 _ => None,
                             }
-                        },
+                        }
                         _ => None,
                     };
-                    
+
                     // DEBUG: Log node properties before evaluating predicate
                     // Use the variable from predicate if available, otherwise use found_node_id
                     let log_node_id = if let Some(var_name) = &predicate_var_name {
@@ -2531,20 +2495,8 @@ impl Executor {
                     } else {
                         found_node_id
                     };
-                    
-                    if let Some(node_id) = log_node_id {
-                        if let Ok(node_value) = self.read_node_as_value(node_id) {
-                            println!(
-                                "[execute_filter] Evaluating predicate '{}' on row with node_id={} (var={:?}), node_value={:?}",
-                                predicate, node_id, predicate_var_name, node_value
-                            );
-                        }
-                    }
+
                     let predicate_result = self.evaluate_predicate_on_row(row, context, &expr)?;
-                    println!(
-                        "[execute_filter] Predicate '{}' evaluated to {} for row with node_id={:?}",
-                        predicate, predicate_result, found_node_id
-                    );
                     if predicate_result {
                         filtered_rows.push(row.clone());
                         // Row key already tracked in seen_row_keys during duplicate check
@@ -2557,12 +2509,6 @@ impl Executor {
                 "Filter operator: {} rows passed deduplication and predicate (from {} input rows)",
                 filtered_rows.len(),
                 rows.len()
-            );
-            println!(
-                "[execute_filter] Filtered {} rows from {} input rows (predicate: '{}')",
-                filtered_rows.len(),
-                rows.len(),
-                predicate
             );
         }
 
@@ -2636,8 +2582,8 @@ impl Executor {
         } else {
             "variables"
         };
-        println!(
-            "[TRACE] execute_expand: input rows from {} (result_set.rows.len()={}, variables.len()={})",
+        tracing::trace!(
+            "execute_expand: input rows from {} (result_set.rows.len()={}, variables.len()={})",
             rows_source,
             context.result_set.rows.len(),
             context.variables.len()
@@ -2648,11 +2594,6 @@ impl Executor {
         // from previous operators (like NodeByLabel which creates multiple rows)
         let rows = if !context.result_set.rows.is_empty() {
             let rows_from_result_set = self.result_set_as_rows(context);
-            println!(
-                "DEBUG: Expand: result_set has {} rows, converted to {} row maps",
-                context.result_set.rows.len(),
-                rows_from_result_set.len()
-            );
             tracing::debug!(
                 "Expand: result_set has {} rows, converted to {} row maps",
                 context.result_set.rows.len(),
@@ -2666,10 +2607,6 @@ impl Executor {
             rows_from_result_set
         } else {
             let materialized = self.materialize_rows_from_variables(context);
-            println!(
-                "DEBUG: Expand: materialized {} rows from variables",
-                materialized.len()
-            );
             materialized
         };
 
@@ -2806,12 +2743,7 @@ impl Executor {
                         })
                 };
 
-            println!("\n[DEBUG Expand] ===== START EXPAND =====");
-            println!("[DEBUG Expand] source_var='{}', target_var='{}', rel_var='{}', direction={:?}", source_var, target_var, rel_var, direction);
-            println!("[DEBUG Expand] rows.len()={}", rows.len());
-
             for (row_idx, row) in rows.iter().enumerate() {
-                println!("[DEBUG Expand] Processing row {}/{}", row_idx + 1, rows.len());
                 // CRITICAL: Get source_value from row first, then fallback to context variables
                 // This ensures we process each row independently
                 let source_value = row
@@ -2852,14 +2784,21 @@ impl Executor {
                 // This can happen if materialize_rows_from_variables didn't work correctly
                 // or if we're in an edge case. If it's an Array, we need to process each element
                 // as a separate source node to ensure all nodes are processed.
+                // HOWEVER: If source_value is already a single node (not an Array), we should NOT
+                // treat it as an Array. This prevents duplicate processing when materialize_rows_from_variables
+                // already created proper rows.
                 let source_nodes = match &source_value {
                     Value::Array(arr) if !arr.is_empty() => {
-                        // If we got an Array, process each element as a separate source node
-                        // This ensures all nodes are processed even if materialize_rows_from_variables
+                        // Only process as Array if it's actually an Array
+                        // This should only happen in edge cases where materialize_rows_from_variables
                         // didn't work correctly
                         arr.clone()
                     }
-                    other => vec![other.clone()],
+                    other => {
+                        // If it's not an Array, treat as single source node
+                        // This is the normal case when rows are properly materialized
+                        vec![other.clone()]
+                    }
                 };
 
                 // Process each source node in the array
@@ -2948,11 +2887,6 @@ impl Executor {
                         relationships.len(),
                         source_id
                     );
-                    println!(
-                        "DEBUG: Expand found {} relationships for source node_id {}",
-                        relationships.len(),
-                        source_id
-                    );
 
                     if relationships.is_empty() {
                         tracing::debug!(
@@ -2975,20 +2909,7 @@ impl Executor {
                         relationships
                     };
 
-                    println!(
-                        "DEBUG: Expand processing {} filtered relationships for source node_id {}",
-                        filtered_relationships.len(),
-                        source_id
-                    );
                     for (rel_idx, rel_info) in filtered_relationships.iter().enumerate() {
-                        println!(
-                            "DEBUG: Expand processing relationship {} of {}: rel_id={}, src={}, dst={}",
-                            rel_idx + 1,
-                            filtered_relationships.len(),
-                            rel_info.id,
-                            rel_info.source_id,
-                            rel_info.target_id
-                        );
                         let target_id = match direction {
                             Direction::Outgoing => rel_info.target_id,
                             Direction::Incoming => rel_info.source_id,
@@ -3007,7 +2928,9 @@ impl Executor {
                         // If so, we must ensure the relationship's target matches the bound value
                         // This prevents Cartesian product issues where Expand overwrites the target variable
                         if let Some(existing_target_value) = row.get(target_var) {
-                            if let Some(existing_id) = Self::extract_entity_id(existing_target_value) {
+                            if let Some(existing_id) =
+                                Self::extract_entity_id(existing_target_value)
+                            {
                                 if existing_id != target_id {
                                     tracing::debug!(
                                         "Expand: skipping relationship {} (rel_id: {}) - target_id {} does not match existing bound value {} in row",
@@ -3068,11 +2991,6 @@ impl Executor {
             expanded_rows.len(),
             rows.len()
         );
-        println!(
-            "DEBUG: Expand created {} expanded rows from {} input rows",
-            expanded_rows.len(),
-            rows.len()
-        );
 
         // CRITICAL DEBUG: Log detailed information about expanded rows for debugging
         if !expanded_rows.is_empty() {
@@ -3102,6 +3020,19 @@ impl Executor {
                 rows.len()
             );
             context.result_set.rows.clear();
+            // CRITICAL FIX: Clear variables related to this Expand operation to prevent Project
+            // from materializing rows from variables when no relationships were found.
+            // This ensures that queries like MATCH (a)-[r:KNOWS]->(b) RETURN a.name don't return
+            // rows for nodes that don't have the specified relationship type.
+            if !source_var.is_empty() {
+                context.variables.remove(source_var);
+            }
+            if !target_var.is_empty() {
+                context.variables.remove(target_var);
+            }
+            if !rel_var.is_empty() {
+                context.variables.remove(rel_var);
+            }
         } else {
             // CRITICAL: Always update result_set with all expanded rows
             // This ensures all relationships are included in the result
@@ -3113,12 +3044,6 @@ impl Executor {
             self.update_result_set_from_rows(context, &expanded_rows);
 
             // Verify that all expanded rows were added to result_set
-            println!(
-                "DEBUG: Expand: result_set had {} rows before clear, now has {} rows after update (expected {} expanded rows)",
-                rows_before_clear,
-                context.result_set.rows.len(),
-                expanded_rows.len()
-            );
             tracing::debug!(
                 "Expand: result_set had {} rows before clear, now has {} rows after update (expected {} expanded rows)",
                 rows_before_clear,
@@ -3128,11 +3053,6 @@ impl Executor {
 
             // Assert that all expanded rows were added
             if context.result_set.rows.len() != expanded_rows.len() {
-                println!(
-                    "DEBUG: Expand: Mismatch! result_set has {} rows but {} expanded rows were created - some rows may have been lost in deduplication",
-                    context.result_set.rows.len(),
-                    expanded_rows.len()
-                );
                 tracing::warn!(
                     "Expand: Mismatch! result_set has {} rows but {} expanded rows were created - some rows may have been lost in deduplication",
                     context.result_set.rows.len(),
@@ -5289,8 +5209,8 @@ impl Executor {
             if let Some(first_row) = left_context.result_set.rows.first() {
                 if first_row.values.len() != left_context.result_set.columns.len() {
                     // Mismatch - this shouldn't happen, but log it
-                    eprintln!(
-                        "UNION WARNING: Left side column/row mismatch: {} cols, {} values",
+                    tracing::warn!(
+                        "UNION: Left side column/row mismatch: {} cols, {} values",
                         left_context.result_set.columns.len(),
                         first_row.values.len()
                     );
@@ -5302,8 +5222,8 @@ impl Executor {
         {
             if let Some(first_row) = right_context.result_set.rows.first() {
                 if first_row.values.len() != right_context.result_set.columns.len() {
-                    eprintln!(
-                        "UNION WARNING: Right side column/row mismatch: {} cols, {} values",
+                    tracing::warn!(
+                        "UNION: Right side column/row mismatch: {} cols, {} values",
                         right_context.result_set.columns.len(),
                         first_row.values.len()
                     );
@@ -5502,15 +5422,57 @@ impl Executor {
         use crate::transaction::TransactionManager;
         use serde_json::Value as JsonValue;
 
-        println!("\n[DEBUG execute_create_with_context] ===== START =====");
-        println!("[DEBUG execute_create_with_context] result_set.rows.len()={}", context.result_set.rows.len());
-        println!("[DEBUG execute_create_with_context] context.variables.len()={}", context.variables.len());
+        // CRITICAL FIX: Always try to use context.variables first for MATCH...CREATE
+        // The variables contain the full node objects with _nexus_id, while result_set.rows
+        // may contain only projected values (strings) without _nexus_id.
+        // Only fall back to result_set.rows if variables are empty.
 
-        // CRITICAL FIX: Use result_set.rows if it contains node variables, otherwise use context.variables
-        // When CREATE has RETURN count(*), Project removes node variables from result_set.rows
-        // In that case, we need to use context.variables which still contains the matched nodes
-        let current_rows = if !context.result_set.rows.is_empty() {
-            // Convert result_set.rows to HashMap format
+        tracing::debug!(
+            "execute_create_with_context: variables={:?}, result_set.rows={}",
+            context.variables.keys().collect::<Vec<_>>(),
+            context.result_set.rows.len()
+        );
+
+        let current_rows = if !context.variables.is_empty() {
+            // Prefer variables - they contain full node objects with _nexus_id
+            let materialized = self.materialize_rows_from_variables(context);
+            tracing::debug!(
+                "execute_create_with_context: materialized {} rows from variables",
+                materialized.len()
+            );
+
+            // Verify materialized rows have node objects with _nexus_id
+            let has_node_ids = materialized.iter().any(|row| {
+                row.values().any(|v| {
+                    if let JsonValue::Object(obj) = v {
+                        obj.contains_key("_nexus_id")
+                    } else {
+                        false
+                    }
+                })
+            });
+
+            if has_node_ids {
+                materialized
+            } else if !context.result_set.rows.is_empty() {
+                // Variables didn't have node IDs, try result_set.rows
+                let columns = context.result_set.columns.clone();
+                let rows: Vec<_> = context
+                    .result_set
+                    .rows
+                    .iter()
+                    .map(|row| self.row_to_map(row, &columns))
+                    .collect();
+                tracing::debug!(
+                    "execute_create_with_context: using {} rows from result_set.rows",
+                    rows.len()
+                );
+                rows
+            } else {
+                materialized // Return what we have, even if no _nexus_id
+            }
+        } else if !context.result_set.rows.is_empty() {
+            // No variables - use result_set.rows
             let columns = context.result_set.columns.clone();
             let rows: Vec<_> = context
                 .result_set
@@ -5518,57 +5480,16 @@ impl Executor {
                 .iter()
                 .map(|row| self.row_to_map(row, &columns))
                 .collect();
-            
-            // Check if rows contain node variables (not just aggregation results like "cnt")
-            // If rows only contain aggregation columns, use context.variables instead
-            let has_node_variables = rows.iter().any(|row| {
-                row.values().any(|v| {
-                    if let JsonValue::Object(obj) = v {
-                        obj.contains_key("_nexus_id") && !obj.contains_key("type")
-                    } else {
-                        false
-                    }
-                })
-            });
-            
-            if has_node_variables {
-                tracing::debug!(
-                    "execute_create_with_context: converted {} rows from result_set.rows, columns={:?}",
-                    rows.len(),
-                    columns
-                );
-                rows
-            } else {
-                // result_set.rows only contains aggregation results, use context.variables
-                tracing::debug!(
-                    "execute_create_with_context: result_set.rows contains only aggregation columns ({:?}), using context.variables instead",
-                    columns
-                );
-                self.materialize_rows_from_variables(context)
-            }
-        } else {
-            // Fallback to materialize if result_set is empty
             tracing::debug!(
-                "execute_create_with_context: result_set.rows is empty, falling back to materialize_rows_from_variables"
+                "execute_create_with_context: no variables, using {} rows from result_set.rows",
+                rows.len()
             );
-            self.materialize_rows_from_variables(context)
+            rows
+        } else {
+            // No variables and no rows
+            tracing::debug!("execute_create_with_context: no variables and no rows");
+            Vec::new()
         };
-
-        // Log the rows that will be used for CREATE
-        println!("[DEBUG execute_create_with_context] current_rows.len()={}", current_rows.len());
-        for (idx, row) in current_rows.iter().enumerate() {
-            let row_info: Vec<String> = row.iter().map(|(var, val)| {
-                if let JsonValue::Object(obj) = val {
-                    let node_id = obj.get("_nexus_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("<no name>");
-                    format!("{}={}({})", var, name, node_id)
-                } else {
-                    format!("{}={:?}", var, val)
-                }
-            }).collect();
-            println!("[DEBUG execute_create_with_context]   Row {}: {}", idx, row_info.join(", "));
-        }
-        println!("[DEBUG execute_create_with_context] ===== END =====\n");
 
         // If no rows from MATCH, nothing to create
         if current_rows.is_empty() {
@@ -5580,49 +5501,57 @@ impl Executor {
         let mut tx = tx_mgr.begin_write()?;
 
         // For each row in the MATCH result, create the pattern
+        tracing::warn!(
+            "execute_create_with_context: processing {} rows",
+            current_rows.len()
+        );
         for row in current_rows.iter() {
+            tracing::warn!(
+                "execute_create_with_context: row keys={:?}",
+                row.keys().collect::<Vec<_>>()
+            );
             let mut node_ids: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
 
             // First, resolve existing node variables from the row
-            println!(
-                "[execute_create_with_context] Processing row with {} variables",
-                row.len()
-            );
             for (var_name, var_value) in row {
+                tracing::warn!(
+                    "execute_create_with_context: checking var={}, value type={}",
+                    var_name,
+                    match var_value {
+                        JsonValue::Object(_) => "Object",
+                        JsonValue::String(_) => "String",
+                        JsonValue::Number(_) => "Number",
+                        JsonValue::Array(_) => "Array",
+                        JsonValue::Bool(_) => "Bool",
+                        JsonValue::Null => "Null",
+                    }
+                );
                 if let JsonValue::Object(obj) = var_value {
+                    tracing::warn!(
+                        "execute_create_with_context: obj keys={:?}",
+                        obj.keys().collect::<Vec<_>>()
+                    );
                     if let Some(JsonValue::Number(id)) = obj.get("_nexus_id") {
                         if let Some(node_id) = id.as_u64() {
-                            tracing::debug!(
-                                "execute_create_with_context: extracted node_id={} for var={}, node_object={:?}",
+                            tracing::warn!(
+                                "execute_create_with_context: extracted node_id={} for var={}",
                                 node_id,
                                 var_name,
-                                obj
-                            );
-                            println!(
-                                "[execute_create_with_context] Extracted node_id={} for var={}",
-                                node_id, var_name
                             );
                             node_ids.insert(var_name.clone(), node_id);
                         }
                     } else {
-                        println!(
-                            "[execute_create_with_context] WARNING: Variable {} has no _nexus_id: {:?}",
-                            var_name, obj
-                        );
+                        tracing::warn!("execute_create_with_context: no _nexus_id in obj");
                     }
                 } else {
-                    println!(
-                        "[execute_create_with_context] WARNING: Variable {} is not an Object: {:?}",
-                        var_name, var_value
+                    tracing::warn!(
+                        "execute_create_with_context: var {} is not Object, value={:?}",
+                        var_name,
+                        var_value
                     );
                 }
             }
-            println!(
-                "[execute_create_with_context] Resolved {} node IDs from row: {:?}",
-                node_ids.len(),
-                node_ids.keys().collect::<Vec<_>>()
-            );
 
             // CRITICAL FIX: If no node IDs were resolved from the row and the pattern requires
             // existing nodes from MATCH, skip this row (Filter removed all valid rows)
@@ -5643,11 +5572,8 @@ impl Executor {
                         parser::PatternElement::Relationship(_) => false,
                     }
                 });
-                
+
                 if pattern_requires_existing_nodes {
-                    println!(
-                        "[execute_create_with_context] Skipping CREATE: no node IDs resolved and pattern requires existing nodes from MATCH (Filter removed all rows)"
-                    );
                     continue; // Skip this row - Filter removed all valid matches
                 }
             }
@@ -5726,26 +5652,13 @@ impl Executor {
                             // Source is the last_node_var, target will be the next node in pattern
                             if let Some(source_var) = &last_node_var {
                                 if let Some(source_id) = node_ids.get(source_var) {
-                                    println!(
-                                        "[execute_create_with_context] Found source node: var={}, id={}",
-                                        source_var, source_id
-                                    );
                                     // Find target node (next element after this relationship)
                                     if idx + 1 < pattern.elements.len() {
                                         if let parser::PatternElement::Node(target_node) =
                                             &pattern.elements[idx + 1]
                                         {
                                             if let Some(target_var) = &target_node.variable {
-                                                println!(
-                                                    "[execute_create_with_context] Looking for target node: var={}, available node_ids: {:?}",
-                                                    target_var,
-                                                    node_ids.keys().collect::<Vec<_>>()
-                                                );
                                                 if let Some(target_id) = node_ids.get(target_var) {
-                                                    println!(
-                                                        "[execute_create_with_context] Found target node: var={}, id={}",
-                                                        target_var, target_id
-                                                    );
                                                     // Acquire row locks on source and target nodes
                                                     let (_source_lock, _target_lock_opt) = self
                                                         .acquire_relationship_locks(
@@ -5759,14 +5672,6 @@ impl Executor {
                                                         target_id,
                                                         type_id
                                                     );
-                                                    println!(
-                                                        "[execute_create_with_context] Creating relationship: source_id={}, target_id={}, type_id={}, source_var={:?}, target_var={:?}",
-                                                        source_id,
-                                                        target_id,
-                                                        type_id,
-                                                        source_var,
-                                                        target_var
-                                                    );
                                                     let rel_id =
                                                         self.store_mut().create_relationship(
                                                             &mut tx, *source_id, *target_id,
@@ -5775,10 +5680,6 @@ impl Executor {
                                                     tracing::debug!(
                                                         "execute_create_with_context: relationship created successfully, rel_id={}",
                                                         rel_id
-                                                    );
-                                                    println!(
-                                                        "[execute_create_with_context] Relationship created successfully: rel_id={}, source_id={}, target_id={}",
-                                                        rel_id, source_id, target_id
                                                     );
 
                                                     // CRITICAL FIX: Populate relationship variable if specified
@@ -5791,12 +5692,15 @@ impl Executor {
                                                                 target_id: *target_id,
                                                                 type_id,
                                                             };
-                                                            if let Ok(rel_value) = self.read_relationship_as_value(&rel_info) {
+                                                            if let Ok(rel_value) = self
+                                                                .read_relationship_as_value(
+                                                                    &rel_info,
+                                                                )
+                                                            {
                                                                 // Store relationship in context for RETURN clause
-                                                                context.variables.insert(rel_var.clone(), rel_value);
-                                                                println!(
-                                                                    "[execute_create_with_context] Populated relationship variable '{}' with rel_id={}",
-                                                                    rel_var, rel_id
+                                                                context.variables.insert(
+                                                                    rel_var.clone(),
+                                                                    rel_value,
                                                                 );
                                                             }
                                                         }
@@ -5806,37 +5710,37 @@ impl Executor {
 
                                                     // Relationship created successfully
                                                 } else {
-                                                    println!(
-                                                        "[execute_create_with_context] ERROR: Target node not found: var={}, available node_ids: {:?}",
+                                                    tracing::warn!(
+                                                        "execute_create_with_context: Target node not found: var={}, available node_ids: {:?}",
                                                         target_var,
                                                         node_ids.keys().collect::<Vec<_>>()
                                                     );
                                                 }
                                             } else {
-                                                println!(
-                                                    "[execute_create_with_context] ERROR: Target node has no variable"
+                                                tracing::warn!(
+                                                    "execute_create_with_context: Target node has no variable"
                                                 );
                                             }
                                         } else {
-                                            println!(
-                                                "[execute_create_with_context] ERROR: Next element is not a Node"
+                                            tracing::warn!(
+                                                "execute_create_with_context: Next element is not a Node"
                                             );
                                         }
                                     } else {
-                                        println!(
-                                            "[execute_create_with_context] ERROR: No next element after relationship"
+                                        tracing::warn!(
+                                            "execute_create_with_context: No next element after relationship"
                                         );
                                     }
                                 } else {
-                                    println!(
-                                        "[execute_create_with_context] ERROR: Source node not found: var={}, available node_ids: {:?}",
+                                    tracing::warn!(
+                                        "execute_create_with_context: Source node not found: var={}, available node_ids: {:?}",
                                         source_var,
                                         node_ids.keys().collect::<Vec<_>>()
                                     );
                                 }
                             } else {
-                                println!(
-                                    "[execute_create_with_context] ERROR: No last_node_var (no source node before relationship)"
+                                tracing::warn!(
+                                    "execute_create_with_context: No last_node_var (no source node before relationship)"
                                 );
                             }
                         }
@@ -5867,11 +5771,8 @@ impl Executor {
         // But actually, after CREATE, we don't need any variables from the previous MATCH
         // So clearing all variables should be safe
         context.variables.clear();
-        println!(
-            "[execute_create_with_context] Cleared result_set.rows and context.variables after CREATE"
-        );
-        println!(
-            "[TRACE] After cleanup: result_set.rows.len()={}, variables.len()={}",
+        tracing::trace!(
+            "After cleanup: result_set.rows.len()={}, variables.len()={}",
             context.result_set.rows.len(),
             context.variables.len()
         );
@@ -5889,7 +5790,7 @@ impl Executor {
                     label_id,
                     variable
                 );
-                
+
                 // CRITICAL FIX: Remove relationship objects from variables before creating cartesian product
                 // Relationship objects have a "type" property - filter them out to avoid contamination
                 context.variables.retain(|var_name, var_value| {
@@ -5907,9 +5808,7 @@ impl Executor {
                     } else {
                         false
                     };
-                    if is_relationship {
-                        println!("[execute_operator NodeByLabel] Removing relationship variable '{}' before creating cartesian product", var_name);
-                    }
+                    if is_relationship {}
                     !is_relationship // Keep only non-relationship variables
                 });
 
@@ -5917,9 +5816,9 @@ impl Executor {
                 // Since we are applying Cartesian product and regenerating the full state from variables,
                 // the old rows in result_set are stale (partial state) and should be removed.
                 context.result_set.rows.clear();
-                
+
                 context.variables.remove(variable);
-                
+
                 // CRITICAL FIX: Apply Cartesian product if there are existing variables
                 // If we have existing rows (e.g. from a previous MATCH), we must cross-product
                 // the new nodes with the existing rows.
@@ -5945,22 +5844,19 @@ impl Executor {
             }
             Operator::AllNodesScan { variable } => {
                 let nodes = self.execute_all_nodes_scan()?;
-                println!("[DEBUG AllNodesScan] Scanned {} nodes for variable '{}'", nodes.len(), variable);
-                
+
                 // CRITICAL FIX: Always clear result_set.rows before regenerating from variables
                 context.result_set.rows.clear();
 
                 // CRITICAL FIX: Apply Cartesian product if there are existing variables
                 if !context.variables.is_empty() {
-                    println!("[DEBUG AllNodesScan] Applying cartesian product with existing variables: {:?}", context.variables.keys().collect::<Vec<_>>());
                     self.apply_cartesian_product(context, variable, nodes)?;
                 } else {
                     context.set_variable(variable, Value::Array(nodes));
                 }
-                
+
                 // CRITICAL FIX: Materialize rows from variables so Project can process them
                 let rows = self.materialize_rows_from_variables(context);
-                println!("[DEBUG AllNodesScan] Materialized {} rows", rows.len());
                 self.update_result_set_from_rows(context, &rows);
             }
             Operator::Filter { predicate } => {
@@ -7472,11 +7368,6 @@ impl Executor {
                 type_ids,
                 direction
             );
-            // Force println to stdout for debugging
-            println!(
-                "[DEBUG] find_relationships Node {}: first_rel_ptr={}",
-                node_id, rel_ptr
-            );
 
             // CRITICAL FIX: If first_rel_ptr is 0, try to find relationships by scanning
             // This handles the case where mmap synchronization failed and first_rel_ptr
@@ -7540,11 +7431,6 @@ impl Executor {
                         node_id,
                         scanned_rel_ids.len()
                     );
-                    println!(
-                        "[DEBUG] find_relationships Node {}: Found {} relationships via scan (first_rel_ptr was 0)",
-                        node_id,
-                        scanned_rel_ids.len()
-                    );
 
                     for rel_id in scanned_rel_ids {
                         if let Ok(rel_record) = self.store().read_rel(rel_id) {
@@ -7560,11 +7446,6 @@ impl Executor {
                     }
 
                     // Return early - we found relationships via scan
-                    println!(
-                        "DEBUG: Expand found {} relationships for source node_id {} (via scan)",
-                        relationships.len(),
-                        node_id
-                    );
                     return Ok(relationships);
                 } else {
                     tracing::debug!(
@@ -7594,15 +7475,6 @@ impl Executor {
                             // first_rel_ptr points to an invalid relationship - use scan instead
                             tracing::debug!(
                                 "[find_relationships] Node {}: first_rel_ptr={} points to invalid relationship {} (src={}, dst={}) for direction {:?}, using scan",
-                                node_id,
-                                rel_ptr,
-                                verify_rel_id,
-                                verify_src_id,
-                                verify_dst_id,
-                                direction
-                            );
-                            println!(
-                                "[DEBUG] find_relationships Node {}: first_rel_ptr={} points to invalid relationship {} (src={}, dst={}) for direction {:?}, using scan",
                                 node_id,
                                 rel_ptr,
                                 verify_rel_id,
@@ -7671,36 +7543,15 @@ impl Executor {
 
                                 if matches_type {
                                     scanned_rel_ids.insert(check_rel_id);
-                                    println!(
-                                        "[DEBUG] find_relationships Node {}: Scan found relationship {} (src={}, dst={}, type={})",
-                                        node_id,
-                                        check_rel_id,
-                                        check_src_id,
-                                        check_dst_id,
-                                        record_type_id
-                                    );
                                 }
                             }
                         }
                     }
                 }
 
-                println!(
-                    "[DEBUG] find_relationships Node {}: Scan completed - checked {} slots, found {} valid relationships, matched {} relationships",
-                    node_id,
-                    checked_count,
-                    scanned_count,
-                    scanned_rel_ids.len()
-                );
-
                 if !scanned_rel_ids.is_empty() {
                     tracing::debug!(
                         "[find_relationships] Node {}: Found {} relationships via scan (first_rel_ptr was invalid)",
-                        node_id,
-                        scanned_rel_ids.len()
-                    );
-                    println!(
-                        "[DEBUG] find_relationships Node {}: Found {} relationships via scan (first_rel_ptr was invalid)",
                         node_id,
                         scanned_rel_ids.len()
                     );
@@ -7718,11 +7569,6 @@ impl Executor {
                         }
                     }
 
-                    println!(
-                        "DEBUG: Expand found {} relationships for source node_id {} (via scan - invalid first_rel_ptr)",
-                        relationships.len(),
-                        node_id
-                    );
                     return Ok(relationships);
                 } else {
                     // Scan found nothing and first_rel_ptr is invalid - no relationships exist for this direction
@@ -7730,10 +7576,6 @@ impl Executor {
                         "[find_relationships] Node {}: first_rel_ptr was invalid and scan found no relationships for direction {:?}",
                         node_id,
                         direction
-                    );
-                    println!(
-                        "[DEBUG] find_relationships Node {}: first_rel_ptr was invalid and scan found no relationships for direction {:?}",
-                        node_id, direction
                     );
                     return Ok(relationships); // Return empty vector
                 }
@@ -7775,10 +7617,6 @@ impl Executor {
                     rel_ptr,
                     current_rel_id
                 );
-                println!(
-                    "[DEBUG] find_relationships Node {}: processing rel_ptr={} (id={})",
-                    node_id, rel_ptr, current_rel_id
-                );
 
                 if let Ok(rel_record) = self.store().read_rel(current_rel_id) {
                     // Copy fields to local variables to avoid packed struct reference issues
@@ -7819,10 +7657,6 @@ impl Executor {
                         Direction::Both => true,
                     };
 
-                    println!(
-                        "[DEBUG] find_relationships Node {}: checking rel_id={}, src={}, dst={}, direction={:?}, matches_direction={}",
-                        node_id, current_rel_id, src_id, dst_id, direction, matches_direction
-                    );
                     if matches_type && matches_direction {
                         tracing::debug!(
                             "[find_relationships] Node {}: MATCHED relationship id={}, src={}, dst={}, type_id={}",
@@ -7832,10 +7666,6 @@ impl Executor {
                             dst_id,
                             record_type_id
                         );
-                        println!(
-                            "[DEBUG] find_relationships Node {}: ADDING relationship id={} (src={}, dst={})",
-                            node_id, current_rel_id, src_id, dst_id
-                        );
                         relationships.push(RelationshipInfo {
                             id: current_rel_id,
                             source_id: src_id,
@@ -7843,16 +7673,6 @@ impl Executor {
                             type_id: record_type_id,
                         });
                     } else {
-                        println!(
-                            "[DEBUG] find_relationships Node {}: SKIPPING relationship id={} (matches_type={}, matches_direction={}, src={}, dst={}, node_id={})",
-                            node_id,
-                            current_rel_id,
-                            matches_type,
-                            matches_direction,
-                            src_id,
-                            dst_id,
-                            node_id
-                        );
                         tracing::debug!(
                             "[find_relationships] Node {}: SKIPPED relationship id={} (matches_type={}, matches_direction={})",
                             node_id,
@@ -7877,14 +7697,6 @@ impl Executor {
                         rel_ptr,
                         src_id,
                         node_id,
-                        src_id == node_id
-                    );
-                    println!(
-                        "[DEBUG] find_relationships Node {}: moving to next_ptr={} (from rel_id={}, src={}, using_src={})",
-                        node_id,
-                        rel_ptr,
-                        current_rel_id,
-                        src_id,
                         src_id == node_id
                     );
 
@@ -8597,63 +8409,18 @@ impl Executor {
 
     /// Read a node as a JSON value
     fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
-        println!(
-            "[DEBUG read_node_as_value] Starting to read node_id={}",
-            node_id
-        );
         let node_record = self.store().read_node(node_id)?;
-        println!(
-            "[DEBUG read_node_as_value] node_id={}, read_node returned: prop_ptr={}, label_bits={:b}",
-            node_id, node_record.prop_ptr, node_record.label_bits
-        );
 
         if node_record.is_deleted() {
-            println!(
-                "[DEBUG read_node_as_value] node_id={} is deleted, returning Null",
-                node_id
-            );
             return Ok(Value::Null);
         }
 
         let label_names = self
             .catalog()
             .get_labels_from_bitmap(node_record.label_bits)?;
-        println!(
-            "[DEBUG read_node_as_value] node_id={}, labels: {:?}",
-            node_id, label_names
-        );
         let _labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
 
-        println!(
-            "[DEBUG read_node_as_value] node_id={}, calling load_node_properties",
-            node_id
-        );
         let properties_value = self.store().load_node_properties(node_id)?;
-        println!(
-            "[DEBUG read_node_as_value] node_id={}, load_node_properties returned: {:?}",
-            node_id,
-            properties_value.as_ref().map(|v| {
-                if let Value::Object(obj) = v {
-                    obj.keys().map(|k| k.as_str()).collect::<Vec<_>>()
-                } else {
-                    vec!["<not object>"]
-                }
-            })
-        );
-
-        // TRACE: Check if loaded properties look like relationship properties
-        if let Some(props) = &properties_value {
-            if let Some(obj) = props.as_object() {
-                // Check if properties contain relationship-specific keys
-                if obj.contains_key("since") || obj.contains_key("type") {
-                    println!(
-                        "[TRACE] read_node_as_value: WARNING - node_id={} has relationship-like properties: {:?}",
-                        node_id,
-                        obj.keys().collect::<Vec<_>>()
-                    );
-                }
-            }
-        }
 
         tracing::debug!(
             "read_node_as_value: node_id={}, properties_value={:?}",
@@ -8690,12 +8457,6 @@ impl Executor {
         let mut node = properties_map;
         node.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
 
-        println!(
-            "[DEBUG read_node_as_value] node_id={}, final node has {} keys: {:?}",
-            node_id,
-            node.len(),
-            node.keys().collect::<Vec<_>>()
-        );
         tracing::debug!(
             "read_node_as_value: node_id={}, final node has {} keys: {:?}",
             node_id,
@@ -9442,9 +9203,6 @@ impl Executor {
         new_var: &str,
         new_values: Vec<Value>,
     ) -> Result<()> {
-        println!("[DEBUG apply_cartesian_product] START: new_var='{}', new_values.len()={}, existing variables={:?}", new_var, new_values.len(), context.variables.keys());
-        println!("[DEBUG apply_cartesian_product] new_values: {:?}", new_values);
-
         // 1. Determine current row count (N)
         // Find the length of the first array variable
         let current_count = context
@@ -9459,8 +9217,6 @@ impl Executor {
             })
             .max() // Use max just in case, though they should be equal
             .unwrap_or(0);
-
-        println!("[DEBUG apply_cartesian_product] current_count (N)={}", current_count);
 
         if current_count == 0 {
             // No existing rows (or only scalars), just set the new variable
@@ -9482,7 +9238,7 @@ impl Executor {
         // 2. Expand existing variables: repeat each element M times (M = new_count)
         // We need to collect keys first to avoid borrowing issues
         let keys: Vec<String> = context.variables.keys().cloned().collect();
-        
+
         for key in keys {
             if let Some(val) = context.variables.get_mut(&key) {
                 if let Value::Array(arr) = val {
@@ -9548,9 +9304,10 @@ impl Executor {
             };
             var_types.push((var.clone(), var_type));
         }
-        println!(
-            "[TRACE] materialize_rows_from_variables: variables={:?}, has_relationships={}, creating cartesian product",
-            var_types, has_relationships
+        tracing::trace!(
+            "materialize_rows_from_variables: variables={:?}, has_relationships={}, creating cartesian product",
+            var_types,
+            has_relationships
         );
 
         let mut arrays: HashMap<String, Vec<Value>> = HashMap::new();
@@ -9576,52 +9333,36 @@ impl Executor {
             return Vec::new();
         }
 
-        // CRITICAL DEBUG: Log detailed information about arrays
-        println!("\n[DEBUG materialize_rows_from_variables] ===== START =====");
-        println!("[DEBUG materialize] Number of variables: {}", arrays.len());
-        for (var_name, values) in &arrays {
-            println!("[DEBUG materialize]   Variable '{}': {} elements", var_name, values.len());
-            for (idx, val) in values.iter().enumerate() {
-                if let Value::Object(obj) = val {
-                    let node_id = obj.get("_nexus_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("<no name>");
-                    println!("[DEBUG materialize]     [{}] node_id={}, name={}", idx, node_id, name);
-                } else {
-                    println!("[DEBUG materialize]     [{}] non-object value: {:?}", idx, val);
-                }
-            }
-        }
-
         // CRITICAL FIX: Implement true cartesian product instead of zip
         // When we have multiple node arrays (e.g., p1=[Alice, Bob], c2=[Acme, TechCorp]),
         // we need ALL combinations (4 rows), not just pairs (2 rows)
-        
+
         // Check if all arrays have the same length and all are nodes (not single values)
-        let all_same_len = arrays.values().map(|v| v.len()).collect::<std::collections::HashSet<_>>().len() == 1;
+        let all_same_len = arrays
+            .values()
+            .map(|v| v.len())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == 1;
         let has_multiple_arrays = arrays.len() > 1;
         let all_multi_element = arrays.values().all(|v| v.len() > 1);
-        
+
         let needs_cartesian_product = has_multiple_arrays && all_multi_element && all_same_len;
-        
-        println!(
-            "[DEBUG materialize] arrays.len()={}, all_same_len={}, all_multi_element={}, needs_cartesian_product={}",
-            arrays.len(), all_same_len, all_multi_element, needs_cartesian_product
-        );
-        
+
         if needs_cartesian_product {
             // TRUE CARTESIAN PRODUCT: Generate ALL combinations
             let var_names: Vec<String> = arrays.keys().cloned().collect();
-            let array_values: Vec<Vec<Value>> = var_names.iter().map(|k| arrays[k].clone()).collect();
-            
+            let array_values: Vec<Vec<Value>> =
+                var_names.iter().map(|k| arrays[k].clone()).collect();
+
             // Calculate total number of combinations
             let total_combinations: usize = array_values.iter().map(|arr| arr.len()).product();
-            println!("[DEBUG materialize] Generating {} cartesian product combinations from {} arrays", total_combinations, var_names.len());
-            
+
             let mut rows = Vec::new();
-            
+
             // Generate all combinations using nested iteration
             let mut indices = vec![0usize; array_values.len()];
-            
+
             loop {
                 // Create a row from current indices
                 let mut row = HashMap::new();
@@ -9630,7 +9371,7 @@ impl Executor {
                     row.insert(var_name.clone(), value);
                 }
                 rows.push(row);
-                
+
                 // Increment indices (like odometer)
                 let mut carry = true;
                 for i in (0..indices.len()).rev() {
@@ -9643,42 +9384,24 @@ impl Executor {
                         }
                     }
                 }
-                
+
                 // If carry is still true, we've exhausted all combinations
                 if carry {
                     break;
                 }
             }
-            
-            println!("[DEBUG materialize] Generated {} cartesian product rows", rows.len());
-            for (idx, row) in rows.iter().enumerate() {
-                let row_info: Vec<String> = row.iter().map(|(var, val)| {
-                    if let Value::Object(obj) = val {
-                        let node_id = obj.get("_nexus_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("<no name>");
-                        format!("{}={}({})", var, name, node_id)
-                    } else {
-                        format!("{}={:?}", var, val)
-                    }
-                }).collect();
-                println!("[DEBUG materialize]   Row {}: {}", idx, row_info.join(", "));
-            }
-            println!("[DEBUG materialize_rows_from_variables] ===== END =====\n");
+
             return rows;
         }
-        
+
         // FALLBACK: Old zip-based logic for single arrays or mixed sizes
-        println!("[DEBUG materialize] Using FALLBACK (zip-based) logic");
         let max_len = arrays
             .values()
             .map(|values| values.len())
             .max()
             .unwrap_or(0);
 
-        println!("[DEBUG materialize] max_len={}", max_len);
-
         if max_len == 0 {
-            println!("[DEBUG materialize_rows_from_variables] ===== END (empty) =====\n");
             return Vec::new();
         }
 
@@ -9747,21 +9470,6 @@ impl Executor {
             }
         }
 
-        println!("[DEBUG materialize] Generated {} fallback rows", rows.len());
-        for (idx, row) in rows.iter().enumerate() {
-            let row_info: Vec<String> = row.iter().map(|(var, val)| {
-                if let Value::Object(obj) = val {
-                    let node_id = obj.get("_nexus_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("<no name>");
-                    format!("{}={}({})", var, name, node_id)
-                } else {
-                    format!("{}={:?}", var, val)
-                }
-            }).collect();
-            println!("[DEBUG materialize]   Row {}: {}", idx, row_info.join(", "));
-        }
-        println!("[DEBUG materialize_rows_from_variables] ===== END =====\n");
-
         rows
     }
 
@@ -9784,12 +9492,6 @@ impl Executor {
                 rows_with_relationships += 1;
             }
         }
-        println!(
-            "[TRACE] update_result_set_from_rows: input rows={}, rows_with_relationships={}, result_set.rows.len()={} before update",
-            rows.len(),
-            rows_with_relationships,
-            context.result_set.rows.len()
-        );
 
         // CRITICAL FIX: Only use columns from rows, not from context.variables
         // Context variables may contain old/unused variables that cause null rows
@@ -9882,10 +9584,6 @@ impl Executor {
                     let row_key = key_parts.join("_");
 
                     let is_dup = !seen_row_keys.insert(row_key.clone());
-                    println!(
-                        "DEBUG: update_result_set_from_rows: relationship row -> key='{}' (rel_id={}), is_duplicate={}, entity_ids={:?}, vars={:?}",
-                        row_key, rel_id, is_dup, all_entity_ids, var_entries
-                    );
                     is_dup
                 } else {
                     // Fallback: Can't find rel_id but have multiple entities - include variables in key
@@ -9914,10 +9612,6 @@ impl Executor {
                     let row_key = key_parts.join("_");
 
                     let is_dup = !seen_row_keys.insert(row_key.clone());
-                    println!(
-                        "DEBUG: update_result_set_from_rows: relationship row (no rel_id, using vars) -> key='{}', is_duplicate={}, entity_ids={:?}, vars={:?}",
-                        row_key, is_dup, all_entity_ids, var_entries
-                    );
                     is_dup
                 }
             } else if let Some(first_id) = all_entity_ids.first() {
@@ -9936,11 +9630,6 @@ impl Executor {
             }
         }
 
-        println!(
-            "DEBUG: update_result_set_from_rows: deduplicated {} rows to {} unique rows",
-            rows.len(),
-            unique_rows.len()
-        );
         tracing::debug!(
             "update_result_set_from_rows: deduplicated {} rows to {} unique rows",
             rows.len(),
@@ -9960,12 +9649,6 @@ impl Executor {
                 }
             }
             all_entity_ids.sort();
-            println!(
-                "DEBUG: update_result_set_from_rows: row {} has entity_ids: {:?}, keys: {:?}",
-                idx,
-                all_entity_ids,
-                row_map.keys().collect::<Vec<_>>()
-            );
         }
 
         // CRITICAL FIX: Always clear result_set.rows before updating to ensure complete replacement
@@ -10060,17 +9743,12 @@ impl Executor {
         context: &ExecutionContext,
         expr: &parser::Expression,
     ) -> Result<Value> {
-        println!("[DEBUG evaluate_projection_expression] ENTRY: expr={:?}, row.len()={}, row.keys()={:?}", 
-                 expr, row.len(), row.keys().collect::<Vec<_>>());
         match expr {
             parser::Expression::Variable(name) => {
-                println!("[DEBUG evaluate_projection_expression] Variable: name={}", name);
                 let result = row.get(name).cloned().unwrap_or(Value::Null);
-                println!("[DEBUG evaluate_projection_expression] Variable result: {:?}", result);
                 Ok(result)
-            },
+            }
             parser::Expression::PropertyAccess { variable, property } => {
-                println!("[DEBUG evaluate_projection_expression] PropertyAccess: variable={}, property={}", variable, property);
                 // Check if this is a point method call (e.g., point.distance())
                 if property == "distance" {
                     // Get the point from the variable
@@ -10109,53 +9787,14 @@ impl Executor {
                             if let Value::Object(obj) = entity {
                                 if !obj.contains_key("type") {
                                     // It's a node - reload it to recover properties via reverse_index
-                                    println!(
-                                        "[DEBUG evaluate_projection_expression] Property '{}' not found in node {} (variable '{}'), attempting to reload from storage",
-                                        property, node_id, variable
-                                    );
-                                    println!(
-                                        "[DEBUG evaluate_projection_expression] Current node keys: {:?}",
-                                        obj.keys().collect::<Vec<_>>()
-                                    );
                                     if let Ok(reloaded_node) = self.read_node_as_value(node_id) {
-                                        println!(
-                                            "[DEBUG evaluate_projection_expression] Successfully reloaded node {} from storage",
-                                            node_id
-                                        );
-                                        if let Value::Object(reloaded_obj) = &reloaded_node {
-                                            println!(
-                                                "[DEBUG evaluate_projection_expression] Reloaded node keys: {:?}",
-                                                reloaded_obj.keys().collect::<Vec<_>>()
-                                            );
-                                            // Check if reloaded node has the property
-                                            if let Some(reloaded_prop) = reloaded_obj.get(property) {
-                                                println!(
-                                                    "[DEBUG evaluate_projection_expression] Reloaded node has property '{}' = {:?}",
-                                                    property, reloaded_prop
-                                                );
-                                            } else {
-                                                println!(
-                                                    "[DEBUG evaluate_projection_expression] WARNING: Reloaded node still doesn't have property '{}'",
-                                                    property
-                                                );
-                                            }
-                                        }
                                         // Use reloaded node for property access
                                         entity_opt = Some(reloaded_node);
-                                    } else {
-                                        println!(
-                                            "[DEBUG evaluate_projection_expression] ERROR: Failed to reload node {} from storage",
-                                            node_id
-                                        );
                                     }
                                 }
                             }
                         }
                     } else {
-                        println!(
-                            "[DEBUG evaluate_projection_expression] Property '{}' found in node (variable '{}') = {:?}",
-                            property, variable, prop_value
-                        );
                     }
                 }
 
@@ -12178,18 +11817,14 @@ impl Executor {
     }
 
     fn extract_property(entity: &Value, property: &str) -> Value {
-        println!("[DEBUG extract_property] Extracting property '{}' from entity", property);
         if let Value::Object(obj) = entity {
-            println!("[DEBUG extract_property] Entity is an object with {} keys: {:?}", obj.len(), obj.keys().collect::<Vec<_>>());
             // First check directly in the object (for nodes with flat properties)
             // This is the primary case - nodes have properties directly in the object
             if let Some(value) = obj.get(property) {
-                println!("[DEBUG extract_property] Property '{}' found in object: {:?}", property, value);
                 // CRITICAL FIX: Allow _nexus_id to be returned when explicitly requested
                 // Only skip truly internal properties that shouldn't be exposed
                 if property == "_nexus_id" {
                     // _nexus_id is allowed and commonly used in queries
-                    println!("[DEBUG extract_property] Returning _nexus_id: {:?}", value);
                     return value.clone();
                 }
                 // Skip other internal properties
@@ -12198,25 +11833,16 @@ impl Executor {
                     && property != "_target"
                     && property != "_element_id"
                 {
-                    println!("[DEBUG extract_property] Returning non-internal property '{}': {:?}", property, value);
                     return value.clone();
                 }
-                println!("[DEBUG extract_property] Property '{}' is internal, skipping", property);
-            } else {
-                println!("[DEBUG extract_property] Property '{}' NOT found in object", property);
             }
             // Then check if there's a nested "properties" object (for compatibility with other formats)
             if let Some(Value::Object(props)) = obj.get("properties") {
-                println!("[DEBUG extract_property] Checking nested 'properties' object");
                 if let Some(value) = props.get(property) {
-                    println!("[DEBUG extract_property] Property '{}' found in nested 'properties': {:?}", property, value);
                     return value.clone();
                 }
             }
-        } else {
-            println!("[DEBUG extract_property] Entity is NOT an object: {:?}", entity);
         }
-        println!("[DEBUG extract_property] Returning Null for property '{}'", property);
         Value::Null
     }
 
@@ -12350,38 +11976,18 @@ impl Executor {
         context: &mut ExecutionContext,
         rows: &[HashMap<String, Value>],
     ) {
-        println!("\n[DEBUG update_variables_from_rows] ===== START =====");
-        println!("[DEBUG update_variables_from_rows] Input: {} rows", rows.len());
-        println!("[DEBUG update_variables_from_rows] BEFORE update: context.variables has {} variables", context.variables.len());
-        
         let mut arrays: HashMap<String, Vec<Value>> = HashMap::new();
         for row in rows {
             for (var, value) in row {
                 arrays.entry(var.clone()).or_default().push(value.clone());
             }
         }
-        
-        println!("[DEBUG update_variables_from_rows] Clearing variables...");
+
         context.variables.clear();
-        
-        println!("[DEBUG update_variables_from_rows] Setting {} new variables:", arrays.len());
-        for (var, values) in &arrays {
-            println!("[DEBUG update_variables_from_rows]   Variable '{}': {} values", var, values.len());
-            for (idx, val) in values.iter().enumerate() {
-                if let Value::Object(obj) = val {
-                    let node_id = obj.get("_nexus_id").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("<no name>");
-                    println!("[DEBUG update_variables_from_rows]     [{}] node_id={}, name={}", idx, node_id, name);
-                }
-            }
-        }
-        
+
         for (var, values) in arrays {
             context.variables.insert(var, Value::Array(values));
         }
-        
-        println!("[DEBUG update_variables_from_rows] AFTER update: context.variables has {} variables", context.variables.len());
-        println!("[DEBUG update_variables_from_rows] ===== END =====\n");
     }
 
     fn evaluate_predicate_on_row(

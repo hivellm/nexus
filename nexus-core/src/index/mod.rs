@@ -137,7 +137,6 @@ impl LabelIndex {
 
     /// Add a node with given labels
     pub fn add_node(&self, node_id: u64, label_ids: &[u32]) -> Result<()> {
-        println!("[DEBUG LabelIndex] Adding node_id={} to labels={:?}", node_id, label_ids);
         let mut bitmaps = self.label_bitmaps.write();
 
         for &label_id in label_ids {

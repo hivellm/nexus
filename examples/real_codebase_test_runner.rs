@@ -1,4 +1,4 @@
-//! Real Codebase Test Runner for Nexus Graph Database
+﻿//! Real Codebase Test Runner for Nexus Graph Database
 //!
 //! This utility runs comprehensive integration tests using real datasets:
 //! - Loads real datasets (Knowledge Graph, Social Network)
@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+use tracing;
 
 /// Comprehensive test runner for real codebase integration tests
 pub struct RealCodebaseTestRunner {
@@ -42,8 +43,8 @@ impl RealCodebaseTestRunner {
     
     /// Run all integration tests with real datasets
     pub async fn run_all_tests(&mut self) -> Result<TestResults, Box<dyn std::error::Error>> {
-        println!("🚀 Starting Real Codebase Integration Tests");
-        println!("==========================================");
+        tracing::info!("🚀 Starting Real Codebase Integration Tests");
+        tracing::info!("==========================================");
         
         let mut results = TestResults::new();
         
@@ -51,37 +52,37 @@ impl RealCodebaseTestRunner {
         self.check_test_environment().await?;
         
         // Test 1: Dataset Loading Tests
-        println!("\n📊 Running Dataset Loading Tests...");
+        tracing::info!("\n📊 Running Dataset Loading Tests...");
         let dataset_results = self.run_dataset_loading_tests().await?;
         results.add_category("Dataset Loading", dataset_results);
         
         // Test 2: Cypher Query Tests
-        println!("\n🔍 Running Cypher Query Tests...");
+        tracing::info!("\n🔍 Running Cypher Query Tests...");
         let cypher_results = self.run_cypher_query_tests().await?;
         results.add_category("Cypher Queries", cypher_results);
         
         // Test 3: Vector Search Tests
-        println!("\n🎯 Running Vector Search Tests...");
+        tracing::info!("\n🎯 Running Vector Search Tests...");
         let vector_results = self.run_vector_search_tests().await?;
         results.add_category("Vector Search", vector_results);
         
         // Test 4: Performance Tests
-        println!("\n⚡ Running Performance Tests...");
+        tracing::info!("\n⚡ Running Performance Tests...");
         let perf_results = self.run_performance_tests().await?;
         results.add_category("Performance", perf_results);
         
         // Test 5: Stress Tests
-        println!("\n💪 Running Stress Tests...");
+        tracing::info!("\n💪 Running Stress Tests...");
         let stress_results = self.run_stress_tests().await?;
         results.add_category("Stress Testing", stress_results);
         
         // Test 6: Error Handling Tests
-        println!("\n🛡️ Running Error Handling Tests...");
+        tracing::info!("\n🛡️ Running Error Handling Tests...");
         let error_results = self.run_error_handling_tests().await?;
         results.add_category("Error Handling", error_results);
         
         // Test 7: Data Consistency Tests
-        println!("\n🔒 Running Data Consistency Tests...");
+        tracing::info!("\n🔒 Running Data Consistency Tests...");
         let consistency_results = self.run_consistency_tests().await?;
         results.add_category("Data Consistency", consistency_results);
         
@@ -91,7 +92,7 @@ impl RealCodebaseTestRunner {
     
     /// Check test environment and dataset availability
     async fn check_test_environment(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🔍 Checking test environment...");
+        tracing::info!("🔍 Checking test environment...");
         
         let datasets = vec![
             ("Knowledge Graph", "examples/datasets/knowledge_graph.json"),
@@ -103,10 +104,10 @@ impl RealCodebaseTestRunner {
         
         for (name, path) in datasets {
             if Path::new(path).exists() {
-                println!("  ✅ {}: Available", name);
+                tracing::info!("  ✅ {}: Available", name);
                 available_count += 1;
             } else {
-                println!("  ❌ {}: Missing ({})", name, path);
+                tracing::info!("  ❌ {}: Missing ({})", name, path);
             }
         }
         
@@ -114,7 +115,7 @@ impl RealCodebaseTestRunner {
             return Err("No test datasets available. Please ensure dataset files exist.".into());
         }
         
-        println!("  📊 {} out of {} datasets available", available_count, datasets.len());
+        tracing::info!("  📊 {} out of {} datasets available", available_count, datasets.len());
         Ok(())
     }
     
@@ -933,20 +934,20 @@ impl TestResults {
     }
     
     fn print_summary(&self) {
-        println!("\n🎯 Test Results Summary");
-        println!("========================");
-        println!("Total tests: {}", self.total_tests());
-        println!("Passed: {} ({:.1}%)", self.passed_tests(), 
+        tracing::info!("\n🎯 Test Results Summary");
+        tracing::info!("========================");
+        tracing::info!("Total tests: {}", self.total_tests());
+        tracing::info!("Passed: {} ({:.1}%)", self.passed_tests(), 
             self.passed_tests() as f64 / self.total_tests() as f64 * 100.0);
-        println!("Failed: {} ({:.1}%)", self.failed_tests(),
+        tracing::info!("Failed: {} ({:.1}%)", self.failed_tests(),
             self.failed_tests() as f64 / self.total_tests() as f64 * 100.0);
         
-        println!("\n📊 Category Breakdown:");
+        tracing::info!("\n📊 Category Breakdown:");
         for category in &self.categories {
             let passed = category.passed_count();
             let total = category.total_count();
             let percentage = if total > 0 { passed as f64 / total as f64 * 100.0 } else { 0.0 };
-            println!("  {}: {}/{} ({:.1}%)", category.name, passed, total, percentage);
+            tracing::info!("  {}: {}/{} ({:.1}%)", category.name, passed, total, percentage);
         }
         
         // Print failed tests
@@ -956,11 +957,11 @@ impl TestResults {
             .collect();
         
         if !failed_tests.is_empty() {
-            println!("\n❌ Failed Tests:");
+            tracing::info!("\n❌ Failed Tests:");
             for test in failed_tests {
-                println!("  - {}: {}", test.name, test.description);
+                tracing::info!("  - {}: {}", test.name, test.description);
                 if let Some(error) = &test.error {
-                    println!("    Error: {}", error);
+                    tracing::info!("    Error: {}", error);
                 }
             }
         }
@@ -990,10 +991,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "http://localhost:3000".to_string()
     };
     
-    println!("🚀 Nexus Real Codebase Integration Test Runner");
-    println!("==============================================");
-    println!("Server URL: {}", base_url);
-    println!();
+    tracing::info!("🚀 Nexus Real Codebase Integration Test Runner");
+    tracing::info!("==============================================");
+    tracing::info!("Server URL: {}", base_url);
+    tracing::info!();
     
     let mut runner = RealCodebaseTestRunner::new(base_url);
     let results = runner.run_all_tests().await?;

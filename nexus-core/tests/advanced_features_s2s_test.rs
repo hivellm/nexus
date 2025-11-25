@@ -14,6 +14,7 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {
@@ -86,15 +87,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("{}: PASSED", test_name);
+                tracing::info!("{}: PASSED", test_name);
                 true
             } else {
-                println!("{}: FAILED - Error: {:?}", test_name, response.error);
+                tracing::info!("{}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("{}: FAILED - Request error: {}", test_name, e);
+            tracing::info!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -105,24 +106,24 @@ async fn test_advanced_features_s2s() {
     let server_url = get_server_url();
 
     // Wait for server to be available
-    println!("Waiting for server at {}...", server_url);
+    tracing::info!("Waiting for server at {}...", server_url);
     if !wait_for_server(&server_url, 5).await {
-        eprintln!("WARNING: Server not available at {}", server_url);
-        eprintln!("WARNING: Skipping S2S test. To run this test:");
-        eprintln!("   1. Start the server: cargo run --release --bin nexus-server");
-        eprintln!("   2. Run: cargo test --features s2s --test advanced_features_s2s_test");
-        eprintln!("WARNING: This test is ignored when server is not available.");
+        etracing::info!("WARNING: Server not available at {}", server_url);
+        etracing::info!("WARNING: Skipping S2S test. To run this test:");
+        etracing::info!("   1. Start the server: cargo run --release --bin nexus-server");
+        etracing::info!("   2. Run: cargo test --features s2s --test advanced_features_s2s_test");
+        etracing::info!("WARNING: This test is ignored when server is not available.");
         return; // Skip test instead of failing
     }
-    println!("Server is ready");
-    println!();
+    tracing::info!("Server is ready");
+    tracing::info!();
 
     let client = reqwest::Client::new();
     let mut passed = 0;
     let mut failed = 0;
 
     // Setup test data
-    println!("=== Setting up test data ===");
+    tracing::info!("=== Setting up test data ===");
     let setup_query = r#"
 CREATE 
   (alice:Person {name: 'Alice', age: 30, scores: [85, 90, 78, 92], city: 'New York'}),
@@ -150,10 +151,10 @@ CREATE
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // CASE Expressions Tests
-    println!("=== CASE Expressions - Complex Scenarios ===");
+    tracing::info!("=== CASE Expressions - Complex Scenarios ===");
     if test_query_success(
         &client,
         &server_url,
@@ -204,10 +205,10 @@ LIMIT 5
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // FOREACH Tests
-    println!("=== FOREACH - Complex Scenarios ===");
+    tracing::info!("=== FOREACH - Complex Scenarios ===");
     // Note: FOREACH with RETURN is not supported for write queries
     // Using FOREACH without RETURN (write-only query)
     if test_query_success(
@@ -227,10 +228,10 @@ FOREACH (x IN [1, 2, 3] |
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // EXISTS Tests
-    println!("=== EXISTS - Complex Scenarios ===");
+    tracing::info!("=== EXISTS - Complex Scenarios ===");
     // Note: EXISTS with WHERE clause inside pattern may not be fully supported
     // Using simpler EXISTS patterns that are known to work
     if test_query_success(
@@ -272,10 +273,10 @@ LIMIT 5
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Map Projections Tests
-    println!("=== Map Projections - Complex Scenarios ===");
+    tracing::info!("=== Map Projections - Complex Scenarios ===");
     if test_query_success(
         &client,
         &server_url,
@@ -296,10 +297,10 @@ LIMIT 3
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // List Comprehensions Tests
-    println!("=== List Comprehensions - Complex Scenarios ===");
+    tracing::info!("=== List Comprehensions - Complex Scenarios ===");
     if test_query_success(
         &client,
         &server_url,
@@ -316,10 +317,10 @@ LIMIT 3
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Pattern Comprehensions Tests
-    println!("=== Pattern Comprehensions - Complex Scenarios ===");
+    tracing::info!("=== Pattern Comprehensions - Complex Scenarios ===");
     if test_query_success(
         &client,
         &server_url,
@@ -336,26 +337,27 @@ LIMIT 3
     } else {
         failed += 1;
     }
-    println!();
+    tracing::info!();
 
     // Summary
-    println!("==========================================");
-    println!("Test Summary");
-    println!("==========================================");
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
-    println!("Total: {}", passed + failed);
-    println!();
+    tracing::info!("==========================================");
+    tracing::info!("Test Summary");
+    tracing::info!("==========================================");
+    tracing::info!("Passed: {}", passed);
+    tracing::info!("Failed: {}", failed);
+    tracing::info!("Total: {}", passed + failed);
+    tracing::info!();
 
     if failed == 0 {
-        println!("ALL TESTS PASSED!");
+        tracing::info!("ALL TESTS PASSED!");
     } else {
-        println!(
+        tracing::info!(
             "WARNING: SOME TESTS FAILED ({} passed, {} failed)",
-            passed, failed
+            passed,
+            failed
         );
-        println!("WARNING: Note: Some features may not be fully implemented yet.");
-        println!("WARNING: This is expected for advanced Cypher features.");
+        tracing::info!("WARNING: Note: Some features may not be fully implemented yet.");
+        tracing::info!("WARNING: This is expected for advanced Cypher features.");
         // Don't panic - just warn about failures
         // panic!("Some tests failed: {} passed, {} failed", passed, failed);
     }

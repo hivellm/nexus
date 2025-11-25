@@ -16,6 +16,7 @@ use crate::error::{Error, Result};
 use crate::execution::compiled::{CompiledQuery, CompiledQueryImpl};
 use std::collections::HashMap;
 use std::time::Duration;
+use tracing;
 
 /// JIT Compiler for Cypher queries
 pub struct JitCompiler {
@@ -50,7 +51,7 @@ impl JitCompiler {
         // Generate optimized Rust code based on query type
         let rust_code = self.generate_code(cypher, &query_type)?;
 
-        println!("Generated code:\n{}", rust_code);
+        tracing::debug!("Generated code:\n{}", rust_code);
 
         let compilation_time = start_time.elapsed();
         self.stats.successful_compilations += 1;

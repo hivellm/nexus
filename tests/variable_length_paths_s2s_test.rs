@@ -1,4 +1,4 @@
-//! End-to-end (S2S) tests for Variable-Length Paths via HTTP API
+﻿//! End-to-end (S2S) tests for Variable-Length Paths via HTTP API
 //!
 //! These tests require the server to be running and are only executed when
 //! the `s2s` feature is enabled.
@@ -12,6 +12,7 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
+use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {
@@ -84,15 +85,15 @@ async fn test_query_success(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_none() || response.error.as_ref().unwrap().is_empty() {
-                println!("{}: PASSED ({} rows)", test_name, response.rows.len());
+                tracing::info!("{}: PASSED ({} rows)", test_name, response.rows.len());
                 true
             } else {
-                println!("{}: FAILED - Error: {:?}", test_name, response.error);
+                tracing::info!("{}: FAILED - Error: {:?}", test_name, response.error);
                 false
             }
         }
         Err(e) => {
-            println!("{}: FAILED - Request error: {}", test_name, e);
+            tracing::info!("{}: FAILED - Request error: {}", test_name, e);
             false
         }
     }
@@ -108,15 +109,15 @@ async fn test_query_error(
     match execute_query(client, url, query).await {
         Ok(response) => {
             if response.error.is_some() && !response.error.as_ref().unwrap().is_empty() {
-                println!("{}: PASSED (expected error)", test_name);
+                tracing::info!("{}: PASSED (expected error)", test_name);
                 true
             } else {
-                println!("{}: FAILED - Expected error but got success", test_name);
+                tracing::info!("{}: FAILED - Expected error but got success", test_name);
                 false
             }
         }
         Err(_) => {
-            println!("{}: PASSED (expected error)", test_name);
+            tracing::info!("{}: PASSED (expected error)", test_name);
             true
         }
     }
@@ -128,7 +129,7 @@ async fn test_variable_length_paths_zero_or_more() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -153,7 +154,7 @@ async fn test_variable_length_paths_one_or_more() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -178,7 +179,7 @@ async fn test_variable_length_paths_exact_length() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -203,7 +204,7 @@ async fn test_variable_length_paths_range() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -230,7 +231,7 @@ async fn test_variable_length_paths_zero_or_one() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -253,7 +254,7 @@ async fn test_variable_length_paths_with_relationship_variable() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -278,7 +279,7 @@ async fn test_variable_length_paths_no_path_found() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -295,7 +296,7 @@ async fn test_variable_length_paths_no_path_found() {
     
     // Should return empty result, not error
     assert!(response.error.is_none() || response.error.as_ref().unwrap().is_empty());
-    println!("No path found: PASSED ({} rows)", response.rows.len());
+    tracing::info!("No path found: PASSED ({} rows)", response.rows.len());
 }
 
 #[tokio::test]
@@ -304,7 +305,7 @@ async fn test_variable_length_paths_bidirectional() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -329,7 +330,7 @@ async fn test_shortest_path_function() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 
@@ -358,7 +359,7 @@ async fn test_all_shortest_paths_function() {
     let client = reqwest::Client::new();
 
     if !wait_for_server(&url, 5).await {
-        eprintln!("Server not available, skipping test");
+        etracing::info!("Server not available, skipping test");
         return;
     }
 

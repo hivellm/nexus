@@ -12,88 +12,89 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::time::Instant;
+use tracing;
 
 /// Demonstration of execution engine integration
 pub fn demo_integration() -> Result<()> {
-    println!("🔬 EXECUTION ENGINE INTEGRATION DEMO");
-    println!("====================================");
-    println!("");
-    println!("✅ SIMD-Accelerated Columnar Data Structures");
-    println!("   - 64-byte aligned columns for AVX-512");
-    println!("   - Type-safe column access (i64, f64, string, bool)");
-    println!("   - SIMD-optimized memory layouts");
-    println!("");
-    println!("✅ Vectorized WHERE Operators");
-    println!("   - SIMD filter_equal, filter_greater, filter_range");
-    println!("   - Vectorized aggregations (sum, count, avg, min, max)");
-    println!("   - Hardware-accelerated filtering");
-    println!("");
-    println!("✅ JIT Query Compilation");
-    println!("   - Cypher AST → Rust code generation");
-    println!("   - Query caching with schema invalidation");
-    println!("   - Lazy compilation for performance");
-    println!("");
-    println!("✅ Advanced Join Algorithms");
-    println!("   - Hash joins with bloom filter optimization");
-    println!("   - Merge joins for sorted data");
-    println!("   - Adaptive algorithm selection");
-    println!("");
-    println!("✅ Executor Integration");
-    println!("   - Feature flag for gradual rollout");
-    println!("   - Fallback to interpreted execution");
-    println!("   - Performance monitoring and metrics");
-    println!("");
-    println!("🎯 INTEGRATION COMPLETE!");
-    println!("========================");
-    println!("The new execution engine is ready for production!");
-    println!("");
-    println!("Expected Performance Improvements:");
-    println!("- WHERE filters: 4-5ms → ≤3.0ms (≥40% speedup)");
-    println!("- Complex queries: 7ms → ≤4.0ms (≥43% speedup)");
-    println!("- JOIN queries: 6.9ms → ≤4.0ms (≥42% speedup)");
-    println!("");
-    println!("Next: Real graph storage integration & benchmarks");
+    tracing::info!("🔬 EXECUTION ENGINE INTEGRATION DEMO");
+    tracing::info!("====================================");
+    tracing::info!("");
+    tracing::info!("✅ SIMD-Accelerated Columnar Data Structures");
+    tracing::info!("   - 64-byte aligned columns for AVX-512");
+    tracing::info!("   - Type-safe column access (i64, f64, string, bool)");
+    tracing::info!("   - SIMD-optimized memory layouts");
+    tracing::info!("");
+    tracing::info!("✅ Vectorized WHERE Operators");
+    tracing::info!("   - SIMD filter_equal, filter_greater, filter_range");
+    tracing::info!("   - Vectorized aggregations (sum, count, avg, min, max)");
+    tracing::info!("   - Hardware-accelerated filtering");
+    tracing::info!("");
+    tracing::info!("✅ JIT Query Compilation");
+    tracing::info!("   - Cypher AST → Rust code generation");
+    tracing::info!("   - Query caching with schema invalidation");
+    tracing::info!("   - Lazy compilation for performance");
+    tracing::info!("");
+    tracing::info!("✅ Advanced Join Algorithms");
+    tracing::info!("   - Hash joins with bloom filter optimization");
+    tracing::info!("   - Merge joins for sorted data");
+    tracing::info!("   - Adaptive algorithm selection");
+    tracing::info!("");
+    tracing::info!("✅ Executor Integration");
+    tracing::info!("   - Feature flag for gradual rollout");
+    tracing::info!("   - Fallback to interpreted execution");
+    tracing::info!("   - Performance monitoring and metrics");
+    tracing::info!("");
+    tracing::info!("🎯 INTEGRATION COMPLETE!");
+    tracing::info!("========================");
+    tracing::info!("The new execution engine is ready for production!");
+    tracing::info!("");
+    tracing::info!("Expected Performance Improvements:");
+    tracing::info!("- WHERE filters: 4-5ms → ≤3.0ms (≥40% speedup)");
+    tracing::info!("- Complex queries: 7ms → ≤4.0ms (≥43% speedup)");
+    tracing::info!("- JOIN queries: 6.9ms → ≤4.0ms (≥42% speedup)");
+    tracing::info!("");
+    tracing::info!("Next: Real graph storage integration & benchmarks");
 
     Ok(())
 }
 
 /// Run comprehensive performance benchmarks comparing interpreted vs vectorized execution
 pub fn run_performance_benchmarks() -> Result<()> {
-    println!("🚀 EXECUTOR PERFORMANCE BENCHMARKS");
-    println!("===================================");
-    println!();
+    tracing::info!("🚀 EXECUTOR PERFORMANCE BENCHMARKS");
+    tracing::info!("===================================");
+    tracing::info!("");
 
-    println!("✅ Vectorized Execution Engine");
-    println!("   - SIMD-accelerated WHERE filters");
-    println!("   - Columnar data processing");
-    println!("   - Advanced JOIN algorithms");
-    println!("   - JIT compilation support");
-    println!();
+    tracing::info!("✅ Vectorized Execution Engine");
+    tracing::info!("   - SIMD-accelerated WHERE filters");
+    tracing::info!("   - Columnar data processing");
+    tracing::info!("   - Advanced JOIN algorithms");
+    tracing::info!("   - JIT compilation support");
+    tracing::info!("");
 
-    println!("📊 Benchmark Results Summary:");
-    println!("   - WHERE filtering: ≤3.0ms (40%+ improvement)");
-    println!("   - Complex queries: ≤4.0ms (43% improvement)");
-    println!("   - JOIN operations: ≤4.0ms (42% improvement)");
-    println!("   - Memory efficiency: Optimized allocation");
-    println!("   - Cache performance: 90%+ hit rates");
-    println!();
+    tracing::info!("📊 Benchmark Results Summary:");
+    tracing::info!("   - WHERE filtering: ≤3.0ms (40%+ improvement)");
+    tracing::info!("   - Complex queries: ≤4.0ms (43% improvement)");
+    tracing::info!("   - JOIN operations: ≤4.0ms (42% improvement)");
+    tracing::info!("   - Memory efficiency: Optimized allocation");
+    tracing::info!("   - Cache performance: 90%+ hit rates");
+    tracing::info!("");
 
-    println!("🎯 Performance Targets Achieved:");
-    println!("   ✓ 40%+ query performance improvement");
-    println!("   ✓ SIMD acceleration for WHERE filters");
-    println!("   ✓ Columnar processing optimization");
-    println!("   ✓ Advanced JOIN algorithms");
-    println!("   ✓ JIT compilation infrastructure");
-    println!();
+    tracing::info!("🎯 Performance Targets Achieved:");
+    tracing::info!("   ✓ 40%+ query performance improvement");
+    tracing::info!("   ✓ SIMD acceleration for WHERE filters");
+    tracing::info!("   ✓ Columnar processing optimization");
+    tracing::info!("   ✓ Advanced JOIN algorithms");
+    tracing::info!("   ✓ JIT compilation infrastructure");
+    tracing::info!("");
 
-    println!("📈 Next Steps:");
-    println!("   - Phase 8: Relationship processing optimization ✅ COMPLETED");
-    println!("   - Phase 9: Memory and concurrency improvements");
-    println!("   - Phase 10: Advanced features and monitoring");
-    println!();
+    tracing::info!("📈 Next Steps:");
+    tracing::info!("   - Phase 8: Relationship processing optimization ✅ COMPLETED");
+    tracing::info!("   - Phase 9: Memory and concurrency improvements");
+    tracing::info!("   - Phase 10: Advanced features and monitoring");
+    tracing::info!("");
 
-    println!("✨ Vectorized execution successfully integrated!");
-    println!("   Ready for production deployment with gradual rollout capability.");
+    tracing::info!("✨ Vectorized execution successfully integrated!");
+    tracing::info!("   Ready for production deployment with gradual rollout capability.");
 
     Ok(())
 }
@@ -102,7 +103,7 @@ pub fn run_performance_benchmarks() -> Result<()> {
 pub fn benchmark_executor_creation() -> Result<()> {
     use std::time::Instant;
 
-    println!("🔧 Benchmarking Executor Creation Overhead...");
+    tracing::info!("🔧 Benchmarking Executor Creation Overhead...");
 
     let start = Instant::now();
     // Create executor with vectorized enabled
@@ -150,9 +151,9 @@ pub fn benchmark_executor_creation() -> Result<()> {
         Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config_baseline)?;
     let baseline_time = start.elapsed();
 
-    println!("   Vectorized executor creation: {:?}", vectorized_time);
-    println!("   Baseline executor creation: {:?}", baseline_time);
-    println!(
+    tracing::info!("   Vectorized executor creation: {:?}", vectorized_time);
+    tracing::info!("   Baseline executor creation: {:?}", baseline_time);
+    tracing::info!(
         "   Overhead: {:.2}x",
         vectorized_time.as_nanos() as f64 / baseline_time.as_nanos() as f64
     );
@@ -170,11 +171,11 @@ mod tests {
         // This test will run the integration benchmark
         // In a real scenario, you'd want to mock the dependencies
         match demo_integration() {
-            Ok(_) => println!("Integration benchmark completed successfully"),
+            Ok(_) => tracing::info!("Integration benchmark completed successfully"),
             Err(e) => {
                 // For now, allow the test to pass even if benchmark fails
                 // (since it depends on external components)
-                println!("Integration benchmark failed (expected): {:?}", e);
+                tracing::info!("Integration benchmark failed (expected): {:?}", e);
             }
         }
         assert!(true); // Always pass this test
@@ -184,9 +185,9 @@ mod tests {
     fn test_performance_benchmarks() {
         // Run the comprehensive performance benchmarks
         match run_performance_benchmarks() {
-            Ok(_) => println!("Performance benchmarks completed successfully"),
+            Ok(_) => tracing::info!("Performance benchmarks completed successfully"),
             Err(e) => {
-                println!("Performance benchmarks failed: {:?}", e);
+                tracing::info!("Performance benchmarks failed: {:?}", e);
             }
         }
         assert!(true); // Always pass this test
@@ -196,9 +197,9 @@ mod tests {
     fn test_executor_creation_benchmark() {
         // Test executor creation overhead benchmarking
         match benchmark_executor_creation() {
-            Ok(_) => println!("Executor creation benchmark completed successfully"),
+            Ok(_) => tracing::info!("Executor creation benchmark completed successfully"),
             Err(e) => {
-                println!("Executor creation benchmark failed: {:?}", e);
+                tracing::info!("Executor creation benchmark failed: {:?}", e);
             }
         }
         assert!(true); // Always pass this test

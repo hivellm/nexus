@@ -1,6 +1,7 @@
-use nexus_core::storage::{RecordStore, RelationshipRecord};
+﻿use nexus_core::storage::{RecordStore, RelationshipRecord};
 use nexus_core::transaction::TransactionManager;
 use tempfile::TempDir;
+use tracing;
 
 #[test]
 fn test_relationship_linked_list_traversal() {
@@ -23,21 +24,21 @@ fn test_relationship_linked_list_traversal() {
     tx_mgr.commit(&mut tx).unwrap();
     store.flush().unwrap(); // Ensure persistence
 
-    println!("Nodes created: {}, {}, {}", node1, node2, node3);
+    tracing::info!("Nodes created: {}, {}, {}", node1, node2, node3);
 
     // Create first relationship: node1 -> node2
     let mut tx1 = tx_mgr.begin_write().unwrap();
     let rel1 = store
         .create_relationship(&mut tx1, node1, node2, 1, serde_json::json!({}))
         .unwrap();
-    println!("Rel 1 created: {} ({} -> {})", rel1, node1, node2);
+    tracing::info!("Rel 1 created: {} ({} -> {})", rel1, node1, node2);
     tx_mgr.commit(&mut tx1).unwrap();
     store.flush().unwrap();
 
     // Verify first relationship pointer on node1
     let n1_rec = store.read_node(node1).unwrap();
     let first_rel_ptr_1 = n1_rec.first_rel_ptr;
-    println!("Node 1 first_rel_ptr after rel1: {}", first_rel_ptr_1);
+    tracing::info!("Node 1 first_rel_ptr after rel1: {}", first_rel_ptr_1);
     assert_eq!(first_rel_ptr_1, rel1 + 1);
 
     // Create second relationship: node1 -> node3
@@ -45,30 +46,30 @@ fn test_relationship_linked_list_traversal() {
     let rel2 = store
         .create_relationship(&mut tx2, node1, node3, 1, serde_json::json!({}))
         .unwrap();
-    println!("Rel 2 created: {} ({} -> {})", rel2, node1, node3);
+    tracing::info!("Rel 2 created: {} ({} -> {})", rel2, node1, node3);
     tx_mgr.commit(&mut tx2).unwrap();
     store.flush().unwrap();
 
     // Verify first relationship pointer on node1 (should point to rel2 now)
     let n1_rec_2 = store.read_node(node1).unwrap();
     let first_rel_ptr_2 = n1_rec_2.first_rel_ptr;
-    println!("Node 1 first_rel_ptr after rel2: {}", first_rel_ptr_2);
+    tracing::info!("Node 1 first_rel_ptr after rel2: {}", first_rel_ptr_2);
     assert_eq!(first_rel_ptr_2, rel2 + 1);
 
     // Verify rel2 points to rel1 via next_src_ptr
     let r2_rec = store.read_rel(rel2).unwrap();
     let next_src_ptr = r2_rec.next_src_ptr;
-    println!("Rel 2 next_src_ptr: {}", next_src_ptr);
+    tracing::info!("Rel 2 next_src_ptr: {}", next_src_ptr);
     assert_eq!(next_src_ptr, rel1 + 1, "Rel 2 should point to Rel 1");
 
     // Verify traversal
     let mut count = 0;
     let mut ptr = first_rel_ptr_2;
 
-    println!("Starting traversal from ptr: {}", ptr);
+    tracing::info!("Starting traversal from ptr: {}", ptr);
     while ptr != 0 {
         let rel_id = ptr - 1;
-        println!("Visiting rel_id: {}", rel_id);
+        tracing::info!("Visiting rel_id: {}", rel_id);
         count += 1;
 
         let rel = store.read_rel(rel_id).unwrap();
@@ -78,10 +79,10 @@ fn test_relationship_linked_list_traversal() {
 
         if src_id == node1 {
             ptr = next_src;
-            println!("  Next ptr (src): {}", ptr);
+            tracing::info!("  Next ptr (src): {}", ptr);
         } else {
             ptr = next_dst;
-            println!("  Next ptr (dst): {}", ptr);
+            tracing::info!("  Next ptr (dst): {}", ptr);
         }
 
         if count > 10 {

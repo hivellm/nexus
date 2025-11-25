@@ -126,6 +126,13 @@ mod tests {
         (Arc::new(catalog), dir)
     }
 
+    /// Create an isolated catalog for tests that need data isolation
+    fn create_isolated_test_catalog() -> (Arc<Catalog>, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let catalog = Catalog::with_isolated_path(dir.path(), 100 * 1024 * 1024).unwrap();
+        (Arc::new(catalog), dir)
+    }
+
     #[test]
     fn test_persistent_udf_registry() {
         let (catalog, _dir) = create_test_catalog();
@@ -218,7 +225,8 @@ mod tests {
 
     #[test]
     fn test_load_signatures_from_catalog() {
-        let (catalog, _dir) = create_test_catalog();
+        // Use isolated catalog for tests that count signatures
+        let (catalog, _dir) = create_isolated_test_catalog();
 
         // Store signatures directly in catalog
         let sig1 = UdfSignature {

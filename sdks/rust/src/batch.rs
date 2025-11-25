@@ -1,4 +1,4 @@
-//! Batch operations for efficient bulk data operations
+﻿//! Batch operations for efficient bulk data operations
 
 use crate::client::NexusClient;
 use crate::error::{NexusError, Result};
@@ -93,7 +93,7 @@ impl NexusClient {
     ///     });
     /// }
     /// let response = client.batch_create_nodes(nodes).await?;
-    /// println!("Created {} nodes", response.node_ids.len());
+    /// tracing::info!("Created {} nodes", response.node_ids.len());
     /// # Ok(())
     /// # }
     /// ```
@@ -152,7 +152,7 @@ impl NexusClient {
     ///     });
     /// }
     /// let response = client.batch_create_relationships(relationships).await?;
-    /// println!("Created {} relationships", response.rel_ids.len());
+    /// tracing::info!("Created {} relationships", response.rel_ids.len());
     /// # Ok(())
     /// # }
     /// ```
