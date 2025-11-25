@@ -1995,11 +1995,20 @@ impl<'a> QueryPlanner<'a> {
                         prev_node_var = Some(target_var.clone());
 
                         // Get type_ids from relationship types (support multiple types like :TYPE1|TYPE2)
+                        // CRITICAL FIX: Use get_or_create_type to ensure type exists even if not yet in catalog
+                        // This handles cases where relationships are created but type lookup fails
                         let type_ids: Vec<u32> = rel
                             .types
                             .iter()
                             .filter_map(|type_name| {
-                                self.catalog.get_type_id(type_name).ok().flatten()
+                                // Try get_type_id first (faster), fallback to get_or_create_type if not found
+                                self.catalog.get_type_id(type_name)
+                                    .ok()
+                                    .flatten()
+                                    .or_else(|| {
+                                        // Type might not exist yet - create it to ensure lookup works
+                                        self.catalog.get_or_create_type(type_name).ok()
+                                    })
                             })
                             .collect();
 
