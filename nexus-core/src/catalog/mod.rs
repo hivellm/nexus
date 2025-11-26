@@ -263,7 +263,7 @@ impl Catalog {
     ///
     /// WARNING: Use sparingly! Each call creates a new LMDB environment.
     /// Only use for tests that absolutely require data isolation.
-    #[cfg(test)]
+    /// This is available for both unit tests and integration tests.
     pub fn with_isolated_path<P: AsRef<Path>>(path: P, map_size: usize) -> Result<Self> {
         Self::open_at_path(path.as_ref(), map_size)
     }

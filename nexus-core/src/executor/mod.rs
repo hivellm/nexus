@@ -9801,7 +9801,12 @@ impl Executor {
                             if let Value::Object(obj) = &value {
                                 let mut keys: Vec<String> = obj
                                     .keys()
-                                    .filter(|k| !k.starts_with('_')) // Exclude internal fields like _nexus_id
+                                    .filter(|k| {
+                                        // Exclude internal fields:
+                                        // - Fields starting with _ (like _nexus_id, _nexus_type)
+                                        // - "type" field (internal relationship type)
+                                        !k.starts_with('_') && *k != "type"
+                                    })
                                     .map(|k| k.to_string())
                                     .collect();
                                 keys.sort();

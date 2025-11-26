@@ -837,8 +837,9 @@ fn regression_rel_with_one_property() {
 
 #[test]
 fn regression_rel_with_three_properties() {
+    // Use isolated catalog to prevent interference from other tests
     let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -935,8 +936,9 @@ fn regression_rel_bidirectional_pattern() {
 
 #[test]
 fn regression_rel_type_function() {
+    // Use isolated catalog to prevent interference from other tests
     let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -983,8 +985,9 @@ fn regression_rel_id_function() {
 
 #[test]
 fn regression_rel_keys_function() {
+    // Use isolated catalog to prevent interference from other tests
     let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1008,8 +1011,9 @@ fn regression_rel_keys_function() {
 
 #[test]
 fn regression_rel_empty_properties() {
+    // Use isolated catalog to prevent interference from other tests
     let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1356,8 +1360,9 @@ fn regression_rel_limit() {
 
 #[test]
 fn regression_rel_distinct_types() {
+    // Use isolated catalog to prevent interference from other tests
     let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1474,8 +1479,9 @@ fn regression_keys_sorted() {
 
 #[test]
 fn regression_type_function() {
+    // Use isolated catalog to prevent interference from other tests
     let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
