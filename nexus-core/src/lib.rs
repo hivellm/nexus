@@ -227,7 +227,7 @@ impl Engine {
     ///
     /// WARNING: Use sparingly - each call creates a new LMDB environment.
     /// Only use for tests that absolutely require data isolation.
-    #[cfg(test)]
+    /// This is available for both unit tests and integration tests.
     pub fn with_isolated_catalog<P: AsRef<std::path::Path>>(data_dir: P) -> Result<Self> {
         let data_dir = data_dir.as_ref();
         std::fs::create_dir_all(data_dir)?;
