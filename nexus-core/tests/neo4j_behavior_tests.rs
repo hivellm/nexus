@@ -211,21 +211,34 @@ fn test_union_requires_same_column_count() -> Result<(), Error> {
 #[test]
 fn test_multiple_labels_intersection() -> Result<(), Error> {
     // Neo4j: Multiple labels in pattern means AND (intersection)
+    // Use unique labels to prevent interference from other tests that share the catalog
     let (mut engine, _temp_dir) = setup_test_engine()?;
 
+    // Use unique label names to avoid collisions with other tests
+    let test_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let person_label = format!("Person_{}", test_id);
+    let employee_label = format!("Employee_{}", test_id);
+
     let _id1 = engine.create_node(
-        vec!["Person".to_string(), "Employee".to_string()],
+        vec![person_label.clone(), employee_label.clone()],
         serde_json::json!({"name": "Alice"}),
     )?;
 
     let _id2 = engine.create_node(
-        vec!["Person".to_string()],
+        vec![person_label.clone()],
         serde_json::json!({"name": "Bob"}),
     )?;
 
     engine.refresh_executor()?;
 
-    let result = engine.execute_cypher("MATCH (n:Person:Employee) RETURN count(*) AS count")?;
+    let query = format!(
+        "MATCH (n:{}:{}) RETURN count(*) AS count",
+        person_label, employee_label
+    );
+    let result = engine.execute_cypher(&query)?;
     let count = result.rows[0].values[0].as_i64().unwrap();
 
     assert_eq!(count, 1, "Should only match nodes with BOTH labels");

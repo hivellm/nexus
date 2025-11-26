@@ -3789,8 +3789,23 @@ impl Executor {
             && !needs_virtual_row;
 
         // Use project_columns for column lookups if available
-        let columns_for_lookup = if !project_columns.is_empty() {
-            &project_columns
+        // CRITICAL FIX: If projection_items contains columns that aren't in project_columns,
+        // we need to add them to columns_for_lookup so that aggregations can find them
+        let extended_columns: Vec<String> = if let Some(items) = projection_items {
+            // Start with project_columns, then add any missing columns from projection_items
+            let mut cols = project_columns.clone();
+            for item in items {
+                if !cols.contains(&item.alias) {
+                    cols.push(item.alias.clone());
+                }
+            }
+            cols
+        } else {
+            project_columns.clone()
+        };
+
+        let columns_for_lookup = if !extended_columns.is_empty() {
+            &extended_columns
         } else {
             &context.result_set.columns
         };
@@ -4009,421 +4024,201 @@ impl Executor {
                                 };
                             Value::Number(serde_json::Number::from(count))
                         } else {
+                            // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
                             let col_name = column.as_ref().unwrap();
-                            let col_idx = self.get_column_index(col_name, columns_for_lookup);
-                            let count = if let Some(idx) = col_idx {
-                                if *distinct {
-                                    // Phase 2.4.2: Optimize COUNT(DISTINCT) - pre-size HashSet
-                                    let estimated_unique = (group_rows.len() / 2).max(1);
-                                    let mut unique_values =
-                                        std::collections::HashSet::with_capacity(estimated_unique);
-                                    for row in &group_rows {
-                                        if idx < row.values.len() && !row.values[idx].is_null() {
-                                            // Avoid to_string() allocation when possible by using references
-                                            unique_values.insert(row.values[idx].to_string());
+                            let count = if *distinct {
+                                // COUNT(DISTINCT) - count unique non-null values
+                                let estimated_unique = (group_rows.len() / 2).max(1);
+                                let mut unique_values =
+                                    std::collections::HashSet::with_capacity(estimated_unique);
+                                for row in &group_rows {
+                                    if let Some(val) = self.extract_value_from_row(
+                                        row,
+                                        col_name,
+                                        columns_for_lookup,
+                                    ) {
+                                        if !val.is_null() {
+                                            unique_values.insert(val.to_string());
                                         }
                                     }
-                                    unique_values.len()
-                                } else {
-                                    // Phase 2.4.2: COUNT(col) - count non-null values (optimized: single pass)
-                                    let mut count = 0;
-                                    for row in &group_rows {
-                                        if idx < row.values.len() && !row.values[idx].is_null() {
+                                }
+                                unique_values.len()
+                            } else {
+                                // COUNT(col) - count non-null values
+                                let mut count = 0;
+                                for row in &group_rows {
+                                    if let Some(val) = self.extract_value_from_row(
+                                        row,
+                                        col_name,
+                                        columns_for_lookup,
+                                    ) {
+                                        if !val.is_null() {
                                             count += 1;
                                         }
                                     }
-                                    count
                                 }
-                            } else {
-                                // Column not found in result_set columns - this can happen when Project
-                                // removed the column before Aggregate (like `r` in `count(r)`)
-                                // For relationship aggregations, each row in the group represents one relationship
-                                // So we can count the rows in the group as the relationship count
-                                // This is safe because Expand creates one row per relationship
-                                if *distinct {
-                                    // For COUNT(DISTINCT r), count unique rows in the group
-                                    // Each row is unique if it represents a different relationship
-                                    effective_row_count
-                                } else {
-                                    // For COUNT(r), simply count all rows in the group
-                                    // Each row represents one relationship
-                                    effective_row_count
-                                }
+                                count
                             };
                             Value::Number(serde_json::Number::from(count))
                         }
                     }
                     Aggregation::Sum { column, .. } => {
-                        let col_idx = self.get_column_index(column, columns_for_lookup);
-                        if let Some(idx) = col_idx {
-                            // Handle empty group_rows with virtual row case
-                            if group_rows.is_empty() && needs_virtual_row {
-                                // Virtual row case - return the literal value (1)
-                                Value::Number(serde_json::Number::from(1))
-                            } else {
-                                // 🚀 PARALLEL SUM OPTIMIZATION: Use parallel summation for large groups
-                                let sum: f64 = if group_rows.len() > 500 {
-                                    use rayon::prelude::*;
-                                    group_rows
-                                        .par_iter()
-                                        .filter_map(|row| {
-                                            if idx < row.values.len() {
-                                                self.value_to_number(&row.values[idx]).ok()
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .sum()
-                                } else {
-                                    group_rows
-                                        .iter()
-                                        .filter_map(|row| {
-                                            if idx < row.values.len() {
-                                                self.value_to_number(&row.values[idx]).ok()
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .sum()
-                                };
-                                // If we have a virtual row but sum is 0, it might mean the virtual row had wrong values
-                                // For virtual row case with no actual rows, return the value from virtual row
-                                if sum == 0.0 && needs_virtual_row && group_rows.len() == 1 {
-                                    // Virtual row should have value 1 in the column (from our creation above)
-                                    // Try to preserve the original type (integer vs float)
-                                    if let Some(row) = group_rows.first() {
-                                        if idx < row.values.len() {
-                                            // Check if the original value is an integer
-                                            match &row.values[idx] {
-                                                Value::Number(n) => {
-                                                    if let Some(i) = n.as_i64() {
-                                                        // Original was integer, return as integer
-                                                        Value::Number(serde_json::Number::from(i))
-                                                    } else if let Some(f) = n.as_f64() {
-                                                        // Original was float, return as float
-                                                        Value::Number(
-                                                            serde_json::Number::from_f64(f)
-                                                                .unwrap_or(
-                                                                    serde_json::Number::from(1),
-                                                                ),
-                                                        )
-                                                    } else {
-                                                        Value::Number(serde_json::Number::from(1))
-                                                    }
-                                                }
-                                                _ => Value::Number(serde_json::Number::from(1)),
-                                            }
-                                        } else {
-                                            Value::Number(serde_json::Number::from(1))
-                                        }
-                                    } else {
-                                        Value::Number(serde_json::Number::from(1))
-                                    }
-                                } else {
-                                    // Check if sum is a whole number, return as integer if possible
-                                    if sum.fract() == 0.0 {
-                                        Value::Number(serde_json::Number::from(sum as i64))
-                                    } else {
-                                        Value::Number(
-                                            serde_json::Number::from_f64(sum)
-                                                .unwrap_or(serde_json::Number::from(0)),
-                                        )
-                                    }
-                                }
-                            }
+                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                        // This handles cases where column is "n.value" but rows only have "n" (the node object)
+                        // Handle empty group_rows with virtual row case
+                        if group_rows.is_empty() && needs_virtual_row {
+                            // Virtual row case - return the literal value (1)
+                            Value::Number(serde_json::Number::from(1))
                         } else {
-                            Value::Number(serde_json::Number::from(0))
+                            // Calculate sum using extract_value_from_row
+                            let sum: f64 = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .sum();
+                            // Return sum as integer if whole number, otherwise as float
+                            if sum.fract() == 0.0 {
+                                Value::Number(serde_json::Number::from(sum as i64))
+                            } else {
+                                Value::Number(
+                                    serde_json::Number::from_f64(sum)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
+                            }
                         }
                     }
                     Aggregation::Avg { column, .. } => {
-                        let col_idx = self.get_column_index(column, columns_for_lookup);
-                        if let Some(idx) = col_idx {
-                            // Handle empty group_rows with virtual row case
-                            if group_rows.is_empty() && needs_virtual_row {
-                                // Virtual row case - return the literal value (10 for avg(10))
-                                Value::Number(
-                                    serde_json::Number::from_f64(10.0)
-                                        .unwrap_or(serde_json::Number::from(10)),
-                                )
-                            } else {
-                                // Phase 2.4.2: Optimize AVG - calculate sum and count in single pass
-                                let mut sum = 0.0;
-                                let mut count = 0;
-                                for row in &group_rows {
-                                    if idx < row.values.len() {
-                                        if let Ok(num) = self.value_to_number(&row.values[idx]) {
-                                            sum += num;
-                                            count += 1;
-                                        }
+                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                        // Handle empty group_rows with virtual row case
+                        if group_rows.is_empty() && needs_virtual_row {
+                            // Virtual row case - return the literal value (10 for avg(10))
+                            Value::Number(
+                                serde_json::Number::from_f64(10.0)
+                                    .unwrap_or(serde_json::Number::from(10)),
+                            )
+                        } else {
+                            // Calculate sum and count using extract_value_from_row
+                            let mut sum = 0.0;
+                            let mut count = 0;
+                            for row in &group_rows {
+                                if let Some(val) =
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                {
+                                    if let Ok(num) = self.value_to_number(&val) {
+                                        sum += num;
+                                        count += 1;
                                     }
-                                }
-
-                                if count == 0 {
-                                    // For virtual row case, return the value from virtual row
-                                    if needs_virtual_row && group_rows.len() == 1 {
-                                        if let Some(row) = group_rows.first() {
-                                            if idx < row.values.len() {
-                                                let val = self
-                                                    .value_to_number(&row.values[idx])
-                                                    .unwrap_or(10.0);
-                                                Value::Number(
-                                                    serde_json::Number::from_f64(val)
-                                                        .unwrap_or(serde_json::Number::from(10)),
-                                                )
-                                            } else {
-                                                Value::Number(serde_json::Number::from(10))
-                                            }
-                                        } else {
-                                            Value::Number(serde_json::Number::from(10))
-                                        }
-                                    } else {
-                                        Value::Null
-                                    }
-                                } else {
-                                    // Phase 2.4.2: Calculate average from pre-computed sum and count
-                                    let avg = sum / count as f64;
-                                    Value::Number(
-                                        serde_json::Number::from_f64(avg)
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
                                 }
                             }
-                        } else {
-                            Value::Null
+
+                            if count == 0 {
+                                Value::Null
+                            } else {
+                                // Calculate average from sum and count
+                                let avg = sum / count as f64;
+                                Value::Number(
+                                    serde_json::Number::from_f64(avg)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
+                            }
                         }
                     }
                     Aggregation::Min { column, .. } => {
-                        let col_idx = self.get_column_index(column, columns_for_lookup);
-                        if let Some(idx) = col_idx {
-                            // Handle virtual row case: if we have exactly one row and it's a virtual row,
-                            // use the value directly instead of finding minimum
-                            // Also handle empty group_rows with virtual row (virtual row was created but group_rows is empty)
-                            if needs_virtual_row
-                                && (group_rows.len() == 1
-                                    || (group_rows.is_empty() && !project_rows.is_empty()))
-                            {
-                                let row_to_use = if group_rows.len() == 1 {
-                                    group_rows.first()
-                                } else if !project_rows.is_empty() {
-                                    project_rows.first()
-                                } else {
-                                    None
-                                };
-                                if let Some(row) = row_to_use {
-                                    if idx < row.values.len() && !row.values[idx].is_null() {
-                                        row.values[idx].clone()
-                                    } else {
-                                        Value::Null
-                                    }
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                // Phase 2.2.2: Optimized MIN calculation
-                                // Early exit optimization: if we can determine min without full scan
-                                // For numeric values, we can optimize by comparing as we iterate
-                                let mut min_val: Option<&Value> = None;
-                                let mut min_num: Option<f64> = None;
+                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                        let mut min_val: Option<Value> = None;
+                        let mut min_num: Option<f64> = None;
 
-                                for row in &group_rows {
-                                    if idx < row.values.len() && !row.values[idx].is_null() {
-                                        let val = &row.values[idx];
-                                        // Try to convert to number for efficient comparison
-                                        if let Ok(num) = self.value_to_number(val) {
-                                            if min_num.is_none() || num < min_num.unwrap() {
-                                                min_num = Some(num);
-                                                min_val = Some(val);
-                                            }
+                        for row in &group_rows {
+                            if let Some(val) =
+                                self.extract_value_from_row(row, column, columns_for_lookup)
+                            {
+                                if !val.is_null() {
+                                    // Try to convert to number for efficient comparison
+                                    if let Ok(num) = self.value_to_number(&val) {
+                                        if min_num.is_none() || num < min_num.unwrap() {
+                                            min_num = Some(num);
+                                            min_val = Some(val);
+                                        }
+                                    } else {
+                                        // For non-numeric, fall back to value comparison
+                                        if min_val.is_none() {
+                                            min_val = Some(val);
                                         } else {
-                                            // For non-numeric, fall back to value comparison
-                                            if min_val.is_none() {
+                                            // String comparison
+                                            let a_str = min_val.as_ref().unwrap().to_string();
+                                            let b_str = val.to_string();
+                                            if b_str < a_str {
                                                 min_val = Some(val);
-                                            } else {
-                                                // Compare values
-                                                if let Ok(a_num) =
-                                                    self.value_to_number(min_val.unwrap())
-                                                {
-                                                    if let Ok(b_num) = self.value_to_number(val) {
-                                                        if b_num < a_num {
-                                                            min_val = Some(val);
-                                                        }
-                                                    }
-                                                } else {
-                                                    // String comparison
-                                                    let a_str = min_val.unwrap().to_string();
-                                                    let b_str = val.to_string();
-                                                    if b_str < a_str {
-                                                        min_val = Some(val);
-                                                    }
-                                                }
                                             }
                                         }
                                     }
                                 }
-                                min_val.cloned().unwrap_or(Value::Null)
                             }
-                        } else {
-                            Value::Null
                         }
+                        min_val.unwrap_or(Value::Null)
                     }
                     Aggregation::Max { column, .. } => {
-                        let col_idx = self.get_column_index(column, columns_for_lookup);
-                        if let Some(idx) = col_idx {
-                            // Handle virtual row case: if we have exactly one row and it's a virtual row,
-                            // use the value directly instead of finding maximum
-                            // Also handle empty group_rows with virtual row (virtual row was created but group_rows is empty)
-                            if needs_virtual_row
-                                && (group_rows.len() == 1
-                                    || (group_rows.is_empty() && !project_rows.is_empty()))
-                            {
-                                let row_to_use = if group_rows.len() == 1 {
-                                    group_rows.first()
-                                } else if !project_rows.is_empty() {
-                                    project_rows.first()
-                                } else {
-                                    None
-                                };
-                                if let Some(row) = row_to_use {
-                                    if idx < row.values.len() && !row.values[idx].is_null() {
-                                        row.values[idx].clone()
-                                    } else {
-                                        Value::Null
-                                    }
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                // Phase 2.2.2: Optimized MAX calculation
-                                // Early exit optimization: if we can determine max without full scan
-                                // For numeric values, we can optimize by comparing as we iterate
-                                let mut max_val: Option<&Value> = None;
-                                let mut max_num: Option<f64> = None;
+                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                        let mut max_val: Option<Value> = None;
+                        let mut max_num: Option<f64> = None;
 
-                                for row in &group_rows {
-                                    if idx < row.values.len() && !row.values[idx].is_null() {
-                                        let val = &row.values[idx];
-                                        // Try to convert to number for efficient comparison
-                                        if let Ok(num) = self.value_to_number(val) {
-                                            if max_num.is_none() || num > max_num.unwrap() {
-                                                max_num = Some(num);
-                                                max_val = Some(val);
-                                            }
+                        for row in &group_rows {
+                            if let Some(val) =
+                                self.extract_value_from_row(row, column, columns_for_lookup)
+                            {
+                                if !val.is_null() {
+                                    // Try to convert to number for efficient comparison
+                                    if let Ok(num) = self.value_to_number(&val) {
+                                        if max_num.is_none() || num > max_num.unwrap() {
+                                            max_num = Some(num);
+                                            max_val = Some(val);
+                                        }
+                                    } else {
+                                        // For non-numeric, fall back to value comparison
+                                        if max_val.is_none() {
+                                            max_val = Some(val);
                                         } else {
-                                            // For non-numeric, fall back to value comparison
-                                            if max_val.is_none() {
+                                            // String comparison
+                                            let a_str = max_val.as_ref().unwrap().to_string();
+                                            let b_str = val.to_string();
+                                            if b_str > a_str {
                                                 max_val = Some(val);
-                                            } else {
-                                                // Compare values
-                                                if let Ok(a_num) =
-                                                    self.value_to_number(max_val.unwrap())
-                                                {
-                                                    if let Ok(b_num) = self.value_to_number(val) {
-                                                        if b_num > a_num {
-                                                            max_val = Some(val);
-                                                        }
-                                                    }
-                                                } else {
-                                                    // String comparison
-                                                    let a_str = max_val.unwrap().to_string();
-                                                    let b_str = val.to_string();
-                                                    if b_str > a_str {
-                                                        max_val = Some(val);
-                                                    }
-                                                }
                                             }
                                         }
                                     }
                                 }
-                                max_val.cloned().unwrap_or(Value::Null)
                             }
-                        } else {
-                            Value::Null
                         }
+                        max_val.unwrap_or(Value::Null)
                     }
                     Aggregation::Collect {
                         column, distinct, ..
                     } => {
-                        // CRITICAL FIX: When Project is deferred, column may be "p.name" but only "p" exists
-                        // Try to get value using column index first, then fallback to property extraction
-                        let col_idx = self.get_column_index(column, columns_for_lookup);
-                        let get_value_from_row = |row: &Row,
-                                                  idx_opt: Option<usize>|
-                         -> Option<Value> {
-                            if let Some(idx) = idx_opt {
-                                if idx < row.values.len() && !row.values[idx].is_null() {
-                                    return Some(row.values[idx].clone());
-                                }
-                            } else if column.contains('.') {
-                                // Try to extract property from variable object
-                                let parts: Vec<&str> = column.split('.').collect();
-                                if parts.len() == 2 {
-                                    let var_name = parts[0];
-                                    let prop_name = parts[1];
-                                    // Find variable column
-                                    if let Some(var_idx) =
-                                        self.get_column_index(var_name, columns_for_lookup)
-                                    {
-                                        if var_idx < row.values.len() {
-                                            if let Value::Object(obj) = &row.values[var_idx] {
-                                                // Extract property from node object
-                                                if let Some(Value::Object(props)) =
-                                                    obj.get("properties")
-                                                {
-                                                    return props.get(prop_name).cloned();
-                                                } else if let Some(val) = obj.get(prop_name) {
-                                                    return Some(val.clone());
-                                                }
-                                            }
-                                        }
-                                    }
-                                    // Try using projection_items if available
-                                    if let Some(items) = projection_items {
-                                        if let Some(item) =
-                                            items.iter().find(|i| i.alias == *column)
-                                        {
-                                            // Convert row to HashMap for evaluation
-                                            let row_map: HashMap<String, Value> =
-                                                columns_for_lookup
-                                                    .iter()
-                                                    .zip(row.values.iter())
-                                                    .map(|(col, val)| (col.clone(), val.clone()))
-                                                    .collect();
-                                            if let Ok(val) = self.evaluate_projection_expression(
-                                                &row_map,
-                                                context,
-                                                &item.expression,
-                                            ) {
-                                                if !val.is_null() {
-                                                    return Some(val);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            None
-                        };
+                        // Use extract_value_from_row which correctly handles PropertyAccess (e.g., p.name)
+                        // Pre-size Vec for COLLECT (Phase 2.3 optimization)
+                        let estimated_collect_size = group_rows.len();
+                        let mut collected_values = Vec::with_capacity(estimated_collect_size);
 
-                        if let Some(idx) = col_idx {
-                            // Pre-size Vec for COLLECT (Phase 2.3 optimization)
-                            let estimated_collect_size = group_rows.len();
-                            let mut collected_values = Vec::with_capacity(estimated_collect_size);
-
-                            // Handle virtual row case: if we have exactly one row and it's a virtual row,
-                            // collect that single value into an array
-                            if needs_virtual_row
-                                && (group_rows.len() == 1
-                                    || (group_rows.is_empty() && !project_rows.is_empty()))
-                            {
-                                let row_to_use = if group_rows.len() == 1 {
-                                    group_rows.first()
-                                } else if !project_rows.is_empty() {
-                                    project_rows.first()
-                                } else {
-                                    None
-                                };
-                                if let Some(row) = row_to_use {
-                                    if let Some(val) = get_value_from_row(row, Some(idx)) {
+                        // Handle virtual row case: if we have exactly one row and it's a virtual row,
+                        // collect that single value into an array
+                        if needs_virtual_row
+                            && (group_rows.len() == 1
+                                || (group_rows.is_empty() && !project_rows.is_empty()))
+                        {
+                            let row_to_use = if group_rows.len() == 1 {
+                                group_rows.first()
+                            } else if !project_rows.is_empty() {
+                                project_rows.first()
+                            } else {
+                                None
+                            };
+                            if let Some(row) = row_to_use {
+                                if let Some(val) =
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                {
+                                    if !val.is_null() {
                                         Value::Array(vec![val])
                                     } else {
                                         Value::Array(Vec::new())
@@ -4432,63 +4227,34 @@ impl Executor {
                                     Value::Array(Vec::new())
                                 }
                             } else {
-                                // Use pre-sized Vec for COLLECT (Phase 2.3 optimization)
-                                if *distinct {
-                                    // COLLECT(DISTINCT col) - collect unique values
-                                    let unique_values: std::collections::HashSet<String> =
-                                        group_rows
-                                            .iter()
-                                            .filter_map(|row| {
-                                                get_value_from_row(row, Some(idx))
-                                                    .map(|v| v.to_string())
-                                            })
-                                            .collect();
-                                    // Convert back to original values (sorted for determinism)
-                                    let mut sorted: Vec<_> = unique_values.into_iter().collect();
-                                    sorted.sort();
-                                    // Collect distinct values into pre-sized Vec
-                                    for row in &group_rows {
-                                        if let Some(val) = get_value_from_row(row, Some(idx)) {
-                                            let val_str = val.to_string();
-                                            if sorted.contains(&val_str) {
-                                                sorted.retain(|s| s != &val_str);
-                                                collected_values.push(val);
-                                            }
-                                        }
-                                    }
-                                    Value::Array(collected_values)
-                                } else {
-                                    // COLLECT(col) - collect all non-null values into pre-sized Vec
-                                    for row in &group_rows {
-                                        if let Some(val) = get_value_from_row(row, Some(idx)) {
+                                Value::Array(Vec::new())
+                            }
+                        } else if *distinct {
+                            // COLLECT(DISTINCT col) - collect unique values
+                            let mut seen = std::collections::HashSet::new();
+                            for row in &group_rows {
+                                if let Some(val) =
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                {
+                                    if !val.is_null() {
+                                        let val_str = val.to_string();
+                                        if seen.insert(val_str) {
                                             collected_values.push(val);
                                         }
                                     }
-                                    Value::Array(collected_values)
                                 }
                             }
+                            Value::Array(collected_values)
                         } else {
-                            // Column not found - try property extraction fallback
-                            let estimated_collect_size = group_rows.len();
-                            let mut collected_values = Vec::with_capacity(estimated_collect_size);
+                            // COLLECT(col) - collect all non-null values
                             for row in &group_rows {
-                                if let Some(val) = get_value_from_row(row, None) {
-                                    if *distinct {
-                                        let val_str = val.to_string();
-                                        if !collected_values
-                                            .iter()
-                                            .any(|v: &Value| v.to_string() == val_str)
-                                        {
-                                            collected_values.push(val);
-                                        }
-                                    } else {
+                                if let Some(val) =
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                {
+                                    if !val.is_null() {
                                         collected_values.push(val);
                                     }
                                 }
-                            }
-                            if *distinct {
-                                // Sort distinct values for determinism
-                                collected_values.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
                             }
                             Value::Array(collected_values)
                         }
@@ -6680,6 +6446,41 @@ impl Executor {
         Ok(())
     }
 
+    /// Extract value from a row for a given column name.
+    /// Handles PropertyAccess columns (like "n.value") by extracting from the node object.
+    fn extract_value_from_row(&self, row: &Row, column: &str, columns: &[String]) -> Option<Value> {
+        // First try direct column lookup
+        if let Some(idx) = columns.iter().position(|c| c == column) {
+            if idx < row.values.len() {
+                return Some(row.values[idx].clone());
+            }
+        }
+
+        // If column is a PropertyAccess (like "n.value"), extract from node object
+        if column.contains('.') {
+            let parts: Vec<&str> = column.split('.').collect();
+            if parts.len() == 2 {
+                let var_name = parts[0];
+                let prop_name = parts[1];
+
+                // Find the variable in columns
+                if let Some(var_idx) = columns.iter().position(|c| c == var_name) {
+                    if var_idx < row.values.len() {
+                        // Extract property from the node object
+                        if let Value::Object(obj) = &row.values[var_idx] {
+                            // Node objects can have properties directly or nested
+                            if let Some(val) = obj.get(prop_name) {
+                                return Some(val.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Get the index of a column by name
     fn get_column_index(&self, column_name: &str, columns: &[String]) -> Option<usize> {
         columns.iter().position(|col| col == column_name)
@@ -7359,10 +7160,10 @@ impl Executor {
 
                 // Scan for relationships where this node is the source (for Outgoing) or target (for Incoming)
                 // We'll scan recent relationships (limit to avoid performance issues)
-                // CRITICAL: Start from a reasonable high ID and scan backwards, checking up to 500 relationships
-                // This assumes relationships are created sequentially, so recent ones have higher IDs
+                // CRITICAL FIX: Start from a reasonable high ID and scan backwards, checking up to 501 relationships
+                // to ensure rel_id=0 is always checked. This assumes relationships are created sequentially.
                 let start_id = 500; // Start from a reasonable high ID (adjust if you have more relationships)
-                let scan_limit = 500; // Check at most 500 relationships
+                let scan_limit = 501; // Check at most 501 relationships (0..=500 is 501 items)
                 let mut scanned_rel_ids = std::collections::HashSet::new();
                 let mut scanned_count = 0;
 
@@ -7377,6 +7178,13 @@ impl Executor {
                         if !rel_record.is_deleted() {
                             let check_src_id = rel_record.src_id;
                             let check_dst_id = rel_record.dst_id;
+
+                            // CRITICAL FIX: Skip uninitialized relationship records
+                            // These have src_id=0 and dst_id=0 (pointing to node 0 in both directions)
+                            if check_src_id == 0 && check_dst_id == 0 && check_rel_id > 0 {
+                                // This looks like an uninitialized record - skip it
+                                continue;
+                            }
 
                             // Check if this relationship matches the direction we're looking for
                             let matches_direction = match direction {
@@ -7505,6 +7313,17 @@ impl Executor {
                             let check_src_id = rel_record.src_id;
                             let check_dst_id = rel_record.dst_id;
 
+                            // CRITICAL FIX: Skip uninitialized relationship records
+                            // These have src_id=0 and dst_id=0 (pointing to node 0 in both directions)
+                            // which are invalid for real relationships (would be a self-loop from node 0 to node 0)
+                            // A real relationship would have a valid type_id > 0 if src=0 and dst=0
+                            let record_type_id = rel_record.type_id;
+                            if check_src_id == 0 && check_dst_id == 0 && check_rel_id > 0 {
+                                // This looks like an uninitialized record - skip it
+                                // Note: we only skip if rel_id > 0 because rel_id=0 could be legitimate
+                                continue;
+                            }
+
                             let matches_direction = match direction {
                                 Direction::Outgoing => check_src_id == node_id,
                                 Direction::Incoming => check_dst_id == node_id,
@@ -7514,7 +7333,6 @@ impl Executor {
                             };
 
                             if matches_direction {
-                                let record_type_id = rel_record.type_id;
                                 let matches_type =
                                     type_ids.is_empty() || type_ids.contains(&record_type_id);
 
@@ -7528,7 +7346,7 @@ impl Executor {
 
                 if !scanned_rel_ids.is_empty() {
                     tracing::debug!(
-                        "[find_relationships] Node {}: Found {} relationships via scan (first_rel_ptr was invalid)",
+                        "[find_relationships] Node {}: Found {} relationships via scan",
                         node_id,
                         scanned_rel_ids.len()
                     );
