@@ -9,6 +9,8 @@ use tempfile::TempDir;
 
 fn create_test_executor() -> (Executor, TempDir) {
     let dir = TempDir::new().unwrap();
+    // Ensure directory exists before creating components
+    std::fs::create_dir_all(dir.path()).unwrap();
     let catalog = Catalog::new(dir.path()).unwrap();
     let store = RecordStore::new(dir.path()).unwrap();
     let label_index = LabelIndex::new();
