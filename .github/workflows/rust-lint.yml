@@ -29,6 +29,8 @@ jobs:
     - uses: Swatinem/rust-cache@v2
       with:
         key: clippy
+        cache-all-crates: false
+        save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' }}
     
     - name: Check code formatting
       run: cargo +nightly fmt --all -- --check
@@ -41,4 +43,8 @@ jobs:
     
     - name: Check cargo clippy warnings for all targets and features
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+    - name: Clean after lint
+      if: always()
+      run: cargo clean
 
