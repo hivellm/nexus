@@ -1,1 +1,26 @@
-"use strict";const e=require("electron");e.contextBridge.exposeInMainWorld("electronAPI",{getVersion:()=>e.ipcRenderer.invoke("app:getVersion"),getPlatform:()=>e.ipcRenderer.invoke("app:getPlatform"),openFile:i=>e.ipcRenderer.invoke("dialog:openFile",i),saveFile:i=>e.ipcRenderer.invoke("dialog:saveFile",i),readFile:i=>e.ipcRenderer.invoke("fs:readFile",i),writeFile:(i,n)=>e.ipcRenderer.invoke("fs:writeFile",i,n),minimizeWindow:()=>e.ipcRenderer.send("window:minimize"),maximizeWindow:()=>e.ipcRenderer.send("window:maximize"),closeWindow:()=>e.ipcRenderer.send("window:close"),isMaximized:()=>e.ipcRenderer.invoke("window:isMaximized"),showNotification:i=>e.ipcRenderer.send("notification:show",i),openExternal:i=>e.ipcRenderer.invoke("shell:openExternal",i),onMainMessage:i=>{e.ipcRenderer.on("main-process-message",(n,r)=>i(r))}});
+"use strict";
+const electron = require("electron");
+electron.contextBridge.exposeInMainWorld("electronAPI", {
+  // App info
+  getVersion: () => electron.ipcRenderer.invoke("app:getVersion"),
+  getPlatform: () => electron.ipcRenderer.invoke("app:getPlatform"),
+  // File dialogs
+  openFile: (options) => electron.ipcRenderer.invoke("dialog:openFile", options),
+  saveFile: (options) => electron.ipcRenderer.invoke("dialog:saveFile", options),
+  // File system
+  readFile: (filePath) => electron.ipcRenderer.invoke("fs:readFile", filePath),
+  writeFile: (filePath, content) => electron.ipcRenderer.invoke("fs:writeFile", filePath, content),
+  // Window controls
+  minimizeWindow: () => electron.ipcRenderer.send("window:minimize"),
+  maximizeWindow: () => electron.ipcRenderer.send("window:maximize"),
+  closeWindow: () => electron.ipcRenderer.send("window:close"),
+  isMaximized: () => electron.ipcRenderer.invoke("window:isMaximized"),
+  // Notifications
+  showNotification: (options) => electron.ipcRenderer.send("notification:show", options),
+  // Shell
+  openExternal: (url) => electron.ipcRenderer.invoke("shell:openExternal", url),
+  // Listen for messages from main process
+  onMainMessage: (callback) => {
+    electron.ipcRenderer.on("main-process-message", (_, message) => callback(message));
+  }
+});

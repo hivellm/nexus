@@ -14,6 +14,7 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
+            minify: false,
             lib: {
               entry: 'electron/main.ts',
               formats: ['cjs'],
@@ -23,6 +24,7 @@ export default defineConfig({
               output: {
                 format: 'cjs',
                 entryFileNames: '[name].cjs',
+                compact: false,
               },
             },
           },
@@ -36,6 +38,7 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
+            minify: false,
             lib: {
               entry: 'electron/preload.ts',
               formats: ['cjs'],
@@ -45,6 +48,7 @@ export default defineConfig({
               output: {
                 format: 'cjs',
                 entryFileNames: '[name].cjs',
+                compact: false,
               },
             },
           },
