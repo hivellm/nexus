@@ -232,7 +232,10 @@ impl PropertyIndex {
 
     /// Clean up expired entries
     pub fn cleanup_expired(&mut self) {
-        let cutoff = Instant::now() - self.ttl;
+        // Use checked_sub to avoid overflow on Windows
+        let cutoff = Instant::now()
+            .checked_sub(self.ttl)
+            .unwrap_or_else(|| Instant::now() - Duration::from_secs(0)); // Fallback to now if overflow
         let mut to_remove = Vec::new();
 
         // Find entries older than TTL (simplified - in practice would track timestamps)

@@ -493,7 +493,10 @@ impl MultiLayerCache {
             access_frequency: HashMap::new(),
             last_access: HashMap::new(),
             last_distributed_sync: Instant::now(),
-            last_warm_time: Instant::now() - std::time::Duration::from_secs(3600), // Start with old timestamp
+            // Use checked_sub to avoid overflow on Windows
+            last_warm_time: Instant::now()
+                .checked_sub(std::time::Duration::from_secs(3600))
+                .unwrap_or_else(Instant::now), // Fallback to now if overflow
         })
     }
 
@@ -515,7 +518,10 @@ impl MultiLayerCache {
 
     /// Clean up old access tracking data
     fn cleanup_access_tracking(&mut self) {
-        let cutoff = Instant::now() - Duration::from_secs(3600); // 1 hour ago
+        // Use checked_sub to avoid overflow on Windows
+        let cutoff = Instant::now()
+            .checked_sub(Duration::from_secs(3600))
+            .unwrap_or_else(|| Instant::now() - Duration::from_secs(0)); // Fallback to now if overflow
 
         // Remove entries older than cutoff
         self.last_access.retain(|_, time| *time > cutoff);
