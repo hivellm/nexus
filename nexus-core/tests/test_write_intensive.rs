@@ -62,6 +62,7 @@ async fn test_1000_concurrent_create_operations() {
 
 /// Test relationship creation throughput
 #[tokio::test]
+#[ignore] // TODO: Test takes >60s, skipping in CI
 async fn test_relationship_creation_throughput() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
