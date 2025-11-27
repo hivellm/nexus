@@ -369,7 +369,8 @@ mod tests {
     use tokio::sync::RwLock;
 
     /// Helper function to create a test server
-    async fn create_test_server() -> Arc<NexusServer> {
+    /// Returns (TempDir, Arc<NexusServer>) - TempDir must be kept alive for the duration of the test
+    async fn create_test_server() -> (TempDir, Arc<NexusServer>) {
         let temp_dir = TempDir::new().unwrap();
         let engine = Engine::with_data_dir(temp_dir.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
@@ -399,7 +400,7 @@ mod tests {
             .unwrap(),
         );
 
-        Arc::new(NexusServer::new(
+        let server = Arc::new(NexusServer::new(
             executor_arc,
             engine_arc,
             database_manager_arc,
@@ -408,13 +409,15 @@ mod tests {
             jwt_manager,
             audit_logger,
             RootUserConfig::default(),
-        ))
+        ));
+
+        (temp_dir, server)
     }
 
     #[tokio::test]
     #[ignore] // TODO: Fix LMDB BadRslot error - likely due to concurrent access issues
     async fn test_ingest_nodes_only() {
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let request = IngestRequest {
             nodes: vec![
                 NodeIngest {
@@ -439,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ingest_relationships_only() {
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let request = IngestRequest {
             nodes: vec![],
             relationships: vec![RelIngest {
@@ -459,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ingest_mixed_data() {
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let request = IngestRequest {
             nodes: vec![NodeIngest {
                 id: None,
@@ -483,7 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ingest_empty_request() {
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let request = IngestRequest {
             nodes: vec![],
             relationships: vec![],
@@ -508,7 +511,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -526,7 +529,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -553,7 +556,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -575,7 +578,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -593,7 +596,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -611,7 +614,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -629,7 +632,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -666,7 +669,7 @@ mod tests {
             use_batching: true,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -701,7 +704,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -732,7 +735,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -763,7 +766,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
@@ -786,7 +789,7 @@ mod tests {
             use_batching: false,
         };
 
-        let server = create_test_server().await;
+        let (_temp_dir, server) = create_test_server().await;
         let _response = ingest_data(State(server), Json(request)).await;
         // Test passes if no panic occurs
     }
