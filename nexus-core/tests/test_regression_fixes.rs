@@ -3,7 +3,9 @@
 //! These tests ensure that the fixes implemented don't regress and continue to work correctly.
 
 use nexus_core::executor::Query;
-use nexus_core::testing::{TestContext, create_test_executor, setup_test_engine};
+use nexus_core::testing::{
+    TestContext, create_test_executor, setup_isolated_test_engine, setup_test_engine,
+};
 use serde_json::Value;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
@@ -386,7 +388,7 @@ fn regression_create_index_returns_message() {
 #[test]
 fn regression_create_constraint_returns_message() {
     run_with_timeout("regression_create_constraint_returns_message", || {
-        let (mut engine, _ctx) = setup_test_engine().unwrap();
+        let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
         // Create a node first
         engine

@@ -231,23 +231,26 @@ impl Catalog {
             // This prevents TlsFull errors on Windows by limiting to just 1 LMDB environment
             static TEST_CATALOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
-            let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
-                let base = std::env::temp_dir().join("nexus_test_catalogs_shared");
-                // DO NOT remove existing directory - it may be in use by parallel tests
-                // Just ensure the directory exists
-                if let Err(e) = std::fs::create_dir_all(&base) {
-                    // Log error but continue - directory might already exist from parallel test
-                    eprintln!(
-                        "Warning: Failed to create test catalog dir {:?}: {}",
-                        base, e
-                    );
-                }
-                base
-            });
+            let shared_dir = TEST_CATALOG_DIR
+                .get_or_init(|| std::env::temp_dir().join("nexus_test_catalogs_shared"));
 
-            // Ensure directory exists (may have been deleted by another test)
-            if !shared_dir.exists() {
-                let _ = std::fs::create_dir_all(shared_dir);
+            // ALWAYS ensure directory exists before every use
+            // This handles race conditions where the directory may have been deleted
+            // Use a loop with retry to handle transient filesystem issues
+            for attempt in 0..3 {
+                match std::fs::create_dir_all(shared_dir) {
+                    Ok(_) => break,
+                    Err(e) if attempt < 2 => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to create test catalog dir {:?}: {}",
+                            shared_dir, e
+                        );
+                    }
+                }
             }
 
             shared_dir.clone()
