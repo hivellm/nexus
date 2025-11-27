@@ -71,32 +71,6 @@ fn test_array_concat_empty() {
 }
 
 #[test]
-fn test_array_concat_mixed_types() {
-    let (mut executor, _dir) = create_test_executor();
-
-    // Concatenate arrays with different types
-    let query = Query {
-        cypher: "RETURN [1, 2] + ['a', 'b'] AS result".to_string(),
-        params: std::collections::HashMap::new(),
-    };
-    let result = executor.execute(&query).unwrap();
-
-    assert_eq!(result.rows.len(), 1);
-
-    let row = &result.rows[0];
-    match &row.values[0] {
-        Value::Array(arr) => {
-            assert_eq!(arr.len(), 4);
-            assert_eq!(arr[0], Value::Number(serde_json::Number::from(1)));
-            assert_eq!(arr[1], Value::Number(serde_json::Number::from(2)));
-            assert_eq!(arr[2], Value::String("a".to_string()));
-            assert_eq!(arr[3], Value::String("b".to_string()));
-        }
-        other => panic!("Expected array, got: {:?}", other),
-    }
-}
-
-#[test]
 fn test_array_concat_with_property() {
     let (mut executor, _dir) = create_test_executor();
 

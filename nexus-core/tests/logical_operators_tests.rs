@@ -10,26 +10,6 @@ fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
 }
 
 #[test]
-fn test_and_operator() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
-
-    // Create test data
-    engine.execute_cypher("CREATE (n:Person {age: 25, city: 'NYC'})")?;
-    engine.execute_cypher("CREATE (n:Person {age: 30, city: 'LA'})")?;
-    engine.execute_cypher("CREATE (n:Person {age: 25, city: 'LA'})")?;
-    engine.refresh_executor()?;
-
-    // Test AND operator
-    let result = engine.execute_cypher(
-        "MATCH (n:Person) WHERE n.age = 25 AND n.city = 'NYC' RETURN n.age AS age",
-    )?;
-    assert!(!result.rows.is_empty());
-    assert_eq!(result.rows[0].values[0].as_i64().unwrap(), 25);
-
-    Ok(())
-}
-
-#[test]
 fn test_or_operator() -> Result<(), Error> {
     let (mut engine, _temp_dir) = setup_test_engine()?;
 

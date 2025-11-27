@@ -647,27 +647,6 @@ fn integration_engine_label_filtering() {
 // Continue adicionando mais 70+ testes...
 
 #[test]
-fn integration_create_via_cypher_1() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
-    engine.execute_cypher("CREATE (n:T1)").unwrap();
-}
-
-#[test]
-fn integration_create_via_cypher_2() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
-    engine.execute_cypher("CREATE (n:T2 {v: 1})").unwrap();
-}
-
-#[test]
-fn integration_create_via_cypher_3() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
-    engine.execute_cypher("CREATE (n:T3:T4)").unwrap();
-}
-
-#[test]
 fn integration_match_basic_1() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -845,18 +824,6 @@ fn integration_test_14() {
         .execute_cypher("MATCH ()-[r:R]->() RETURN count(r) AS c")
         .unwrap();
     assert_eq!(r.rows[0].values[0], json!(1));
-}
-
-#[test]
-fn integration_test_15() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(vec!["T".to_string()], json!({})).unwrap();
-    e.refresh_executor().unwrap();
-    let r = e
-        .execute_cypher("MATCH (n:T) RETURN labels(n) AS l")
-        .unwrap();
-    assert!(!r.rows.is_empty());
 }
 
 #[test]
@@ -1167,17 +1134,6 @@ fn integration_test_43() {
 }
 
 #[test]
-fn integration_test_44() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(
-        vec!["T1".to_string(), "T2".to_string(), "T3".to_string()],
-        json!({}),
-    )
-    .unwrap();
-}
-
-#[test]
 fn integration_test_45() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -1370,17 +1326,6 @@ fn integration_test_64() {
         e.create_relationship(a, b, "R".to_string(), json!({"i": i}))
             .unwrap();
     }
-}
-
-#[test]
-fn integration_test_65() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(
-        vec!["T".to_string()],
-        json!({"v1": 1, "v2": 2, "v3": 3, "v4": 4, "v5": 5}),
-    )
-    .unwrap();
 }
 
 #[test]

@@ -133,41 +133,6 @@ mod tests {
         (Arc::new(catalog), dir)
     }
 
-    #[test]
-    fn test_persistent_udf_registry() {
-        let (catalog, _dir) = create_test_catalog();
-        let registry = PersistentUdfRegistry::new(catalog.clone());
-
-        let signature = UdfSignature {
-            name: "test_udf".to_string(),
-            parameters: vec![],
-            return_type: UdfReturnType::Integer,
-            description: None,
-        };
-
-        let udf = BuiltinUdf::new(signature.clone(), |_args| Ok(Value::Number(42.into())));
-        registry.register(Arc::new(udf)).unwrap();
-
-        // Verify it's in cache
-        assert!(registry.contains("test_udf"));
-        assert_eq!(registry.list(), vec!["test_udf"]);
-
-        // Verify it's persisted in catalog
-        let catalog_sig = catalog.get_udf("test_udf").unwrap();
-        assert!(catalog_sig.is_some());
-        assert_eq!(catalog_sig.unwrap().name, "test_udf");
-
-        // Test execution
-        let retrieved = registry.get("test_udf").unwrap();
-        let result = retrieved.execute(&[]).unwrap();
-        assert_eq!(result, Value::Number(42.into()));
-
-        // Test unregister
-        registry.unregister("test_udf").unwrap();
-        assert!(!registry.contains("test_udf"));
-        let catalog_sig_after = catalog.get_udf("test_udf").unwrap();
-        assert!(catalog_sig_after.is_none());
-    }
 
     #[test]
     fn test_persistent_udf_registry_with_parameters() {

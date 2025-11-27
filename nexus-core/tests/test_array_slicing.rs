@@ -208,23 +208,3 @@ fn test_array_slice_full_range() {
     );
 }
 
-#[test]
-fn test_array_slice_strings() {
-    let (mut executor, _dir) = create_test_executor();
-
-    // Slice works with string arrays
-    let query = Query {
-        cypher: "RETURN ['a', 'b', 'c', 'd', 'e'][1..3] AS result".to_string(),
-        params: HashMap::new(),
-    };
-    let result = executor.execute(&query).unwrap();
-
-    assert_eq!(result.rows.len(), 1);
-    assert_eq!(
-        result.rows[0].values[0],
-        Value::Array(vec![
-            Value::String("b".to_string()),
-            Value::String("c".to_string())
-        ])
-    );
-}

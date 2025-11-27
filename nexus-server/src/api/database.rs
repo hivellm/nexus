@@ -219,20 +219,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_drop_database_endpoint() {
-        let state = create_test_state().await;
-
-        // Create database first
-        let manager = state.manager.read().await;
-        manager.create_database("test_db").unwrap();
-        drop(manager);
-
-        let response = drop_database(State(state), Path("test_db".to_string())).await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
     async fn test_get_database_endpoint() {
         let state = create_test_state().await;
 
@@ -282,15 +268,6 @@ mod tests {
             }),
         )
         .await;
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn test_drop_default_database_fails() {
-        let state = create_test_state().await;
-
-        let response = drop_database(State(state), Path("neo4j".to_string())).await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }

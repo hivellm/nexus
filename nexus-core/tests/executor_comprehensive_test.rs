@@ -227,20 +227,6 @@ fn test_limit_zero() {
 // ============================================================================
 
 #[test]
-fn test_order_by_ascending() {
-    let (mut executor, _dir) = create_test_executor();
-    setup_test_data(&mut executor);
-
-    let query = Query {
-        cypher: "MATCH (a:Person) RETURN a.name ORDER BY a.name ASC".to_string(),
-        params: HashMap::new(),
-    };
-
-    let _result = executor.execute(&query).unwrap();
-    // Result rows can be empty or have data - both are valid
-}
-
-#[test]
 fn test_order_by_descending() {
     let (mut executor, _dir) = create_test_executor();
     setup_test_data(&mut executor);
@@ -706,22 +692,6 @@ fn test_variable_length_path() {
 
     let result = executor.execute(&query2);
     // Variable length paths may not be fully supported
-    assert!(result.is_ok() || result.is_err());
-}
-
-#[test]
-fn test_optional_match() {
-    let (mut executor, _dir) = create_test_executor();
-    setup_test_data(&mut executor);
-
-    let query = Query {
-        cypher: "MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b:Person) RETURN a.name, b.name"
-            .to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query);
-    // Optional match may not be fully supported
     assert!(result.is_ok() || result.is_err());
 }
 

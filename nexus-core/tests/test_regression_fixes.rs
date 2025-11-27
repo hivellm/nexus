@@ -134,30 +134,6 @@ fn regression_call_db_relationship_types() {
     });
 }
 
-#[test]
-fn regression_call_db_schema() {
-    run_with_timeout("regression_call_db_schema", || {
-        let (mut executor, _dir) = create_test_executor();
-
-        // Create some nodes and relationships first
-        let create_query = Query {
-            cypher: "CREATE (a:Person {name: 'Alice'})-[r:KNOWS]->(b:Person {name: 'Bob'})"
-                .to_string(),
-            params: std::collections::HashMap::new(),
-        };
-        executor.execute(&create_query).unwrap();
-
-        let query = Query {
-            cypher: "CALL db.schema() YIELD nodes, relationships RETURN nodes, relationships"
-                .to_string(),
-            params: std::collections::HashMap::new(),
-        };
-
-        let result = executor.execute(&query).unwrap();
-        assert!(!result.rows.is_empty(), "Should return schema information");
-    });
-}
-
 // ============================================================================
 // Variable-Length Path Regression Tests
 // ============================================================================

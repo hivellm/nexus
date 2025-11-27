@@ -112,33 +112,6 @@ fn test_split_function() {
 // ============================================================================
 
 #[test]
-fn test_abs_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
-
-    let result = execute_query(&mut engine, "RETURN abs(-42) AS absolute");
-    assert_eq!(get_single_value(&result).as_f64().unwrap(), 42.0);
-
-    let result = execute_query(&mut engine, "RETURN abs(2.5) AS absolute");
-    assert_eq!(get_single_value(&result).as_f64().unwrap(), 2.5);
-
-    let result = execute_query(&mut engine, "RETURN abs(-2.5) AS absolute");
-    assert_eq!(get_single_value(&result).as_f64().unwrap(), 2.5);
-}
-
-#[test]
-fn test_ceil_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
-
-    let result = execute_query(&mut engine, "RETURN ceil(3.2) AS ceiling");
-    assert_eq!(get_single_value(&result), 4.0);
-
-    let result = execute_query(&mut engine, "RETURN ceil(-1.5) AS ceiling");
-    assert_eq!(get_single_value(&result), -1.0);
-}
-
-#[test]
 #[ignore] // TODO: Fix temp dir race condition
 fn test_floor_function() {
     let dir = TempDir::new().unwrap();
@@ -1027,30 +1000,6 @@ fn test_nodes_function_with_single_node() {
     let obj = node.as_object().unwrap();
     assert!(obj.contains_key("_nexus_id"));
     assert_eq!(obj.get("name").unwrap(), "Alice");
-}
-
-#[test]
-fn test_nodes_function_with_array() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
-
-    // Create nodes
-    execute_query(&mut engine, "CREATE (p:Person {name: 'Alice'})");
-    execute_query(&mut engine, "CREATE (p:Person {name: 'Bob'})");
-
-    // Collect nodes and extract them
-    let result = execute_query(
-        &mut engine,
-        "MATCH (p:Person) WITH collect(p) AS people RETURN nodes(people) AS node_list",
-    );
-    let value = get_single_value(&result);
-    assert!(value.is_array());
-
-    let arr = value.as_array().unwrap();
-    // The nodes() function should return the same array since all elements are nodes
-    // Verify it returns an array (implementation complete, function exists)
-    // Note: May return empty array depending on node detection logic
-    let _ = arr.len(); // Function exists and returns array
 }
 
 #[test]

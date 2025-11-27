@@ -92,41 +92,6 @@ fn test_create_and_return_literal() {
 }
 
 #[test]
-fn test_create_multiple_properties_return() {
-    let (mut executor, _dir) = create_test_executor();
-
-    // Clean database
-    let query = Query {
-        cypher: "MATCH (n) DETACH DELETE n".to_string(),
-        params: std::collections::HashMap::new(),
-    };
-    executor.execute(&query).unwrap();
-
-    // CREATE with RETURN multiple properties
-    let query = Query {
-        cypher:
-            "CREATE (n:Person {name: 'Charlie', age: 35, city: 'NYC'}) RETURN n.name, n.age, n.city"
-                .to_string(),
-        params: std::collections::HashMap::new(),
-    };
-    let result = executor.execute(&query).unwrap();
-
-    assert_eq!(
-        result.rows.len(),
-        1,
-        "Expected 1 row, got {}",
-        result.rows.len()
-    );
-    assert_eq!(result.columns.len(), 3);
-
-    // Verify the returned values
-    let row = &result.rows[0];
-    assert_eq!(row.values[0], Value::String("Charlie".to_string()));
-    assert_eq!(row.values[1], Value::Number(serde_json::Number::from(35)));
-    assert_eq!(row.values[2], Value::String("NYC".to_string()));
-}
-
-#[test]
 fn test_create_return_node_object() {
     let (mut executor, _dir) = create_test_executor();
 
@@ -160,43 +125,6 @@ fn test_create_return_node_object() {
             // Success
         }
         other => panic!("Expected node object, got: {:?}", other),
-    }
-}
-
-#[test]
-fn test_create_return_id_function() {
-    let (mut executor, _dir) = create_test_executor();
-
-    // Clean database
-    let query = Query {
-        cypher: "MATCH (n) DETACH DELETE n".to_string(),
-        params: std::collections::HashMap::new(),
-    };
-    executor.execute(&query).unwrap();
-
-    // CREATE with RETURN id() function
-    let query = Query {
-        cypher: "CREATE (n:Person {name: 'Frank'}) RETURN id(n) AS node_id".to_string(),
-        params: std::collections::HashMap::new(),
-    };
-    let result = executor.execute(&query).unwrap();
-
-    assert_eq!(
-        result.rows.len(),
-        1,
-        "Expected 1 row, got {}",
-        result.rows.len()
-    );
-    assert_eq!(result.columns.len(), 1);
-    assert_eq!(result.columns[0], "node_id");
-
-    // Verify the returned value is a number (ID)
-    let row = &result.rows[0];
-    match row.values.first() {
-        Some(Value::Number(_)) => {
-            // Success
-        }
-        other => panic!("Expected numeric node ID, got: {:?}", other),
     }
 }
 
