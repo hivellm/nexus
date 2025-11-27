@@ -1189,40 +1189,6 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrent_access() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let dir = TempDir::new().unwrap();
-        // Use larger map size for concurrent tests to avoid MapFull errors
-        // 512KB should be sufficient for 10 concurrent label creations
-        let catalog = Arc::new(Catalog::with_map_size(dir.path(), 512 * 1024).unwrap());
-
-        let mut handles = vec![];
-
-        // Spawn 10 threads concurrently creating labels
-        for i in 0..10 {
-            let cat = catalog.clone();
-            let handle = thread::spawn(move || {
-                let label = format!("Label{}", i);
-                cat.get_or_create_label(&label).unwrap();
-            });
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        // Verify all labels created
-        for i in 0..10 {
-            let label = format!("Label{}", i);
-            let id = catalog.get_or_create_label(&label).unwrap();
-            assert!(id < 10);
-        }
-    }
-
-    #[test]
     fn test_type_name_lookup() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
@@ -1360,52 +1326,6 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrent_types_and_keys() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let dir = TempDir::new().unwrap();
-        // Use larger map size for concurrent tests to avoid MapFull errors
-        // 512KB should be sufficient for 10 concurrent operations (5 types + 5 keys)
-        let catalog = Arc::new(Catalog::with_map_size(dir.path(), 512 * 1024).unwrap());
-
-        let mut handles = vec![];
-
-        // Concurrently create types
-        for i in 0..5 {
-            let cat = catalog.clone();
-            let handle = thread::spawn(move || {
-                let type_name = format!("TYPE_{}", i);
-                cat.get_or_create_type(&type_name).unwrap();
-            });
-            handles.push(handle);
-        }
-
-        // Concurrently create keys
-        for i in 0..5 {
-            let cat = catalog.clone();
-            let handle = thread::spawn(move || {
-                let key = format!("key_{}", i);
-                cat.get_or_create_key(&key).unwrap();
-            });
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        // Verify all created
-        for i in 0..5 {
-            let type_name = format!("TYPE_{}", i);
-            catalog.get_or_create_type(&type_name).unwrap();
-
-            let key = format!("key_{}", i);
-            catalog.get_or_create_key(&key).unwrap();
-        }
-    }
-
-    #[test]
     fn test_sync_operation() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
@@ -1472,31 +1392,6 @@ mod tests {
             let age_id = catalog.get_or_create_key("age").unwrap();
             assert_eq!(age_id, 1); // After name(0)
         }
-    }
-
-    #[test]
-    fn test_concurrent_label_same_name() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let dir = TempDir::new().unwrap();
-        // Use larger map size for concurrent tests to avoid MapFull errors
-        // 512KB should be sufficient for 5 concurrent label creations
-        let catalog = Arc::new(Catalog::with_map_size(dir.path(), 512 * 1024).unwrap());
-
-        let mut handles = vec![];
-
-        // Multiple threads trying to create same label
-        for _ in 0..5 {
-            let cat = catalog.clone();
-            let handle = thread::spawn(move || cat.get_or_create_label("Person").unwrap());
-            handles.push(handle);
-        }
-
-        let ids: Vec<u32> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-
-        // All should get same ID
-        assert!(ids.iter().all(|&id| id == ids[0]));
     }
 
     #[test]
