@@ -47,14 +47,9 @@ impl ApiKeyStorage {
             static AUTH_STORAGE_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
             let shared_dir = AUTH_STORAGE_DIR.get_or_init(|| {
-                // Use process ID to ensure each test process gets a fresh auth storage
-                // This prevents stale data issues and race conditions with parallel tests
-                let pid = std::process::id();
-                let base = std::env::temp_dir().join(format!("nexus_test_auth_{}", pid));
-                // Clean up any stale data that might exist at this path
-                if base.exists() {
-                    let _ = std::fs::remove_dir_all(&base);
-                }
+                // Use a fixed shared directory for all tests
+                // This ensures consistent auth state across all tests
+                let base = std::env::temp_dir().join("nexus_test_auth_shared");
                 std::fs::create_dir_all(&base).ok();
                 base
             });

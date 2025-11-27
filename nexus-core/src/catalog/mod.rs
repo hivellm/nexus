@@ -232,35 +232,12 @@ impl Catalog {
             static TEST_CATALOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
             let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
-                // Use process ID to ensure each test process gets a fresh catalog
-                // This prevents label/type ID mismatches when RecordStore is fresh but Catalog has stale IDs
-                let pid = std::process::id();
-                let dir = std::env::temp_dir().join(format!("nexus_test_catalog_{}", pid));
-                // Clean any stale data that might exist at this path
-                if dir.exists() {
-                    let _ = std::fs::remove_dir_all(&dir);
-                }
+                // Use a fixed shared directory for all tests
+                // This ensures label/type IDs are consistent across all tests
+                let dir = std::env::temp_dir().join("nexus_test_catalogs_shared");
+                std::fs::create_dir_all(&dir).ok();
                 dir
             });
-
-            // ALWAYS ensure directory exists before every use
-            // This handles race conditions where the directory may have been deleted
-            // Use a loop with retry to handle transient filesystem issues
-            for attempt in 0..3 {
-                match std::fs::create_dir_all(shared_dir) {
-                    Ok(_) => break,
-                    Err(e) if attempt < 2 => {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to create test catalog dir {:?}: {}",
-                            shared_dir, e
-                        );
-                    }
-                }
-            }
 
             shared_dir.clone()
         } else {
