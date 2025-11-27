@@ -1,24 +1,11 @@
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 use serde_json::Value;
 use std::collections::HashMap;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 #[test]
 fn test_array_slice_basic() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Basic slice [1..3] returns elements at index 1 and 2
     let query = Query {
@@ -36,7 +23,7 @@ fn test_array_slice_basic() {
 
 #[test]
 fn test_array_slice_from_start() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Slice from start [..3] returns first 3 elements
     let query = Query {
@@ -58,7 +45,7 @@ fn test_array_slice_from_start() {
 
 #[test]
 fn test_array_slice_to_end() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Slice to end [2..] returns from index 2 to end
     let query = Query {
@@ -81,7 +68,7 @@ fn test_array_slice_to_end() {
 #[test]
 #[ignore] // TODO: Fix parser to handle negative numbers in array slices
 fn test_array_slice_negative_start() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Negative start index [-3..-1] counts from end
     let query = Query {
@@ -101,7 +88,7 @@ fn test_array_slice_negative_start() {
 #[test]
 #[ignore] // TODO: Fix negative end index calculation in array slicing
 fn test_array_slice_negative_end() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Negative end index [1..-1]
     let query = Query {
@@ -124,7 +111,7 @@ fn test_array_slice_negative_end() {
 
 #[test]
 fn test_array_slice_out_of_bounds() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Out of bounds slice returns what's available
     let query = Query {
@@ -142,7 +129,7 @@ fn test_array_slice_out_of_bounds() {
 
 #[test]
 fn test_array_slice_empty() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Inverted indices return empty array
     let query = Query {
@@ -158,7 +145,7 @@ fn test_array_slice_empty() {
 #[test]
 #[ignore] // TODO: Fix array slicing with properties in CREATE/RETURN
 fn test_array_slice_with_property() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -188,7 +175,7 @@ fn test_array_slice_with_property() {
 
 #[test]
 fn test_array_slice_full_range() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Full range [..] returns entire array
     let query = Query {
@@ -207,4 +194,3 @@ fn test_array_slice_full_range() {
         ])
     );
 }
-

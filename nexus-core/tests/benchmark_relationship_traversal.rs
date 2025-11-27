@@ -8,17 +8,15 @@
 #[cfg(test)]
 mod tests {
     use nexus_core::Engine;
+    use nexus_core::testing::setup_test_engine;
     use std::time::Instant;
-    use tempfile::TempDir;
-    use tracing;
 
     #[test]
     #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
     fn benchmark_relationship_traversal() {
         tracing::info!("=== Phase 3: Relationship Traversal Benchmark ===\n");
 
-        let dir = TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+        let (mut engine, _ctx) = setup_test_engine().unwrap();
 
         // Create test data
         tracing::info!("Creating test data...");

@@ -1,24 +1,11 @@
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tempfile::TempDir;
 
 /// Counter for unique test labels to prevent cross-test interference
 static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 #[test]
 fn test_multiple_relationship_types_single() {
@@ -27,7 +14,7 @@ fn test_multiple_relationship_types_single() {
     let company_label = format!("CompanySingle{}", test_id);
     let knows_type = format!("KNOWS_S{}", test_id);
     let works_type = format!("WORKS_AT_S{}", test_id);
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create test data with unique labels
     let query = Query {
@@ -72,14 +59,13 @@ fn test_multiple_relationship_types_single() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_multiple_relationship_types_or() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let person_label = format!("PersonOr{}", test_id);
     let company_label = format!("CompanyOr{}", test_id);
     let knows_type = format!("KNOWS_O{}", test_id);
     let works_type = format!("WORKS_AT_O{}", test_id);
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create test data with unique labels
     let query = Query {
@@ -135,7 +121,7 @@ fn test_multiple_relationship_types_with_return() {
     let knows_type = format!("KNOWS_R{}", test_id);
     let works_type = format!("WORKS_AT_R{}", test_id);
     let likes_type = format!("LIKES_R{}", test_id);
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create test data with unique labels
     let query = Query {
@@ -194,13 +180,12 @@ fn test_multiple_relationship_types_with_return() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_multiple_relationship_types_nonexistent() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let person_label = format!("PersonNE{}", test_id);
     let knows_type = format!("KNOWS_NE{}", test_id);
     let nonexistent_type = format!("NONEXISTENT{}", test_id);
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create test data with only KNOWS relationship
     let query = Query {

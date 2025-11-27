@@ -189,8 +189,8 @@ impl ApiKeyStorage {
 mod tests {
     use super::super::permissions::Permission;
     use super::*;
+    use crate::testing::TestContext;
     use chrono::{Duration, Utc};
-    use tempfile::TempDir;
 
     fn create_test_api_key(id: &str, name: &str) -> ApiKey {
         ApiKey {
@@ -211,15 +211,15 @@ mod tests {
     #[test]
     fn test_api_key_storage_creation() {
         // Use isolated path to ensure clean state for this test
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
         assert!(storage.list_api_keys().unwrap().is_empty());
     }
 
     #[test]
     fn test_store_and_retrieve_api_key() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         let api_key = create_test_api_key("test-id", "test-key");
         storage.store_api_key(&api_key).unwrap();
@@ -233,8 +233,8 @@ mod tests {
 
     #[test]
     fn test_delete_api_key() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         let api_key = create_test_api_key("test-id", "test-key");
         storage.store_api_key(&api_key).unwrap();
@@ -247,9 +247,9 @@ mod tests {
 
     #[test]
     fn test_list_api_keys() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         // Use isolated path for tests that count items
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         let key1 = create_test_api_key("list-id1", "list-key1");
         let key2 = create_test_api_key("list-id2", "list-key2");
@@ -262,8 +262,8 @@ mod tests {
 
     #[test]
     fn test_get_api_keys_for_user() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         let mut key1 = create_test_api_key("id1", "key1");
         key1.user_id = Some("user1".to_string());
@@ -286,9 +286,9 @@ mod tests {
 
     #[test]
     fn test_cleanup_expired_keys() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         // Use isolated path for cleanup tests
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         let mut expired_key = create_test_api_key("cleanup-expired", "cleanup-expired-key");
         expired_key.expires_at = Some(Utc::now() - Duration::days(1));
@@ -308,8 +308,8 @@ mod tests {
 
     #[test]
     fn test_update_api_key() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         let mut api_key = create_test_api_key("test-id", "test-key");
         storage.store_api_key(&api_key).unwrap();
@@ -323,8 +323,8 @@ mod tests {
 
     #[test]
     fn test_cleanup_expired_keys_edge_cases() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         // Test with no expired keys
         let mut valid_key = create_test_api_key("valid", "valid-key");
@@ -359,8 +359,8 @@ mod tests {
 
     #[test]
     fn test_cleanup_expired_keys_with_none_expiration() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         // Keys with None expiration should not be cleaned up
         let mut no_expiration_key = create_test_api_key("no-exp", "no-exp-key");
@@ -374,9 +374,9 @@ mod tests {
 
     #[test]
     fn test_cleanup_expired_keys_boundary_time() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         // Use isolated path for cleanup tests
-        let storage = ApiKeyStorage::with_isolated_path(temp_dir.path()).unwrap();
+        let storage = ApiKeyStorage::with_isolated_path(ctx.path()).unwrap();
 
         // Key expiring exactly now (boundary case)
         let mut boundary_key = create_test_api_key("boundary-test", "boundary-test-key");

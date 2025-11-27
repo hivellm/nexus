@@ -2,9 +2,8 @@
 //!
 //! Comprehensive integration tests covering all major components and their interactions
 
-use nexus_core::Engine;
+use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 use serde_json::json;
-use tempfile::TempDir;
 
 // ============================================================================
 // Engine Integration Tests (30 tests)
@@ -12,8 +11,7 @@ use tempfile::TempDir;
 
 #[test]
 fn integration_engine_create_and_query() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Person {name: 'Alice'})")
@@ -27,8 +25,7 @@ fn integration_engine_create_and_query() {
 
 #[test]
 fn integration_engine_multi_label_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(
@@ -46,8 +43,7 @@ fn integration_engine_multi_label_nodes() {
 
 #[test]
 fn integration_engine_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -68,10 +64,8 @@ fn integration_engine_relationships() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_engine_10_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         engine
@@ -88,8 +82,7 @@ fn integration_engine_10_nodes() {
 
 #[test]
 fn integration_engine_20_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..20 {
         engine
@@ -106,8 +99,7 @@ fn integration_engine_20_nodes() {
 
 #[test]
 fn integration_engine_50_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..50 {
         engine
@@ -124,8 +116,7 @@ fn integration_engine_50_nodes() {
 
 #[test]
 fn integration_engine_100_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..100 {
         engine
@@ -142,8 +133,7 @@ fn integration_engine_100_nodes() {
 
 #[test]
 fn integration_engine_10_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -168,8 +158,7 @@ fn integration_engine_10_relationships() {
 
 #[test]
 fn integration_engine_20_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -195,8 +184,7 @@ fn integration_engine_20_relationships() {
 #[test]
 #[ignore]
 fn integration_engine_aggregations() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 1..=10 {
         engine
@@ -214,8 +202,7 @@ fn integration_engine_aggregations() {
 #[test]
 #[ignore]
 fn integration_engine_min_max() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in [5, 1, 9, 3] {
         engine
@@ -238,8 +225,7 @@ fn integration_engine_min_max() {
 #[test]
 #[ignore]
 fn integration_engine_avg() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in [10, 20, 30] {
         engine
@@ -257,8 +243,7 @@ fn integration_engine_avg() {
 #[test]
 #[ignore]
 fn integration_engine_union() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -279,8 +264,7 @@ fn integration_engine_union() {
 #[test]
 #[ignore]
 fn integration_engine_union_all() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -299,10 +283,8 @@ fn integration_engine_union_all() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn integration_engine_labels_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -317,10 +299,8 @@ fn integration_engine_labels_function() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn integration_engine_keys_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"a": 1, "b": 2}))
@@ -336,8 +316,7 @@ fn integration_engine_keys_function() {
 
 #[test]
 fn integration_engine_id_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let node_id = engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -352,8 +331,7 @@ fn integration_engine_id_function() {
 
 #[test]
 fn integration_engine_type_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -375,8 +353,7 @@ fn integration_engine_type_function() {
 
 #[test]
 fn integration_engine_where_filter() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..20 {
         engine
@@ -393,8 +370,7 @@ fn integration_engine_where_filter() {
 
 #[test]
 fn integration_engine_limit() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..50 {
         engine
@@ -411,8 +387,7 @@ fn integration_engine_limit() {
 
 #[test]
 fn integration_engine_order_by() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"name": "Charlie"}))
@@ -433,8 +408,7 @@ fn integration_engine_order_by() {
 
 #[test]
 fn integration_engine_distinct() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 1}))
@@ -454,10 +428,8 @@ fn integration_engine_distinct() {
 }
 
 #[test]
-#[ignore] // TODO: Fix - may have race condition with stats in parallel tests
 fn integration_engine_stats() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..5 {
         engine
@@ -472,8 +444,7 @@ fn integration_engine_stats() {
 
 #[test]
 fn integration_engine_health() {
-    let dir = TempDir::new().unwrap();
-    let engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (engine, _ctx) = setup_test_engine().unwrap();
 
     let health = engine.health_check().unwrap();
     assert!(
@@ -483,10 +454,8 @@ fn integration_engine_health() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn integration_engine_get_node() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let id = engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -497,8 +466,7 @@ fn integration_engine_get_node() {
 
 #[test]
 fn integration_engine_get_relationship() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["N".to_string()], json!({}))
@@ -515,10 +483,8 @@ fn integration_engine_get_relationship() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_engine_multiple_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..5 {
         let labels = vec!["Test".to_string(), format!("Label{}", i)];
@@ -534,8 +500,7 @@ fn integration_engine_multiple_labels() {
 
 #[test]
 fn integration_engine_refresh_multiple() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -551,10 +516,8 @@ fn integration_engine_refresh_multiple() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_engine_sequential_creates() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine.execute_cypher("CREATE (n:A)").unwrap();
     engine.execute_cypher("CREATE (n:B)").unwrap();
@@ -576,8 +539,7 @@ fn integration_engine_sequential_creates() {
 
 #[test]
 fn integration_engine_mixed_api_cypher() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -602,8 +564,7 @@ fn integration_engine_mixed_api_cypher() {
 #[test]
 #[ignore]
 fn integration_engine_label_filtering() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Person".to_string()], json!({}))
@@ -628,8 +589,7 @@ fn integration_engine_label_filtering() {
 
 #[test]
 fn integration_match_basic_1() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({}))
         .unwrap();
@@ -639,8 +599,7 @@ fn integration_match_basic_1() {
 
 #[test]
 fn integration_match_basic_2() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({"v": 1}))
         .unwrap();
@@ -653,8 +612,7 @@ fn integration_match_basic_2() {
 
 #[test]
 fn integration_match_basic_3() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({}))
         .unwrap();
@@ -673,31 +631,28 @@ fn integration_match_basic_3() {
 
 #[test]
 fn integration_test_01() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
 }
 
 #[test]
 fn integration_test_02() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    // Use isolated engine to avoid parallel test interference
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 1}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_03() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["A".to_string(), "B".to_string()], json!({}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_04() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..5 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -705,8 +660,7 @@ fn integration_test_04() {
 
 #[test]
 fn integration_test_05() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..10 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -715,8 +669,7 @@ fn integration_test_05() {
 
 #[test]
 fn integration_test_06() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.create_relationship(a, b, "R".to_string(), json!({}))
@@ -725,8 +678,7 @@ fn integration_test_06() {
 
 #[test]
 fn integration_test_07() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.create_relationship(a, b, "R".to_string(), json!({"p": 1}))
@@ -735,8 +687,7 @@ fn integration_test_07() {
 
 #[test]
 fn integration_test_08() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..3 {
         e.create_node(vec![format!("L{}", i)], json!({})).unwrap();
     }
@@ -744,22 +695,21 @@ fn integration_test_08() {
 
 #[test]
 fn integration_test_09() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    // Use isolated engine to avoid parallel test interference
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     e.execute_cypher("CREATE (n:T {v: 1})").unwrap();
 }
 
 #[test]
 fn integration_test_10() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    // Use isolated engine to avoid parallel test interference
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     e.execute_cypher("CREATE (n:T {a: 1, b: 2})").unwrap();
 }
 
 #[test]
 fn integration_test_11() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     e.execute_cypher("MATCH (n:T) RETURN n").unwrap();
@@ -767,8 +717,7 @@ fn integration_test_11() {
 
 #[test]
 fn integration_test_12() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 1}))
         .unwrap();
     e.refresh_executor().unwrap();
@@ -778,8 +727,7 @@ fn integration_test_12() {
 
 #[test]
 fn integration_test_13() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..7 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -792,8 +740,7 @@ fn integration_test_13() {
 
 #[test]
 fn integration_test_14() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -808,8 +755,7 @@ fn integration_test_14() {
 
 #[test]
 fn integration_test_16() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"a": 1}))
         .unwrap();
     e.refresh_executor().unwrap();
@@ -819,8 +765,7 @@ fn integration_test_16() {
 
 #[test]
 fn integration_test_17() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     let r = e.execute_cypher("MATCH (n:T) RETURN id(n) AS i").unwrap();
@@ -829,8 +774,7 @@ fn integration_test_17() {
 
 #[test]
 fn integration_test_18() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -844,10 +788,8 @@ fn integration_test_18() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_19() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..3 {
         e.create_node(vec!["T".to_string()], json!({"v": i}))
             .unwrap();
@@ -861,8 +803,7 @@ fn integration_test_19() {
 
 #[test]
 fn integration_test_20() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..10 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -874,8 +815,7 @@ fn integration_test_20() {
 #[test]
 #[ignore]
 fn integration_test_21() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 1..=5 {
         e.create_node(vec!["T".to_string()], json!({"v": i}))
             .unwrap();
@@ -890,8 +830,7 @@ fn integration_test_21() {
 #[test]
 #[ignore]
 fn integration_test_22() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 10}))
         .unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 20}))
@@ -906,8 +845,7 @@ fn integration_test_22() {
 #[test]
 #[ignore]
 fn integration_test_23() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in [5, 1, 9] {
         e.create_node(vec!["T".to_string()], json!({"v": i}))
             .unwrap();
@@ -922,8 +860,7 @@ fn integration_test_23() {
 #[test]
 #[ignore]
 fn integration_test_24() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in [5, 1, 9] {
         e.create_node(vec!["T".to_string()], json!({"v": i}))
             .unwrap();
@@ -938,8 +875,7 @@ fn integration_test_24() {
 #[test]
 #[ignore]
 fn integration_test_25() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["A".to_string()], json!({"v": 1}))
         .unwrap();
     e.create_node(vec!["B".to_string()], json!({"v": 2}))
@@ -953,28 +889,23 @@ fn integration_test_25() {
 
 #[test]
 fn integration_test_26() {
-    let d = TempDir::new().unwrap();
-    let data_path = d.path().to_path_buf();
-    let mut e = Engine::with_data_dir(&data_path).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T26".to_string()], json!({"a": 1, "b": 2, "c": 3}))
         .unwrap();
-    drop(e); // Ensure engine is dropped before temp dir
 }
 
 #[test]
 fn integration_test_27() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..15 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn integration_test_28() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    // Use isolated engine to avoid parallel test interference
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     for i in 0..20 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -984,16 +915,15 @@ fn integration_test_28() {
 #[test]
 #[ignore]
 fn integration_test_29() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let id = e.create_node(vec!["T".to_string()], json!({})).unwrap();
     assert!(id > 0);
 }
 
 #[test]
 fn integration_test_30() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    // Use isolated engine to avoid parallel test interference
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     e.stats().unwrap();
@@ -1001,15 +931,13 @@ fn integration_test_30() {
 
 #[test]
 fn integration_test_31() {
-    let d = TempDir::new().unwrap();
-    let e = Engine::with_data_dir(d.path()).unwrap();
+    let (e, _ctx) = setup_test_engine().unwrap();
     e.health_check().unwrap();
 }
 
 #[test]
 fn integration_test_33() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _ in 0..3 {
         e.refresh_executor().unwrap();
     }
@@ -1017,8 +945,7 @@ fn integration_test_33() {
 
 #[test]
 fn integration_test_34() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1030,8 +957,7 @@ fn integration_test_34() {
 
 #[test]
 fn integration_test_35() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["A".to_string()], json!({})).unwrap();
     e.create_node(vec!["B".to_string()], json!({})).unwrap();
     e.create_node(vec!["C".to_string()], json!({})).unwrap();
@@ -1039,57 +965,49 @@ fn integration_test_35() {
 
 #[test]
 fn integration_test_36() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.execute_cypher("CREATE (n:T1)").unwrap();
     e.execute_cypher("CREATE (n:T2)").unwrap();
 }
 
 #[test]
 fn integration_test_37() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": true}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_38() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": false}))
         .unwrap();
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_39() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 0}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_40() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 0.0}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_41() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": ""}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_42() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..25 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1097,8 +1015,7 @@ fn integration_test_42() {
 
 #[test]
 fn integration_test_43() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..30 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1107,8 +1024,7 @@ fn integration_test_43() {
 
 #[test]
 fn integration_test_45() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(
         vec!["T".to_string()],
         json!({"a": 1, "b": 2, "c": 3, "d": 4}),
@@ -1118,8 +1034,7 @@ fn integration_test_45() {
 
 #[test]
 fn integration_test_46() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1128,34 +1043,29 @@ fn integration_test_46() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_47() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 3.15}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_48() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": -42}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_49() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": -3.15}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_50() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..35 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1163,8 +1073,7 @@ fn integration_test_50() {
 
 #[test]
 fn integration_test_51() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..40 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1172,10 +1081,8 @@ fn integration_test_51() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_52() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let nodes: Vec<u64> = (0..5)
         .map(|_| e.create_node(vec!["N".to_string()], json!({})).unwrap())
         .collect();
@@ -1188,24 +1095,21 @@ fn integration_test_52() {
 
 #[test]
 fn integration_test_53() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"str": "test", "num": 42}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_54() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"bool": true, "float": 1.5}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_55() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..45 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1213,8 +1117,7 @@ fn integration_test_55() {
 
 #[test]
 fn integration_test_56() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let id = e
         .create_node(vec!["T".to_string()], json!({"name": "test"}))
         .unwrap();
@@ -1223,8 +1126,7 @@ fn integration_test_56() {
 
 #[test]
 fn integration_test_58() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..8 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1232,8 +1134,7 @@ fn integration_test_58() {
 
 #[test]
 fn integration_test_59() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..12 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1242,24 +1143,21 @@ fn integration_test_59() {
 
 #[test]
 fn integration_test_60() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"list": vec![1, 2, 3]}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_61() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"map": {"key": "value"}}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_62() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..18 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1267,8 +1165,7 @@ fn integration_test_62() {
 
 #[test]
 fn integration_test_63() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..22 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1277,8 +1174,7 @@ fn integration_test_63() {
 
 #[test]
 fn integration_test_64() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1290,18 +1186,15 @@ fn integration_test_64() {
 
 #[test]
 fn integration_test_66() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..28 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_67() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..32 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1310,8 +1203,7 @@ fn integration_test_67() {
 
 #[test]
 fn integration_test_68() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(
         vec!["T".to_string()],
         json!({"s": "string", "n": 1, "b": true, "f": 1.5}),
@@ -1321,8 +1213,7 @@ fn integration_test_68() {
 
 #[test]
 fn integration_test_69() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..6 {
         e.create_node(vec![format!("Label{}", i)], json!({}))
             .unwrap();
@@ -1331,18 +1222,15 @@ fn integration_test_69() {
 
 #[test]
 fn integration_test_70() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..38 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_71() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(
         vec!["L1".to_string(), "L2".to_string()],
         json!({"p1": 1, "p2": 2}),
@@ -1351,10 +1239,8 @@ fn integration_test_71() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_72() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..42 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1362,10 +1248,8 @@ fn integration_test_72() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn integration_test_73() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let nodes: Vec<u64> = (0..10)
         .map(|_| e.create_node(vec!["N".to_string()], json!({})).unwrap())
         .collect();
@@ -1374,8 +1258,7 @@ fn integration_test_73() {
 
 #[test]
 fn integration_test_74() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..48 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1383,24 +1266,21 @@ fn integration_test_74() {
 
 #[test]
 fn integration_test_75() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 100000}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_76() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 0.00001}))
         .unwrap();
 }
 
 #[test]
 fn integration_test_77() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..52 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1408,8 +1288,7 @@ fn integration_test_77() {
 
 #[test]
 fn integration_test_78() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     for _i in 0..15 {
         let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
@@ -1421,8 +1300,7 @@ fn integration_test_78() {
 
 #[test]
 fn integration_test_79() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..58 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1430,8 +1308,7 @@ fn integration_test_79() {
 
 #[test]
 fn integration_test_80() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(
         vec!["T".to_string()],
         json!({"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6}),
@@ -1441,8 +1318,7 @@ fn integration_test_80() {
 
 #[test]
 fn integration_test_81() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..62 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1451,8 +1327,7 @@ fn integration_test_81() {
 
 #[test]
 fn integration_test_82() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(
         vec![
             "A".to_string(),
@@ -1467,18 +1342,15 @@ fn integration_test_82() {
 
 #[test]
 fn integration_test_83() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..68 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
 }
 
 #[test]
-#[ignore] // TODO: Fix - temp dir race condition in parallel tests
 fn integration_test_84() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for i in 0..72 {
         e.create_node(vec!["T".to_string()], json!({"i": i}))
             .unwrap();
@@ -1487,8 +1359,7 @@ fn integration_test_84() {
 
 #[test]
 fn integration_test_85() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..78 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }

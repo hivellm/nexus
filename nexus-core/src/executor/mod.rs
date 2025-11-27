@@ -12575,20 +12575,20 @@ mod geospatial_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestContext;
     use std::collections::HashMap;
-    use tempfile::TempDir;
 
-    fn create_executor() -> (Executor, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let catalog = Catalog::new(dir.path()).unwrap();
-        let store = RecordStore::new(dir.path()).unwrap();
+    fn create_executor() -> (Executor, TestContext) {
+        let ctx = TestContext::new();
+        let catalog = Catalog::new(ctx.path()).unwrap();
+        let store = RecordStore::new(ctx.path()).unwrap();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new_default(128).unwrap();
 
         let config = ExecutorConfig::default();
         let executor =
             Executor::new_with_config(&catalog, &store, &label_index, &knn_index, config).unwrap();
-        (executor, dir)
+        (executor, ctx)
     }
 
     fn build_node(id: u64, name: &str, age: i64) -> Value {
@@ -12627,7 +12627,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn filter_removes_non_matching_rows() {
         let (executor, _dir) = create_executor();
         let mut context = ExecutionContext::new(HashMap::new(), None);

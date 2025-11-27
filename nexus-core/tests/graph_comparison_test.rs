@@ -8,18 +8,18 @@ use nexus_core::graph::comparison::{
 use nexus_core::graph::simple::PropertyValue;
 use nexus_core::graph::{Edge, EdgeId, Graph, Node, NodeId};
 use nexus_core::storage::RecordStore;
+use nexus_core::testing::TestContext;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tempfile::TempDir;
 
 /// Helper function to create a test graph with sample data
 #[allow(dead_code)]
-fn create_test_graph() -> (Graph, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let catalog = Arc::new(Catalog::new(dir.path().join("catalog")).unwrap());
+fn create_test_graph() -> (Graph, TestContext) {
+    let ctx = TestContext::new();
+    let store = RecordStore::new(ctx.path()).unwrap();
+    let catalog = Arc::new(Catalog::new(ctx.path().join("catalog")).unwrap());
     let graph = Graph::new(store, catalog);
-    (graph, dir)
+    (graph, ctx)
 }
 
 /// Helper function to create a test node

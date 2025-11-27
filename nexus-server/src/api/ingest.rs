@@ -354,6 +354,7 @@ mod tests {
     use super::*;
     use crate::config::RootUserConfig;
     use axum::extract::{Json, State};
+    use nexus_core::testing::TestContext;
     use nexus_core::{
         Engine,
         auth::{
@@ -365,20 +366,19 @@ mod tests {
     };
     use serde_json::json;
     use std::sync::Arc;
-    use tempfile::TempDir;
     use tokio::sync::RwLock;
 
     /// Helper function to create a test server
-    /// Returns (TempDir, Arc<NexusServer>) - TempDir must be kept alive for the duration of the test
-    async fn create_test_server() -> (TempDir, Arc<NexusServer>) {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = Engine::with_data_dir(temp_dir.path()).unwrap();
+    /// Returns (TestContext, Arc<NexusServer>) - TestContext must be kept alive for the duration of the test
+    async fn create_test_server() -> (TestContext, Arc<NexusServer>) {
+        let ctx = TestContext::new();
+        let engine = Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = Executor::default();
         let executor_arc = Arc::new(executor);
 
-        let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager = DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
 
         let rbac = RoleBasedAccessControl::new();
@@ -411,13 +411,12 @@ mod tests {
             RootUserConfig::default(),
         ));
 
-        (temp_dir, server)
+        (ctx, server)
     }
 
     #[tokio::test]
-    #[ignore] // TODO: Fix LMDB BadRslot error - likely due to concurrent access issues
     async fn test_ingest_nodes_only() {
-        let (_temp_dir, server) = create_test_server().await;
+        let (_ctx, server) = create_test_server().await;
         let request = IngestRequest {
             nodes: vec![
                 NodeIngest {

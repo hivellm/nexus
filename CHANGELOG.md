@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - LMDB Parallel Test Isolation (2025-11-27) 🔧
+
+- **Centralized Testing Infrastructure**: Created `nexus_core::testing` module with `TestContext` for proper test isolation
+  - `TestContext` provides unique temporary directories with guaranteed lifecycle management
+  - Automatic cleanup on drop with proper LMDB environment handling
+  - Replaced all `TempDir::new()` patterns across 60+ test files
+  - Files: `nexus-core/src/testing/mod.rs`, `nexus-core/src/testing/context.rs`
+
+- **Re-enabled ~60 Ignored Tests**: Tests previously ignored due to "temp dir race condition" now pass
+  - Fixed parallel test interference by ensuring unique directories per test
+  - Removed `#[ignore]` attributes from tests that were flaky due to shared temp directories
+  - All tests now run reliably in parallel with `--test-threads=4`
+
+- **Server Test Migration**: Migrated all `nexus-server` tests to use `TestContext`
+  - `mcp_auth_test.rs`, `vectorizer_integration_test.rs`
+  - `graph_correlation_mcp_tests.rs`, `comparison.rs`, `database.rs`
+  - `export.rs`, `ingest.rs`, `property_keys.rs`, `config.rs`, `main.rs`
+  - Uses `Box::leak` pattern for shared static test resources
+
+- **Test Results**: 1262 nexus-core tests + 246 nexus-server tests passing
+
 ### Fixed - Test Isolation & Query Execution (2025-11-25) 🔧
 
 - **Filter Deduplication Bug**: Fixed multi-node MATCH queries returning incorrect results

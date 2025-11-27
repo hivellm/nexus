@@ -1,13 +1,7 @@
 /// Tests that verify Nexus behavior matches Neo4j specifications
 /// These tests encode expected Neo4j behavior based on official documentation
-use nexus_core::{Engine, Error};
-use tempfile::TempDir;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
+use nexus_core::Error;
+use nexus_core::testing::setup_test_engine;
 
 // ============================================================================
 // AGGREGATION BEHAVIOR TESTS
@@ -16,7 +10,7 @@ fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
 #[test]
 fn test_count_star_includes_all_rows() -> Result<(), Error> {
     // Neo4j: COUNT(*) counts all rows, including those with NULL values
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 1})")?;
     engine.execute_cypher("CREATE (n:Node {value: 2})")?;
@@ -36,10 +30,9 @@ fn test_count_star_includes_all_rows() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_count_property_excludes_nulls() -> Result<(), Error> {
     // Neo4j: COUNT(property) only counts non-NULL values
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 1})")?;
     engine.execute_cypher("CREATE (n:Node {value: 2})")?;
@@ -59,10 +52,9 @@ fn test_count_property_excludes_nulls() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_count_distinct_deduplicates() -> Result<(), Error> {
     // Neo4j: COUNT(DISTINCT ...) returns unique non-NULL values
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 1})")?;
     engine.execute_cypher("CREATE (n:Node {value: 2})")?;
@@ -81,10 +73,9 @@ fn test_count_distinct_deduplicates() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_avg_ignores_nulls() -> Result<(), Error> {
     // Neo4j: AVG() calculates average of non-NULL values only
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 10})")?;
     engine.execute_cypher("CREATE (n:Node {value: 20})")?;
@@ -105,10 +96,9 @@ fn test_avg_ignores_nulls() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_min_max_ignore_nulls() -> Result<(), Error> {
     // Neo4j: MIN/MAX ignore NULL values
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 5})")?;
     engine.execute_cypher("CREATE (n:Node {value: 10})")?;
@@ -127,10 +117,9 @@ fn test_min_max_ignore_nulls() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_sum_ignores_nulls() -> Result<(), Error> {
     // Neo4j: SUM() ignores NULL values
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 5})")?;
     engine.execute_cypher("CREATE (n:Node {value: 10})")?;
@@ -155,10 +144,9 @@ fn test_sum_ignores_nulls() -> Result<(), Error> {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_union_removes_duplicates() -> Result<(), Error> {
     // Neo4j: UNION removes duplicate rows
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:A {value: 1})")?;
     engine.execute_cypher("CREATE (n:A {value: 2})")?;
@@ -177,7 +165,7 @@ fn test_union_removes_duplicates() -> Result<(), Error> {
 #[ignore = "CREATE via Cypher duplicates nodes - investigating"]
 fn test_union_all_keeps_duplicates() -> Result<(), Error> {
     // Neo4j: UNION ALL keeps all rows including duplicates
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:A {value: 1})")?;
     engine.execute_cypher("CREATE (n:A {value: 2})")?;
@@ -196,7 +184,7 @@ fn test_union_all_keeps_duplicates() -> Result<(), Error> {
 #[test]
 fn test_union_requires_same_column_count() -> Result<(), Error> {
     // Neo4j: UNION requires same number of columns in both queries
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:A {a: 1, b: 2})")?;
     engine.execute_cypher("CREATE (n:B {x: 10})")?;
@@ -215,11 +203,10 @@ fn test_union_requires_same_column_count() -> Result<(), Error> {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_multiple_labels_intersection() -> Result<(), Error> {
     // Neo4j: Multiple labels in pattern means AND (intersection)
     // Use unique labels to prevent interference from other tests that share the catalog
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Use unique label names to avoid collisions with other tests
     let test_id = std::time::SystemTime::now()
@@ -255,7 +242,7 @@ fn test_multiple_labels_intersection() -> Result<(), Error> {
 #[test]
 fn test_relationship_direction_matters() -> Result<(), Error> {
     // Neo4j: Relationship direction is significant in directed patterns
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     let alice = engine.create_node(
         vec!["Person".to_string()],
@@ -285,10 +272,9 @@ fn test_relationship_direction_matters() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_bidirectional_pattern_counts_both() -> Result<(), Error> {
     // Neo4j: Bidirectional pattern matches relationship in either direction
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     let alice = engine.create_node(
         vec!["Person".to_string()],
@@ -318,7 +304,7 @@ fn test_bidirectional_pattern_counts_both() -> Result<(), Error> {
 #[test]
 fn test_labels_returns_array() -> Result<(), Error> {
     // Neo4j: labels() returns array of label strings
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.create_node(
         vec!["Person".to_string(), "Employee".to_string()],
@@ -340,7 +326,7 @@ fn test_labels_returns_array() -> Result<(), Error> {
 #[test]
 fn test_keys_returns_property_names() -> Result<(), Error> {
     // Neo4j: keys() returns array of property names
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Person {name: 'Alice', age: 30})")?;
     engine.refresh_executor()?;
@@ -359,7 +345,7 @@ fn test_keys_returns_property_names() -> Result<(), Error> {
 #[test]
 fn test_id_returns_unique_identifier() -> Result<(), Error> {
     // Neo4j: id() returns unique numeric identifier
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Person {name: 'Alice'})")?;
     engine.execute_cypher("CREATE (n:Person {name: 'Bob'})")?;
@@ -390,10 +376,9 @@ fn test_id_returns_unique_identifier() -> Result<(), Error> {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_where_property_equals() -> Result<(), Error> {
     // Neo4j: WHERE property = value filters correctly
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Person {name: 'Alice', age: 30})")?;
     engine.execute_cypher("CREATE (n:Person {name: 'Bob', age: 25})")?;
@@ -417,7 +402,7 @@ fn test_where_property_equals() -> Result<(), Error> {
 #[ignore] // TODO: Fix - may have interference from other tests using Person label
 fn test_where_property_comparison() -> Result<(), Error> {
     // Neo4j: WHERE supports comparison operators
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Person {age: 20})")?;
     engine.execute_cypher("CREATE (n:Person {age: 30})")?;
@@ -441,7 +426,7 @@ fn test_where_property_comparison() -> Result<(), Error> {
 #[ignore = "IS NOT NULL syntax not yet implemented"]
 fn test_where_null_check() -> Result<(), Error> {
     // Neo4j: WHERE property IS NOT NULL filters NULL values
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 1})")?;
     engine.execute_cypher("CREATE (n:Node {})")?; // No value
@@ -462,7 +447,7 @@ fn test_where_null_check() -> Result<(), Error> {
 #[test]
 fn test_empty_match_returns_zero() -> Result<(), Error> {
     // Neo4j: MATCH with no results returns 0 for COUNT
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     let result = engine.execute_cypher("MATCH (n:NonExistent) RETURN count(*) AS count")?;
     let count = result.rows[0].values[0].as_i64().unwrap();
@@ -472,10 +457,9 @@ fn test_empty_match_returns_zero() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_aggregation_on_empty_returns_null() -> Result<(), Error> {
     // Neo4j: Aggregations on empty set return NULL (except COUNT which returns 0)
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     let avg_result = engine.execute_cypher("MATCH (n:NonExistent) RETURN avg(n.value) AS avg")?;
     let avg = &avg_result.rows[0].values[0];

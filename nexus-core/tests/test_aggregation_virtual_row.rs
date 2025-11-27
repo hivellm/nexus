@@ -1,18 +1,9 @@
-﻿use nexus_core::Engine;
-use nexus_core::error::Error;
-use tempfile::TempDir;
-use tracing;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir =
-        TempDir::new().map_err(|e| Error::Internal(format!("Failed to create temp dir: {}", e)))?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
+﻿use nexus_core::error::Error;
+use nexus_core::testing::setup_test_engine;
 
 #[test]
 fn test_count_star_without_match() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // RETURN count(*) without MATCH should return 1 (not 0 or null)
     let result = engine.execute_cypher("RETURN count(*) AS count")?;
@@ -38,7 +29,7 @@ fn test_count_star_without_match() -> Result<(), Error> {
 
 #[test]
 fn test_sum_literal_without_match() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // RETURN sum(1) without MATCH should return 1 (not null)
     let result = engine.execute_cypher("RETURN sum(1) AS sum_val")?;
@@ -60,7 +51,7 @@ fn test_sum_literal_without_match() -> Result<(), Error> {
 
 #[test]
 fn test_avg_literal_without_match() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // RETURN avg(10) without MATCH should return 10 (not null)
     let result = engine.execute_cypher("RETURN avg(10) AS avg_val")?;
@@ -86,7 +77,7 @@ fn test_avg_literal_without_match() -> Result<(), Error> {
 
 #[test]
 fn test_min_literal_without_match() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // RETURN min(5) without MATCH should return 5 (not null)
     let result = engine.execute_cypher("RETURN min(5) AS min_val")?;
@@ -108,7 +99,7 @@ fn test_min_literal_without_match() -> Result<(), Error> {
 
 #[test]
 fn test_max_literal_without_match() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // RETURN max(15) without MATCH should return 15 (not null)
     let result = engine.execute_cypher("RETURN max(15) AS max_val")?;
@@ -134,7 +125,7 @@ fn test_max_literal_without_match() -> Result<(), Error> {
 
 #[test]
 fn test_collect_literal_without_match() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // RETURN collect(1) without MATCH should return [1] (not empty array)
     let result = engine.execute_cypher("RETURN collect(1) AS collected")?;

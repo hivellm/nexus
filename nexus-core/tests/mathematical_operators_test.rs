@@ -1,16 +1,10 @@
 /// Tests for mathematical operators (power, modulo)
-use nexus_core::{Engine, Error};
-use tempfile::TempDir;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
+use nexus_core::Error;
+use nexus_core::testing::setup_test_engine;
 
 #[test]
 fn test_power_operator() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Test basic power operation
     let result = engine.execute_cypher("RETURN 2 ^ 3 AS power")?;
@@ -44,7 +38,7 @@ fn test_power_operator() -> Result<(), Error> {
 
 #[test]
 fn test_modulo_operator() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Test basic modulo operation
     let result = engine.execute_cypher("RETURN 10 % 3 AS mod")?;
@@ -78,7 +72,7 @@ fn test_modulo_operator() -> Result<(), Error> {
 
 #[test]
 fn test_power_with_null() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Test power with null (should return null)
     let result = engine.execute_cypher("RETURN null ^ 2 AS power")?;
@@ -101,7 +95,7 @@ fn test_power_with_null() -> Result<(), Error> {
 
 #[test]
 fn test_modulo_with_null() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Test modulo with null (should return null)
     let result = engine.execute_cypher("RETURN null % 3 AS mod")?;
@@ -124,7 +118,7 @@ fn test_modulo_with_null() -> Result<(), Error> {
 
 #[test]
 fn test_power_in_where_clause() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Node {value: 8.0})")?;
@@ -153,7 +147,7 @@ fn test_power_in_where_clause() -> Result<(), Error> {
 
 #[test]
 fn test_modulo_in_where_clause() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Node {value: 10})")?;

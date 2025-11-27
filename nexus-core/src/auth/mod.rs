@@ -548,8 +548,8 @@ mod tests {
     #[test]
     fn test_cleanup_expired_api_keys() {
         let config = AuthConfig::default();
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let auth_manager = AuthManager::with_storage(config, temp_dir.path()).unwrap();
+        let ctx = crate::testing::TestContext::new();
+        let auth_manager = AuthManager::with_storage(config, ctx.path()).unwrap();
 
         // Create expired key
         let (expired_key, _) = auth_manager

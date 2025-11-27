@@ -4,9 +4,8 @@
 //! Tests measure COUNT, GROUP BY, and COLLECT performance
 
 use nexus_core::Engine;
+use nexus_core::testing::setup_test_engine;
 use std::time::Instant;
-use tempfile::TempDir;
-use tracing;
 
 /// Helper function to execute a Cypher query
 fn execute_cypher(engine: &mut Engine, query: &str) -> nexus_core::executor::ResultSet {
@@ -17,8 +16,7 @@ fn execute_cypher(engine: &mut Engine, query: &str) -> nexus_core::executor::Res
 #[test]
 #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_count_star() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data
     tracing::info!("Creating test data for COUNT(*) benchmark...");
@@ -58,8 +56,7 @@ fn benchmark_count_star() {
 #[test]
 #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_group_by() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data with different labels
     tracing::info!("Creating test data for GROUP BY benchmark...");
@@ -107,8 +104,7 @@ fn benchmark_group_by() {
 #[test]
 #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_collect() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data
     tracing::info!("Creating test data for COLLECT benchmark...");
@@ -151,8 +147,7 @@ fn benchmark_collect() {
 #[test]
 #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_min_max() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data
     tracing::info!("Creating test data for MIN/MAX benchmark...");
@@ -215,8 +210,7 @@ fn benchmark_min_max() {
 #[test]
 #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_aggregation_with_filter() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data
     tracing::info!("Creating test data for filtered aggregation benchmark...");
@@ -259,8 +253,7 @@ fn benchmark_aggregation_with_filter() {
 #[test]
 #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
 fn benchmark_parallel_aggregation_speedup() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create large dataset (5000 nodes to trigger parallel aggregation)
     // Parallel threshold is 1000 rows, so 5000 should definitely trigger it

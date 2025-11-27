@@ -597,14 +597,14 @@ impl AuditLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::testing::TestContext;
 
     #[tokio::test]
     async fn test_audit_logger_creation() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -615,10 +615,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_log_user_created() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -637,16 +637,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_authentication_failure() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -663,16 +663,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_disabled() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: false,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -692,16 +692,16 @@ mod tests {
 
         // Verify no log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(!log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_api_key_operations() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -745,16 +745,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_permission_operations() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -788,16 +788,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_write_operations() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -867,16 +867,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_authentication_success() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -893,16 +893,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_user_deleted() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -921,16 +921,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_log_rotation_edge_case() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -953,7 +953,7 @@ mod tests {
 
         // Verify log file exists and has content
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
 
         // Verify file has multiple lines
@@ -964,10 +964,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_log_compression_failure_scenario() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: true,
         };
@@ -988,16 +988,16 @@ mod tests {
 
         // Verify log file was created (compression happens in background)
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_retention_period_cleanup() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 1, // Very short retention for testing
             compress_logs: false,
         };
@@ -1018,7 +1018,7 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
 
         // Test cleanup function directly
@@ -1029,12 +1029,12 @@ mod tests {
             .to_string();
 
         // Create an old log file
-        let old_log_file = temp_dir.path().join(format!("audit-{}.log", old_date));
+        let old_log_file = ctx.path().join(format!("audit-{}.log", old_date));
         std::fs::write(&old_log_file, "old log content").unwrap();
         assert!(old_log_file.exists());
 
         // Run cleanup
-        AuditLogger::cleanup_old_logs_static(temp_dir.path(), 1).unwrap();
+        AuditLogger::cleanup_old_logs_static(ctx.path(), 1).unwrap();
 
         // Old file should be deleted
         assert!(!old_log_file.exists());
@@ -1044,10 +1044,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_audit_log_with_none_actor() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -1068,16 +1068,16 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
     }
 
     #[tokio::test]
     async fn test_audit_log_failure_result() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -1100,7 +1100,7 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
 
         // Verify failure is logged
@@ -1110,10 +1110,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_audit_log_with_ip_address() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let config = AuditConfig {
             enabled: true,
-            log_dir: temp_dir.path().to_path_buf(),
+            log_dir: ctx.path().to_path_buf(),
             retention_days: 30,
             compress_logs: false,
         };
@@ -1132,7 +1132,7 @@ mod tests {
 
         // Verify log file was created
         let today = Utc::now().format("%Y-%m-%d").to_string();
-        let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+        let log_file = ctx.path().join(format!("audit-{}.log", today));
         assert!(log_file.exists());
 
         // Verify IP address is logged

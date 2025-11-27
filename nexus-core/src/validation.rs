@@ -639,15 +639,15 @@ impl Default for GraphValidator {
 mod tests {
     use super::*;
     use crate::graph::simple::PropertyValue;
-    use tempfile::TempDir;
+    use crate::testing::TestContext;
 
-    fn create_test_graph() -> (Graph, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = crate::storage::RecordStore::new(dir.path()).unwrap();
+    fn create_test_graph() -> (Graph, TestContext) {
+        let ctx = TestContext::new();
+        let store = crate::storage::RecordStore::new(ctx.path()).unwrap();
         let catalog =
-            std::sync::Arc::new(crate::catalog::Catalog::new(dir.path().join("catalog")).unwrap());
+            std::sync::Arc::new(crate::catalog::Catalog::new(ctx.path().join("catalog")).unwrap());
         let graph = Graph::new(store, catalog);
-        (graph, dir)
+        (graph, ctx)
     }
 
     #[test]
@@ -740,7 +740,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_validate_empty_graph() {
         let (graph, _dir) = create_test_graph();
         let validator = GraphValidator::new();
@@ -904,7 +903,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_validate_isolated_node() {
         let (graph, _dir) = create_test_graph();
 

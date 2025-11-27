@@ -1,13 +1,12 @@
-﻿use nexus_core::storage::{RecordStore, RelationshipRecord};
+use nexus_core::storage::{RecordStore, RelationshipRecord};
+use nexus_core::testing::TestContext;
 use nexus_core::transaction::TransactionManager;
-use tempfile::TempDir;
-use tracing;
 
 #[test]
 fn test_relationship_linked_list_traversal() {
     // Setup
-    let temp_dir = TempDir::new().unwrap();
-    let mut store = RecordStore::new(temp_dir.path()).unwrap();
+    let ctx = TestContext::new();
+    let mut store = RecordStore::new(ctx.path()).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
 
     // Create 3 nodes

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo nextest run:*)",
+      "Bash(for:*)",
+      "Bash(do echo \"=== Run $i ===\")",
+      "Bash(done)",
+      "Bash(cargo install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

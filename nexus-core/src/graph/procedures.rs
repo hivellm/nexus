@@ -1070,9 +1070,9 @@ mod tests {
 
     #[test]
     fn test_procedure_with_catalog() {
-        use tempfile::TempDir;
-        let dir = TempDir::new().unwrap();
-        let catalog = Arc::new(crate::catalog::Catalog::new(dir.path()).unwrap());
+        use crate::testing::TestContext;
+        let ctx = TestContext::new();
+        let catalog = Arc::new(crate::catalog::Catalog::new(ctx.path()).unwrap());
         let registry = ProcedureRegistry::with_catalog(catalog.clone());
 
         // Register a custom procedure

@@ -273,9 +273,8 @@ mod plugin_tests {
     fn test_plugin_context_with_all_registries() {
         let udf_registry = Arc::new(UdfRegistry::new());
         let procedure_registry = Arc::new(crate::graph::procedures::ProcedureRegistry::new());
-        let catalog = Arc::new(
-            crate::catalog::Catalog::new(tempfile::TempDir::new().unwrap().path()).unwrap(),
-        );
+        let test_ctx = crate::testing::TestContext::new();
+        let catalog = Arc::new(crate::catalog::Catalog::new(test_ctx.path()).unwrap());
         let mut ctx = PluginContext::new(
             Some(udf_registry.clone()),
             Some(procedure_registry.clone()),

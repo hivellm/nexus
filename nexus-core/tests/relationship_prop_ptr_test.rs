@@ -5,14 +5,14 @@
 
 use nexus_core::error::Result;
 use nexus_core::storage::RecordStore;
+use nexus_core::testing::TestContext;
 use nexus_core::transaction::TransactionManager;
-use tempfile::TempDir;
 
-fn create_test_store() -> (RecordStore, TempDir, std::path::PathBuf) {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().to_path_buf();
+fn create_test_store() -> (RecordStore, TestContext, std::path::PathBuf) {
+    let ctx = TestContext::new();
+    let path = ctx.path().to_path_buf();
     let store = RecordStore::new(&path).unwrap();
-    (store, dir, path)
+    (store, ctx, path)
 }
 
 #[test]

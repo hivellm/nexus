@@ -15,9 +15,9 @@ use nexus_core::auth::jwt::JwtManager;
 use nexus_core::auth::middleware::RateLimitConfig;
 use nexus_core::auth::middleware::RateLimiter;
 use nexus_core::auth::{AuthManager, Permission};
+use nexus_core::testing::TestContext;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 
 #[tokio::test]
 #[cfg_attr(
@@ -135,10 +135,11 @@ async fn test_authentication_middleware_overhead() {
 async fn test_audit_logging_performance() {
     // Audit logging should not block requests significantly
 
-    let temp_dir = TempDir::new().unwrap();
+    let temp_ctx = TestContext::new();
+    let temp_dir = temp_ctx.path();
     let config = AuditConfig {
         enabled: true,
-        log_dir: temp_dir.path().to_path_buf(),
+        log_dir: temp_dir.to_path_buf(),
         retention_days: 30,
         compress_logs: false,
     };
@@ -233,12 +234,13 @@ async fn test_api_key_lookup_performance() {
     // API key lookup performance (includes Argon2 verification)
     // Note: Argon2 is intentionally slow for security, so we test with fewer iterations
 
-    let temp_dir = TempDir::new().unwrap();
+    let temp_ctx = TestContext::new();
+    let temp_dir = temp_ctx.path();
     let config = nexus_core::auth::AuthConfig {
         enabled: true,
         ..Default::default()
     };
-    let auth_manager = AuthManager::with_storage(config, temp_dir.path()).unwrap();
+    let auth_manager = AuthManager::with_storage(config, temp_dir).unwrap();
 
     // Create multiple API keys
     let mut keys = Vec::new();

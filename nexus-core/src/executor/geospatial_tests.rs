@@ -1,24 +1,9 @@
 //! Tests for geospatial functions
 
-use crate::executor::{Executor, Query};
-use crate::index::KnnIndex;
-use crate::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use crate::executor::Query;
+use crate::testing::{TestContext, create_test_executor};
 use serde_json::Value;
 use std::collections::HashMap;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    // Ensure directory exists before creating components
-    std::fs::create_dir_all(dir.path()).unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 #[test]
 fn test_distance_function_cartesian_2d() {
@@ -59,7 +44,6 @@ fn test_distance_function_cartesian_2d() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition - "No such file or directory" error
 fn test_distance_function_cartesian_3d() {
     let (mut executor, _dir) = create_test_executor();
     let mut params = HashMap::new();

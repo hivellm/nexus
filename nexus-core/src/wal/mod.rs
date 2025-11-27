@@ -460,13 +460,13 @@ impl Default for Wal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::testing::TestContext;
 
-    fn create_test_wal() -> (Wal, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("wal.log");
+    fn create_test_wal() -> (Wal, TestContext) {
+        let ctx = TestContext::new();
+        let path = ctx.path().join("wal.log");
         let wal = Wal::new(&path).unwrap();
-        (wal, dir)
+        (wal, ctx)
     }
 
     #[test]
@@ -554,8 +554,8 @@ mod tests {
 
     #[test]
     fn test_recover_with_entries() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("wal.log");
+        let ctx = TestContext::new();
+        let path = ctx.path().join("wal.log");
 
         // Write entries
         {
@@ -717,8 +717,8 @@ mod tests {
 
     #[test]
     fn test_crc_corruption_detection() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("wal.log");
+        let ctx = TestContext::new();
+        let path = ctx.path().join("wal.log");
 
         // Write valid entry
         {

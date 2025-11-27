@@ -107,9 +107,9 @@ pub fn benchmark_executor_creation() -> Result<()> {
 
     let start = Instant::now();
     // Create executor with vectorized enabled
-    let dir = tempfile::TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
+    let ctx = crate::testing::TestContext::new();
+    let catalog = Catalog::new(ctx.path()).unwrap();
+    let store = RecordStore::new(ctx.path()).unwrap();
     let label_index = LabelIndex::new();
     let knn_index = KnnIndex::new_default(128).unwrap();
 

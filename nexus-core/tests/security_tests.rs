@@ -17,6 +17,7 @@ use nexus_core::auth::jwt::JwtManager;
 use nexus_core::auth::middleware::RateLimitConfig;
 use nexus_core::auth::middleware::RateLimiter;
 use nexus_core::auth::{AuthManager, Permission};
+use nexus_core::testing::TestContext;
 use std::time::Duration;
 
 #[test]
@@ -484,12 +485,11 @@ fn test_audit_log_injection_prevention() {
     // Audit logs should safely handle malicious input
 
     use nexus_core::auth::audit::{AuditConfig, AuditLogger};
-    use tempfile::TempDir;
 
-    let temp_dir = TempDir::new().unwrap();
+    let ctx = TestContext::new();
     let config = AuditConfig {
         enabled: true,
-        log_dir: temp_dir.path().to_path_buf(),
+        log_dir: ctx.path().to_path_buf(),
         retention_days: 30,
         compress_logs: false,
     };
@@ -518,7 +518,7 @@ fn test_audit_log_injection_prevention() {
 
     // Verify log file was created
     let today = Utc::now().format("%Y-%m-%d").to_string();
-    let log_file = temp_dir.path().join(format!("audit-{}.log", today));
+    let log_file = ctx.path().join(format!("audit-{}.log", today));
     assert!(log_file.exists(), "Audit log file should be created");
 
     // Read log content

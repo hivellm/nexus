@@ -5,9 +5,9 @@
 use nexus_core::catalog::Catalog;
 use nexus_core::page_cache::PageCache;
 use nexus_core::storage::RecordStore;
+use nexus_core::testing::TestContext;
 use nexus_core::transaction::TransactionManager;
 use nexus_core::wal::Wal;
-use tempfile::TempDir;
 
 #[test]
 fn test_workspace_compiles() {
@@ -28,11 +28,12 @@ async fn test_tokio_runtime() {
 // Integration Test 1: Catalog + Storage
 #[test]
 fn test_catalog_storage_integration() {
-    let dir = TempDir::new().unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
 
     // Create catalog and storage
-    let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let mut store = RecordStore::new(dir.path()).unwrap();
+    let catalog = Catalog::new(dir.join("catalog")).unwrap();
+    let mut store = RecordStore::new(dir).unwrap();
 
     // Create label and node
     let person_label = catalog.get_or_create_label("Person").unwrap();
@@ -62,9 +63,10 @@ fn test_catalog_storage_integration() {
 // Integration Test 2: Storage + Relationship Traversal
 #[test]
 fn test_relationship_traversal_integration() {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let mut store = RecordStore::new(dir.path()).unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let catalog = Catalog::new(dir.join("catalog")).unwrap();
+    let mut store = RecordStore::new(dir).unwrap();
 
     // Create nodes
     let person_label = catalog.get_or_create_label("Person").unwrap();
@@ -126,10 +128,11 @@ fn test_relationship_traversal_integration() {
 // Integration Test 3: Transaction + WAL
 #[test]
 fn test_transaction_wal_integration() {
-    let dir = TempDir::new().unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
 
     let mut tx_mgr = TransactionManager::new().unwrap();
-    let mut wal = Wal::new(dir.path().join("wal.log")).unwrap();
+    let mut wal = Wal::new(dir.join("wal.log")).unwrap();
 
     // Begin transaction
     let mut tx = tx_mgr.begin_write().unwrap();
@@ -164,9 +167,10 @@ fn test_transaction_wal_integration() {
 // Integration Test 4: Page Cache + Storage
 #[test]
 fn test_page_cache_storage_integration() {
-    let dir = TempDir::new().unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
 
-    let mut store = RecordStore::new(dir.path()).unwrap();
+    let mut store = RecordStore::new(dir).unwrap();
     let mut cache = PageCache::new(100).unwrap();
 
     // Simulate page-based storage access
@@ -188,12 +192,13 @@ fn test_page_cache_storage_integration() {
 // Integration Test 5: Full Transaction Lifecycle
 #[test]
 fn test_full_transaction_lifecycle() {
-    let dir = TempDir::new().unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
 
-    let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let mut store = RecordStore::new(dir.path()).unwrap();
+    let catalog = Catalog::new(dir.join("catalog")).unwrap();
+    let mut store = RecordStore::new(dir).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
-    let mut wal = Wal::new(dir.path().join("wal.log")).unwrap();
+    let mut wal = Wal::new(dir.join("wal.log")).unwrap();
 
     // Transaction 1: Create node
     {
@@ -253,8 +258,9 @@ fn test_full_transaction_lifecycle() {
 // Integration Test 6: WAL Crash Recovery
 #[test]
 fn test_wal_crash_recovery() {
-    let dir = TempDir::new().unwrap();
-    let wal_path = dir.path().join("wal.log");
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let wal_path = dir.join("wal.log");
 
     // Simulate normal operation
     {
@@ -312,8 +318,9 @@ fn test_wal_crash_recovery() {
 // Integration Test 7: Page Cache Eviction with Storage
 #[test]
 fn test_page_cache_eviction_integration() {
-    let dir = TempDir::new().unwrap();
-    let _store = RecordStore::new(dir.path()).unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let _store = RecordStore::new(dir).unwrap();
     let mut cache = PageCache::new(5).unwrap(); // Small cache
 
     // Access 20 different pages to trigger eviction
@@ -330,13 +337,14 @@ fn test_page_cache_eviction_integration() {
 // Integration Test 8: Multi-Module Transaction
 #[test]
 fn test_multi_module_transaction() {
-    let dir = TempDir::new().unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
 
-    let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
-    let mut store = RecordStore::new(dir.path()).unwrap();
+    let catalog = Catalog::new(dir.join("catalog")).unwrap();
+    let mut store = RecordStore::new(dir).unwrap();
     let mut cache = PageCache::new(100).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
-    let mut wal = Wal::new(dir.path().join("wal.log")).unwrap();
+    let mut wal = Wal::new(dir.join("wal.log")).unwrap();
 
     // Complex transaction: create labeled node, relationship, and checkpoint
     let mut tx = tx_mgr.begin_write().unwrap();
@@ -406,8 +414,9 @@ fn test_multi_module_transaction() {
 // Integration Test 9: MVCC Snapshot Isolation
 #[test]
 fn test_mvcc_snapshot_isolation() {
-    let dir = TempDir::new().unwrap();
-    let mut store = RecordStore::new(dir.path()).unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let mut store = RecordStore::new(dir).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
 
     // Create initial node at epoch 0
@@ -436,9 +445,10 @@ fn test_mvcc_snapshot_isolation() {
 // Integration Test 10: Performance Benchmark - Node Insert
 #[test]
 fn test_node_insert_performance() {
-    let dir = TempDir::new().unwrap();
-    let mut store = RecordStore::new(dir.path()).unwrap();
-    let catalog = Catalog::new(dir.path().join("catalog")).unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let mut store = RecordStore::new(dir).unwrap();
+    let catalog = Catalog::new(dir.join("catalog")).unwrap();
 
     let person_label = catalog.get_or_create_label("Person").unwrap();
 
@@ -466,8 +476,9 @@ fn test_node_insert_performance() {
 // Integration Test 11: Performance Benchmark - Node Read
 #[test]
 fn test_node_read_performance() {
-    let dir = TempDir::new().unwrap();
-    let mut store = RecordStore::new(dir.path()).unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let mut store = RecordStore::new(dir).unwrap();
 
     // Pre-create nodes
     let count = 10_000;
@@ -497,8 +508,9 @@ fn test_node_read_performance() {
 // Integration Test 12: Checkpoint and Truncate
 #[test]
 fn test_checkpoint_integration() {
-    let dir = TempDir::new().unwrap();
-    let mut wal = Wal::new(dir.path().join("wal.log")).unwrap();
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let mut wal = Wal::new(dir.join("wal.log")).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
 
     // Write several transactions
@@ -533,10 +545,9 @@ fn test_concurrent_transactions() {
     use std::thread;
     use tracing;
 
-    let dir = TempDir::new().unwrap();
-    let store = Arc::new(parking_lot::Mutex::new(
-        RecordStore::new(dir.path()).unwrap(),
-    ));
+    let ctx = TestContext::new();
+    let dir = ctx.path();
+    let store = Arc::new(parking_lot::Mutex::new(RecordStore::new(dir).unwrap()));
     let tx_mgr = Arc::new(parking_lot::Mutex::new(TransactionManager::new().unwrap()));
 
     let mut handles = vec![];

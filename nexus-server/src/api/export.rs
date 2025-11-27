@@ -218,6 +218,7 @@ mod tests {
     use super::*;
     use crate::config::RootUserConfig;
     use axum::extract::{Query, State};
+    use nexus_core::testing::TestContext;
     use nexus_core::{
         Engine,
         auth::{
@@ -228,14 +229,13 @@ mod tests {
         executor::Executor,
     };
     use std::sync::Arc;
-    use tempfile::TempDir;
     use tokio::sync::RwLock;
 
     /// Helper function to create a test server
-    /// Returns server and temp_dir (to keep temp_dir alive)
-    async fn create_test_server() -> (Arc<NexusServer>, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = Engine::with_data_dir(temp_dir.path()).unwrap();
+    /// Returns server and TestContext (to keep context alive)
+    async fn create_test_server() -> (Arc<NexusServer>, TestContext) {
+        let ctx = TestContext::new();
+        let engine = Engine::with_data_dir(ctx.path()).unwrap();
 
         // Create executor using Engine's components
         // The Engine already has executor, but we need a separate one for server state
@@ -251,7 +251,7 @@ mod tests {
 
         let engine_arc = Arc::new(RwLock::new(engine));
 
-        let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
+        let database_manager = DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
 
         let rbac = RoleBasedAccessControl::new();
@@ -284,7 +284,7 @@ mod tests {
                 audit_logger,
                 RootUserConfig::default(),
             )),
-            temp_dir,
+            ctx,
         )
     }
 

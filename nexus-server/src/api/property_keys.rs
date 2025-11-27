@@ -287,19 +287,22 @@ pub async fn get_property_key_stats(State(state): State<PropertyKeysState>) -> R
 mod tests {
     use super::*;
     use nexus_core::Engine;
-    use tempfile::TempDir;
+    use nexus_core::testing::TestContext;
 
-    async fn create_test_state() -> PropertyKeysState {
-        let dir = TempDir::new().unwrap();
-        let engine = Engine::with_data_dir(dir.path()).unwrap();
-        PropertyKeysState {
-            engine: Arc::new(RwLock::new(engine)),
-        }
+    async fn create_test_state() -> (PropertyKeysState, TestContext) {
+        let ctx = TestContext::new();
+        let engine = Engine::with_data_dir(ctx.path()).unwrap();
+        (
+            PropertyKeysState {
+                engine: Arc::new(RwLock::new(engine)),
+            },
+            ctx,
+        )
     }
 
     #[tokio::test]
     async fn test_list_property_keys() {
-        let state = create_test_state().await;
+        let (state, _ctx) = create_test_state().await;
 
         let response = list_property_keys(State(state)).await;
 
@@ -308,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_property_key_stats() {
-        let state = create_test_state().await;
+        let (state, _ctx) = create_test_state().await;
 
         let response = get_property_key_stats(State(state)).await;
 
@@ -317,8 +320,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_property_keys_with_data() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
 
         // Create nodes with properties
         engine
@@ -344,7 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_property_keys_empty_database() {
-        let state = create_test_state().await;
+        let (state, _ctx) = create_test_state().await;
 
         let response = list_property_keys(State(state)).await;
 
@@ -389,8 +392,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_property_keys_with_multiple_keys() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
 
         // Create nodes with different properties
         for i in 0..5 {
@@ -417,7 +420,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_stats_consistency() {
-        let state = create_test_state().await;
+        let (state, _ctx) = create_test_state().await;
 
         // Call both endpoints
         let response1 = list_property_keys(State(state.clone())).await;
@@ -429,7 +432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_property_keys_state_creation() {
-        let state = create_test_state().await;
+        let (state, _ctx) = create_test_state().await;
 
         // Verify state is properly initialized
         let mut engine = state.engine.write().await;
@@ -439,8 +442,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_property_keys_statistics_accuracy() {
-        let dir = TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
 
         // Create nodes with properties
         engine

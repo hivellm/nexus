@@ -1,23 +1,10 @@
 //! Test CALL procedure syntax variations
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 
 #[test]
 fn test_call_procedure_with_yield_and_return() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create some nodes with labels first
     let create_query = Query {
@@ -51,7 +38,7 @@ fn test_call_procedure_with_yield_and_return() {
 
 #[test]
 fn test_call_procedure_with_return_only() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create some nodes with labels first
     let create_query = Query {
@@ -75,7 +62,7 @@ fn test_call_procedure_with_return_only() {
 
 #[test]
 fn test_call_procedure_without_return() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create some nodes with labels first
     let create_query = Query {
@@ -106,7 +93,7 @@ fn test_call_procedure_without_return() {
 
 #[test]
 fn test_call_procedure_relationship_types() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create some relationships first
     let create_query = Query {
@@ -127,7 +114,7 @@ fn test_call_procedure_relationship_types() {
 
 #[test]
 fn test_call_procedure_property_keys() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create some nodes with properties first
     let create_query = Query {
@@ -148,7 +135,7 @@ fn test_call_procedure_property_keys() {
 
 #[test]
 fn test_call_procedure_schema() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create some nodes and relationships first
     let create_query = Query {

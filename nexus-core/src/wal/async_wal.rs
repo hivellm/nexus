@@ -428,12 +428,12 @@ impl Drop for AsyncWalWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestContext;
     use crate::wal::WalEntry;
-    use tempfile::TempDir;
 
-    fn create_test_writer() -> (AsyncWalWriter, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let wal_path = dir.path().join("wal.log");
+    fn create_test_writer() -> (AsyncWalWriter, TestContext) {
+        let ctx = TestContext::new();
+        let wal_path = ctx.path().join("wal.log");
         let wal = Wal::new(&wal_path).unwrap();
 
         let config = AsyncWalConfig {
@@ -445,7 +445,7 @@ mod tests {
         };
 
         let writer = AsyncWalWriter::new(wal, config).unwrap();
-        (writer, dir)
+        (writer, ctx)
     }
 
     #[test]
@@ -515,8 +515,8 @@ mod tests {
     #[test]
     #[ignore] // TODO: Fix batch size limit test - timing issue with async flushing
     fn test_batch_size_limit() {
-        let dir = TempDir::new().unwrap();
-        let wal_path = dir.path().join("wal.log");
+        let ctx = TestContext::new();
+        let wal_path = ctx.path().join("wal.log");
         let wal = Wal::new(&wal_path).unwrap();
 
         let config = AsyncWalConfig {

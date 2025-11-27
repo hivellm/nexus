@@ -630,15 +630,15 @@ impl BulkLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestContext;
     use std::collections::HashMap;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_bulk_loader_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let catalog = Arc::new(Catalog::new(temp_dir.path()).unwrap());
-        let storage = Arc::new(RwLock::new(RecordStore::new(temp_dir.path()).unwrap()));
-        let indexes = Arc::new(IndexManager::new(temp_dir.path().join("indexes")).unwrap());
+        let ctx = TestContext::new();
+        let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+        let storage = Arc::new(RwLock::new(RecordStore::new(ctx.path()).unwrap()));
+        let indexes = Arc::new(IndexManager::new(ctx.path().join("indexes")).unwrap());
         let transaction_manager = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
 
         let config = BulkLoadConfig::default();
@@ -651,10 +651,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_from_memory() {
-        let temp_dir = TempDir::new().unwrap();
-        let catalog = Arc::new(Catalog::new(temp_dir.path()).unwrap());
-        let storage = Arc::new(RwLock::new(RecordStore::new(temp_dir.path()).unwrap()));
-        let indexes = Arc::new(IndexManager::new(temp_dir.path().join("indexes")).unwrap());
+        let ctx = TestContext::new();
+        let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+        let storage = Arc::new(RwLock::new(RecordStore::new(ctx.path()).unwrap()));
+        let indexes = Arc::new(IndexManager::new(ctx.path().join("indexes")).unwrap());
         let transaction_manager = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
 
         let config = BulkLoadConfig {
@@ -973,10 +973,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulk_loader_with_custom_config() {
-        let temp_dir = TempDir::new().unwrap();
-        let catalog = Arc::new(Catalog::new(temp_dir.path()).unwrap());
-        let storage = Arc::new(RwLock::new(RecordStore::new(temp_dir.path()).unwrap()));
-        let indexes = Arc::new(IndexManager::new(temp_dir.path().join("indexes")).unwrap());
+        let ctx = TestContext::new();
+        let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+        let storage = Arc::new(RwLock::new(RecordStore::new(ctx.path()).unwrap()));
+        let indexes = Arc::new(IndexManager::new(ctx.path().join("indexes")).unwrap());
         let transaction_manager = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
 
         let config = BulkLoadConfig {

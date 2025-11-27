@@ -2,25 +2,12 @@
 //!
 //! These tests ensure that the fixes implemented don't regress and continue to work correctly.
 
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::{TestContext, create_test_executor, setup_test_engine};
 use serde_json::Value;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
 use std::time::Duration;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 fn run_with_timeout<F>(name: &str, f: F)
 where
@@ -60,7 +47,7 @@ where
 #[test]
 fn regression_call_db_labels_with_yield_and_return() {
     run_with_timeout("regression_call_db_labels_with_yield_and_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // Create some nodes with labels first
         let create_query = Query {
@@ -84,7 +71,7 @@ fn regression_call_db_labels_with_yield_and_return() {
 #[test]
 fn regression_call_db_property_keys() {
     run_with_timeout("regression_call_db_property_keys", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // Create some nodes with properties first
         let create_query = Query {
@@ -113,7 +100,7 @@ fn regression_call_db_property_keys() {
 #[test]
 fn regression_call_db_relationship_types() {
     run_with_timeout("regression_call_db_relationship_types", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // Create some relationships first
         let create_query = Query {
@@ -141,7 +128,7 @@ fn regression_call_db_relationship_types() {
 #[test]
 fn regression_variable_length_path_range_quantifier() {
     run_with_timeout("regression_variable_length_path_range_quantifier", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // Create a path
         let create_query = Query {
@@ -167,7 +154,7 @@ fn regression_variable_length_path_range_quantifier() {
 #[test]
 fn regression_shortest_path_function() {
     run_with_timeout("regression_shortest_path_function", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // Create a path
         let create_query = Query {
@@ -198,7 +185,7 @@ fn regression_shortest_path_function() {
 #[ignore] // TODO: Fix DELETE with RETURN count(*) - deleted_count is 0
 fn regression_delete_with_return_count() {
     run_with_timeout("regression_delete_with_return_count", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // Create some nodes
         let create_query = Query {
@@ -230,7 +217,7 @@ fn regression_delete_with_return_count() {
 #[test]
 fn regression_detach_delete_with_return_count() {
     run_with_timeout("regression_detach_delete_with_return_count", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // Create some nodes with relationships
         let create_query = Query {
@@ -258,10 +245,9 @@ fn regression_detach_delete_with_return_count() {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn regression_coalesce_returns_first_non_null() {
     run_with_timeout("regression_coalesce_returns_first_non_null", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "RETURN coalesce(null, 'default') AS result".to_string(),
@@ -288,7 +274,7 @@ fn regression_coalesce_returns_first_non_null() {
 #[test]
 fn regression_coalesce_returns_first_value() {
     run_with_timeout("regression_coalesce_returns_first_value", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "RETURN coalesce('first', 'second', 'third') AS result".to_string(),
@@ -308,7 +294,7 @@ fn regression_coalesce_returns_first_value() {
 #[test]
 fn regression_coalesce_returns_null_when_all_null() {
     run_with_timeout("regression_coalesce_returns_null_when_all_null", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "RETURN coalesce(null, null, null) AS result".to_string(),
@@ -335,8 +321,8 @@ fn regression_drop_database_if_exists_succeeds_when_not_exists() {
     run_with_timeout(
         "regression_drop_database_if_exists_succeeds_when_not_exists",
         || {
-            let dir = TempDir::new().unwrap();
-            let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+            let ctx = TestContext::new();
+            let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
             // Try to drop non-existent database with IF EXISTS
             let result = manager.drop_database("nonexistent_db", true);
@@ -355,8 +341,8 @@ fn regression_drop_database_if_exists_fails_when_not_exists_without_flag() {
     run_with_timeout(
         "regression_drop_database_if_exists_fails_when_not_exists_without_flag",
         || {
-            let dir = TempDir::new().unwrap();
-            let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+            let ctx = TestContext::new();
+            let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
             // Try to drop non-existent database without IF EXISTS
             let result = manager.drop_database("nonexistent_db", false);
@@ -374,11 +360,8 @@ fn regression_drop_database_if_exists_fails_when_not_exists_without_flag() {
 
 #[test]
 fn regression_create_index_returns_message() {
-    use nexus_core::Engine;
-
     run_with_timeout("regression_create_index_returns_message", || {
-        let dir = TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+        let (mut engine, _ctx) = setup_test_engine().unwrap();
 
         // Create a node first
         engine
@@ -402,11 +385,8 @@ fn regression_create_index_returns_message() {
 
 #[test]
 fn regression_create_constraint_returns_message() {
-    use nexus_core::Engine;
-
     run_with_timeout("regression_create_constraint_returns_message", || {
-        let dir = TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+        let (mut engine, _ctx) = setup_test_engine().unwrap();
 
         // Create a node first
         engine

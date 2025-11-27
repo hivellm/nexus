@@ -8,16 +8,14 @@
 //! Validates that all optimizations work together correctly and improve performance.
 
 use nexus_core::Engine;
+use nexus_core::testing::setup_test_engine;
 use std::time::Instant;
-use tempfile::TempDir;
-use tracing;
 
 #[test]
 fn test_relationship_storage_synchronization() {
     tracing::info!("=== Phase 8.1: Relationship Storage Synchronization Test ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes
     engine
@@ -60,8 +58,7 @@ fn test_relationship_storage_synchronization() {
 fn test_advanced_traversal_engine() {
     tracing::info!("=== Phase 8.2: Advanced Traversal Engine Test ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create a chain of nodes: 1 -> 2 -> 3 -> 4 -> 5
     engine.execute_cypher("CREATE (a:Person {id: 1}), (b:Person {id: 2}), (c:Person {id: 3}), (d:Person {id: 4}), (e:Person {id: 5})").unwrap();
@@ -108,8 +105,7 @@ fn test_advanced_traversal_engine() {
 fn test_relationship_property_indexing() {
     tracing::info!("=== Phase 8.3: Relationship Property Indexing Test ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes
     engine
@@ -155,8 +151,7 @@ fn test_relationship_property_indexing() {
 fn benchmark_phase8_optimizations() {
     tracing::info!("=== Phase 8: Performance Benchmark ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data: 100 nodes with 500 relationships
     tracing::info!("Creating test data...");
@@ -237,8 +232,7 @@ fn benchmark_phase8_optimizations() {
 fn test_phase8_integration() {
     tracing::info!("=== Phase 8: Full Integration Test ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create a small graph
     engine

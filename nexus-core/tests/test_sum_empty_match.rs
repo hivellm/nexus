@@ -1,24 +1,11 @@
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 use serde_json::Value;
 use std::collections::HashMap;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 #[test]
 fn test_sum_with_empty_match() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -45,7 +32,7 @@ fn test_sum_with_empty_match() {
 
 #[test]
 fn test_sum_with_literal() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Test sum() with literal - should work
     let query = Query {
@@ -64,7 +51,7 @@ fn test_sum_with_literal() {
 
 #[test]
 fn test_sum_with_actual_values() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -98,7 +85,7 @@ fn test_sum_with_actual_values() {
 
 #[test]
 fn test_avg_with_empty_match() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {

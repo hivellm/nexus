@@ -3,19 +3,19 @@
 //! Tests for MCP authentication middleware and API key validation
 
 use nexus_core::auth::{AuthConfig, AuthManager, Permission, middleware::AuthMiddleware};
+use nexus_core::testing::TestContext;
 use nexus_server::{NexusServer, config::RootUserConfig};
 use std::sync::Arc;
-use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 /// Helper function to create a test server with authentication enabled
-async fn create_test_server_with_auth() -> (Arc<NexusServer>, Arc<AuthManager>) {
+async fn create_test_server_with_auth() -> (Arc<NexusServer>, Arc<AuthManager>, TestContext) {
     use nexus_core::{
         Engine, auth::RoleBasedAccessControl, database::DatabaseManager, executor::Executor,
     };
 
-    let temp_dir = TempDir::new().unwrap();
-    let data_dir = temp_dir.path().to_path_buf();
+    let ctx = TestContext::new();
+    let data_dir = ctx.path().to_path_buf();
 
     // Ensure data directory exists
     std::fs::create_dir_all(&data_dir).unwrap();
@@ -78,7 +78,7 @@ async fn create_test_server_with_auth() -> (Arc<NexusServer>, Arc<AuthManager>) 
         RootUserConfig::default(),
     ));
 
-    (server, auth_manager)
+    (server, auth_manager, ctx)
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn test_mcp_auth_extract_api_key_none() {
 
 #[tokio::test]
 async fn test_mcp_auth_manager_verify_valid_key() {
-    let (_server, auth_manager) = create_test_server_with_auth().await;
+    let (_server, auth_manager, _ctx) = create_test_server_with_auth().await;
 
     // Generate a valid API key
     let (_api_key, full_key) = auth_manager
@@ -135,7 +135,7 @@ async fn test_mcp_auth_manager_verify_valid_key() {
 
 #[tokio::test]
 async fn test_mcp_auth_manager_verify_invalid_key() {
-    let (_server, auth_manager) = create_test_server_with_auth().await;
+    let (_server, auth_manager, _ctx) = create_test_server_with_auth().await;
 
     // Try to verify an invalid key
     let result = auth_manager.verify_api_key("nx_invalid_key_12345678901234567890");
@@ -146,7 +146,7 @@ async fn test_mcp_auth_manager_verify_invalid_key() {
 #[tokio::test]
 #[ignore] // TODO: Fix temp dir race condition - LMDB "No such file or directory" error
 async fn test_mcp_auth_manager_revoke_key() {
-    let (_server, auth_manager) = create_test_server_with_auth().await;
+    let (_server, auth_manager, _ctx) = create_test_server_with_auth().await;
 
     // Generate and revoke an API key
     let (api_key, full_key) = auth_manager
@@ -174,7 +174,7 @@ async fn test_mcp_auth_manager_revoke_key() {
 
 #[tokio::test]
 async fn test_mcp_auth_manager_permissions() {
-    let (_server, auth_manager) = create_test_server_with_auth().await;
+    let (_server, auth_manager, _ctx) = create_test_server_with_auth().await;
 
     // Generate API key with Read permission
     let (api_key, _full_key) = auth_manager
@@ -190,7 +190,7 @@ async fn test_mcp_auth_manager_permissions() {
 
 #[tokio::test]
 async fn test_mcp_auth_manager_admin_permissions() {
-    let (_server, auth_manager) = create_test_server_with_auth().await;
+    let (_server, auth_manager, _ctx) = create_test_server_with_auth().await;
 
     // Generate API key with Admin permission
     let (api_key, _full_key) = auth_manager

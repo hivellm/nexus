@@ -23,20 +23,12 @@
 // - nexus-core/tests/test_relationship_debug.rs (this file)
 // - nexus-core/src/executor/mod.rs (execute_create_pattern_internal, execute_all_nodes_scan)
 
-use nexus_core::{Engine, Error};
-use tempfile::TempDir;
-use tracing;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
+use nexus_core::Error;
+use nexus_core::testing::setup_test_engine;
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_simple_relationship_creation() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Check initial state
     tracing::info!("\n=== Initial State ===");

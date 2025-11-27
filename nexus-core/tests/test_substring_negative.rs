@@ -1,24 +1,11 @@
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 use serde_json::Value;
 use std::collections::HashMap;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 #[test]
 fn test_substring_positive_index() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN substring('hello', 1, 3) AS result".to_string(),
@@ -33,7 +20,7 @@ fn test_substring_positive_index() {
 #[test]
 #[ignore] // TODO: Fix negative index calculation in substring
 fn test_substring_negative_index() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Test negative index - should count from end
     let query = Query {
@@ -50,7 +37,7 @@ fn test_substring_negative_index() {
 #[test]
 #[ignore] // TODO: Fix negative index calculation in substring
 fn test_substring_negative_index_no_length() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Test negative index without length - should take from that position to end
     let query = Query {
@@ -66,7 +53,7 @@ fn test_substring_negative_index_no_length() {
 
 #[test]
 fn test_substring_negative_index_large() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Test negative index larger than string length - should start from beginning
     let query = Query {
@@ -82,7 +69,7 @@ fn test_substring_negative_index_large() {
 
 #[test]
 fn test_substring_no_length() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN substring('hello', 2) AS result".to_string(),

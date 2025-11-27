@@ -71,6 +71,10 @@ pub mod validation;
 pub mod vectorizer_cache;
 pub mod wal;
 
+// Testing infrastructure - exposed unconditionally for integration tests
+// The module provides isolated test environments that prevent LMDB conflicts
+pub mod testing;
+
 pub use error::{Error, Result};
 pub use graph::clustering::{
     Cluster, ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, ClusteringMetrics,
@@ -3937,12 +3941,7 @@ struct NodeWriteState {
 mod tests {
     use super::*;
 
-    /// Create an Engine with isolated storage (bypasses test sharing)
-    /// Use sparingly - each call creates new LMDB environments
-    fn create_isolated_engine() -> Result<Engine> {
-        let temp_dir = tempfile::tempdir()?;
-        Engine::with_isolated_catalog(temp_dir.path())
-    }
+    use crate::testing::setup_isolated_test_engine;
 
     #[test]
     fn test_error_storage() {
@@ -4459,10 +4458,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix - uses default data dir which conflicts with parallel tests
     fn test_delete_node() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+        let ctx = crate::testing::TestContext::new();
+        let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
 
         // Create a node first
         let node_id = engine
@@ -4721,7 +4719,7 @@ mod tests {
     #[test]
     fn test_get_graph_statistics() {
         // Use isolated engine to ensure clean state
-        let mut engine = create_isolated_engine().unwrap();
+        let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
         // Create some nodes with different labels
         let _node1 = engine
@@ -4757,7 +4755,7 @@ mod tests {
     #[test]
     fn test_clear_all_data() {
         // Use isolated engine for clear data test
-        let mut engine = create_isolated_engine().unwrap();
+        let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
         // Create some data
         let _node1 = engine

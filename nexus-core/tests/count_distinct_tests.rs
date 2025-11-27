@@ -1,11 +1,5 @@
+use nexus_core::testing::setup_test_engine;
 use nexus_core::{Engine, Error};
-use tempfile::TempDir;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
 
 fn setup_test_data(engine: &mut Engine) -> Result<(), Error> {
     // Create diverse data for COUNT DISTINCT testing
@@ -42,7 +36,7 @@ fn setup_test_data(engine: &mut Engine) -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_basic() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     let result =
@@ -58,7 +52,7 @@ fn test_count_distinct_basic() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_vs_regular_count() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     let distinct_result =
@@ -81,7 +75,7 @@ fn test_count_distinct_vs_regular_count() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_city() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     let result =
@@ -96,7 +90,7 @@ fn test_count_distinct_city() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_multiple_labels() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (p:Person:Employee {name: 'Alice', dept: 'Engineering'})")?;
     engine.execute_cypher("CREATE (p:Person:Employee {name: 'Bob', dept: 'Sales'})")?;
@@ -120,7 +114,7 @@ fn test_count_distinct_multiple_labels() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_with_where() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     let result = engine.execute_cypher(
@@ -136,7 +130,7 @@ fn test_count_distinct_with_where() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_products_price() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     let result = engine
@@ -154,7 +148,7 @@ fn test_count_distinct_products_price() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_by_category() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     let result = engine.execute_cypher("MATCH (p:Product) WHERE p.category = 'Electronics' RETURN count(DISTINCT p.price) AS prices")?;
@@ -168,7 +162,7 @@ fn test_count_distinct_by_category() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_empty_result() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     let result =
@@ -183,7 +177,7 @@ fn test_count_distinct_empty_result() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_all_same_value() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (p:Item {type: 'A'})")?;
     engine.execute_cypher("CREATE (p:Item {type: 'A'})")?;
@@ -202,7 +196,7 @@ fn test_count_distinct_all_same_value() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_with_null_values() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (p:Node {value: 10})")?;
     engine.execute_cypher("CREATE (p:Node {value: 20})")?;
@@ -222,7 +216,7 @@ fn test_count_distinct_with_null_values() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_numeric_values() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     for i in 0..10 {
         let age = (i % 3) * 10 + 20; // Creates ages: 20, 30, 40, 20, 30, 40, ...
@@ -241,7 +235,7 @@ fn test_count_distinct_numeric_values() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_string_values() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     let names = vec!["Alice", "Bob", "Alice", "Charlie", "Bob", "Alice", "David"];
     for name in names {
@@ -264,7 +258,7 @@ fn test_count_distinct_string_values() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_large_dataset() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create 100 nodes with 10 distinct values
     for i in 0..100 {
@@ -285,7 +279,7 @@ fn test_count_distinct_large_dataset() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_case_sensitive() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (p:Text {word: 'hello'})")?;
     engine.execute_cypher("CREATE (p:Text {word: 'Hello'})")?;
@@ -304,7 +298,7 @@ fn test_count_distinct_case_sensitive() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn test_count_distinct_with_limit() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
     setup_test_data(&mut engine)?;
 
     // LIMIT should not affect COUNT DISTINCT result

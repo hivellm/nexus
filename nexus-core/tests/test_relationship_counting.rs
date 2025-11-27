@@ -1,23 +1,16 @@
-﻿use nexus_core::{Engine, Error};
+﻿use nexus_core::Error;
+use nexus_core::testing::setup_test_engine;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tempfile::TempDir;
-use tracing;
 
 /// Counter for unique test labels to prevent cross-test interference
 static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
 
 #[test]
 fn test_directed_relationship_counting() -> Result<(), Error> {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let person_label = format!("PersonDir{}", test_id);
     let knows_type = format!("KNOWS_DIR{}", test_id);
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create nodes with unique labels
     engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
@@ -63,7 +56,7 @@ fn test_bidirectional_relationship_counting() -> Result<(), Error> {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let person_label = format!("PersonBi{}", test_id);
     let knows_type = format!("KNOWS_BI{}", test_id);
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create nodes with unique labels
     engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
@@ -111,7 +104,7 @@ fn test_relationship_type_filtering() -> Result<(), Error> {
     let company_label = format!("CompanyFilter{}", test_id);
     let knows_type = format!("KNOWS_F{}", test_id);
     let works_type = format!("WORKS_AT_F{}", test_id);
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create nodes with unique labels
     engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
@@ -158,7 +151,7 @@ fn test_relationship_type_filtering_single_type() -> Result<(), Error> {
     let company_label = format!("CompanySingle{}", test_id);
     let knows_type = format!("KNOWS_S{}", test_id);
     let works_type = format!("WORKS_AT_S{}", test_id);
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create nodes with unique labels
     engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
@@ -204,7 +197,7 @@ fn test_relationship_direction_with_labels() -> Result<(), Error> {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let person_label = format!("PersonLabel{}", test_id);
     let knows_type = format!("KNOWS_L{}", test_id);
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create nodes with unique labels
     engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;

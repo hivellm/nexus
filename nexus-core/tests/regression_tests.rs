@@ -4,15 +4,14 @@
 //! Each test is named after the issue it prevents.
 
 use nexus_core::Engine;
+use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 use serde_json::json;
-use tempfile::TempDir;
 
 /// Regression test: UNION operator returns Null values
 /// Fixed in commit a4d399f
 #[test]
 fn regression_union_null_values() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data
     engine
@@ -67,8 +66,7 @@ fn regression_union_null_values() {
 /// shared test catalog state (labels like Person, Employee may exist from other tests)
 #[test]
 fn regression_multiple_labels_intersection() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create nodes with different label combinations
     engine
@@ -102,8 +100,7 @@ fn regression_multiple_labels_intersection() {
 /// Fixed in commit a4d399f
 #[test]
 fn regression_id_function_null() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create a node
     let node_id = engine
@@ -126,8 +123,7 @@ fn regression_id_function_null() {
 /// Fixed in commit 28879da
 #[test]
 fn regression_keys_function_empty() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create a node with properties
     engine
@@ -159,10 +155,8 @@ fn regression_keys_function_empty() {
 /// Regression test: Relationship properties not accessible
 /// Fixed in commit 87a75fc
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn regression_relationship_properties() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes and relationship with properties
     let alice_id = engine
@@ -200,10 +194,8 @@ fn regression_relationship_properties() {
 /// Regression test: CREATE clause doesn't persist data
 /// Fixed in commits e6a15d3 and a4d399f
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn regression_create_persistence() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create node via Cypher
     engine
@@ -232,10 +224,8 @@ fn regression_create_persistence() {
 /// Regression test: CREATE with multiple labels fails
 /// Fixed in commit e6a15d3
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn regression_create_multiple_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create node with multiple labels
     engine
@@ -277,10 +267,8 @@ fn regression_create_multiple_labels() {
 /// Regression test: Bidirectional relationships not working
 /// Fixed in commit 87a75fc
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn regression_bidirectional_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes and bidirectional relationships
     let a_id = engine

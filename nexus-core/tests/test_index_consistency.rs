@@ -4,8 +4,8 @@
 //! in batch during commit (Phase 1 optimization).
 
 use nexus_core::Engine;
+use nexus_core::testing::setup_test_engine;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tempfile::TempDir;
 
 /// Counter for unique test labels to prevent cross-test interference
 static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -24,8 +24,7 @@ fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
 #[test]
 fn test_label_index_consistency_after_batch_updates() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Use unique labels to prevent cross-test interference
     let person_label = format!("PersonTest{}", test_id);
@@ -96,8 +95,7 @@ fn test_label_index_consistency_after_batch_updates() {
 /// Test that relationship indexes remain consistent after batch updates
 #[test]
 fn test_relationship_index_consistency_after_batch_updates() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Begin transaction
     engine.execute_cypher("BEGIN TRANSACTION").unwrap();
@@ -140,8 +138,7 @@ fn test_relationship_index_consistency_after_batch_updates() {
 /// Test that property indexes remain consistent after batch updates
 #[test]
 fn test_property_index_consistency_after_batch_updates() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Begin transaction
     engine.execute_cypher("BEGIN TRANSACTION").unwrap();
@@ -190,8 +187,7 @@ fn test_property_index_consistency_after_batch_updates() {
 #[test]
 #[ignore] // TODO: Fix rollback node removal from index
 fn test_index_consistency_after_rollback() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create initial node with unique identifier
     engine.execute_cypher("BEGIN TRANSACTION").unwrap();
@@ -238,8 +234,7 @@ fn test_index_consistency_after_rollback() {
 /// Test that indexes remain consistent with concurrent transactions
 #[tokio::test]
 async fn test_index_consistency_with_concurrent_transactions() {
-    let dir = TempDir::new().unwrap();
-    let engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (engine, _ctx) = setup_test_engine().unwrap();
     let engine = std::sync::Arc::new(std::sync::Mutex::new(engine));
 
     // Create multiple transactions concurrently

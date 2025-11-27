@@ -609,8 +609,8 @@ async fn create_mcp_router(
 mod tests {
     use super::*;
     use config::RootUserConfig;
+    use nexus_core::testing::TestContext;
     use std::net::{IpAddr, Ipv4Addr};
-    use tempfile::TempDir;
 
     #[test]
     fn test_config_default() {
@@ -622,15 +622,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_nexus_server_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
 
         let database_manager =
-            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+            nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
@@ -672,15 +672,15 @@ mod tests {
 
     #[test]
     fn test_nexus_server_clone() {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
 
         let database_manager =
-            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+            nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
@@ -726,15 +726,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_mcp_router() {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
 
         let database_manager =
-            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+            nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
@@ -861,15 +861,15 @@ mod tests {
     #[tokio::test]
     async fn test_router_creation() {
         // This test verifies that the router can be created without panicking
-        let temp_dir = TempDir::new().unwrap();
-        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
 
         let database_manager =
-            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+            nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
@@ -913,15 +913,15 @@ mod tests {
 
     #[test]
     fn test_nexus_server_fields() {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
 
         let database_manager =
-            nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+            nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));

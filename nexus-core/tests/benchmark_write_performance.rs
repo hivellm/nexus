@@ -5,9 +5,8 @@
 //! - 1.7: Benchmark write performance (CREATE node and CREATE relationship)
 
 use nexus_core::Engine;
+use nexus_core::testing::{TestContext, setup_test_engine};
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
-use tracing;
 
 /// Helper to extract count from result
 fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
@@ -25,8 +24,7 @@ fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
 async fn benchmark_create_node_operations() {
     tracing::info!("\n=== Benchmark: CREATE Node Operations ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let num_operations = 1000;
     let mut latencies = Vec::new();
@@ -103,8 +101,7 @@ async fn benchmark_create_node_operations() {
 async fn benchmark_create_relationship_operations() {
     tracing::info!("\n=== Benchmark: CREATE Relationship Operations ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create base nodes first
     tracing::info!("Creating base nodes...");
@@ -193,8 +190,7 @@ async fn benchmark_deferred_index_updates() {
     tracing::info!("\n=== Benchmark: Deferred Index Updates Performance ===");
     tracing::info!("Comparing batch index updates vs immediate updates");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let num_nodes = 500;
     let mut latencies_with_batching = Vec::new();
@@ -287,9 +283,10 @@ async fn benchmark_deferred_index_updates() {
 async fn benchmark_concurrent_write_performance() {
     tracing::info!("\n=== Benchmark: Concurrent Write Performance ===");
 
-    let dir = TempDir::new().unwrap();
-    let engine = Engine::with_data_dir(dir.path()).unwrap();
+    let ctx = TestContext::new();
+    let engine = Engine::with_data_dir(ctx.path()).unwrap();
     let engine = std::sync::Arc::new(std::sync::Mutex::new(engine));
+    let _ctx = ctx; // Keep ctx alive for the duration of the test
 
     let num_threads = 10;
     let operations_per_thread = 100;

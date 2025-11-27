@@ -1,26 +1,13 @@
 //! Test CREATE with RETURN clause
 //! Critical bug: CREATE executes successfully but returns 0 rows instead of 1
 
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 use serde_json::Value;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 #[test]
 fn test_create_single_node_with_property_return() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -55,9 +42,8 @@ fn test_create_single_node_with_property_return() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_create_and_return_literal() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -93,7 +79,7 @@ fn test_create_and_return_literal() {
 
 #[test]
 fn test_create_return_node_object() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -129,9 +115,8 @@ fn test_create_return_node_object() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_create_multiple_nodes_with_return() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -163,9 +148,8 @@ fn test_create_multiple_nodes_with_return() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_create_arithmetic_expression_in_return() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {

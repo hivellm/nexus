@@ -1,0 +1,18 @@
+# Nextest configuration for Nexus
+# See https://nexte.st/book/configuration.html
+
+[profile.default]
+# Limit test threads to prevent LMDB environment exhaustion
+test-threads = 4
+
+# Retries for flaky tests (0 = no retries)
+retries = 0
+
+# Fail fast by default
+fail-fast = true
+
+[profile.ci]
+# CI profile with more conservative settings
+test-threads = 2
+retries = 1
+fail-fast = false

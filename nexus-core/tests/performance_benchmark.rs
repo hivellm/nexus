@@ -13,12 +13,11 @@ use nexus_core::cache::MultiLayerCache;
 use nexus_core::executor::{Executor, Query};
 use nexus_core::index::LabelIndex;
 use nexus_core::storage::RecordStore;
+use nexus_core::testing::TestContext;
 use nexus_core::{catalog::Catalog, index::KnnIndex};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
-use tracing;
 
 /// Benchmark configuration
 #[derive(Debug, Clone)]
@@ -73,12 +72,14 @@ struct BenchmarkResults {
 }
 
 /// Create benchmark environment
-fn create_benchmark_environment(_config: &BenchmarkConfig) -> (Executor, MultiLayerCache, TempDir) {
-    let dir = TempDir::new().unwrap();
+fn create_benchmark_environment(
+    _config: &BenchmarkConfig,
+) -> (Executor, MultiLayerCache, TestContext) {
+    let ctx = TestContext::new();
 
     // Create all components
-    let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
-    let store = RecordStore::new(dir.path()).unwrap();
+    let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+    let store = RecordStore::new(ctx.path()).unwrap();
     let label_index = Arc::new(LabelIndex::new());
     let knn_index = Arc::new(KnnIndex::new_default(128).unwrap());
 
@@ -88,7 +89,7 @@ fn create_benchmark_environment(_config: &BenchmarkConfig) -> (Executor, MultiLa
     // Create executor
     let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
 
-    (executor, cache, dir)
+    (executor, cache, ctx)
 }
 
 /// Generate benchmark dataset

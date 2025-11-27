@@ -161,25 +161,22 @@ pub async fn get_database(
 mod tests {
     use super::*;
     use nexus_core::database::DatabaseManager;
-    use tempfile::TempDir;
+    use nexus_core::testing::TestContext;
 
-    // Test state wrapper that keeps TempDir alive
+    // Test state wrapper that keeps TestContext alive
     struct TestState {
-        _temp_dir: TempDir, // Keep temp_dir alive
+        _ctx: TestContext, // Keep context alive
         state: DatabaseState,
     }
 
     impl TestState {
         fn new() -> Self {
-            let dir = TempDir::new().unwrap();
-            let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+            let ctx = TestContext::new();
+            let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
             let state = DatabaseState {
                 manager: Arc::new(RwLock::new(manager)),
             };
-            Self {
-                _temp_dir: dir,
-                state,
-            }
+            Self { _ctx: ctx, state }
         }
 
         fn state(&self) -> DatabaseState {
@@ -350,8 +347,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_databases_response_format() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         let response = ListDatabasesResponse {
             databases: manager.list_databases(),

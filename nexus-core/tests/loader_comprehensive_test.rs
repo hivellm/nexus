@@ -7,35 +7,17 @@
 //! - Data validation
 
 use nexus_core::loader::{BulkLoadConfig, BulkLoader, DataSource, NodeData, RelationshipData};
+use nexus_core::testing::{TestContext, create_test_loader};
 use nexus_core::transaction::TransactionManager;
 use nexus_core::{catalog::Catalog, index::IndexManager, storage::RecordStore};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tempfile::TempDir;
 use tokio::sync::RwLock;
-
-fn create_test_loader() -> (BulkLoader, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
-    let storage = Arc::new(RwLock::new(RecordStore::new(dir.path()).unwrap()));
-    let indexes = Arc::new(IndexManager::new(dir.path()).unwrap());
-    let transaction_manager = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
-
-    let loader = BulkLoader::new(
-        catalog,
-        storage,
-        indexes,
-        transaction_manager,
-        BulkLoadConfig::default(),
-    );
-
-    (loader, dir)
-}
 
 #[tokio::test]
 async fn test_loader_with_invalid_data() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     // Try to load invalid node data
     let invalid_nodes = vec![NodeData {
@@ -56,7 +38,7 @@ async fn test_loader_with_invalid_data() {
 
 #[tokio::test]
 async fn test_loader_with_duplicate_node_ids() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     let nodes = vec![
         NodeData {
@@ -91,7 +73,7 @@ async fn test_loader_with_duplicate_node_ids() {
 
 #[tokio::test]
 async fn test_loader_with_invalid_relationship() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     // Create valid nodes first
     let nodes = vec![NodeData {
@@ -121,7 +103,7 @@ async fn test_loader_with_invalid_relationship() {
 
 #[tokio::test]
 async fn test_loader_with_large_dataset() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     // Create 1000 nodes
     let mut nodes = Vec::new();
@@ -151,12 +133,11 @@ async fn test_loader_with_large_dataset() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix temp dir race condition
 async fn test_loader_with_custom_config() {
-    let dir = TempDir::new().unwrap();
-    let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
-    let storage = Arc::new(RwLock::new(RecordStore::new(dir.path()).unwrap()));
-    let indexes = Arc::new(IndexManager::new(dir.path()).unwrap());
+    let ctx = TestContext::new();
+    let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+    let storage = Arc::new(RwLock::new(RecordStore::new(ctx.path()).unwrap()));
+    let indexes = Arc::new(IndexManager::new(ctx.path()).unwrap());
     let transaction_manager = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
 
     let config = BulkLoadConfig {
@@ -188,7 +169,7 @@ async fn test_loader_with_custom_config() {
 
 #[tokio::test]
 async fn test_loading_stats_tracking() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     let nodes = vec![
         NodeData {
@@ -225,9 +206,8 @@ async fn test_loading_stats_tracking() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix temp dir race condition
 async fn test_loader_with_empty_data() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     let data_source = DataSource::InMemory {
         nodes: vec![],
@@ -244,7 +224,7 @@ async fn test_loader_with_empty_data() {
 
 #[tokio::test]
 async fn test_loader_with_complex_properties() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     let nodes = vec![NodeData {
         id: Some(1),
@@ -270,9 +250,8 @@ async fn test_loader_with_complex_properties() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix temp dir race condition
 async fn test_loader_phase_tracking() {
-    let (loader, _dir) = create_test_loader();
+    let (loader, _ctx) = create_test_loader();
 
     let nodes = vec![NodeData {
         id: Some(1),

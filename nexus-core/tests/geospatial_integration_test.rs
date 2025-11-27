@@ -7,31 +7,16 @@
 //! - Geospatial procedures
 //! - Edge cases and error handling
 
-use nexus_core::executor::{Executor, Query};
+use nexus_core::executor::Query;
 use nexus_core::geospatial::procedures::{
     BoundingBox, WithinBBoxProcedure, WithinDistanceProcedure,
 };
 use nexus_core::geospatial::{CoordinateSystem, Point, rtree::RTreeIndex};
 use nexus_core::graph::algorithms::Graph;
 use nexus_core::graph::procedures::{GraphProcedure, ProcedureRegistry};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::testing::create_test_executor;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    // Ensure directory exists before creating components
-    std::fs::create_dir_all(dir.path()).unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 // ============================================================================
 // Point Data Type Tests
@@ -141,7 +126,7 @@ fn test_point_distance_edge_cases() {
 
 #[test]
 fn test_distance_function_multiple_queries() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Test multiple distance calculations in one query
     let mut params = HashMap::new();
@@ -181,7 +166,7 @@ fn test_distance_function_multiple_queries() {
 
 #[test]
 fn test_distance_function_with_null_points() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     let mut params = HashMap::new();
 
     params.insert("p1".to_string(), Value::Null);
@@ -202,7 +187,7 @@ fn test_distance_function_with_null_points() {
 
 #[test]
 fn test_distance_function_coordinate_system_mismatch() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     let mut params = HashMap::new();
 
     // Mixing coordinate systems should still calculate distance
@@ -522,7 +507,7 @@ fn test_rtree_with_procedures_integration() {
 
 #[test]
 fn test_point_json_roundtrip_with_executor() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     let mut params = HashMap::new();
 
     // Create point and convert to JSON
@@ -645,9 +630,8 @@ fn test_point_display_format() {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix - temp dir race condition in parallel tests
 fn test_create_spatial_index_basic() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "CREATE SPATIAL INDEX ON :Location(coordinates)".to_string(),
@@ -670,9 +654,8 @@ fn test_create_spatial_index_basic() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_create_spatial_index_if_not_exists() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create index first time
     let query1 = Query {
@@ -693,7 +676,7 @@ fn test_create_spatial_index_if_not_exists() {
 
 #[test]
 fn test_create_spatial_index_or_replace() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create index first time
     let query1 = Query {
@@ -713,9 +696,8 @@ fn test_create_spatial_index_or_replace() {
 }
 
 #[test]
-#[ignore] // TODO: Fix - temp dir race condition in parallel tests
 fn test_create_spatial_index_multiple_labels() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create indexes for different labels
     let queries = vec![
@@ -735,9 +717,8 @@ fn test_create_spatial_index_multiple_labels() {
 }
 
 #[test]
-#[ignore] // TODO: Fix - temp dir race condition in parallel tests
 fn test_create_property_index_vs_spatial_index() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create property index
     let query1 = Query {
@@ -768,7 +749,7 @@ fn test_create_property_index_vs_spatial_index() {
 
 #[test]
 fn test_create_spatial_index_invalid_syntax() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Missing ON keyword
     let query1 = Query {
@@ -787,7 +768,7 @@ fn test_create_spatial_index_invalid_syntax() {
 
 #[test]
 fn test_create_spatial_index_with_special_characters() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Test with label that has special characters (if supported)
     let query = Query {
@@ -1077,7 +1058,7 @@ fn test_rtree_distance_query_very_small_distance() {
 
 #[test]
 fn test_distance_function_in_where_clause() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     let mut params = HashMap::new();
 
     params.insert(
@@ -1100,7 +1081,7 @@ fn test_distance_function_in_where_clause() {
 
 #[test]
 fn test_distance_function_with_aggregation() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     let mut params = HashMap::new();
 
     params.insert(
@@ -1136,7 +1117,7 @@ fn test_distance_function_with_aggregation() {
 
 #[test]
 fn test_distance_function_with_null_handling() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     let mut params = HashMap::new();
 
     // Test with one null point
@@ -1172,7 +1153,7 @@ fn test_distance_function_with_null_handling() {
 
 #[test]
 fn test_distance_function_precision() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     let mut params = HashMap::new();
 
     // Test with very precise coordinates
@@ -1237,7 +1218,7 @@ fn test_rtree_stress_insert_remove() {
 
 #[test]
 fn test_multiple_spatial_indexes() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create multiple spatial indexes
     let indexes = vec![

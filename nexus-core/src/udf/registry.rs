@@ -116,23 +116,22 @@ impl PersistentUdfRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestContext;
     use crate::udf::{BuiltinUdf, UdfParameter, UdfReturnType, UdfSignature};
     use serde_json::Value;
-    use tempfile::TempDir;
 
-    fn create_test_catalog() -> (Arc<Catalog>, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let catalog = Catalog::new(dir.path()).unwrap();
-        (Arc::new(catalog), dir)
+    fn create_test_catalog() -> (Arc<Catalog>, TestContext) {
+        let ctx = TestContext::new();
+        let catalog = Catalog::new(ctx.path()).unwrap();
+        (Arc::new(catalog), ctx)
     }
 
     /// Create an isolated catalog for tests that need data isolation
-    fn create_isolated_test_catalog() -> (Arc<Catalog>, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let catalog = Catalog::with_isolated_path(dir.path(), 100 * 1024 * 1024).unwrap();
-        (Arc::new(catalog), dir)
+    fn create_isolated_test_catalog() -> (Arc<Catalog>, TestContext) {
+        let ctx = TestContext::new();
+        let catalog = Catalog::with_isolated_path(ctx.path(), 100 * 1024 * 1024).unwrap();
+        (Arc::new(catalog), ctx)
     }
-
 
     #[test]
     fn test_persistent_udf_registry_with_parameters() {
@@ -257,7 +256,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_get_nonexistent_udf() {
         let (catalog, _dir) = create_test_catalog();
         let registry = PersistentUdfRegistry::new(catalog.clone());
@@ -295,7 +293,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_udf_persistence_across_registry_instances() {
         let (catalog, _dir) = create_test_catalog();
 

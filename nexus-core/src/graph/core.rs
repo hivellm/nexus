@@ -1194,19 +1194,7 @@ pub struct GraphStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::Catalog;
-    use tempfile::TempDir;
-
-    fn create_test_graph() -> (Graph, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = RecordStore::new(dir.path()).unwrap();
-        // Ensure catalog directory exists before creating Catalog
-        let catalog_path = dir.path().join("catalog");
-        std::fs::create_dir_all(&catalog_path).unwrap();
-        let catalog = Arc::new(Catalog::new(&catalog_path).unwrap());
-        let graph = Graph::new(store, catalog);
-        (graph, dir)
-    }
+    use crate::testing::{create_isolated_test_graph, create_test_graph};
 
     #[test]
     fn test_node_creation() {
@@ -1236,7 +1224,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_node_properties() {
         let (graph, _dir) = create_test_graph();
 
@@ -1415,7 +1402,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_edge_other_end() {
         let (graph, _dir) = create_test_graph();
 
@@ -1550,7 +1536,8 @@ mod tests {
 
     #[test]
     fn test_edge_is_empty() {
-        let (graph, _dir) = create_test_graph();
+        // Use isolated graph to avoid parallel test interference
+        let (graph, _dir) = create_isolated_test_graph();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -1568,7 +1555,8 @@ mod tests {
 
     #[test]
     fn test_clear_cache() {
-        let (graph, _dir) = create_test_graph();
+        // Use isolated graph to avoid parallel test interference
+        let (graph, _dir) = create_isolated_test_graph();
 
         let node_id1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let node_id2 = graph.create_node(vec!["Person".to_string()]).unwrap();

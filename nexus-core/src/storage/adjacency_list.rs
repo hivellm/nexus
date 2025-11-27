@@ -766,20 +766,20 @@ impl AdjacencyListStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::testing::TestContext;
 
     #[test]
     fn test_adjacency_list_store_creation() {
-        let dir = TempDir::new().unwrap();
-        let store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let store = AdjacencyListStore::new(ctx.path()).unwrap();
         assert_eq!(store.outgoing_file_size, 1024 * 1024);
         assert_eq!(store.incoming_file_size, 1024 * 1024);
     }
 
     #[test]
     fn test_add_outgoing_relationships() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships for node 1
         let relationships = vec![(1, 1), (2, 1), (3, 2)]; // (rel_id, type_id)
@@ -795,8 +795,8 @@ mod tests {
 
     #[test]
     fn test_get_outgoing_relationships_filtered() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with different types
         let relationships = vec![(1, 1), (2, 1), (3, 2)];
@@ -812,8 +812,8 @@ mod tests {
 
     #[test]
     fn test_multiple_nodes_with_relationships() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships for node 1
         let node1_rels = vec![(1, 1), (2, 1), (3, 2)];
@@ -843,8 +843,8 @@ mod tests {
 
     #[test]
     fn test_node_with_no_relationships() {
-        let dir = TempDir::new().unwrap();
-        let store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Node with no relationships should return empty vector
         let result = store.get_outgoing_relationships(999, &[]).unwrap();
@@ -853,8 +853,8 @@ mod tests {
 
     #[test]
     fn test_add_relationships_incrementally() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add first batch of relationships
         let batch1 = vec![(1, 1), (2, 1)];
@@ -875,8 +875,8 @@ mod tests {
 
     #[test]
     fn test_filter_by_multiple_types() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with multiple types
         let relationships = vec![(1, 1), (2, 1), (3, 2), (4, 3), (5, 2)];
@@ -894,8 +894,8 @@ mod tests {
 
     #[test]
     fn test_filter_by_nonexistent_type() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with type 1
         let relationships = vec![(1, 1), (2, 1)];
@@ -908,8 +908,8 @@ mod tests {
 
     #[test]
     fn test_large_number_of_relationships() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add 100 relationships for a single node
         let mut relationships = Vec::new();
@@ -929,8 +929,8 @@ mod tests {
 
     #[test]
     fn test_flush_persistence() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path();
+        let ctx = TestContext::new();
+        let path = ctx.path();
 
         // Create store and add relationships
         {
@@ -951,8 +951,8 @@ mod tests {
 
     #[test]
     fn test_empty_relationships_list() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Adding empty list should not crash
         let empty: Vec<(u64, u32)> = vec![];
@@ -965,8 +965,8 @@ mod tests {
 
     #[test]
     fn test_same_relationship_id_different_types() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Note: In real usage, same rel_id shouldn't have different types
         // But we test that the store handles it gracefully
@@ -981,8 +981,8 @@ mod tests {
 
     #[test]
     fn test_high_degree_node() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Simulate high-degree node (node with many relationships)
         let mut relationships = Vec::new();
@@ -1002,8 +1002,8 @@ mod tests {
 
     #[test]
     fn test_concurrent_node_access_pattern() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships for multiple nodes (simulating concurrent access pattern)
         for node_id in 0..10 {
@@ -1028,8 +1028,8 @@ mod tests {
 
     #[test]
     fn test_type_distribution() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with uneven type distribution
         let relationships = vec![
@@ -1058,8 +1058,8 @@ mod tests {
 
     #[test]
     fn test_stress_many_nodes() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Create 1000 nodes, each with 10 relationships
         for node_id in 0..1000 {
@@ -1082,8 +1082,8 @@ mod tests {
 
     #[test]
     fn test_very_large_relationship_list() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add 10,000 relationships for a single node
         let mut relationships = Vec::new();
@@ -1103,8 +1103,8 @@ mod tests {
 
     #[test]
     fn test_sequential_vs_batch_addition() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships sequentially
         for i in 0..10 {
@@ -1128,8 +1128,8 @@ mod tests {
 
     #[test]
     fn test_mixed_type_distribution() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with mixed type distribution
         let relationships = vec![
@@ -1161,8 +1161,8 @@ mod tests {
 
     #[test]
     fn test_boundary_conditions() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Test with node_id = 0
         let rels = vec![(1, 1)];
@@ -1185,8 +1185,8 @@ mod tests {
 
     #[test]
     fn test_reopen_store_multiple_times() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path();
+        let ctx = TestContext::new();
+        let path = ctx.path();
 
         // Create and add relationships
         {
@@ -1217,8 +1217,8 @@ mod tests {
 
     #[test]
     fn test_multiple_flushes() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships and flush multiple times
         for i in 0..5 {
@@ -1234,8 +1234,8 @@ mod tests {
 
     #[test]
     fn test_filter_all_types() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with different types
         let relationships = vec![(1, 1), (2, 2), (3, 3), (4, 1), (5, 2)];
@@ -1253,8 +1253,8 @@ mod tests {
 
     #[test]
     fn test_node_isolation() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships for multiple nodes
         for node_id in 0..5 {
@@ -1282,8 +1282,8 @@ mod tests {
 
     #[test]
     fn test_type_filtering_performance() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add 1000 relationships with 100 different types
         let mut relationships = Vec::new();
@@ -1303,8 +1303,8 @@ mod tests {
 
     #[test]
     fn test_concurrent_node_patterns() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Simulate concurrent access pattern: add relationships to different nodes
         // in an interleaved manner, but batch by node to avoid overwriting
@@ -1354,8 +1354,8 @@ mod tests {
 
     #[test]
     fn test_file_growth() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add enough relationships to trigger file growth
         // Each relationship needs ~20 bytes (header) + 16 bytes (entry) = 36 bytes
@@ -1377,8 +1377,8 @@ mod tests {
 
     #[test]
     fn test_sparse_node_distribution() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships to sparse node IDs (not consecutive)
         let sparse_nodes = vec![1, 100, 1000, 10000, 100000];
@@ -1397,8 +1397,8 @@ mod tests {
 
     #[test]
     fn test_relationship_id_uniqueness() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with unique IDs
         let relationships = vec![(1, 1), (2, 1), (3, 1), (100, 2), (200, 2), (1000, 3)];
@@ -1414,8 +1414,8 @@ mod tests {
 
     #[test]
     fn test_mixed_batch_sizes() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships in batches of different sizes
         store.add_outgoing_relationships(1, &[(1, 1)]).unwrap(); // Single
@@ -1432,8 +1432,8 @@ mod tests {
 
     #[test]
     fn test_type_zero_handling() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add relationships with type_id = 0 (valid type)
         let relationships = vec![(1, 0), (2, 0), (3, 1)];
@@ -1449,8 +1449,8 @@ mod tests {
 
     #[test]
     fn test_add_incoming_relationships() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add incoming relationships for node 1
         let relationships = vec![(1, 1), (2, 1), (3, 2)];
@@ -1466,8 +1466,8 @@ mod tests {
 
     #[test]
     fn test_incoming_relationships_filtered() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add incoming relationships with different types
         let relationships = vec![(1, 1), (2, 1), (3, 2)];
@@ -1483,8 +1483,8 @@ mod tests {
 
     #[test]
     fn test_outgoing_and_incoming_separation() {
-        let dir = TempDir::new().unwrap();
-        let mut store = AdjacencyListStore::new(dir.path()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = AdjacencyListStore::new(ctx.path()).unwrap();
 
         // Add outgoing relationships for node 1
         let outgoing = vec![(1, 1), (2, 1)];

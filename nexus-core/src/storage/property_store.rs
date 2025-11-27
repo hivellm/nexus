@@ -731,21 +731,21 @@ impl EntityType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TestContext;
     use serde_json::json;
     use std::sync::{Arc, RwLock};
-    use tempfile::TempDir;
 
     #[test]
     fn test_property_store_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
         assert_eq!(store.property_count(), 0);
     }
 
     #[test]
     fn test_store_and_load_properties() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         let properties = json!({
             "name": "Alice",
@@ -769,8 +769,8 @@ mod tests {
 
     #[test]
     fn test_update_properties() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         let initial_properties = json!({"name": "Alice"});
         let updated_properties = json!({"name": "Alice", "age": 30});
@@ -788,8 +788,8 @@ mod tests {
 
     #[test]
     fn test_delete_properties() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         let properties = json!({"name": "Alice"});
         store
@@ -814,8 +814,8 @@ mod tests {
 
     #[test]
     fn test_relationship_properties() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         let properties = json!({"weight": 0.8, "type": "friends"});
         store
@@ -831,8 +831,8 @@ mod tests {
 
     #[test]
     fn test_large_property_data() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         // Create a large JSON object
         let mut large_data = serde_json::Map::new();
@@ -854,9 +854,9 @@ mod tests {
 
     #[test]
     fn test_concurrent_property_access() {
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         let store = Arc::new(RwLock::new(
-            PropertyStore::new(temp_dir.path().to_path_buf()).unwrap(),
+            PropertyStore::new(ctx.path().to_path_buf()).unwrap(),
         ));
 
         let handles: Vec<_> = (0..10)
@@ -891,8 +891,8 @@ mod tests {
 
     #[test]
     fn test_property_store_capacity_expansion() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         // Store many properties to trigger capacity expansion
         for i in 0..100 {
@@ -918,8 +918,8 @@ mod tests {
 
     #[test]
     fn test_property_store_health_check() {
-        let temp_dir = TempDir::new().unwrap();
-        let store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         // Health check should pass for valid store
         store.health_check().unwrap();
@@ -930,8 +930,8 @@ mod tests {
 
     #[test]
     fn test_property_store_error_handling() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         // Test loading non-existent property
         let result = store.load_properties(999, EntityType::Node).unwrap();
@@ -943,8 +943,8 @@ mod tests {
 
     #[test]
     fn test_property_store_serialization_types() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         // Test different JSON value types
         let test_cases = vec![
@@ -969,8 +969,8 @@ mod tests {
 
     #[test]
     fn test_property_store_mixed_entity_types() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut store = PropertyStore::new(temp_dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let mut store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
 
         // Store properties for both node and relationship with same ID
         let node_props = json!({"type": "user", "name": "Alice"});

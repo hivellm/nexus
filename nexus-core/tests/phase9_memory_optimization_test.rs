@@ -10,11 +10,10 @@ use nexus_core::memory::{
     CacheStats, LockFreeCounter, LockFreeHashMap, LockFreeStack, NumaAllocator, NumaConfig,
     NumaPartitionedCache, NumaScheduler, PredictivePrefetcher,
 };
+use nexus_core::testing::setup_test_engine;
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
-use tempfile::TempDir;
-use tracing;
 
 #[test]
 fn test_lock_free_counter() {
@@ -226,8 +225,7 @@ fn test_numa_scheduler() {
 fn test_phase9_integration() {
     tracing::info!("=== Phase 9: Integration Test ===");
 
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create some data
     engine

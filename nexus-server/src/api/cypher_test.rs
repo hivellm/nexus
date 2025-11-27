@@ -11,19 +11,19 @@ mod tests {
     use nexus_core::auth::RoleBasedAccessControl;
     use nexus_core::database::DatabaseManager;
     use nexus_core::executor::parser::CypherParser;
+    use nexus_core::testing::TestContext;
     use std::sync::Arc;
-    use tempfile::TempDir;
     use tokio::sync::RwLock;
 
-    async fn create_test_server() -> Arc<NexusServer> {
-        let temp_dir = TempDir::new().unwrap();
-        let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+    async fn create_test_server() -> (Arc<NexusServer>, TestContext) {
+        let ctx = TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
 
-        let db_path = temp_dir.path().join("databases");
+        let db_path = ctx.path().join("databases");
         std::fs::create_dir_all(&db_path).unwrap();
         let database_manager = DatabaseManager::new(db_path).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
@@ -47,21 +47,24 @@ mod tests {
             .unwrap(),
         );
 
-        Arc::new(NexusServer::new(
-            executor_arc,
-            engine_arc,
-            database_manager_arc,
-            rbac_arc,
-            auth_manager,
-            jwt_manager,
-            audit_logger,
-            crate::config::RootUserConfig::default(),
-        ))
+        (
+            Arc::new(NexusServer::new(
+                executor_arc,
+                engine_arc,
+                database_manager_arc,
+                rbac_arc,
+                auth_manager,
+                jwt_manager,
+                audit_logger,
+                crate::config::RootUserConfig::default(),
+            )),
+            ctx,
+        )
     }
 
     #[tokio::test]
     async fn test_show_databases_returns_default() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("SHOW DATABASES".to_string());
@@ -90,7 +93,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_database_success() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("CREATE DATABASE testdb_unit".to_string());
@@ -122,7 +125,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_database_duplicate_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create database first
@@ -143,7 +146,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_database_success() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create database first
@@ -165,7 +168,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_database_nonexistent_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("DROP DATABASE nonexistent_db_12345".to_string());
@@ -180,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_use_database_success() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create a database first
@@ -210,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_use_database_nonexistent_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("USE DATABASE nonexistent_db_use_12345".to_string());
@@ -226,7 +229,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // TODO: Fix LMDB BadRslot error - likely due to concurrent access issues
     async fn test_use_database_default() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Use the default database (neo4j)
@@ -249,7 +252,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_show_users_empty() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("SHOW USERS".to_string());
@@ -266,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_user_success() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("CREATE USER testuser_unit".to_string());
@@ -298,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_user_duplicate_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user first
@@ -319,7 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_user_if_not_exists() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user first
@@ -344,7 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grant_permission_success() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user first
@@ -366,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grant_permission_nonexistent_user_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("GRANT READ TO nonexistent_user_12345".to_string());
@@ -381,7 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grant_invalid_permission_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user first
@@ -402,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_revoke_permission_success() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user and grant permission first
@@ -429,7 +432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_revoke_permission_nonexistent_user_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("REVOKE READ FROM nonexistent_user_12345".to_string());
@@ -444,7 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grant_multiple_permissions() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user first
@@ -465,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_revoke_multiple_permissions() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user and grant permissions first
@@ -497,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_api_key_success() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("CREATE API KEY testkey".to_string());
@@ -519,7 +522,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_api_key_with_permissions() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new(
@@ -537,7 +540,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // TODO: Fix temp dir race condition in parallel tests
     async fn test_create_api_key_with_expiration() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("CREATE API KEY testkey3 EXPIRES IN '7d'".to_string());
@@ -552,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_api_key_for_user() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user first
@@ -573,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_api_key_invalid_permission_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser =
@@ -590,7 +593,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // TODO: Fix LMDB BadRslot error - likely due to concurrent access issues
     async fn test_create_api_key_nonexistent_user_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser =
@@ -606,7 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_show_api_keys() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create a key first
@@ -640,7 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_show_api_keys_for_user() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create user first
@@ -668,7 +671,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_revoke_api_key() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create a key first
@@ -701,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_api_key() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         // Create a key first
@@ -731,7 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_api_key_nonexistent_error() {
-        let server = create_test_server().await;
+        let (server, _ctx) = create_test_server().await;
         let start_time = std::time::Instant::now();
 
         let mut parser = CypherParser::new("DELETE API KEY 'nonexistent_key_12345'".to_string());

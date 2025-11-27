@@ -1071,21 +1071,21 @@ impl Default for Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::testing::TestContext;
 
-    fn create_test_catalog() -> (Catalog, TempDir) {
-        let dir = TempDir::new().unwrap();
+    fn create_test_catalog() -> (Catalog, TestContext) {
+        let ctx = TestContext::new();
         // Use shared catalog for most tests to avoid TlsFull
-        let catalog = Catalog::with_map_size(dir.path(), 100 * 1024 * 1024).unwrap();
-        (catalog, dir)
+        let catalog = Catalog::with_map_size(ctx.path(), 100 * 1024 * 1024).unwrap();
+        (catalog, ctx)
     }
 
     /// Create an isolated catalog for tests that need data isolation
     /// WARNING: Use sparingly - each call creates a new LMDB environment
-    fn create_isolated_test_catalog() -> (Catalog, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let catalog = Catalog::with_isolated_path(dir.path(), 100 * 1024 * 1024).unwrap();
-        (catalog, dir)
+    fn create_isolated_test_catalog() -> (Catalog, TestContext) {
+        let ctx = TestContext::new();
+        let catalog = Catalog::with_isolated_path(ctx.path(), 100 * 1024 * 1024).unwrap();
+        (catalog, ctx)
     }
 
     #[test]
@@ -1166,8 +1166,8 @@ mod tests {
 
     #[test]
     fn test_persistence() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().to_path_buf();
+        let ctx = TestContext::new();
+        let path = ctx.path().to_path_buf();
 
         // Create catalog and add data using isolated path
         {
@@ -1361,8 +1361,8 @@ mod tests {
 
     #[test]
     fn test_reopen_with_existing_data() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().to_path_buf();
+        let ctx = TestContext::new();
+        let path = ctx.path().to_path_buf();
 
         // Create catalog with data using isolated path
         {

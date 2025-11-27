@@ -1,16 +1,10 @@
 /// Tests for null comparison operators (null = null, null <> null)
-use nexus_core::{Engine, Error};
-use tempfile::TempDir;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
+use nexus_core::Error;
+use nexus_core::testing::setup_test_engine;
 
 #[test]
 fn test_null_equals_null_in_return() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // In Neo4j, null = null returns null in RETURN clause
     let result = engine.execute_cypher("RETURN null = null AS null_eq_null")?;
@@ -27,7 +21,7 @@ fn test_null_equals_null_in_return() -> Result<(), Error> {
 
 #[test]
 fn test_null_not_equals_null_in_return() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // In Neo4j, null <> null returns null in RETURN clause
     let result = engine.execute_cypher("RETURN null <> null AS null_neq_null")?;
@@ -43,9 +37,8 @@ fn test_null_not_equals_null_in_return() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn test_null_equals_null_in_where() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Node {value: null})")?;
@@ -66,7 +59,7 @@ fn test_null_equals_null_in_where() -> Result<(), Error> {
 
 #[test]
 fn test_null_not_equals_null_in_where() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Node {value: null})")?;
@@ -87,7 +80,7 @@ fn test_null_not_equals_null_in_where() -> Result<(), Error> {
 
 #[test]
 fn test_null_equals_value_in_return() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // In Neo4j, null = value returns null
     let result = engine.execute_cypher("RETURN null = 5 AS null_eq_value")?;
@@ -104,7 +97,7 @@ fn test_null_equals_value_in_return() -> Result<(), Error> {
 
 #[test]
 fn test_value_equals_null_in_return() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // In Neo4j, value = null returns null
     let result = engine.execute_cypher("RETURN 5 = null AS value_eq_null")?;
@@ -120,9 +113,8 @@ fn test_value_equals_null_in_return() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn test_null_equals_value_in_where() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Node {value: 5})")?;
@@ -142,9 +134,8 @@ fn test_null_equals_value_in_where() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn test_is_null_operator() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Node {value: null})")?;

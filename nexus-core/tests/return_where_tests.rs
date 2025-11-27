@@ -5,19 +5,13 @@
 //!
 //! This is useful for filtering literal values or expressions
 
-use nexus_core::{Engine, Error};
-use tempfile::TempDir;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
+use nexus_core::Error;
+use nexus_core::testing::setup_test_engine;
 
 #[test]
 fn test_return_where_simple_comparison() -> Result<(), Error> {
     // RETURN value WHERE condition should filter based on condition
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // This should return 1 row if condition is true
     let result = engine.execute_cypher("RETURN 5 AS val WHERE 5 > 3")?;
@@ -41,7 +35,7 @@ fn test_return_where_simple_comparison() -> Result<(), Error> {
 
 #[test]
 fn test_return_where_boolean_literal() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // WHERE true should return the row
     let result = engine.execute_cypher("RETURN 42 AS val WHERE true")?;
@@ -57,7 +51,7 @@ fn test_return_where_boolean_literal() -> Result<(), Error> {
 
 #[test]
 fn test_return_where_is_null() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // WHERE null IS NULL should return the row
     let result = engine.execute_cypher("RETURN 42 AS val WHERE null IS NULL")?;
@@ -72,7 +66,7 @@ fn test_return_where_is_null() -> Result<(), Error> {
 
 #[test]
 fn test_return_where_in_operator() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // WHERE value IN list should filter correctly
     let result = engine.execute_cypher("RETURN 5 AS val WHERE 5 IN [1, 2, 5]")?;
@@ -88,7 +82,7 @@ fn test_return_where_in_operator() -> Result<(), Error> {
 
 #[test]
 fn test_return_where_string_operators() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // WHERE string STARTS WITH prefix
     let result = engine.execute_cypher("RETURN 'hello' AS val WHERE 'hello' STARTS WITH 'he'")?;
@@ -107,7 +101,7 @@ fn test_return_where_string_operators() -> Result<(), Error> {
 
 #[test]
 fn test_return_where_logical_operators() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // WHERE AND condition
     let result = engine.execute_cypher("RETURN 5 AS val WHERE 5 > 3 AND 2 < 4")?;
@@ -126,7 +120,7 @@ fn test_return_where_logical_operators() -> Result<(), Error> {
 
 #[test]
 fn test_return_where_complex_expression() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Complex WHERE condition with nested expressions
     let result = engine.execute_cypher("RETURN 42 AS val WHERE (5 > 3 AND 2 < 4) OR (10 > 20)")?;

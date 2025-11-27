@@ -1,4 +1,4 @@
-﻿//! Vectorizer Integration Tests for Nexus
+//! Vectorizer Integration Tests for Nexus
 //!
 //! These tests verify the complete integration between Nexus and the vectorizer system,
 //! including MCP client, caching, and hybrid search functionality.
@@ -9,10 +9,10 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
 };
+use nexus_core::testing::TestContext;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 
@@ -454,18 +454,18 @@ impl McpVectorizerClient {
 // ============================================================================
 
 /// Create a test server with vectorizer integration
-async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockVectorizer>) {
-    let temp_dir = TempDir::new().unwrap();
+async fn create_vectorizer_test_server()
+-> (Router, Arc<NexusServer>, Arc<MockVectorizer>, TestContext) {
+    let ctx = TestContext::new();
 
     // Initialize core components using Engine
-    let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
     let engine_arc = Arc::new(RwLock::new(engine));
 
     let executor = Executor::default();
     let executor_arc = Arc::new(executor);
 
-    let database_manager =
-        nexus_core::database::DatabaseManager::new(temp_dir.path().into()).unwrap();
+    let database_manager = nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
     let database_manager_arc = Arc::new(RwLock::new(database_manager));
     let rbac = nexus_core::auth::RoleBasedAccessControl::new();
     let rbac_arc = Arc::new(RwLock::new(rbac));
@@ -571,7 +571,7 @@ async fn create_vectorizer_test_server() -> (Router, Arc<NexusServer>, Arc<MockV
         )
         .with_state(server.clone());
 
-    (app, server, vectorizer)
+    (app, server, vectorizer, ctx)
 }
 
 // ============================================================================
@@ -954,8 +954,12 @@ async fn test_vectorizer_codebase_search() {
 #[tokio::test]
 #[ignore = "Health endpoint returns 'Healthy' instead of 'ok'"]
 async fn test_vectorizer_integration_with_api() {
-    let (app, _server, _vectorizer): (Router, Arc<NexusServer>, Arc<MockVectorizer>) =
-        create_vectorizer_test_server().await;
+    let (app, _server, _vectorizer, _ctx): (
+        Router,
+        Arc<NexusServer>,
+        Arc<MockVectorizer>,
+        TestContext,
+    ) = create_vectorizer_test_server().await;
 
     // Test that the API endpoints still work with vectorizer integration
     let request = Request::builder()
@@ -1160,8 +1164,12 @@ async fn test_vectorizer_cache_invalidation() {
 /// Test that vectorizer integration doesn't break existing functionality
 #[tokio::test]
 async fn test_vectorizer_integration_backwards_compatibility() {
-    let (app, _server, _vectorizer): (Router, Arc<NexusServer>, Arc<MockVectorizer>) =
-        create_vectorizer_test_server().await;
+    let (app, _server, _vectorizer, _ctx): (
+        Router,
+        Arc<NexusServer>,
+        Arc<MockVectorizer>,
+        TestContext,
+    ) = create_vectorizer_test_server().await;
 
     // Test all major endpoints still work
     let endpoints = vec![

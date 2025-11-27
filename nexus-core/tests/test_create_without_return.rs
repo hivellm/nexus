@@ -1,23 +1,10 @@
 //! Test CREATE with and without RETURN clause
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 use serde_json::Value;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
 use std::time::Duration;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 fn run_with_timeout<F>(name: &str, f: F)
 where
@@ -53,7 +40,7 @@ where
 #[test]
 fn test_create_single_node_without_return() {
     run_with_timeout("test_create_single_node_without_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "CREATE (n:Person {name: 'Alice'})".to_string(),
@@ -88,7 +75,7 @@ fn test_create_single_node_without_return() {
 #[test]
 fn test_create_multiple_nodes_without_return() {
     run_with_timeout("test_create_multiple_nodes_without_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})".to_string(),
@@ -112,7 +99,7 @@ fn test_create_node_with_multiple_labels_without_return() {
     run_with_timeout(
         "test_create_node_with_multiple_labels_without_return",
         || {
-            let (mut executor, _dir) = create_test_executor();
+            let (mut executor, _ctx) = create_test_executor();
 
             let query = Query {
                 cypher: "CREATE (n:Person:Employee {name: 'Alice', role: 'Developer'})".to_string(),
@@ -151,10 +138,9 @@ fn test_create_node_with_multiple_labels_without_return() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_create_relationship_without_return() {
     run_with_timeout("test_create_relationship_without_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // First create two nodes
         let create_nodes_query = Query {
@@ -185,10 +171,9 @@ fn test_create_relationship_without_return() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_create_path_without_return() {
     run_with_timeout("test_create_path_without_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "CREATE (a:Person {name: 'Alice'})-[r1:KNOWS]->(b:Person {name: 'Bob'})-[r2:KNOWS]->(c:Person {name: 'Charlie'})".to_string(),
@@ -214,7 +199,7 @@ fn test_create_path_without_return() {
 #[test]
 fn test_create_single_node_with_return() {
     run_with_timeout("test_create_single_node_with_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "CREATE (n:Person {name: 'Alice'}) RETURN n".to_string(),
@@ -249,7 +234,7 @@ fn test_create_single_node_with_return() {
 #[test]
 fn test_create_multiple_nodes_with_return() {
     run_with_timeout("test_create_multiple_nodes_with_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) RETURN a, b"
@@ -272,7 +257,7 @@ fn test_create_multiple_nodes_with_return() {
 #[test]
 fn test_create_node_with_multiple_labels_with_return() {
     run_with_timeout("test_create_node_with_multiple_labels_with_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "CREATE (n:Person:Employee {name: 'Alice', role: 'Developer'}) RETURN n"
@@ -313,7 +298,7 @@ fn test_create_node_with_multiple_labels_with_return() {
 #[test]
 fn test_create_relationship_with_return() {
     run_with_timeout("test_create_relationship_with_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         // First create two nodes
         let create_nodes_query = Query {
@@ -341,7 +326,7 @@ fn test_create_relationship_with_return() {
 #[test]
 fn test_create_path_with_return() {
     run_with_timeout("test_create_path_with_return", || {
-        let (mut executor, _dir) = create_test_executor();
+        let (mut executor, _ctx) = create_test_executor();
 
         let query = Query {
             cypher: "CREATE (a:Person {name: 'Alice'})-[r1:KNOWS]->(b:Person {name: 'Bob'})-[r2:KNOWS]->(c:Person {name: 'Charlie'}) RETURN a, b, c, r1, r2".to_string(),

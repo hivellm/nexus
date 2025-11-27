@@ -552,26 +552,32 @@ mod tests {
     use std::sync::Mutex;
 
     /// Test helper to create a simple graph for testing
-    fn create_test_graph() -> Arc<Mutex<Graph>> {
+    fn create_test_graph() -> (Arc<Mutex<Graph>>, nexus_core::testing::TestContext) {
         use nexus_core::catalog::Catalog;
         use nexus_core::storage::RecordStore;
-        use tempfile::TempDir;
+        use nexus_core::testing::TestContext;
 
-        let temp_dir = TempDir::new().unwrap();
-        let store = RecordStore::new(temp_dir.path()).unwrap();
-        let catalog = Arc::new(Catalog::new(temp_dir.path().join("catalog")).unwrap());
+        let ctx = TestContext::new();
+        let store = RecordStore::new(ctx.path()).unwrap();
+        let catalog = Arc::new(Catalog::new(ctx.path().join("catalog")).unwrap());
         let graph = Graph::new(store, catalog);
 
-        Arc::new(Mutex::new(graph))
+        (Arc::new(Mutex::new(graph)), ctx)
     }
 
     #[tokio::test]
     async fn test_compare_graphs_success() {
-        // Initialize graphs if not already initialized
+        // Keep contexts alive to prevent premature cleanup
+        let (_ctx_a, _ctx_b);
         if GRAPH_A.get().is_none() || GRAPH_B.get().is_none() {
-            let graph_a = create_test_graph();
-            let graph_b = create_test_graph();
+            let (graph_a, ctx_a) = create_test_graph();
+            let (graph_b, ctx_b) = create_test_graph();
+            _ctx_a = ctx_a;
+            _ctx_b = ctx_b;
             let _ = init_graphs(graph_a, graph_b);
+        } else {
+            _ctx_a = nexus_core::testing::TestContext::new();
+            _ctx_b = nexus_core::testing::TestContext::new();
         }
 
         // Test comparison
@@ -598,10 +604,17 @@ mod tests {
     #[ignore] // TODO: Fix temp dir race condition
     async fn test_calculate_similarity_success() {
         // Initialize graphs if not already initialized
+        // Keep contexts alive to prevent premature cleanup
+        let (_ctx_a, _ctx_b);
         if GRAPH_A.get().is_none() || GRAPH_B.get().is_none() {
-            let graph_a = create_test_graph();
-            let graph_b = create_test_graph();
+            let (graph_a, ctx_a) = create_test_graph();
+            let (graph_b, ctx_b) = create_test_graph();
+            _ctx_a = ctx_a;
+            _ctx_b = ctx_b;
             let _ = init_graphs(graph_a, graph_b);
+        } else {
+            _ctx_a = nexus_core::testing::TestContext::new();
+            _ctx_b = nexus_core::testing::TestContext::new();
         }
 
         // Test similarity calculation
@@ -628,10 +641,17 @@ mod tests {
     #[tokio::test]
     async fn test_get_graph_stats_success_a() {
         // Initialize graphs if not already initialized
+        // Keep contexts alive to prevent premature cleanup
+        let (_ctx_a, _ctx_b);
         if GRAPH_A.get().is_none() || GRAPH_B.get().is_none() {
-            let graph_a = create_test_graph();
-            let graph_b = create_test_graph();
+            let (graph_a, ctx_a) = create_test_graph();
+            let (graph_b, ctx_b) = create_test_graph();
+            _ctx_a = ctx_a;
+            _ctx_b = ctx_b;
             let _ = init_graphs(graph_a, graph_b);
+        } else {
+            _ctx_a = nexus_core::testing::TestContext::new();
+            _ctx_b = nexus_core::testing::TestContext::new();
         }
 
         // Test getting stats for graph A
@@ -652,10 +672,17 @@ mod tests {
     #[tokio::test]
     async fn test_get_graph_stats_success_b() {
         // Initialize graphs if not already initialized
+        // Keep contexts alive to prevent premature cleanup
+        let (_ctx_a, _ctx_b);
         if GRAPH_A.get().is_none() || GRAPH_B.get().is_none() {
-            let graph_a = create_test_graph();
-            let graph_b = create_test_graph();
+            let (graph_a, ctx_a) = create_test_graph();
+            let (graph_b, ctx_b) = create_test_graph();
+            _ctx_a = ctx_a;
+            _ctx_b = ctx_b;
             let _ = init_graphs(graph_a, graph_b);
+        } else {
+            _ctx_a = nexus_core::testing::TestContext::new();
+            _ctx_b = nexus_core::testing::TestContext::new();
         }
 
         // Test getting stats for graph B
@@ -677,10 +704,17 @@ mod tests {
     #[ignore] // TODO: Fix temp dir race condition
     async fn test_get_graph_stats_invalid_id() {
         // Initialize graphs if not already initialized
+        // Keep contexts alive to prevent premature cleanup
+        let (_ctx_a, _ctx_b);
         if GRAPH_A.get().is_none() || GRAPH_B.get().is_none() {
-            let graph_a = create_test_graph();
-            let graph_b = create_test_graph();
+            let (graph_a, ctx_a) = create_test_graph();
+            let (graph_b, ctx_b) = create_test_graph();
+            _ctx_a = ctx_a;
+            _ctx_b = ctx_b;
             let _ = init_graphs(graph_a, graph_b);
+        } else {
+            _ctx_a = nexus_core::testing::TestContext::new();
+            _ctx_b = nexus_core::testing::TestContext::new();
         }
 
         // Test with invalid graph ID
@@ -707,10 +741,17 @@ mod tests {
     #[tokio::test]
     async fn test_health_check_healthy() {
         // Initialize graphs if not already initialized
+        // Keep contexts alive to prevent premature cleanup
+        let (_ctx_a, _ctx_b);
         if GRAPH_A.get().is_none() || GRAPH_B.get().is_none() {
-            let graph_a = create_test_graph();
-            let graph_b = create_test_graph();
+            let (graph_a, ctx_a) = create_test_graph();
+            let (graph_b, ctx_b) = create_test_graph();
+            _ctx_a = ctx_a;
+            _ctx_b = ctx_b;
             let _ = init_graphs(graph_a, graph_b);
+        } else {
+            _ctx_a = nexus_core::testing::TestContext::new();
+            _ctx_b = nexus_core::testing::TestContext::new();
         }
 
         let result = health_check().await;
@@ -748,8 +789,8 @@ mod tests {
         // Test graph initialization behavior
         // Note: Due to OnceLock global state, this test may behave differently
         // depending on test execution order. Both outcomes are valid.
-        let graph_a = create_test_graph();
-        let graph_b = create_test_graph();
+        let (graph_a, _ctx_a) = create_test_graph();
+        let (graph_b, _ctx_b) = create_test_graph();
 
         let result = init_graphs(graph_a, graph_b);
 

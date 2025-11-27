@@ -6,20 +6,10 @@
 //! - Performance with large graphs
 //! - All validation error types
 
+use nexus_core::testing::create_test_graph;
 use nexus_core::validation::{GraphValidator, ValidationSeverity};
 use nexus_core::{Edge, EdgeId, Graph, Node, NodeId, PropertyValue};
-use nexus_core::{catalog::Catalog, storage::RecordStore};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tempfile::TempDir;
-
-fn create_test_graph() -> (Graph, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
-    let store = RecordStore::new(dir.path()).unwrap();
-    let graph = Graph::new(store, catalog);
-    (graph, dir)
-}
 
 // ============================================================================
 // Edge Case Tests
@@ -92,7 +82,6 @@ fn test_validate_graph_with_many_properties() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_validate_graph_with_duplicate_edges() {
     let (graph, _dir) = create_test_graph();
     let validator = GraphValidator::new();
@@ -121,7 +110,6 @@ fn test_validate_graph_with_duplicate_edges() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_validate_graph_with_self_loops() {
     let (graph, _dir) = create_test_graph();
     let validator = GraphValidator::new();
@@ -160,7 +148,6 @@ fn test_validate_graph_with_orphaned_edges() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn test_validate_graph_with_invalid_node_ids() {
     let (graph, _dir) = create_test_graph();
     let validator = GraphValidator::new();
@@ -211,7 +198,6 @@ fn test_validate_graph_with_invalid_edge_ids() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn test_validate_graph_with_empty_rel_type() {
     let (graph, _dir) = create_test_graph();
     let validator = GraphValidator::new();

@@ -1487,12 +1487,12 @@ pub struct RecordStoreStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::testing::TestContext;
 
-    fn create_test_store() -> (RecordStore, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let store = RecordStore::new(dir.path()).unwrap();
-        (store, dir)
+    fn create_test_store() -> (RecordStore, TestContext) {
+        let ctx = TestContext::new();
+        let store = RecordStore::new(ctx.path()).unwrap();
+        (store, ctx)
     }
 
     #[test]
@@ -1641,8 +1641,8 @@ mod tests {
 
     #[test]
     fn test_persistence() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().to_path_buf();
+        let ctx = TestContext::new();
+        let path = ctx.path().to_path_buf();
 
         // Create store and write data
         {

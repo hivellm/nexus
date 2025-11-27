@@ -1434,11 +1434,11 @@ mod tests {
     #[test]
     fn test_from_engine() {
         use crate::Engine;
-        use tempfile::TempDir;
+        use crate::testing::TestContext;
 
-        let temp_dir = TempDir::new().unwrap();
+        let ctx = TestContext::new();
         // Use isolated catalog to avoid data contamination from other tests
-        let mut engine = Engine::with_isolated_catalog(temp_dir.path()).unwrap();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
 
         // Create some test data - use single query for reliability
         engine

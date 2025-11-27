@@ -382,10 +382,10 @@ mod tests {
 
     #[test]
     fn test_from_auth_file_valid() {
-        use tempfile::TempDir;
+        use nexus_core::testing::TestContext;
 
-        let temp_dir = TempDir::new().unwrap();
-        let config_dir = temp_dir.path();
+        let ctx = TestContext::new();
+        let config_dir = ctx.path();
         let config_file = config_dir.join("auth.toml");
 
         // Create a valid config file
@@ -421,10 +421,10 @@ require_health_auth = true
 
     #[test]
     fn test_from_auth_file_invalid_toml() {
-        use tempfile::TempDir;
+        use nexus_core::testing::TestContext;
 
-        let temp_dir = TempDir::new().unwrap();
-        let config_dir = temp_dir.path();
+        let ctx = TestContext::new();
+        let config_dir = ctx.path();
         let config_file = config_dir.join("auth.toml");
 
         // Create an invalid TOML file
@@ -436,10 +436,10 @@ require_health_auth = true
 
     #[test]
     fn test_from_auth_file_partial_config() {
-        use tempfile::TempDir;
+        use nexus_core::testing::TestContext;
 
-        let temp_dir = TempDir::new().unwrap();
-        let config_dir = temp_dir.path();
+        let ctx = TestContext::new();
+        let config_dir = ctx.path();
         let config_file = config_dir.join("auth.toml");
 
         // Create a config file with only root_user section

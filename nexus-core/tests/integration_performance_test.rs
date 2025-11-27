@@ -14,15 +14,14 @@ use nexus_core::cache::{CacheConfig, MultiLayerCache};
 use nexus_core::executor::{Executor, Query};
 use nexus_core::index::LabelIndex;
 use nexus_core::storage::RecordStore;
+use nexus_core::testing::TestContext;
 use nexus_core::wal::{AsyncWalConfig, AsyncWalWriter, Wal};
 use nexus_core::{catalog::Catalog, index::KnnIndex};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 use tokio::time::sleep;
-use tracing;
 
 /// Performance test configuration
 #[derive(Debug, Clone)]
@@ -75,12 +74,12 @@ struct IntegrationTestResults {
 /// Create a fully configured test environment with all performance optimizations
 fn create_optimized_test_environment(
     _config: &IntegrationTestConfig,
-) -> (Executor, MultiLayerCache, TempDir) {
-    let dir = TempDir::new().unwrap();
+) -> (Executor, MultiLayerCache, TestContext) {
+    let ctx = TestContext::new();
 
     // Create all components
-    let catalog = Arc::new(Catalog::new(dir.path()).unwrap());
-    let store = RecordStore::new(dir.path()).unwrap();
+    let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+    let store = RecordStore::new(ctx.path()).unwrap();
     let label_index = Arc::new(LabelIndex::new());
     let knn_index = Arc::new(KnnIndex::new_default(128).unwrap());
 
@@ -90,7 +89,7 @@ fn create_optimized_test_environment(
     // Create executor
     let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
 
-    (executor, cache, dir)
+    (executor, cache, ctx)
 }
 
 /// Generate test data: nodes and relationships

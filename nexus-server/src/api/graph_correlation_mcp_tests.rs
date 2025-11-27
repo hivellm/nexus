@@ -11,6 +11,7 @@
 use crate::api::streaming::handle_nexus_mcp_tool;
 use crate::{NexusServer, config::RootUserConfig};
 use chrono;
+use nexus_core::testing::TestContext;
 use nexus_core::{
     auth::{
         AuditConfig, AuditLogger, AuthConfig, AuthManager, JwtConfig, JwtManager,
@@ -22,23 +23,21 @@ use nexus_core::{
 use rmcp::model::CallToolRequestParam;
 use serde_json::json;
 use std::sync::Arc;
-use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tracing;
 
-/// Test server wrapper that keeps TempDir alive
+/// Test server wrapper that keeps TestContext alive
 pub struct TestServer {
-    _temp_dir: TempDir, // Keep temp_dir alive
+    _ctx: TestContext, // Keep context alive
     server: Arc<NexusServer>,
 }
 
 impl TestServer {
     pub fn new() -> Self {
-        use std::sync::{Arc, Mutex, Once};
+        use std::sync::{Arc, Mutex};
         use tokio::sync::RwLock;
 
         // Use shared components to prevent file descriptor leaks during concurrent tests
-        static INIT: Once = Once::new();
         static SHARED_ENGINE: Mutex<Option<Arc<RwLock<nexus_core::Engine>>>> = Mutex::new(None);
         static SHARED_EXECUTOR: Mutex<Option<Arc<nexus_core::executor::Executor>>> =
             Mutex::new(None);
@@ -50,19 +49,20 @@ impl TestServer {
         let mut db_manager_guard = SHARED_DATABASE_MANAGER.lock().unwrap();
 
         if engine_guard.is_none() {
-            let temp_dir = TempDir::new().unwrap();
-            let data_dir = temp_dir.path();
+            let ctx = TestContext::new();
+            let data_dir = ctx.path();
             std::fs::create_dir_all(data_dir).unwrap();
             let engine = nexus_core::Engine::with_data_dir(data_dir).unwrap();
             let engine_arc = Arc::new(RwLock::new(engine));
 
             let executor = Arc::new(Executor::default());
 
-            let database_manager = DatabaseManager::new(temp_dir.path().into()).unwrap();
+            let database_manager = DatabaseManager::new(ctx.path().into()).unwrap();
             let database_manager_arc = Arc::new(RwLock::new(database_manager));
 
-            // Keep temp_dir alive by leaking it (acceptable for testing)
-            std::mem::forget(temp_dir);
+            // Leak the context to keep temp dir alive for the duration of tests
+            // This is acceptable for testing as the process will clean up on exit
+            Box::leak(Box::new(ctx));
 
             *engine_guard = Some(engine_arc);
             *executor_guard = Some(executor);
@@ -72,25 +72,6 @@ impl TestServer {
         let engine_arc = engine_guard.as_ref().unwrap().clone();
         let executor_arc = executor_guard.as_ref().unwrap().clone();
         let database_manager_arc = db_manager_guard.as_ref().unwrap().clone();
-
-        let rbac = RoleBasedAccessControl::new();
-        let rbac_arc = Arc::new(RwLock::new(rbac));
-
-        let auth_config = AuthConfig::default();
-        let auth_manager = Arc::new(AuthManager::new(auth_config));
-
-        let jwt_config = JwtConfig::default();
-        let jwt_manager = Arc::new(JwtManager::new(jwt_config));
-
-        let audit_logger = Arc::new(
-            AuditLogger::new(AuditConfig {
-                enabled: false,
-                log_dir: std::path::PathBuf::from("./logs"),
-                retention_days: 30,
-                compress_logs: false,
-            })
-            .unwrap(),
-        );
 
         let rbac = RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));
@@ -122,11 +103,11 @@ impl TestServer {
             RootUserConfig::default(),
         ));
 
-        // Create a dummy temp dir for the struct (won't be used since we use shared resources)
-        let dummy_temp_dir = TempDir::new().unwrap();
+        // Create a dummy context for the struct (shared resources are leaked above)
+        let dummy_ctx = TestContext::new();
 
         Self {
-            _temp_dir: dummy_temp_dir,
+            _ctx: dummy_ctx,
             server,
         }
     }
@@ -138,10 +119,10 @@ impl TestServer {
 
 /// Helper function to create a test server with all required components
 /// Note: This function creates a TestServer internally but only returns the server.
-/// For tests that may have resource issues, use TestServer::new() directly to keep TempDir alive.
+/// For tests that may have resource issues, use TestServer::new() directly to keep TestContext alive.
 fn create_test_server() -> Arc<NexusServer> {
     // Use a static/thread-local approach would be better, but for now we'll use TestServer
-    // The TempDir will be dropped when the function returns, but the server should work
+    // The TestContext will be dropped when the function returns, but the server should work
     // as long as the files are already opened. However, this can cause "too many open files"
     // when many tests run in parallel. Tests that fail should use TestServer::new() directly.
     TestServer::new().server()

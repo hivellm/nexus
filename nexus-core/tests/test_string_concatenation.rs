@@ -1,27 +1,13 @@
 //! Test String Concatenation operator (+)
 //! Neo4j compatibility tests for string concatenation
 
-use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::executor::Query;
+use nexus_core::testing::create_test_executor;
 use serde_json::Value;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_string_concat_simple() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Simple string concatenation
     let query = Query {
@@ -39,9 +25,8 @@ fn test_string_concat_simple() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_string_concat_with_property() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -71,7 +56,7 @@ fn test_string_concat_with_property() {
 
 #[test]
 fn test_string_concat_with_number_conversion() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -104,9 +89,8 @@ fn test_string_concat_with_number_conversion() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn test_string_concat_in_create_return() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Clean database
     let query = Query {
@@ -128,9 +112,8 @@ fn test_string_concat_in_create_return() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn test_string_concat_empty_strings() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Concatenate with empty strings
     let query = Query {

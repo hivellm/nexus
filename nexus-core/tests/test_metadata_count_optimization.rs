@@ -4,8 +4,8 @@
 //! Tests verify that COUNT(*) uses catalog metadata when possible
 
 use nexus_core::Engine;
+use nexus_core::testing::setup_test_engine;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tempfile::TempDir;
 
 /// Counter for unique test labels to prevent cross-test interference
 static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -19,8 +19,7 @@ fn execute_cypher(engine: &mut Engine, query: &str) -> nexus_core::executor::Res
 fn test_count_star_uses_metadata() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let label = format!("TestNode{}", test_id);
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create some nodes with unique label
     for i in 0..10 {
@@ -45,8 +44,7 @@ fn test_count_star_with_label_uses_metadata() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let person_label = format!("Person{}", test_id);
     let company_label = format!("Company{}", test_id);
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes with different unique labels
     for i in 0..5 {
@@ -74,8 +72,7 @@ fn test_count_star_with_label_uses_metadata() {
 fn test_count_star_updates_on_create() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let label = format!("TestPerson{}", test_id);
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Initial count for our unique label
     let query = format!("MATCH (n:{}) RETURN count(*) as total", label);
@@ -104,8 +101,7 @@ fn test_count_star_with_group_by() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let person_label = format!("PersonGroup{}", test_id);
     let company_label = format!("CompanyGroup{}", test_id);
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes with different unique labels
     for i in 0..3 {
@@ -156,8 +152,7 @@ fn test_count_star_with_group_by() {
 fn test_count_star_with_where_filter() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let label = format!("PersonFilter{}", test_id);
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes with properties and unique label
     for i in 0..5 {

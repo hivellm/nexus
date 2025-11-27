@@ -4,7 +4,7 @@
 //! under heavy write loads (Phase 1 Week 5).
 
 use nexus_core::Engine;
-use tempfile::TempDir;
+use nexus_core::testing::setup_test_engine;
 
 /// Helper function to extract count from result
 fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
@@ -19,8 +19,7 @@ fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
 /// Test 1000 concurrent CREATE operations
 #[tokio::test]
 async fn test_1000_concurrent_create_operations() {
-    let dir = TempDir::new().unwrap();
-    let engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (engine, _ctx) = setup_test_engine().unwrap();
     let engine = std::sync::Arc::new(std::sync::Mutex::new(engine));
 
     let num_operations = 1000;
@@ -64,8 +63,7 @@ async fn test_1000_concurrent_create_operations() {
 #[tokio::test]
 #[ignore] // TODO: Test takes >60s, skipping in CI
 async fn test_relationship_creation_throughput() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create base nodes first
     engine.execute_cypher("BEGIN TRANSACTION").unwrap();
@@ -116,8 +114,7 @@ async fn test_relationship_creation_throughput() {
 /// Test write + read mixed workload
 #[tokio::test]
 async fn test_write_read_mixed_workload() {
-    let dir = TempDir::new().unwrap();
-    let engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (engine, _ctx) = setup_test_engine().unwrap();
     let engine = std::sync::Arc::new(std::sync::Mutex::new(engine));
 
     let num_writers = 10;
@@ -184,8 +181,7 @@ async fn test_write_read_mixed_workload() {
 /// Test data consistency after concurrent writes
 #[tokio::test]
 async fn test_data_consistency_after_concurrent_writes() {
-    let dir = TempDir::new().unwrap();
-    let engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (engine, _ctx) = setup_test_engine().unwrap();
     let engine = std::sync::Arc::new(std::sync::Mutex::new(engine));
 
     let num_threads = 20;

@@ -1,7 +1,7 @@
+use nexus_core::testing::setup_test_engine;
 use nexus_core::{Engine, Error, executor::ResultSet};
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tempfile::TempDir;
 
 /// Counter for unique test labels to prevent cross-test interference
 static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -21,8 +21,7 @@ fn result_to_json(result: &ResultSet) -> serde_json::Value {
 
 #[test]
 fn test_unwind_basic_list_literal() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "UNWIND [1, 2, 3] AS x RETURN x").unwrap();
     let json_result = result_to_json(&result);
@@ -40,8 +39,7 @@ fn test_unwind_basic_list_literal() {
 
 #[test]
 fn test_unwind_with_strings() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -59,8 +57,7 @@ fn test_unwind_with_strings() {
 
 #[test]
 fn test_unwind_empty_list() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "UNWIND [] AS x RETURN x").unwrap();
     let json_result = result_to_json(&result);
@@ -71,8 +68,7 @@ fn test_unwind_empty_list() {
 
 #[test]
 fn test_unwind_null_list() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "UNWIND null AS x RETURN x").unwrap();
     let json_result = result_to_json(&result);
@@ -84,8 +80,7 @@ fn test_unwind_null_list() {
 #[test]
 #[ignore = "CREATE with array properties not yet supported"]
 fn test_unwind_with_variable_reference() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create nodes with list properties
     execute_query(
@@ -129,8 +124,7 @@ fn test_unwind_with_variable_reference() {
 #[test]
 #[ignore = "WHERE after UNWIND needs operator reordering - known limitation"]
 fn test_unwind_with_where_filtering() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -149,8 +143,7 @@ fn test_unwind_with_where_filtering() {
 #[test]
 #[ignore = "CREATE with array properties not yet supported"]
 fn test_unwind_with_match_and_where() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data
     execute_query(
@@ -184,8 +177,7 @@ fn test_unwind_with_match_and_where() {
 #[test]
 #[ignore = "CREATE with array properties not yet supported"]
 fn test_unwind_in_complex_query() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create test data
     execute_query(
@@ -240,8 +232,7 @@ fn test_unwind_in_complex_query() {
 #[test]
 #[ignore = "Nested UNWIND needs proper variable binding - known issue"]
 fn test_unwind_nested_lists() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -263,8 +254,7 @@ fn test_unwind_nested_lists() {
 #[test]
 #[ignore = "Aggregation after UNWIND needs operator reordering - known limitation"]
 fn test_unwind_with_aggregation() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -286,8 +276,7 @@ fn test_unwind_with_aggregation() {
 fn test_unwind_creates_cartesian_product() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let label = format!("PersonCart{}", test_id);
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create two nodes with unique label
     execute_query(
@@ -360,8 +349,7 @@ fn test_unwind_creates_cartesian_product() {
 #[test]
 #[ignore = "WHERE after UNWIND needs operator reordering - known limitation"]
 fn test_unwind_with_null_in_list() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,

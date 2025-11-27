@@ -4,8 +4,8 @@
 //! against bugs across all major features and edge cases.
 
 use nexus_core::Engine;
+use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 use serde_json::json;
-use tempfile::TempDir;
 
 // ============================================================================
 // CREATE Clause Regressions (25 tests)
@@ -13,8 +13,7 @@ use tempfile::TempDir;
 
 #[test]
 fn regression_create_with_single_label() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine.execute_cypher("CREATE (n:Test)").unwrap();
     let result = engine
@@ -34,8 +33,7 @@ fn regression_create_with_single_label() {
 
 #[test]
 fn regression_create_with_two_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine.execute_cypher("CREATE (n:Person:Employee)").unwrap();
     let result = engine
@@ -59,8 +57,7 @@ fn regression_create_with_two_labels() {
 
 #[test]
 fn regression_create_with_three_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine.execute_cypher("CREATE (n:A:B:C)").unwrap();
     let result = engine
@@ -80,8 +77,7 @@ fn regression_create_with_three_labels() {
 
 #[test]
 fn regression_create_with_string_prop() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {name: 'Alice'})")
@@ -95,8 +91,7 @@ fn regression_create_with_string_prop() {
 
 #[test]
 fn regression_create_with_int_prop() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {value: 42})")
@@ -110,8 +105,7 @@ fn regression_create_with_int_prop() {
 
 #[test]
 fn regression_create_with_bool_prop() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {active: true})")
@@ -125,8 +119,7 @@ fn regression_create_with_bool_prop() {
 
 #[test]
 fn regression_create_with_float_prop() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {value: 3.14})")
@@ -140,8 +133,7 @@ fn regression_create_with_float_prop() {
 
 #[test]
 fn regression_create_two_props() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {a: 1, b: 2})")
@@ -156,8 +148,7 @@ fn regression_create_two_props() {
 
 #[test]
 fn regression_create_five_props() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {a: 1, b: 2, c: 3, d: 4, e: 5})")
@@ -172,8 +163,7 @@ fn regression_create_five_props() {
 
 #[test]
 fn regression_create_mixed_types() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {str: 'text', num: 42, bool: true})")
@@ -188,8 +178,7 @@ fn regression_create_mixed_types() {
 
 #[test]
 fn regression_create_multiple_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine.execute_cypher("CREATE (n:Test {id: 1})").unwrap();
     engine.execute_cypher("CREATE (n:Test {id: 2})").unwrap();
@@ -210,10 +199,8 @@ fn regression_create_multiple_nodes() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn regression_create_query_immediately() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {name: 'Alice'})")
@@ -232,8 +219,7 @@ fn regression_create_query_immediately() {
 
 #[test]
 fn regression_create_empty_props() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine.execute_cypher("CREATE (n:Test)").unwrap();
     let result = engine
@@ -246,8 +232,7 @@ fn regression_create_empty_props() {
 
 #[test]
 fn regression_create_via_engine_api() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"name": "Alice"}))
@@ -262,8 +247,7 @@ fn regression_create_via_engine_api() {
 
 #[test]
 fn regression_create_10_nodes_via_api() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         engine
@@ -280,8 +264,7 @@ fn regression_create_10_nodes_via_api() {
 
 #[test]
 fn regression_create_50_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..50 {
         engine
@@ -299,8 +282,7 @@ fn regression_create_50_nodes() {
 #[test]
 #[ignore]
 fn regression_create_nodes_different_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({}))
@@ -330,8 +312,7 @@ fn regression_create_nodes_different_labels() {
 
 #[test]
 fn regression_create_false_boolean() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {active: false})")
@@ -345,8 +326,7 @@ fn regression_create_false_boolean() {
 
 #[test]
 fn regression_create_zero_value() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine.execute_cypher("CREATE (n:Test {value: 0})").unwrap();
     let result = engine
@@ -358,8 +338,7 @@ fn regression_create_zero_value() {
 
 #[test]
 fn regression_create_empty_string() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"name": ""}))
@@ -374,8 +353,7 @@ fn regression_create_empty_string() {
 
 #[test]
 fn regression_create_with_label_underscore() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test_Label".to_string()], json!({}))
@@ -390,8 +368,7 @@ fn regression_create_with_label_underscore() {
 
 #[test]
 fn regression_create_camel_case_label() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["TestLabel".to_string()], json!({}))
@@ -406,8 +383,7 @@ fn regression_create_camel_case_label() {
 
 #[test]
 fn regression_create_prop_with_underscore() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .execute_cypher("CREATE (n:Test {first_name: 'Alice'})")
@@ -422,8 +398,7 @@ fn regression_create_prop_with_underscore() {
 
 #[test]
 fn regression_create_and_labels_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -440,8 +415,7 @@ fn regression_create_and_labels_function() {
 
 #[test]
 fn regression_create_and_id_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let node_id = engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -460,8 +434,7 @@ fn regression_create_and_id_function() {
 
 #[test]
 fn regression_match_single_label() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -476,8 +449,7 @@ fn regression_match_single_label() {
 
 #[test]
 fn regression_match_with_where_equals() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 42}))
@@ -495,8 +467,7 @@ fn regression_match_with_where_equals() {
 
 #[test]
 fn regression_match_with_where_greater() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         engine
@@ -513,8 +484,7 @@ fn regression_match_with_where_greater() {
 
 #[test]
 fn regression_match_with_where_less() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         engine
@@ -531,8 +501,7 @@ fn regression_match_with_where_less() {
 
 #[test]
 fn regression_match_with_where_gte() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         engine
@@ -549,8 +518,7 @@ fn regression_match_with_where_gte() {
 
 #[test]
 fn regression_match_with_where_lte() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         engine
@@ -566,10 +534,8 @@ fn regression_match_with_where_lte() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn regression_match_with_limit() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..20 {
         engine
@@ -585,10 +551,8 @@ fn regression_match_with_limit() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn regression_match_with_order_by() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"name": "Charlie"}))
@@ -609,8 +573,7 @@ fn regression_match_with_order_by() {
 
 #[test]
 fn regression_match_return_distinct() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 1}))
@@ -631,8 +594,7 @@ fn regression_match_return_distinct() {
 
 #[test]
 fn regression_match_count_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..15 {
         engine
@@ -650,8 +612,7 @@ fn regression_match_count_nodes() {
 #[test]
 #[ignore]
 fn regression_match_property_pattern() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"name": "Alice"}))
@@ -668,10 +629,8 @@ fn regression_match_property_pattern() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn regression_match_all_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({}))
@@ -692,8 +651,7 @@ fn regression_match_all_nodes() {
 
 #[test]
 fn regression_match_return_multiple_cols() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"a": 1, "b": 2, "c": 3}))
@@ -709,8 +667,7 @@ fn regression_match_return_multiple_cols() {
 #[test]
 #[ignore]
 fn regression_match_with_and_condition() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"a": 10, "b": 20}))
@@ -732,8 +689,7 @@ fn regression_match_with_and_condition() {
 #[test]
 #[ignore]
 fn regression_match_with_or_condition() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 10}))
@@ -757,8 +713,7 @@ fn regression_match_with_or_condition() {
 #[test]
 #[ignore]
 fn regression_match_nonexistent_label() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -773,8 +728,7 @@ fn regression_match_nonexistent_label() {
 
 #[test]
 fn regression_match_nonexistent_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"name": "test"}))
@@ -793,8 +747,7 @@ fn regression_match_nonexistent_property() {
 
 #[test]
 fn regression_rel_basic_creation() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -817,8 +770,7 @@ fn regression_rel_basic_creation() {
 
 #[test]
 fn regression_rel_with_one_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -842,8 +794,7 @@ fn regression_rel_with_one_property() {
 #[test]
 fn regression_rel_with_three_properties() {
     // Use isolated catalog to prevent interference from other tests
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -867,8 +818,7 @@ fn regression_rel_with_three_properties() {
 
 #[test]
 fn regression_rel_outgoing_direction() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"name": "A"}))
@@ -891,8 +841,7 @@ fn regression_rel_outgoing_direction() {
 
 #[test]
 fn regression_rel_incoming_direction() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"name": "A"}))
@@ -916,8 +865,7 @@ fn regression_rel_incoming_direction() {
 #[test]
 #[ignore]
 fn regression_rel_bidirectional_pattern() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"name": "A"}))
@@ -941,8 +889,7 @@ fn regression_rel_bidirectional_pattern() {
 #[test]
 fn regression_rel_type_function() {
     // Use isolated catalog to prevent interference from other tests
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -965,8 +912,7 @@ fn regression_rel_type_function() {
 
 #[test]
 fn regression_rel_id_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -990,8 +936,7 @@ fn regression_rel_id_function() {
 #[test]
 fn regression_rel_keys_function() {
     // Use isolated catalog to prevent interference from other tests
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1016,8 +961,7 @@ fn regression_rel_keys_function() {
 #[test]
 fn regression_rel_empty_properties() {
     // Use isolated catalog to prevent interference from other tests
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1041,8 +985,7 @@ fn regression_rel_empty_properties() {
 
 #[test]
 fn regression_rel_string_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1065,8 +1008,7 @@ fn regression_rel_string_property() {
 
 #[test]
 fn regression_rel_int_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1089,8 +1031,7 @@ fn regression_rel_int_property() {
 
 #[test]
 fn regression_rel_bool_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1113,8 +1054,7 @@ fn regression_rel_bool_property() {
 
 #[test]
 fn regression_rel_float_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1137,8 +1077,7 @@ fn regression_rel_float_property() {
 
 #[test]
 fn regression_rel_null_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1161,8 +1100,7 @@ fn regression_rel_null_property() {
 
 #[test]
 fn regression_rel_match_any_type() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1187,10 +1125,8 @@ fn regression_rel_match_any_type() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
 fn regression_rel_with_labeled_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let person = engine
         .create_node(vec!["Person".to_string()], json!({"name": "Alice"}))
@@ -1213,8 +1149,7 @@ fn regression_rel_with_labeled_nodes() {
 
 #[test]
 fn regression_rel_return_source_target() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"id": "A"}))
@@ -1238,8 +1173,7 @@ fn regression_rel_return_source_target() {
 
 #[test]
 fn regression_rel_10_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1265,8 +1199,7 @@ fn regression_rel_10_relationships() {
 #[test]
 #[ignore]
 fn regression_rel_self_loop() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1286,8 +1219,7 @@ fn regression_rel_self_loop() {
 
 #[test]
 fn regression_rel_where_property() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1313,8 +1245,7 @@ fn regression_rel_where_property() {
 
 #[test]
 fn regression_rel_where_greater() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1339,8 +1270,7 @@ fn regression_rel_where_greater() {
 
 #[test]
 fn regression_rel_limit() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1366,8 +1296,7 @@ fn regression_rel_limit() {
 #[test]
 fn regression_rel_distinct_types() {
     // Use isolated catalog to prevent interference from other tests
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1400,8 +1329,7 @@ fn regression_rel_distinct_types() {
 
 #[test]
 fn regression_labels_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -1417,8 +1345,7 @@ fn regression_labels_function() {
 
 #[test]
 fn regression_labels_function_two() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string(), "B".to_string()], json!({}))
@@ -1434,8 +1361,7 @@ fn regression_labels_function_two() {
 
 #[test]
 fn regression_id_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let node_id = engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -1450,8 +1376,7 @@ fn regression_id_function() {
 
 #[test]
 fn regression_keys_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"a": 1}))
@@ -1467,8 +1392,7 @@ fn regression_keys_function() {
 
 #[test]
 fn regression_keys_sorted() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"z": 1, "a": 2}))
@@ -1485,8 +1409,7 @@ fn regression_keys_sorted() {
 #[test]
 fn regression_type_function() {
     // Use isolated catalog to prevent interference from other tests
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1509,8 +1432,7 @@ fn regression_type_function() {
 
 #[test]
 fn regression_count_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..7 {
         engine
@@ -1528,8 +1450,7 @@ fn regression_count_function() {
 #[test]
 #[ignore]
 fn regression_sum_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 1..=5 {
         engine
@@ -1547,8 +1468,7 @@ fn regression_sum_function() {
 #[test]
 #[ignore]
 fn regression_avg_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 10}))
@@ -1567,8 +1487,7 @@ fn regression_avg_function() {
 #[test]
 #[ignore]
 fn regression_min_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in [50, 10, 30] {
         engine
@@ -1586,8 +1505,7 @@ fn regression_min_function() {
 #[test]
 #[ignore]
 fn regression_max_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in [10, 50, 30] {
         engine
@@ -1604,8 +1522,7 @@ fn regression_max_function() {
 
 #[test]
 fn regression_id_sequential() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let id1 = engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -1620,8 +1537,7 @@ fn regression_id_sequential() {
 #[test]
 #[ignore]
 fn regression_labels_empty() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let _id = engine.create_node(vec![], json!({})).unwrap();
     engine.refresh_executor().unwrap();
@@ -1635,8 +1551,7 @@ fn regression_labels_empty() {
 
 #[test]
 fn regression_keys_empty() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -1653,8 +1568,7 @@ fn regression_keys_empty() {
 #[test]
 #[ignore]
 fn regression_count_zero() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = engine
         .execute_cypher("MATCH (n:NonExistent) RETURN count(n) AS count")
@@ -1665,8 +1579,7 @@ fn regression_count_zero() {
 #[test]
 #[ignore]
 fn regression_sum_zero() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 0}))
@@ -1682,8 +1595,7 @@ fn regression_sum_zero() {
 #[test]
 #[ignore]
 fn regression_avg_single() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 42}))
@@ -1699,8 +1611,7 @@ fn regression_avg_single() {
 #[test]
 #[ignore]
 fn regression_min_max_same() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 100}))
@@ -1716,8 +1627,7 @@ fn regression_min_max_same() {
 
 #[test]
 fn regression_distinct_count() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 1}))
@@ -1738,8 +1648,7 @@ fn regression_distinct_count() {
 
 #[test]
 fn regression_type_rel_different() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1770,8 +1679,7 @@ fn regression_type_rel_different() {
 #[test]
 #[ignore]
 fn regression_union_basic() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -1794,8 +1702,7 @@ fn regression_union_basic() {
 #[test]
 #[ignore]
 fn regression_union_all() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -1817,8 +1724,7 @@ fn regression_union_all() {
 
 #[test]
 fn regression_union_empty_left() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["B".to_string()], json!({"value": 1}))
@@ -1837,8 +1743,8 @@ fn regression_union_empty_left() {
 
 #[test]
 fn regression_union_empty_right() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    // Use isolated engine to avoid interference from parallel tests
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -1847,8 +1753,8 @@ fn regression_union_empty_right() {
 
     let result = engine
         .execute_cypher(
-            "MATCH (a:A) RETURN a 
-         UNION 
+            "MATCH (a:A) RETURN a
+         UNION
          MATCH (b:NonExistent) RETURN b",
         )
         .unwrap();
@@ -1857,8 +1763,7 @@ fn regression_union_empty_right() {
 
 #[test]
 fn regression_union_both_empty() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = engine
         .execute_cypher(
@@ -1873,8 +1778,7 @@ fn regression_union_both_empty() {
 #[test]
 #[ignore]
 fn regression_union_different_types() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": "text"}))
@@ -1896,8 +1800,8 @@ fn regression_union_different_types() {
 
 #[test]
 fn regression_union_with_count() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    // Use isolated engine to avoid interference from parallel tests
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in 0..3 {
         engine
@@ -1913,8 +1817,8 @@ fn regression_union_with_count() {
 
     let result = engine
         .execute_cypher(
-            "MATCH (a:A) RETURN count(a) AS count 
-         UNION 
+            "MATCH (a:A) RETURN count(a) AS count
+         UNION
          MATCH (b:B) RETURN count(b) AS count",
         )
         .unwrap();
@@ -1923,8 +1827,7 @@ fn regression_union_with_count() {
 
 #[test]
 fn regression_union_preserves_columns() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -1947,8 +1850,7 @@ fn regression_union_preserves_columns() {
 
 #[test]
 fn regression_union_multiple() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"n": 1}))
@@ -1976,8 +1878,7 @@ fn regression_union_multiple() {
 #[test]
 #[ignore]
 fn regression_union_with_null() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -2003,15 +1904,13 @@ fn regression_union_with_null() {
 
 #[test]
 fn regression_engine_new() {
-    let dir = TempDir::new().unwrap();
-    let _engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (_engine, _ctx) = setup_test_engine().unwrap();
 }
 
 #[test]
 #[ignore]
 fn regression_engine_create_node_api() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let id = engine
         .create_node(vec!["Test".to_string()], json!({"name": "test"}))
@@ -2022,8 +1921,7 @@ fn regression_engine_create_node_api() {
 #[test]
 #[ignore]
 fn regression_engine_create_relationship_api() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -2040,8 +1938,7 @@ fn regression_engine_create_relationship_api() {
 
 #[test]
 fn regression_engine_refresh_executor() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -2056,8 +1953,7 @@ fn regression_engine_refresh_executor() {
 
 #[test]
 fn regression_engine_multiple_refreshes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -2073,10 +1969,8 @@ fn regression_engine_multiple_refreshes() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn regression_engine_stats() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -2088,10 +1982,8 @@ fn regression_engine_stats() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn regression_engine_health_check() {
-    let dir = TempDir::new().unwrap();
-    let engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (engine, _ctx) = setup_test_engine().unwrap();
 
     let health = engine.health_check().unwrap();
     assert!(
@@ -2103,8 +1995,7 @@ fn regression_engine_health_check() {
 #[test]
 #[ignore = "CREATE with RETURN not yet implemented - created nodes not returned in result"]
 fn regression_engine_execute_cypher() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = engine.execute_cypher("CREATE (n:Test) RETURN n").unwrap();
     assert!(!result.rows.is_empty());
@@ -2112,8 +2003,7 @@ fn regression_engine_execute_cypher() {
 
 #[test]
 fn regression_engine_create_10_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         engine
@@ -2130,8 +2020,7 @@ fn regression_engine_create_10_nodes() {
 
 #[test]
 fn regression_engine_create_10_rels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -2156,8 +2045,7 @@ fn regression_engine_create_10_rels() {
 
 #[test]
 fn regression_engine_tempdir_persistence() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -2165,13 +2053,12 @@ fn regression_engine_tempdir_persistence() {
     engine.refresh_executor().unwrap();
 
     // Temp dir should still exist while engine is alive
-    assert!(dir.path().exists());
+    assert!(ctx.path().exists());
 }
 
 #[test]
 fn regression_engine_get_node() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let node_id = engine
         .create_node(vec!["Test".to_string()], json!({"name": "test"}))
@@ -2188,15 +2075,13 @@ fn regression_engine_get_node() {
 
 #[test]
 fn regression_simple_create() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine.execute_cypher("CREATE (n:T)").unwrap();
 }
 
 #[test]
 fn regression_simple_match() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({}))
         .unwrap();
@@ -2206,8 +2091,7 @@ fn regression_simple_match() {
 
 #[test]
 fn regression_simple_count() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({}))
         .unwrap();
@@ -2220,8 +2104,7 @@ fn regression_simple_count() {
 
 #[test]
 fn regression_simple_prop() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({"n": 1}))
         .unwrap();
@@ -2234,8 +2117,7 @@ fn regression_simple_prop() {
 
 #[test]
 fn regression_simple_two_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({}))
         .unwrap();
@@ -2251,8 +2133,7 @@ fn regression_simple_two_nodes() {
 
 #[test]
 fn regression_simple_rel() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     let a = engine
         .create_node(vec!["N".to_string()], json!({}))
         .unwrap();
@@ -2272,8 +2153,7 @@ fn regression_simple_rel() {
 
 #[test]
 fn regression_simple_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({}))
         .unwrap();
@@ -2286,8 +2166,7 @@ fn regression_simple_labels() {
 
 #[test]
 fn regression_simple_keys() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({"a": 1}))
         .unwrap();
@@ -2300,8 +2179,7 @@ fn regression_simple_keys() {
 
 #[test]
 fn regression_simple_id() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({}))
         .unwrap();
@@ -2314,8 +2192,7 @@ fn regression_simple_id() {
 
 #[test]
 fn regression_simple_where() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
     engine
         .create_node(vec!["T".to_string()], json!({"v": 1}))
         .unwrap();

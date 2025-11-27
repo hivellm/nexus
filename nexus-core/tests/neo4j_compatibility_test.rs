@@ -5,10 +5,14 @@
 //! - UNION queries
 //! - Bidirectional relationship queries
 //! - Relationship property access
+//!
+//! NOTE: These tests use #[serial] to prevent LMDB resource contention
+//! when running with high parallelism (e.g., nextest).
 
 use nexus_core::Engine;
+use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 use serde_json::json;
-use tempfile::TempDir;
+use serial_test::serial;
 
 /// Helper function to execute a Cypher query via Engine
 fn execute_query(
@@ -93,9 +97,9 @@ fn setup_test_data(engine: &mut Engine) -> Result<(), String> {
 }
 
 #[test]
+#[serial]
 fn test_multiple_labels_match() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -121,9 +125,9 @@ fn test_multiple_labels_match() {
 }
 
 #[test]
+#[serial]
 fn test_union_queries() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -166,9 +170,9 @@ fn test_union_queries() {
 }
 
 #[test]
+#[serial]
 fn test_bidirectional_relationship_queries() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -203,9 +207,9 @@ fn test_bidirectional_relationship_queries() {
 }
 
 #[test]
+#[serial]
 fn test_relationship_property_access() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -240,9 +244,9 @@ fn test_relationship_property_access() {
 }
 
 #[test]
+#[serial]
 fn test_relationship_property_return() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -272,9 +276,9 @@ fn test_relationship_property_return() {
 }
 
 #[test]
+#[serial]
 fn test_multiple_labels_filtering() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -292,10 +296,10 @@ fn test_multiple_labels_filtering() {
 }
 
 #[test]
+#[serial]
 #[ignore = "Known bug: MATCH with multiple labels + relationships duplicates results"]
 fn test_complex_multiple_labels_query() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -320,9 +324,9 @@ fn test_complex_multiple_labels_query() {
 
 /// Test UNION ALL (preserves duplicates)
 #[test]
+#[serial]
 fn test_union_all_preserves_duplicates() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     // Create different values to avoid DISTINCT behavior
     engine
@@ -354,23 +358,28 @@ fn test_union_all_preserves_duplicates() {
 
 /// Test labels() function with multiple labels
 #[test]
+#[serial]
 fn test_labels_function_multiple() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(
             vec![
-                "Person".to_string(),
-                "Employee".to_string(),
-                "Developer".to_string(),
+                "LabelTestPerson".to_string(),
+                "LabelTestEmployee".to_string(),
+                "LabelTestDeveloper".to_string(),
             ],
-            json!({"name": "Alice"}),
+            json!({"name": "AliceLabelsTest"}),
         )
         .unwrap();
     engine.refresh_executor().unwrap();
 
-    let result = execute_query(&mut engine, "MATCH (n:Person) RETURN labels(n) AS labels").unwrap();
+    // Filter by unique name to avoid interference from other tests
+    let result = execute_query(
+        &mut engine,
+        "MATCH (n {name: 'AliceLabelsTest'}) RETURN labels(n) AS labels",
+    )
+    .unwrap();
 
     assert_eq!(result.rows.len(), 1);
     let labels = result.rows[0].values[0].as_array().unwrap();
@@ -379,9 +388,9 @@ fn test_labels_function_multiple() {
 
 /// Test type() function with different relationship types
 #[test]
+#[serial]
 fn test_type_function() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"id": "A"}))
@@ -413,9 +422,9 @@ fn test_type_function() {
 
 /// Test keys() function with empty properties
 #[test]
+#[serial]
 fn test_keys_function_empty_node() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Empty".to_string()], json!({}))
@@ -432,9 +441,9 @@ fn test_keys_function_empty_node() {
 
 /// Test id() function consistency
 #[test]
+#[serial]
 fn test_id_function_consistency() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let node_id = engine
         .create_node(vec!["Test".to_string()], json!({"value": 42}))
@@ -455,10 +464,10 @@ fn test_id_function_consistency() {
 
 /// Test multiple labels with COUNT aggregation
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
+
 fn test_multiple_labels_with_count() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(
@@ -496,9 +505,9 @@ fn test_multiple_labels_with_count() {
 
 /// Test ORDER BY with multiple labels
 #[test]
+#[serial]
 fn test_multiple_labels_order_by() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(
@@ -540,9 +549,9 @@ fn test_multiple_labels_order_by() {
 
 /// Test UNION combines results from both sides
 #[test]
+#[serial]
 fn test_union_combines_results() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -573,9 +582,9 @@ fn test_union_combines_results() {
 
 /// Test relationship properties with WHERE filtering
 #[test]
+#[serial]
 fn test_relationship_properties_filtering() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let alice = engine
         .create_node(vec!["Person".to_string()], json!({"name": "Alice"}))
@@ -636,9 +645,9 @@ fn test_relationship_properties_filtering() {
 
 /// Test keys() function on relationships
 #[test]
+#[serial]
 fn test_keys_function_on_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -667,9 +676,9 @@ fn test_keys_function_on_relationships() {
 
 /// Test id() function on relationships
 #[test]
+#[serial]
 fn test_id_function_on_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -696,10 +705,10 @@ fn test_id_function_on_relationships() {
 
 /// Test LIMIT with UNION
 #[test]
+#[serial]
 #[ignore = "LIMIT after UNION not fully supported yet"]
 fn test_union_with_limit() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..5 {
         engine
@@ -728,9 +737,9 @@ fn test_union_with_limit() {
 
 /// Test MATCH with 3+ labels
 #[test]
+#[serial]
 fn test_match_with_three_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(
@@ -762,9 +771,10 @@ fn test_match_with_three_labels() {
 
 /// Test COUNT with multiple labels
 #[test]
+#[serial]
+
 fn test_count_with_multiple_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..10 {
         let labels = if i < 5 {
@@ -790,9 +800,9 @@ fn test_count_with_multiple_labels() {
 
 /// Test relationship direction specificity
 #[test]
+#[serial]
 fn test_relationship_direction_specificity() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"name": "A"}))
@@ -830,10 +840,10 @@ fn test_relationship_direction_specificity() {
 
 /// Test UNION with ORDER BY
 #[test]
+#[serial]
 #[ignore = "ORDER BY after UNION not fully supported yet"]
 fn test_union_with_order_by() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"name": "Zebra"}))
@@ -863,9 +873,10 @@ fn test_union_with_order_by() {
 
 /// Test WHERE with property checks on multiple labels
 #[test]
+#[serial]
+
 fn test_where_with_property_checks() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(
@@ -902,14 +913,14 @@ fn test_where_with_property_checks() {
 
 /// Test CREATE with properties and multiple labels
 #[test]
+#[serial]
 fn test_create_complex_node() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(
         &mut engine,
         "CREATE (n:Person:Employee:Developer {
-            name: 'Alice',
+            name: 'AliceComplexNode',
             age: 30,
             skills: 'Rust',
             active: true
@@ -917,15 +928,18 @@ fn test_create_complex_node() {
     )
     .unwrap();
 
-    // Verify all labels exist
-    let result = execute_query(&mut engine, "MATCH (n) RETURN labels(n) AS labels").unwrap();
-    // May include nodes from previous tests - accept >= 1
+    // Verify all labels exist - filter by the specific node we created
+    let result = execute_query(
+        &mut engine,
+        "MATCH (n {name: 'AliceComplexNode'}) RETURN labels(n) AS labels",
+    )
+    .unwrap();
     assert!(
         !result.rows.is_empty(),
         "Expected at least 1 node, got {}",
         result.rows.len()
     );
-    // Verify the first row has the expected labels
+    // Verify the node has the expected labels
     let labels = result.rows[0].values[0].as_array().unwrap();
     assert!(
         labels.len() >= 3,
@@ -933,17 +947,21 @@ fn test_create_complex_node() {
         labels.len()
     );
 
-    // Verify properties exist
-    let keys_result = execute_query(&mut engine, "MATCH (n) RETURN keys(n) AS keys").unwrap();
+    // Verify properties exist - filter by the specific node
+    let keys_result = execute_query(
+        &mut engine,
+        "MATCH (n {name: 'AliceComplexNode'}) RETURN keys(n) AS keys",
+    )
+    .unwrap();
     let keys = keys_result.rows[0].values[0].as_array().unwrap();
     assert!(keys.len() >= 4, "Should have at least 4 properties");
 }
 
 /// Test MATCH with no labels (scan all)
 #[test]
+#[serial]
 fn test_match_no_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Person".to_string()], json!({"id": 1}))
@@ -967,9 +985,9 @@ fn test_match_no_labels() {
 
 /// Test UNION with different column types
 #[test]
+#[serial]
 fn test_union_with_mixed_types() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": "text"}))
@@ -993,9 +1011,9 @@ fn test_union_with_mixed_types() {
 
 /// Test multiple relationship types in same query
 #[test]
+#[serial]
 fn test_multiple_relationship_types() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"name": "A"}))
@@ -1045,9 +1063,9 @@ fn test_multiple_relationship_types() {
 
 /// Test empty result with UNION
 #[test]
+#[serial]
 fn test_union_with_empty_results() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({}))
@@ -1071,9 +1089,9 @@ fn test_union_with_empty_results() {
 
 /// Test properties with special characters in keys
 #[test]
+#[serial]
 fn test_properties_with_special_keys() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(
@@ -1094,10 +1112,10 @@ fn test_properties_with_special_keys() {
 
 /// Test DISTINCT with labels()
 #[test]
+#[serial]
 #[ignore = "UNWIND with aggregation needs operator reordering"]
 fn test_distinct_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["Person".to_string()], json!({}))
@@ -1127,9 +1145,9 @@ fn test_distinct_labels() {
 
 /// Test relationship properties with NULL values
 #[test]
+#[serial]
 fn test_relationship_null_properties() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1158,9 +1176,9 @@ fn test_relationship_null_properties() {
 
 /// Test UNION with aggregations
 #[test]
+#[serial]
 fn test_union_with_aggregations() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..5 {
         engine
@@ -1189,9 +1207,9 @@ fn test_union_with_aggregations() {
 // ============================================================================
 
 #[test]
+#[serial]
 fn test_count_star_basic() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..5 {
         engine
@@ -1205,9 +1223,9 @@ fn test_count_star_basic() {
 }
 
 #[test]
+#[serial]
 fn test_count_star_vs_count_variable() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for _i in 0..10 {
         engine
@@ -1224,9 +1242,9 @@ fn test_count_star_vs_count_variable() {
 }
 
 #[test]
+#[serial]
 fn test_count_star_with_where() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..20 {
         engine
@@ -1244,9 +1262,9 @@ fn test_count_star_with_where() {
 }
 
 #[test]
+#[serial]
 fn test_count_star_multiple_labels() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string(), "B".to_string()], json!({}))
@@ -1264,9 +1282,9 @@ fn test_count_star_multiple_labels() {
 }
 
 #[test]
+#[serial]
 fn test_count_star_relationships() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1289,9 +1307,9 @@ fn test_count_star_relationships() {
 }
 
 #[test]
+#[serial]
 fn test_count_star_with_limit() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for _i in 0..50 {
         engine
@@ -1306,9 +1324,9 @@ fn test_count_star_with_limit() {
 }
 
 #[test]
+#[serial]
 fn test_count_star_mixed_types() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({}))
@@ -1326,10 +1344,9 @@ fn test_count_star_mixed_types() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn test_count_star_100_nodes() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     for i in 0..100 {
         engine
@@ -1347,20 +1364,18 @@ fn test_count_star_100_nodes() {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_compat_01() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN count(*) AS c").unwrap();
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
+#[serial]
 fn neo4j_compat_02() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..5 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1370,9 +1385,9 @@ fn neo4j_compat_02() {
 }
 
 #[test]
+#[serial]
 fn neo4j_compat_04() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"k": 1}))
         .unwrap();
     e.refresh_executor().unwrap();
@@ -1380,10 +1395,9 @@ fn neo4j_compat_04() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_compat_05() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let id = e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     let r = execute_query(&mut e, "MATCH (n:T) RETURN id(n) AS i").unwrap();
@@ -1391,10 +1405,9 @@ fn neo4j_compat_05() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_compat_06() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1405,10 +1418,9 @@ fn neo4j_compat_06() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_compat_07() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..3 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1418,10 +1430,9 @@ fn neo4j_compat_07() {
 }
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_compat_08() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"a": 1, "b": 2}))
         .unwrap();
     e.refresh_executor().unwrap();
@@ -1429,9 +1440,9 @@ fn neo4j_compat_08() {
 }
 
 #[test]
+#[serial]
 fn neo4j_compat_10() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..15 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1442,17 +1453,17 @@ fn neo4j_compat_10() {
 
 // Continue com mais 65 testes...
 #[test]
+#[serial]
 fn neo4j_test_11() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN count(*) AS c").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_12() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..7 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1461,37 +1472,35 @@ fn neo4j_test_12() {
     assert_eq!(r.rows[0].values[0], json!(7));
 }
 #[test]
+#[serial]
 fn neo4j_test_13() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["A".to_string()], json!({})).unwrap();
     e.create_node(vec!["B".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n) RETURN labels(n) AS l").unwrap();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_14() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"p": 1}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN keys(n) AS k").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_15() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN id(n) AS i").unwrap();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_16() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1501,9 +1510,9 @@ fn neo4j_test_16() {
     execute_query(&mut e, "MATCH ()-[r:R]->() RETURN count(*) AS c").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_17() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..12 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1512,19 +1521,18 @@ fn neo4j_test_17() {
     assert_eq!(r.rows[0].values[0], json!(12));
 }
 #[test]
+#[serial]
 fn neo4j_test_18() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T1".to_string(), "T2".to_string()], json!({}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T1) RETURN count(*) AS c").unwrap();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_19() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..8 {
         e.create_node(vec!["T".to_string()], json!({"v": _i}))
             .unwrap();
@@ -1533,9 +1541,9 @@ fn neo4j_test_19() {
     execute_query(&mut e, "MATCH (n:T) WHERE n.v > 3 RETURN count(*) AS c").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_20() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..6 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1544,19 +1552,18 @@ fn neo4j_test_20() {
     assert_eq!(r.rows.len(), 3);
 }
 #[test]
+#[serial]
 fn neo4j_test_21() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"name": "test"}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T {name: 'test'}) RETURN n").unwrap();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
+#[serial]
 fn neo4j_test_22() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..4 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1564,17 +1571,17 @@ fn neo4j_test_22() {
     execute_query(&mut e, "MATCH (n:T) RETURN count(n) AS c").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_23() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN labels(n) AS l, id(n) AS i").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_24() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..9 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1583,27 +1590,27 @@ fn neo4j_test_24() {
     assert_eq!(r.rows[0].values[0], json!(9));
 }
 #[test]
+#[serial]
 fn neo4j_test_25() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": true}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n.v AS v").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_26() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 3.15}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n.v AS v").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_27() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..11 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1612,9 +1619,9 @@ fn neo4j_test_27() {
     assert_eq!(r.rows[0].values[0], json!(11));
 }
 #[test]
+#[serial]
 fn neo4j_test_29() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1624,10 +1631,9 @@ fn neo4j_test_29() {
     execute_query(&mut e, "MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b").unwrap();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_30() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..13 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1636,27 +1642,27 @@ fn neo4j_test_30() {
     assert_eq!(r.rows[0].values[0], json!(13));
 }
 #[test]
+#[serial]
 fn neo4j_test_31() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["A".to_string()], json!({})).unwrap();
     e.create_node(vec!["B".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     let _r = execute_query(&mut e, "MATCH (a:A), (b:B) RETURN a, b").ok();
 }
 #[test]
+#[serial]
 fn neo4j_test_32() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"name": "Alice"}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n.name AS name").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_33() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..16 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1665,17 +1671,17 @@ fn neo4j_test_33() {
     assert_eq!(r.rows[0].values[0], json!(16));
 }
 #[test]
+#[serial]
 fn neo4j_test_34() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n) RETURN count(*) AS c").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_35() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..18 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1684,9 +1690,9 @@ fn neo4j_test_35() {
     assert_eq!(r.rows[0].values[0], json!(18));
 }
 #[test]
+#[serial]
 fn neo4j_test_36() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"a": 1, "b": 2, "c": 3}))
         .unwrap();
     e.refresh_executor().unwrap();
@@ -1694,9 +1700,9 @@ fn neo4j_test_36() {
     assert!(!r.rows.is_empty());
 }
 #[test]
+#[serial]
 fn neo4j_test_37() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..20 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1705,10 +1711,9 @@ fn neo4j_test_37() {
     assert_eq!(r.rows[0].values[0], json!(20));
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_38() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(
         vec!["A".to_string(), "B".to_string(), "C".to_string()],
         json!({}),
@@ -1718,10 +1723,9 @@ fn neo4j_test_38() {
     execute_query(&mut e, "MATCH (n:A:B:C) RETURN count(*) AS c").unwrap();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_39() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..22 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1730,9 +1734,9 @@ fn neo4j_test_39() {
     assert_eq!(r.rows[0].values[0], json!(22));
 }
 #[test]
+#[serial]
 fn neo4j_test_40() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1745,9 +1749,9 @@ fn neo4j_test_40() {
     assert_eq!(r.rows[0].values[0], json!(5));
 }
 #[test]
+#[serial]
 fn neo4j_test_41() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..25 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1756,20 +1760,18 @@ fn neo4j_test_41() {
     assert_eq!(r.rows[0].values[0], json!(25));
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition in parallel tests
+#[serial]
 fn neo4j_test_42() {
-    let d = TempDir::new().unwrap();
-    std::fs::create_dir_all(d.path()).unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": -100}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n.v AS v").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_43() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..28 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1778,18 +1780,18 @@ fn neo4j_test_43() {
     assert_eq!(r.rows[0].values[0], json!(28));
 }
 #[test]
+#[serial]
 fn neo4j_test_44() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"str": "test", "num": 42}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n.str AS s, n.num AS n").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_45() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..30 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1798,9 +1800,9 @@ fn neo4j_test_45() {
     assert_eq!(r.rows[0].values[0], json!(30));
 }
 #[test]
+#[serial]
 fn neo4j_test_46() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1810,9 +1812,9 @@ fn neo4j_test_46() {
     execute_query(&mut e, "MATCH ()-[r:R]->() RETURN r.p AS p").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_47() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..35 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1821,9 +1823,9 @@ fn neo4j_test_47() {
     assert_eq!(r.rows[0].values[0], json!(35));
 }
 #[test]
+#[serial]
 fn neo4j_test_49() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..40 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1832,9 +1834,9 @@ fn neo4j_test_49() {
     assert_eq!(r.rows[0].values[0], json!(40));
 }
 #[test]
+#[serial]
 fn neo4j_test_51() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..50 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1843,18 +1845,17 @@ fn neo4j_test_51() {
     assert_eq!(r.rows[0].values[0], json!(50));
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_52() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_53() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..55 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1863,10 +1864,9 @@ fn neo4j_test_53() {
     assert_eq!(r.rows[0].values[0], json!(55));
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_54() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
@@ -1879,9 +1879,9 @@ fn neo4j_test_54() {
     assert_eq!(r.rows[0].values[0], json!(2));
 }
 #[test]
+#[serial]
 fn neo4j_test_55() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..60 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1890,18 +1890,18 @@ fn neo4j_test_55() {
     assert_eq!(r.rows[0].values[0], json!(60));
 }
 #[test]
+#[serial]
 fn neo4j_test_56() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 0}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) WHERE n.v = 0 RETURN n").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_57() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..65 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1910,9 +1910,9 @@ fn neo4j_test_57() {
     assert_eq!(r.rows[0].values[0], json!(65));
 }
 #[test]
+#[serial]
 fn neo4j_test_58() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     execute_query(
@@ -1922,9 +1922,9 @@ fn neo4j_test_58() {
     .unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_59() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..70 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1933,9 +1933,9 @@ fn neo4j_test_59() {
     assert_eq!(r.rows[0].values[0], json!(70));
 }
 #[test]
+#[serial]
 fn neo4j_test_60() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let nodes: Vec<u64> = (0..5)
         .map(|_| e.create_node(vec!["N".to_string()], json!({})).unwrap())
         .collect();
@@ -1948,9 +1948,9 @@ fn neo4j_test_60() {
     execute_query(&mut e, "MATCH (a)-[r:NEXT]->(b) RETURN count(*) AS c").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_62() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(
         vec!["T".to_string()],
         json!({"name": "test", "active": true}),
@@ -1964,9 +1964,9 @@ fn neo4j_test_62() {
     .unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_63() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..80 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1975,9 +1975,9 @@ fn neo4j_test_63() {
     assert_eq!(r.rows[0].values[0], json!(80));
 }
 #[test]
+#[serial]
 fn neo4j_test_64() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..3 {
         e.create_node(vec![format!("Label{}", _i)], json!({}))
             .unwrap();
@@ -1986,9 +1986,9 @@ fn neo4j_test_64() {
     execute_query(&mut e, "MATCH (n) RETURN labels(n) AS l").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_65() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..85 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -1997,9 +1997,9 @@ fn neo4j_test_65() {
     assert_eq!(r.rows[0].values[0], json!(85));
 }
 #[test]
+#[serial]
 fn neo4j_test_67() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..90 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -2008,18 +2008,18 @@ fn neo4j_test_67() {
     assert_eq!(r.rows[0].values[0], json!(90));
 }
 #[test]
+#[serial]
 fn neo4j_test_68() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": false}))
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n.v AS v").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_69() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..95 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -2028,9 +2028,9 @@ fn neo4j_test_69() {
     assert_eq!(r.rows[0].values[0], json!(95));
 }
 #[test]
+#[serial]
 fn neo4j_test_70() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..100 {
         e.create_node(vec!["T".to_string()], json!({})).unwrap();
     }
@@ -2039,9 +2039,9 @@ fn neo4j_test_70() {
     assert_eq!(r.rows[0].values[0], json!(100));
 }
 #[test]
+#[serial]
 fn neo4j_test_71() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"name": "Bob"}))
         .unwrap();
     e.create_node(vec!["T".to_string()], json!({"name": "Alice"}))
@@ -2050,18 +2050,17 @@ fn neo4j_test_71() {
     execute_query(&mut e, "MATCH (n:T) RETURN n.name AS name ORDER BY n.name").unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_72() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({})).unwrap();
     e.refresh_executor().unwrap();
     let _r = execute_query(&mut e, "MATCH (n:T) RETURN count(n) AS c, id(n) AS i").ok();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_73() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     for _i in 0..15 {
         e.create_node(vec!["T".to_string()], json!({"value": _i}))
             .unwrap();
@@ -2074,10 +2073,9 @@ fn neo4j_test_73() {
     .unwrap();
 }
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
+#[serial]
 fn neo4j_test_74() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     let a = e
         .create_node(vec!["Person".to_string()], json!({"name": "Alice"}))
         .unwrap();
@@ -2095,9 +2093,9 @@ fn neo4j_test_74() {
     .unwrap();
 }
 #[test]
+#[serial]
 fn neo4j_test_75() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
+    let (mut e, _ctx) = setup_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 1}))
         .unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 2}))

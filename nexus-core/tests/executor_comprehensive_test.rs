@@ -7,22 +7,9 @@
 //! - Expression evaluation
 
 use nexus_core::executor::{Executor, Query};
-use nexus_core::index::KnnIndex;
-use nexus_core::{catalog::Catalog, index::LabelIndex, storage::RecordStore};
+use nexus_core::testing::{create_isolated_test_executor, create_test_executor};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use tempfile::TempDir;
-
-fn create_test_executor() -> (Executor, TempDir) {
-    let dir = TempDir::new().unwrap();
-    let catalog = Catalog::new(dir.path()).unwrap();
-    let store = RecordStore::new(dir.path()).unwrap();
-    let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
-
-    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
-    (executor, dir)
-}
 
 fn setup_test_data(executor: &mut Executor) {
     // Create nodes
@@ -49,7 +36,7 @@ fn setup_test_data(executor: &mut Executor) {
 
 #[test]
 fn test_union_operator() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     // Test UNION with different queries - should combine results
@@ -81,7 +68,7 @@ fn test_union_operator() {
 
 #[test]
 fn test_union_different_labels() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create test data with Person and Company nodes
     let setup_query = Query {
@@ -130,7 +117,7 @@ fn test_union_different_labels() {
 
 #[test]
 fn test_union_all_operator() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -158,7 +145,7 @@ fn test_union_all_operator() {
 
 #[test]
 fn test_distinct_operator() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -173,7 +160,7 @@ fn test_distinct_operator() {
 
 #[test]
 fn test_distinct_multiple_columns() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -191,7 +178,7 @@ fn test_distinct_multiple_columns() {
 
 #[test]
 fn test_limit_operator() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -205,7 +192,7 @@ fn test_limit_operator() {
 
 #[test]
 fn test_limit_zero() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -228,7 +215,7 @@ fn test_limit_zero() {
 
 #[test]
 fn test_order_by_descending() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -242,7 +229,7 @@ fn test_order_by_descending() {
 
 #[test]
 fn test_order_by_multiple_columns() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -260,7 +247,7 @@ fn test_order_by_multiple_columns() {
 
 #[test]
 fn test_count_aggregate() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -275,7 +262,7 @@ fn test_count_aggregate() {
 
 #[test]
 fn test_sum_aggregate() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -289,7 +276,7 @@ fn test_sum_aggregate() {
 
 #[test]
 fn test_min_max_aggregate() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -304,7 +291,7 @@ fn test_min_max_aggregate() {
 
 #[test]
 fn test_group_by() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -323,7 +310,7 @@ fn test_group_by() {
 
 #[test]
 fn test_inner_join() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -337,7 +324,7 @@ fn test_inner_join() {
 
 #[test]
 fn test_left_outer_join() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     // Create a node without relationships
@@ -362,7 +349,7 @@ fn test_left_outer_join() {
 
 #[test]
 fn test_unwind_operator() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let mut params = HashMap::new();
     params.insert("list".to_string(), json!([1, 2, 3, 4, 5]));
@@ -379,7 +366,7 @@ fn test_unwind_operator() {
 
 #[test]
 fn test_unwind_empty_list() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let mut params = HashMap::new();
     params.insert("list".to_string(), json!([]));
@@ -395,7 +382,7 @@ fn test_unwind_empty_list() {
 
 #[test]
 fn test_unwind_with_where() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let mut params = HashMap::new();
     params.insert("list".to_string(), json!([1, 2, 3, 4, 5]));
@@ -415,7 +402,7 @@ fn test_unwind_with_where() {
 
 #[test]
 fn test_arithmetic_expressions() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN 1 + 2 AS sum, 5 - 3 AS diff, 2 * 3 AS prod, 10 / 2 AS quot".to_string(),
@@ -429,7 +416,7 @@ fn test_arithmetic_expressions() {
 
 #[test]
 fn test_comparison_expressions() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN 5 > 3 AS gt, 2 < 4 AS lt, 3 = 3 AS eq, 1 <> 2 AS ne".to_string(),
@@ -442,7 +429,7 @@ fn test_comparison_expressions() {
 
 #[test]
 fn test_logical_expressions() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN true AND false AS and_result, true OR false AS or_result, NOT false AS not_result".to_string(),
@@ -455,7 +442,7 @@ fn test_logical_expressions() {
 
 #[test]
 fn test_string_expressions() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN 'Hello' + ' ' + 'World' AS greeting".to_string(),
@@ -475,7 +462,7 @@ fn test_string_expressions() {
 
 #[test]
 fn test_null_handling() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN null AS null_val, null IS NULL AS is_null, null IS NOT NULL AS is_not_null"
@@ -490,7 +477,7 @@ fn test_null_handling() {
 
 #[test]
 fn test_case_expressions() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN CASE WHEN 1 > 0 THEN 'positive' ELSE 'negative' END AS result".to_string(),
@@ -507,7 +494,7 @@ fn test_case_expressions() {
 
 #[test]
 fn test_invalid_query_syntax() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "INVALID QUERY SYNTAX".to_string(),
@@ -520,7 +507,7 @@ fn test_invalid_query_syntax() {
 
 #[test]
 fn test_missing_parameter() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN $missing_param".to_string(),
@@ -534,7 +521,7 @@ fn test_missing_parameter() {
 
 #[test]
 fn test_division_by_zero() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN 10 / 0 AS result".to_string(),
@@ -552,7 +539,7 @@ fn test_division_by_zero() {
 
 #[test]
 fn test_nested_queries() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -569,7 +556,8 @@ fn test_nested_queries() {
 
 #[test]
 fn test_multiple_clauses() {
-    let (mut executor, _dir) = create_test_executor();
+    // Use isolated executor to avoid interference from parallel tests
+    let (mut executor, _ctx) = create_isolated_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -584,7 +572,7 @@ fn test_multiple_clauses() {
 
 #[test]
 fn test_with_clause() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     let query = Query {
@@ -603,7 +591,7 @@ fn test_with_clause() {
 
 #[test]
 fn test_nested_property_access() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     // Create node with nested properties
     let mut params = HashMap::new();
@@ -639,7 +627,7 @@ fn test_nested_property_access() {
 
 #[test]
 fn test_list_operations() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
 
     let mut params = HashMap::new();
     params.insert("list".to_string(), json!([1, 2, 3]));
@@ -660,7 +648,7 @@ fn test_list_operations() {
 
 #[test]
 fn test_variable_length_path() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     // Create a longer path
@@ -686,9 +674,8 @@ fn test_variable_length_path() {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix temp dir race condition
 fn test_index_scan_operator() {
-    let (mut executor, _dir) = create_test_executor();
+    let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
     // Create an index (if supported)

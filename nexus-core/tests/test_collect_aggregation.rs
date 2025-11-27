@@ -1,16 +1,10 @@
-use nexus_core::{Engine, Error};
-use tempfile::TempDir;
-
-fn setup_test_engine() -> Result<(Engine, TempDir), Error> {
-    let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let engine = Engine::with_data_dir(temp_dir.path())?;
-    Ok((engine, temp_dir))
-}
+use nexus_core::Error;
+use nexus_core::testing::setup_test_engine;
 
 #[test]
 #[ignore] // TODO: Fix nested aggregations like head(collect()) - needs proper post-aggregation projection
 fn test_collect_with_head() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     // Create multiple nodes
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
@@ -46,7 +40,7 @@ fn test_collect_with_head() -> Result<(), Error> {
 #[test]
 #[ignore] // TODO: Fix nested aggregations like tail(collect()) - needs proper post-aggregation projection
 fn test_collect_with_tail() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
     engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
@@ -78,7 +72,7 @@ fn test_collect_with_tail() -> Result<(), Error> {
 #[test]
 #[ignore] // TODO: Fix nested aggregations like reverse(collect()) - needs proper post-aggregation projection
 fn test_collect_with_reverse() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
     engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
@@ -109,7 +103,7 @@ fn test_collect_with_reverse() -> Result<(), Error> {
 
 #[test]
 fn test_collect_without_nesting() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
     engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
@@ -140,7 +134,7 @@ fn test_collect_without_nesting() -> Result<(), Error> {
 
 #[test]
 fn test_count_all() -> Result<(), Error> {
-    let (mut engine, _temp_dir) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_test_engine()?;
 
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
     engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;

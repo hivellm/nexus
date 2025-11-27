@@ -269,13 +269,13 @@ impl DatabaseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use crate::testing::TestContext;
+    use serial_test::serial;
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition in parallel tests
     fn test_database_manager_creation() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         // Should have default database
         assert!(manager.exists("neo4j"));
@@ -283,10 +283,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition in parallel tests
     fn test_create_duplicate_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         manager.create_database("test_db").unwrap();
         let result = manager.create_database("test_db");
@@ -294,10 +293,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition in parallel tests
     fn test_drop_default_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         let result = manager.drop_database("neo4j", false);
         assert!(result.is_err());
@@ -305,8 +303,8 @@ mod tests {
 
     #[test]
     fn test_list_databases() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         manager.create_database("db1").unwrap();
         manager.create_database("db2").unwrap();
@@ -322,8 +320,8 @@ mod tests {
 
     #[test]
     fn test_get_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         manager.create_database("test_db").unwrap();
 
@@ -334,10 +332,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition in parallel tests
     fn test_invalid_database_names() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         // Empty name
         assert!(manager.create_database("").is_err());
@@ -354,8 +351,8 @@ mod tests {
 
     #[test]
     fn test_get_nonexistent_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         let result = manager.get_database("nonexistent");
         assert!(result.is_err());
@@ -363,8 +360,8 @@ mod tests {
 
     #[test]
     fn test_multiple_databases_isolation() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         // Create multiple databases
         let db1 = manager.create_database("db1").unwrap();
@@ -397,10 +394,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition in parallel tests
     fn test_database_info_metadata() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         manager.create_database("test_db").unwrap();
 
@@ -414,10 +410,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix - temp dir race condition in parallel tests
     fn test_database_with_data() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         let db = manager.create_database("test_db").unwrap();
 
@@ -439,20 +434,21 @@ mod tests {
 
     #[test]
     fn test_drop_nonexistent_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         let result = manager.drop_database("nonexistent", false);
         assert!(result.is_err());
     }
 
     #[test]
+    #[serial]
     fn test_concurrent_database_access() {
         use std::sync::Arc;
         use std::thread;
 
-        let dir = TempDir::new().unwrap();
-        let manager = Arc::new(DatabaseManager::new(dir.path().to_path_buf()).unwrap());
+        let ctx = TestContext::new();
+        let manager = Arc::new(DatabaseManager::new(ctx.path().to_path_buf()).unwrap());
 
         let db = manager.create_database("test_db").unwrap();
 
@@ -480,10 +476,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition in parallel tests
     fn test_database_list_sorting() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         manager.create_database("zulu").unwrap();
         manager.create_database("alpha").unwrap();
@@ -497,10 +492,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_database_name_edge_cases() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         // Very long name (should work if within limits)
         let long_name = "a".repeat(50);
@@ -517,10 +511,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix temp dir race condition
     fn test_default_database_name() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
         assert_eq!(manager.default_database_name(), "neo4j");
         assert!(manager.exists("neo4j"));
