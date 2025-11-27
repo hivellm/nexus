@@ -16,7 +16,7 @@ async fn create_test_server_with_auth() -> (Arc<NexusServer>, Arc<AuthManager>) 
 
     let temp_dir = TempDir::new().unwrap();
     let data_dir = temp_dir.path().to_path_buf();
-    
+
     // Ensure data directory exists
     std::fs::create_dir_all(&data_dir).unwrap();
 
