@@ -75,7 +75,9 @@ impl PropertyStore {
         let mut store = Self {
             path,
             mmap,
-            next_offset: 0,
+            // CRITICAL: Start at offset 1, not 0, because prop_ptr=0 means "no properties"
+            // This ensures the first stored property gets offset 1, which is a valid non-zero prop_ptr
+            next_offset: 1,
             index: HashMap::new(),
             reverse_index: HashMap::new(),
         };
@@ -350,7 +352,8 @@ impl PropertyStore {
         // Clear indexes
         self.index.clear();
         self.reverse_index.clear();
-        self.next_offset = 0;
+        // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
+        self.next_offset = 1;
 
         // Truncate and zero out the property file
         let property_file = self.path.join("properties.store");
@@ -438,9 +441,10 @@ impl PropertyStore {
 
         if is_empty {
             tracing::debug!(
-                "[rebuild_index] SKIPPING: file is empty (all zeros), keeping next_offset=0"
+                "[rebuild_index] SKIPPING: file is empty (all zeros), keeping next_offset=1"
             );
-            self.next_offset = 0;
+            // CRITICAL: Keep at 1, not 0, because prop_ptr=0 means "no properties"
+            self.next_offset = 1;
             return Ok(());
         }
 
@@ -506,7 +510,8 @@ impl PropertyStore {
 
         self.index.clear();
         self.reverse_index.clear();
-        self.next_offset = 0;
+        // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
+        self.next_offset = 1;
 
         tracing::debug!(
             "[rebuild_index] Cleared indexes: old_next_offset={}, old_index_size={}, old_reverse_index_size={}",
@@ -539,11 +544,12 @@ impl PropertyStore {
                     found_valid_entries,
                     max_valid_offset
                 );
-                // Only set next_offset if we found valid entries, otherwise keep it at 0
+                // Only set next_offset if we found valid entries, otherwise keep it at 1
                 if found_valid_entries {
                     self.next_offset = offset;
                 } else {
-                    self.next_offset = 0;
+                    // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
+                    self.next_offset = 1;
                 }
                 break;
             }
@@ -578,10 +584,11 @@ impl PropertyStore {
         if found_valid_entries {
             self.next_offset = offset;
         } else {
-            // No valid entries found, keep next_offset at 0
-            self.next_offset = 0;
+            // No valid entries found, keep next_offset at 1
+            // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
+            self.next_offset = 1;
             tracing::debug!(
-                "[rebuild_index] No valid entries found in file, keeping next_offset=0"
+                "[rebuild_index] No valid entries found in file, keeping next_offset=1"
             );
         }
         tracing::debug!(
@@ -749,7 +756,8 @@ mod tests {
         let ptr = store
             .store_properties(1, EntityType::Node, properties.clone())
             .unwrap();
-        assert!(ptr == 0); // First property should be at offset 0
+        // First property should be at offset 1 (not 0, because prop_ptr=0 means "no properties")
+        assert!(ptr == 1, "First property should be at offset 1, got {}", ptr);
 
         let loaded = store.load_properties(1, EntityType::Node).unwrap().unwrap();
         assert_eq!(loaded, properties);
