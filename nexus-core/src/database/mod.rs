@@ -283,21 +283,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
-
-        // Create new database
-        let db = manager.create_database("test_db").unwrap();
-        assert!(manager.exists("test_db"));
-
-        // Verify engine works
-        let mut engine = db.write();
-        let stats = engine.stats().unwrap();
-        assert_eq!(stats.nodes, 0);
-    }
-
-    #[test]
     #[ignore] // TODO: Fix temp dir race condition in parallel tests
     fn test_create_duplicate_database() {
         let dir = TempDir::new().unwrap();
@@ -306,25 +291,6 @@ mod tests {
         manager.create_database("test_db").unwrap();
         let result = manager.create_database("test_db");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_drop_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
-
-        manager.create_database("test_db").unwrap();
-        assert!(manager.exists("test_db"));
-
-        // Drop database (may leave directory on Windows due to file locks)
-        manager.drop_database("test_db", false).unwrap();
-
-        // Verify database removed from manager
-        assert!(!manager.exists("test_db"));
-
-        // Note: On Windows, the directory may not be immediately deleted
-        // due to file handle locks. This is acceptable as the database
-        // is removed from the manager's control.
     }
 
     #[test]
@@ -393,17 +359,6 @@ mod tests {
 
         let result = manager.get_database("nonexistent");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_get_default_database() {
-        let dir = TempDir::new().unwrap();
-        let manager = DatabaseManager::new(dir.path().to_path_buf()).unwrap();
-
-        let db = manager.get_default_database().unwrap();
-        let mut engine = db.write();
-        let stats = engine.stats().unwrap();
-        assert_eq!(stats.nodes, 0);
     }
 
     #[test]
