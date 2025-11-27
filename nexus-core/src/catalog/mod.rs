@@ -231,8 +231,20 @@ impl Catalog {
             // This prevents TlsFull errors on Windows by limiting to just 1 LMDB environment
             static TEST_CATALOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
-            let shared_dir = TEST_CATALOG_DIR
-                .get_or_init(|| std::env::temp_dir().join("nexus_test_catalogs_shared"));
+            let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
+                let dir = std::env::temp_dir().join("nexus_test_catalogs_shared");
+                // CRITICAL: Clean stale data from previous test runs
+                // This prevents label/type ID mismatches when RecordStore is fresh but Catalog has old IDs
+                if dir.exists() {
+                    if let Err(e) = std::fs::remove_dir_all(&dir) {
+                        eprintln!(
+                            "Warning: Failed to clean stale test catalog dir {:?}: {}",
+                            dir, e
+                        );
+                    }
+                }
+                dir
+            });
 
             // ALWAYS ensure directory exists before every use
             // This handles race conditions where the directory may have been deleted
