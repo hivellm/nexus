@@ -999,9 +999,11 @@ fn integration_test_25() {
 #[test]
 fn integration_test_26() {
     let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(vec!["T".to_string()], json!({"a": 1, "b": 2, "c": 3}))
+    let data_path = d.path().to_path_buf();
+    let mut e = Engine::with_data_dir(&data_path).unwrap();
+    e.create_node(vec!["T26".to_string()], json!({"a": 1, "b": 2, "c": 3}))
         .unwrap();
+    drop(e); // Ensure engine is dropped before temp dir
 }
 
 #[test]
