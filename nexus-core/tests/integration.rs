@@ -195,7 +195,8 @@ fn test_full_transaction_lifecycle() {
     let ctx = TestContext::new();
     let dir = ctx.path();
 
-    let catalog = Catalog::new(dir.join("catalog")).unwrap();
+    // Use isolated catalog to ensure label IDs start from 0
+    let catalog = Catalog::with_isolated_path(dir.join("catalog.mdb"), 100 * 1024 * 1024).unwrap();
     let mut store = RecordStore::new(dir).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
     let mut wal = Wal::new(dir.join("wal.log")).unwrap();

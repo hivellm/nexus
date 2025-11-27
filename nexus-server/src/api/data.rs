@@ -933,8 +933,11 @@ mod tests {
         // Get the actual engine instance (may be the one we created or already existing)
         let global_engine = ENGINE.get().expect("Engine should be initialized");
 
-        // Create nodes - first one will have ID 0, create a dummy to get ID 1
+        // Clear all data to ensure test isolation
         let mut engine = global_engine.write().await;
+        engine.clear_all_data().unwrap();
+
+        // Create nodes - first one will have ID 0, create a dummy to get ID 1
         let _dummy_id = engine
             .create_node(vec!["Dummy".to_string()], serde_json::json!({}))
             .unwrap();

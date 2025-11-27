@@ -331,7 +331,7 @@ fn integration_engine_id_function() {
 
 #[test]
 fn integration_engine_type_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))

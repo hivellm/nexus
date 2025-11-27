@@ -233,9 +233,8 @@ impl Catalog {
 
             let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
                 let base = std::env::temp_dir().join("nexus_test_catalogs_shared");
-                // Clean up old data on first init (ignore errors if doesn't exist)
-                let _ = std::fs::remove_dir_all(&base);
-                // Create directory - this must succeed
+                // DO NOT remove existing directory - it may be in use by parallel tests
+                // Just ensure the directory exists
                 if let Err(e) = std::fs::create_dir_all(&base) {
                     // Log error but continue - directory might already exist from parallel test
                     eprintln!(
