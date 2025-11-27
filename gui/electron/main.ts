@@ -18,7 +18,7 @@ process.env.VITE_PUBLIC = app.isPackaged
   : path.join(process.env.DIST, '../public');
 
 let win: BrowserWindow | null = null;
-const preload = path.join(__dirname, 'preload.js');
+const preload = path.join(__dirname, 'preload.cjs');
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
 
 function createWindow() {

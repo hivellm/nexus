@@ -7,6 +7,31 @@
           <h3 class="text-sm font-medium text-text-secondary">Cypher Query</h3>
           <div class="flex items-center gap-2">
             <button
+              @click="showSavedQueries = true"
+              class="btn btn-secondary text-xs"
+              title="Saved Queries"
+            >
+              <i class="fas fa-bookmark mr-1"></i>
+              Saved
+            </button>
+            <button
+              @click="showHistory = true"
+              class="btn btn-secondary text-xs"
+              title="Query History"
+            >
+              <i class="fas fa-history mr-1"></i>
+              History
+            </button>
+            <button
+              @click="saveCurrentQuery"
+              class="btn btn-secondary text-xs"
+              :disabled="!currentQuery.trim()"
+              title="Save Current Query"
+            >
+              <i class="fas fa-save mr-1"></i>
+              Save
+            </button>
+            <button
               @click="clearQuery"
               class="btn btn-secondary text-xs"
               :disabled="!currentQuery"
@@ -24,15 +49,12 @@
             </button>
           </div>
         </div>
-        <div class="monaco-editor-container h-32">
-          <textarea
+        <div class="h-40 rounded-lg overflow-hidden border border-border">
+          <MonacoEditor
             v-model="currentQuery"
-            class="w-full h-full p-3 bg-bg-tertiary text-text-primary font-mono text-sm resize-none focus:outline-none"
-            placeholder="Enter your Cypher query here...
-
-Example: MATCH (n) RETURN n LIMIT 25"
-            @keydown.ctrl.enter="executeQuery"
-          ></textarea>
+            :theme="editorTheme"
+            @execute="executeQuery"
+          />
         </div>
         <div class="flex items-center justify-between mt-2 text-xs text-text-muted">
           <span>Press Ctrl+Enter to execute</span>
@@ -123,45 +145,174 @@ Example: MATCH (n) RETURN n LIMIT 25"
     </div>
 
     <!-- Query History Sidebar -->
-    <div v-if="showHistory" class="fixed right-0 top-0 bottom-0 w-80 bg-bg-secondary border-l border-border p-4 z-50 shadow-lg">
+    <div v-if="showHistory" class="fixed right-0 top-0 bottom-0 w-96 bg-bg-secondary border-l border-border p-4 z-50 shadow-lg">
       <div class="flex items-center justify-between mb-4">
         <h3 class="font-semibold">Query History</h3>
-        <button @click="showHistory = false" class="text-text-muted hover:text-text-primary">
-          <i class="fas fa-times"></i>
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            @click="clearHistory"
+            class="text-xs text-text-muted hover:text-error"
+            title="Clear History"
+          >
+            <i class="fas fa-trash"></i>
+          </button>
+          <button @click="showHistory = false" class="text-text-muted hover:text-text-primary">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
       </div>
       <div class="space-y-2 overflow-y-auto h-full pb-20">
         <div
           v-for="item in history"
           :key="item.id"
-          class="p-3 bg-bg-tertiary rounded-lg cursor-pointer hover:bg-bg-hover"
+          class="p-3 bg-bg-tertiary rounded-lg cursor-pointer hover:bg-bg-hover group"
           @click="loadFromHistory(item.query)"
         >
           <div class="font-mono text-xs text-text-primary truncate">{{ item.query }}</div>
-          <div class="flex items-center gap-2 mt-1 text-xs">
-            <span :class="item.success ? 'text-success' : 'text-error'">
-              <i :class="item.success ? 'fas fa-check' : 'fas fa-times'"></i>
-            </span>
-            <span class="text-text-muted">{{ item.rowCount }} rows</span>
-            <span class="text-text-muted">{{ item.executionTime }}ms</span>
+          <div class="flex items-center justify-between mt-1 text-xs">
+            <div class="flex items-center gap-2">
+              <span :class="item.success ? 'text-success' : 'text-error'">
+                <i :class="item.success ? 'fas fa-check' : 'fas fa-times'"></i>
+              </span>
+              <span class="text-text-muted">{{ item.rowCount }} rows</span>
+              <span class="text-text-muted">{{ item.executionTime }}ms</span>
+            </div>
+            <button
+              @click.stop="saveQueryFromHistory(item)"
+              class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-accent"
+              title="Save this query"
+            >
+              <i class="fas fa-bookmark"></i>
+            </button>
           </div>
+        </div>
+        <div v-if="history.length === 0" class="text-center text-text-muted py-8">
+          <i class="fas fa-history text-2xl mb-2"></i>
+          <p>No query history yet</p>
         </div>
       </div>
     </div>
+
+    <!-- Saved Queries Sidebar -->
+    <div v-if="showSavedQueries" class="fixed right-0 top-0 bottom-0 w-96 bg-bg-secondary border-l border-border p-4 z-50 shadow-lg">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-semibold">Saved Queries</h3>
+        <button @click="showSavedQueries = false" class="text-text-muted hover:text-text-primary">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="space-y-2 overflow-y-auto h-full pb-20">
+        <div
+          v-for="saved in savedQueries"
+          :key="saved.id"
+          class="p-3 bg-bg-tertiary rounded-lg group"
+        >
+          <div class="flex items-center justify-between mb-1">
+            <span class="font-medium text-sm text-text-primary">{{ saved.name }}</span>
+            <div class="flex items-center gap-1">
+              <button
+                @click="loadSavedQuery(saved)"
+                class="text-xs text-text-muted hover:text-accent px-2 py-1"
+                title="Load query"
+              >
+                <i class="fas fa-play"></i>
+              </button>
+              <button
+                @click="deleteSavedQuery(saved.id)"
+                class="text-xs text-text-muted hover:text-error px-2 py-1"
+                title="Delete query"
+              >
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+          <div class="font-mono text-xs text-text-secondary truncate">{{ saved.query }}</div>
+          <div class="text-xs text-text-muted mt-1">
+            {{ formatDate(saved.createdAt) }}
+          </div>
+        </div>
+        <div v-if="savedQueries.length === 0" class="text-center text-text-muted py-8">
+          <i class="fas fa-bookmark text-2xl mb-2"></i>
+          <p>No saved queries yet</p>
+          <p class="text-xs mt-1">Click "Save" to bookmark a query</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save Query Modal -->
+    <div v-if="showSaveModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div class="bg-bg-secondary rounded-lg p-6 w-full max-w-md mx-4">
+        <h3 class="text-lg font-semibold mb-4">Save Query</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm text-text-secondary mb-1">Query Name</label>
+            <input
+              v-model="saveQueryName"
+              type="text"
+              class="w-full px-3 py-2 bg-bg-tertiary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
+              placeholder="e.g., Get all users"
+              @keydown.enter="confirmSaveQuery"
+            />
+          </div>
+          <div>
+            <label class="block text-sm text-text-secondary mb-1">Query</label>
+            <div class="font-mono text-xs text-text-muted bg-bg-tertiary p-3 rounded-lg max-h-32 overflow-auto">
+              {{ queryToSave }}
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-6">
+          <button @click="cancelSaveQuery" class="btn btn-secondary">Cancel</button>
+          <button
+            @click="confirmSaveQuery"
+            class="btn btn-primary"
+            :disabled="!saveQueryName.trim()"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Backdrop for sidebars -->
+    <div
+      v-if="showHistory || showSavedQueries"
+      class="fixed inset-0 bg-black/20 z-40"
+      @click="showHistory = false; showSavedQueries = false"
+    ></div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useQueryStore } from '@/stores/query';
 import { useNotificationsStore } from '@/stores/notifications';
+import { useThemeStore } from '@/stores/theme';
 import { ipcBridge } from '@/services/ipc';
+import MonacoEditor from '@/components/MonacoEditor.vue';
+
+interface SavedQuery {
+  id: string;
+  name: string;
+  query: string;
+  createdAt: Date;
+}
+
+const SAVED_QUERIES_KEY = 'nexus-desktop-saved-queries';
 
 const queryStore = useQueryStore();
 const notifications = useNotificationsStore();
+const themeStore = useThemeStore();
 
 const viewMode = ref<'table' | 'json'>('table');
 const showHistory = ref(false);
+const showSavedQueries = ref(false);
+const showSaveModal = ref(false);
+const saveQueryName = ref('');
+const queryToSave = ref('');
+const savedQueries = ref<SavedQuery[]>([]);
+
+const editorTheme = computed(() => themeStore.theme === 'dark' ? 'vs-dark' : 'vs');
 
 const currentQuery = computed({
   get: () => queryStore.currentQuery,
@@ -173,6 +324,30 @@ const isExecuting = computed(() => queryStore.isExecuting);
 const error = computed(() => queryStore.error);
 const history = computed(() => queryStore.history);
 const lastExecutionTime = computed(() => lastResult.value?.executionTime);
+
+// Load saved queries from localStorage
+function loadSavedQueries(): void {
+  try {
+    const stored = localStorage.getItem(SAVED_QUERIES_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      savedQueries.value = parsed.map((q: any) => ({
+        ...q,
+        createdAt: new Date(q.createdAt),
+      }));
+    }
+  } catch (e) {
+    console.error('Failed to load saved queries:', e);
+  }
+}
+
+function saveSavedQueries(): void {
+  try {
+    localStorage.setItem(SAVED_QUERIES_KEY, JSON.stringify(savedQueries.value));
+  } catch (e) {
+    console.error('Failed to save queries:', e);
+  }
+}
 
 async function executeQuery(): Promise<void> {
   const result = await queryStore.executeQuery();
@@ -186,9 +361,70 @@ function clearQuery(): void {
   queryStore.clearResult();
 }
 
+function clearHistory(): void {
+  queryStore.clearHistory();
+  notifications.info('History cleared', 'Query history has been cleared');
+}
+
 function loadFromHistory(query: string): void {
   queryStore.setQuery(query);
   showHistory.value = false;
+}
+
+function loadSavedQuery(saved: SavedQuery): void {
+  queryStore.setQuery(saved.query);
+  showSavedQueries.value = false;
+  notifications.info('Query loaded', `Loaded "${saved.name}"`);
+}
+
+function saveCurrentQuery(): void {
+  queryToSave.value = currentQuery.value;
+  saveQueryName.value = '';
+  showSaveModal.value = true;
+}
+
+function saveQueryFromHistory(item: { query: string }): void {
+  queryToSave.value = item.query;
+  saveQueryName.value = '';
+  showSaveModal.value = true;
+}
+
+function confirmSaveQuery(): void {
+  if (!saveQueryName.value.trim() || !queryToSave.value.trim()) return;
+
+  const newSaved: SavedQuery = {
+    id: `saved-${Date.now()}`,
+    name: saveQueryName.value.trim(),
+    query: queryToSave.value,
+    createdAt: new Date(),
+  };
+
+  savedQueries.value.unshift(newSaved);
+  saveSavedQueries();
+
+  showSaveModal.value = false;
+  notifications.success('Query saved', `Saved as "${newSaved.name}"`);
+}
+
+function cancelSaveQuery(): void {
+  showSaveModal.value = false;
+  saveQueryName.value = '';
+  queryToSave.value = '';
+}
+
+function deleteSavedQuery(id: string): void {
+  savedQueries.value = savedQueries.value.filter(q => q.id !== id);
+  saveSavedQueries();
+  notifications.info('Query deleted', 'Saved query has been removed');
+}
+
+function formatDate(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
 }
 
 function isObject(value: any): boolean {
@@ -240,4 +476,8 @@ async function exportResults(format: 'json' | 'csv'): Promise<void> {
     notifications.error('Export failed', e.message);
   }
 }
+
+onMounted(() => {
+  loadSavedQueries();
+});
 </script>

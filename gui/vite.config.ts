@@ -22,7 +22,7 @@ export default defineConfig({
               external: ['electron'],
               output: {
                 format: 'cjs',
-                entryFileNames: '[name].js',
+                entryFileNames: '[name].cjs',
               },
             },
           },
@@ -44,7 +44,7 @@ export default defineConfig({
               external: ['electron'],
               output: {
                 format: 'cjs',
-                entryFileNames: '[name].js',
+                entryFileNames: '[name].cjs',
               },
             },
           },

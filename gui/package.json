@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Nexus Desktop - GUI Dashboard for Nexus Graph Database",
   "type": "module",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/main.cjs",
   "author": "HiveLLM",
   "license": "Apache-2.0",
   "private": true,

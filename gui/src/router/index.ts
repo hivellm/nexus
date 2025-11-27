@@ -42,6 +42,11 @@ const routes: RouteRecordRaw[] = [
     name: 'Config',
     component: () => import('@/views/ConfigView.vue'),
   },
+  {
+    path: '/vector-search',
+    name: 'VectorSearch',
+    component: () => import('@/views/VectorSearchView.vue'),
+  },
 ];
 
 const router = createRouter({

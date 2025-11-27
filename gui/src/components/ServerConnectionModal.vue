@@ -114,7 +114,7 @@ onMounted(() => {
     const server = serversStore.getServer(props.serverId);
     if (server) {
       form.name = server.name;
-      form.host = server.host || 'localhost';
+      form.host = server.host || server.url?.replace(/^https?:\/\//, '').split(':')[0] || 'localhost';
       form.port = server.port || 15474;
       form.ssl = server.ssl || false;
     }
