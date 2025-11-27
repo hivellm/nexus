@@ -2735,10 +2735,20 @@ mod tests {
         RelationshipQuantifier, ReturnClause, ReturnItem, WhereClause,
     };
     use crate::index::{KnnIndex, LabelIndex};
+    use crate::testing::TestContext;
+
+    /// Helper to create a test catalog with guaranteed directory existence
+    fn create_test_catalog() -> (Catalog, TestContext) {
+        let ctx = TestContext::new();
+        let catalog =
+            Catalog::with_isolated_path(ctx.path().join("catalog.mdb"), 100 * 1024 * 1024)
+                .expect("Failed to create catalog");
+        (catalog, ctx)
+    }
 
     #[test]
     fn test_plan_simple_query() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -2790,7 +2800,7 @@ mod tests {
 
     #[test]
     fn test_estimate_cost() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -2817,7 +2827,7 @@ mod tests {
 
     #[test]
     fn test_plan_query_with_where_clause() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -2887,7 +2897,7 @@ mod tests {
 
     #[test]
     fn test_plan_query_with_limit() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -2934,7 +2944,7 @@ mod tests {
 
     #[test]
     fn test_plan_query_with_relationship() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -2991,7 +3001,7 @@ mod tests {
 
     #[test]
     fn test_plan_query_with_variable_length_path() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3059,7 +3069,7 @@ mod tests {
 
     #[test]
     fn test_plan_query_with_range_quantifier() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3122,7 +3132,7 @@ mod tests {
 
     #[test]
     fn test_plan_query_empty_patterns() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3138,7 +3148,7 @@ mod tests {
 
     #[test]
     fn test_expression_to_string_variable() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3150,7 +3160,7 @@ mod tests {
 
     #[test]
     fn test_expression_to_string_property_access() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3165,7 +3175,7 @@ mod tests {
 
     #[test]
     fn test_expression_to_string_literals() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3198,7 +3208,7 @@ mod tests {
 
     #[test]
     fn test_expression_to_string_binary_operators() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3222,7 +3232,7 @@ mod tests {
 
     #[test]
     fn test_expression_to_string_parameter() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3234,7 +3244,7 @@ mod tests {
 
     #[test]
     fn test_estimate_cost_all_operators() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3313,7 +3323,7 @@ mod tests {
 
     #[test]
     fn test_optimize_operator_order() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
@@ -3337,7 +3347,7 @@ mod tests {
 
     #[test]
     fn test_plan_query_with_return_alias() {
-        let catalog = Catalog::new(tempfile::tempdir().unwrap()).unwrap();
+        let (catalog, _ctx) = create_test_catalog();
         let label_index = LabelIndex::new();
         let knn_index = KnnIndex::new(128).unwrap();
         let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);

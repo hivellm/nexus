@@ -639,16 +639,7 @@ impl Default for GraphValidator {
 mod tests {
     use super::*;
     use crate::graph::simple::PropertyValue;
-    use crate::testing::TestContext;
-
-    fn create_test_graph() -> (Graph, TestContext) {
-        let ctx = TestContext::new();
-        let store = crate::storage::RecordStore::new(ctx.path()).unwrap();
-        let catalog =
-            std::sync::Arc::new(crate::catalog::Catalog::new(ctx.path().join("catalog")).unwrap());
-        let graph = Graph::new(store, catalog);
-        (graph, ctx)
-    }
+    use crate::testing::{TestContext, create_test_graph};
 
     #[test]
     fn test_validation_result_creation() {
