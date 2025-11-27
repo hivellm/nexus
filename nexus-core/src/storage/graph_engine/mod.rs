@@ -15,6 +15,7 @@ pub mod compression;
 pub mod engine;
 pub mod format;
 pub mod io;
+pub mod migration;
 
 pub use compression::RelationshipCompressor;
 pub use engine::GraphStorageEngine;
@@ -23,3 +24,6 @@ pub use format::{
     SkipListNode, SkipListStats, StorageLayout,
 };
 pub use io::DirectFile;
+pub use migration::{
+    MigrationOptions, MigrationStats, export_to_record_store, migrate_to_graph_engine,
+};

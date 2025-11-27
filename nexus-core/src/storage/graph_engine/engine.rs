@@ -641,6 +641,11 @@ impl GraphStorageEngine {
         }
     }
 
+    /// Get all relationship type IDs that have been created
+    pub fn get_relationship_type_ids(&self) -> Vec<TypeId> {
+        self.layout.relationships.keys().cloned().collect()
+    }
+
     /// Fast check if an edge might exist between two nodes for a given type
     ///
     /// Uses a Bloom filter for O(1) probabilistic lookup.

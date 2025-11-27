@@ -25,5 +25,5 @@ jobs:
         run: |
           codespell \
             --skip="*.lock,*.json,*.map,*.yaml,*.yml,target,node_modules,.git,dist" \
-            --ignore-words-list="crate,ser,deser"
+            --ignore-words-list="crate,ser,deser,FPR"
 
