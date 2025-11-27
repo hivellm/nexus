@@ -757,7 +757,11 @@ mod tests {
             .store_properties(1, EntityType::Node, properties.clone())
             .unwrap();
         // First property should be at offset 1 (not 0, because prop_ptr=0 means "no properties")
-        assert!(ptr == 1, "First property should be at offset 1, got {}", ptr);
+        assert!(
+            ptr == 1,
+            "First property should be at offset 1, got {}",
+            ptr
+        );
 
         let loaded = store.load_properties(1, EntityType::Node).unwrap().unwrap();
         assert_eq!(loaded, properties);
