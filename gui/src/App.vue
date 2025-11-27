@@ -1,28 +1,5 @@
 <template>
   <div id="app" class="flex flex-col h-screen bg-bg-primary text-text-primary">
-    <!-- Top Bar -->
-    <div class="h-10 bg-bg-secondary border-b border-border flex items-center justify-between px-4 flex-shrink-0">
-      <div class="flex items-center gap-6">
-        <div class="text-sm font-medium text-text-primary">Nexus</div>
-        <div class="h-4 w-px bg-border"></div>
-        <div class="flex items-center gap-2 text-xs text-text-secondary">
-          <span :class="['w-1.5 h-1.5 rounded-full', isConnected ? 'bg-success' : 'bg-text-muted']"></span>
-          <span>{{ isConnected ? 'Connected' : 'Disconnected' }}</span>
-        </div>
-      </div>
-      <div class="flex items-center gap-1">
-        <router-link
-          v-for="item in menuItems"
-          :key="item.path"
-          :to="item.path"
-          class="px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
-          :class="{ 'text-text-primary border-b-2 border-accent': isActive(item.path) }"
-        >
-          {{ item.label }}
-        </router-link>
-      </div>
-    </div>
-
     <!-- Main Content -->
     <div class="flex flex-1 min-h-0">
       <!-- Sidebar -->
