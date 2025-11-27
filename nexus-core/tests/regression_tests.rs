@@ -62,10 +62,13 @@ fn regression_union_null_values() {
 
 /// Regression test: MATCH with multiple labels returns wrong count
 /// Fixed in commit fdd3e76
+///
+/// NOTE: Uses with_isolated_catalog to prevent test contamination from
+/// shared test catalog state (labels like Person, Employee may exist from other tests)
 #[test]
 fn regression_multiple_labels_intersection() {
     let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(dir.path()).unwrap();
 
     // Create nodes with different label combinations
     engine
