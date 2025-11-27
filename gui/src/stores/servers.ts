@@ -83,9 +83,10 @@ export const useServersStore = defineStore('servers', () => {
     return servers.value.get(activeServerId.value) || null;
   });
 
-  const activeClient = computed(() => {
+  const activeClient = computed((): NexusApiClient | null => {
     if (!activeServerId.value) return null;
-    return clients.value.get(activeServerId.value) ?? null;
+    const client = clients.value.get(activeServerId.value);
+    return client ? (client as NexusApiClient) : null;
   });
 
   function createClient(config: Server): NexusApiClient {
@@ -213,7 +214,7 @@ export const useServersStore = defineStore('servers', () => {
 
   function getClient(id: string): NexusApiClient | null {
     const client = clients.value.get(id);
-    return client ? client : null;
+    return client ? (client as NexusApiClient) : null;
   }
 
   async function checkServerHealth(id: string): Promise<void> {

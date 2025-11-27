@@ -1,11 +1,11 @@
 <template>
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="$emit('close')">
-    <div class="bg-bg-elevated rounded-lg p-6 w-full max-w-md">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-semibold">
-          {{ editingServer ? 'Edit Connection' : 'New Connection' }}
+  <div v-if="isOpen" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="$emit('close')">
+    <div class="bg-bg-elevated rounded-xl p-6 w-full max-w-md border border-border shadow-xl">
+      <div class="flex items-center justify-between mb-6">
+        <h3 class="text-lg font-semibold text-text-primary">
+          {{ serverId ? 'Edit Connection' : 'New Connection' }}
         </h3>
-        <button @click="$emit('close')" class="text-text-muted hover:text-text-primary">
+        <button @click="$emit('close')" class="p-2 text-text-muted hover:text-text-primary hover:bg-bg-hover rounded transition-colors">
           <i class="fas fa-times"></i>
         </button>
       </div>
@@ -87,7 +87,8 @@ import { useServersStore } from '@/stores/servers';
 import type { Server } from '@/types';
 
 const props = defineProps<{
-  editingServer?: Server | null;
+  isOpen: boolean;
+  serverId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -109,11 +110,14 @@ const isSaving = ref(false);
 const testResult = ref<{ success: boolean; message: string } | null>(null);
 
 onMounted(() => {
-  if (props.editingServer) {
-    form.name = props.editingServer.name;
-    form.host = props.editingServer.host || 'localhost';
-    form.port = props.editingServer.port || 7687;
-    form.ssl = props.editingServer.ssl || false;
+  if (props.serverId) {
+    const server = serversStore.getServer(props.serverId);
+    if (server) {
+      form.name = server.name;
+      form.host = server.host || 'localhost';
+      form.port = server.port || 15474;
+      form.ssl = server.ssl || false;
+    }
   }
 });
 
@@ -159,8 +163,8 @@ async function save(): Promise<void> {
   isSaving.value = true;
 
   try {
-    if (props.editingServer) {
-      serversStore.updateServer(props.editingServer.id, {
+    if (props.serverId) {
+      serversStore.updateServer(props.serverId, {
         name: form.name,
         host: form.host,
         port: form.port,

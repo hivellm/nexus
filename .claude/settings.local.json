@@ -19,7 +19,12 @@
       "Bash(RUST_LOG=nexus_core::executor=debug cargo test:*)",
       "WebSearch",
       "Bash(find:*)",
-      "Bash(npm install)"
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite build)",
+      "Bash(npm install:*)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []
