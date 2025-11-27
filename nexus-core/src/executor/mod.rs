@@ -5504,18 +5504,33 @@ impl Executor {
         // Without this barrier, the second query might read stale node.first_rel_ptr values
         std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
-        // CRITICAL FIX: Clear result_set.rows and context.variables after CREATE to avoid contamination
-        // After CREATE, the result_set.rows may contain rows with relationship objects instead of nodes
-        // Clearing ensures that subsequent MATCH queries don't reuse contaminated rows
-        context.result_set.rows.clear();
-        context.result_set.columns.clear();
-        // Don't clear all variables - only clear variables that were created/modified by CREATE
-        // This preserves variables from MATCH that might be needed by subsequent queries
-        // But actually, after CREATE, we don't need any variables from the previous MATCH
-        // So clearing all variables should be safe
-        context.variables.clear();
+        // CRITICAL FIX: Populate result_set with created entities for CREATE without RETURN
+        // Instead of clearing everything, we populate result_set with the variables we have
+        // This ensures that CREATE without RETURN returns the created entities
+        // If RETURN clause follows, Project operator will overwrite this
+        let mut columns: Vec<String> = context.variables.keys().cloned().collect();
+        columns.sort(); // Ensure consistent column order
+
+        if !columns.is_empty() {
+            let mut row_values = Vec::new();
+            for col in &columns {
+                if let Some(value) = context.variables.get(col) {
+                    row_values.push(value.clone());
+                } else {
+                    row_values.push(JsonValue::Null);
+                }
+            }
+            context.result_set.columns = columns;
+            context.result_set.rows = vec![Row { values: row_values }];
+        } else {
+            // No variables created - clear result_set
+            context.result_set.rows.clear();
+            context.result_set.columns.clear();
+        }
+
         tracing::trace!(
-            "After cleanup: result_set.rows.len()={}, variables.len()={}",
+            "After CREATE: result_set.columns={:?}, result_set.rows.len()={}, variables.len()={}",
+            context.result_set.columns,
             context.result_set.rows.len(),
             context.variables.len()
         );
