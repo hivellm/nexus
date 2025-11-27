@@ -2329,8 +2329,16 @@ impl Executor {
                                 if let Some(node_id) = id.as_u64() {
                                     // Read node and check if it has the label
                                     if let Ok(node_record) = self.store().read_node(node_id) {
-                                        let has_label =
-                                            (node_record.label_bits & (1u64 << label_id)) != 0;
+                                        // Check if node has the label
+                                        // For label_id < 64, use bitmap check (fast)
+                                        // For label_id >= 64, labels are not stored in bitmap, so return false
+                                        let has_label = if label_id < 64 {
+                                            (node_record.label_bits & (1u64 << label_id)) != 0
+                                        } else {
+                                            // Labels with ID >= 64 are not supported in the bitmap
+                                            // This is a limitation of the current implementation
+                                            false
+                                        };
                                         if has_label {
                                             filtered_rows.push(row);
                                         }
