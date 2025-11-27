@@ -9,25 +9,25 @@ export const ipcBridge = {
   // Window controls
   minimizeWindow: (): void => {
     if (isElectron()) {
-      window.electronAPI.minimizeWindow();
+      window.electronAPI!.windowControl('minimize');
     }
   },
 
   toggleMaximize: (): void => {
     if (isElectron()) {
-      window.electronAPI.maximizeWindow();
+      window.electronAPI!.windowControl('maximize');
     }
   },
 
   closeWindow: (): void => {
     if (isElectron()) {
-      window.electronAPI.closeWindow();
+      window.electronAPI!.windowControl('close');
     }
   },
 
   isMaximized: async (): Promise<boolean> => {
     if (isElectron()) {
-      return window.electronAPI.isMaximized();
+      return window.electronAPI!.isMaximized();
     }
     return false;
   },
@@ -35,14 +35,14 @@ export const ipcBridge = {
   // App info
   getVersion: async (): Promise<string> => {
     if (isElectron()) {
-      return window.electronAPI.getVersion();
+      return window.electronAPI!.getAppVersion();
     }
     return '0.1.0-dev';
   },
 
-  getPlatform: async (): Promise<string> => {
+  getPlatform: (): string => {
     if (isElectron()) {
-      return window.electronAPI.getPlatform();
+      return window.electronAPI!.platform;
     }
     return 'web';
   },
@@ -54,7 +54,7 @@ export const ipcBridge = {
     defaultPath?: string;
   }): Promise<string | null> => {
     if (isElectron()) {
-      return window.electronAPI.openFile(options);
+      return window.electronAPI!.showOpenDialog(options);
     }
     // Fallback for web: use file input
     return new Promise((resolve) => {
@@ -79,7 +79,7 @@ export const ipcBridge = {
     defaultPath?: string;
   }): Promise<string | null> => {
     if (isElectron()) {
-      return window.electronAPI.saveFile(options);
+      return window.electronAPI!.showSaveDialog(options);
     }
     // Web fallback: prompt for filename
     const filename = prompt('Enter filename:', options?.defaultPath || 'export.json');
@@ -88,14 +88,14 @@ export const ipcBridge = {
 
   readFile: async (filePath: string): Promise<string> => {
     if (isElectron()) {
-      return window.electronAPI.readFile(filePath);
+      return window.electronAPI!.readFile(filePath);
     }
     throw new Error('File reading not supported in browser mode');
   },
 
   writeFile: async (filePath: string, content: string): Promise<void> => {
     if (isElectron()) {
-      return window.electronAPI.writeFile(filePath, content);
+      return window.electronAPI!.writeFile(filePath, content);
     }
     // Web fallback: trigger download
     const blob = new Blob([content], { type: 'text/plain' });
@@ -109,9 +109,7 @@ export const ipcBridge = {
 
   // Notifications
   showNotification: (options: { title: string; body: string }): void => {
-    if (isElectron()) {
-      window.electronAPI.showNotification(options);
-    } else if ('Notification' in window && Notification.permission === 'granted') {
+    if ('Notification' in window && Notification.permission === 'granted') {
       new Notification(options.title, { body: options.body });
     }
   },
@@ -119,7 +117,7 @@ export const ipcBridge = {
   // External links
   openExternal: async (url: string): Promise<void> => {
     if (isElectron()) {
-      return window.electronAPI.openExternal(url);
+      return window.electronAPI!.openExternal(url);
     }
     window.open(url, '_blank');
   },

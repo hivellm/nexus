@@ -211,8 +211,9 @@ export const useServersStore = defineStore('servers', () => {
     return servers.value.get(id);
   }
 
-  function getClient(id: string): NexusApiClient | undefined {
-    return clients.value.get(id);
+  function getClient(id: string): NexusApiClient | null {
+    const client = clients.value.get(id);
+    return client ? client : null;
   }
 
   async function checkServerHealth(id: string): Promise<void> {
