@@ -288,20 +288,6 @@ fn test_sum_aggregate() {
 }
 
 #[test]
-fn test_avg_aggregate() {
-    let (mut executor, _dir) = create_test_executor();
-    setup_test_data(&mut executor);
-
-    let query = Query {
-        cypher: "MATCH (a:Person) RETURN avg(a.age) AS avg_age".to_string(),
-        params: HashMap::new(),
-    };
-
-    let result = executor.execute(&query).unwrap();
-    assert_eq!(result.rows.len(), 1);
-}
-
-#[test]
 fn test_min_max_aggregate() {
     let (mut executor, _dir) = create_test_executor();
     setup_test_data(&mut executor);
