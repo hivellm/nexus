@@ -1,5 +1,9 @@
 # Proposal: n8n Integration SDK for Nexus
 
+## Why
+
+n8n is a widely-used workflow automation platform with a large community. Creating an official n8n node for Nexus will enable thousands of users to integrate graph database operations into their automation workflows, significantly expanding Nexus adoption and use cases. This integration will make graph operations accessible to non-developers through visual workflow building, opening new markets and use cases for Nexus.
+
 ## Purpose
 
 Create an official n8n node/connector for Nexus graph database to enable workflow automation with graph data operations. This will allow n8n users to easily integrate Nexus into their automation workflows, enabling powerful graph-based data processing, analysis, and integration patterns.
