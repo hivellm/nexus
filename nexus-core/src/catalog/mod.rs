@@ -232,16 +232,13 @@ impl Catalog {
             static TEST_CATALOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
             let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
-                let dir = std::env::temp_dir().join("nexus_test_catalogs_shared");
-                // CRITICAL: Clean stale data from previous test runs
-                // This prevents label/type ID mismatches when RecordStore is fresh but Catalog has old IDs
+                // Use process ID to ensure each test process gets a fresh catalog
+                // This prevents label/type ID mismatches when RecordStore is fresh but Catalog has stale IDs
+                let pid = std::process::id();
+                let dir = std::env::temp_dir().join(format!("nexus_test_catalog_{}", pid));
+                // Clean any stale data that might exist at this path
                 if dir.exists() {
-                    if let Err(e) = std::fs::remove_dir_all(&dir) {
-                        eprintln!(
-                            "Warning: Failed to clean stale test catalog dir {:?}: {}",
-                            dir, e
-                        );
-                    }
+                    let _ = std::fs::remove_dir_all(&dir);
                 }
                 dir
             });
