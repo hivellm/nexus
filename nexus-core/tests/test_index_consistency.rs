@@ -4,7 +4,11 @@
 //! in batch during commit (Phase 1 optimization).
 
 use nexus_core::Engine;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tempfile::TempDir;
+
+/// Counter for unique test labels to prevent cross-test interference
+static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 /// Helper function to extract count from result
 fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
@@ -19,24 +23,42 @@ fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
 /// Test that label indexes remain consistent after batch updates
 #[test]
 fn test_label_index_consistency_after_batch_updates() {
+    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
+
+    // Use unique labels to prevent cross-test interference
+    let person_label = format!("PersonTest{}", test_id);
+    let company_label = format!("CompanyTest{}", test_id);
+    let employee_label = format!("EmployeeTest{}", test_id);
 
     // Begin transaction
     engine.execute_cypher("BEGIN TRANSACTION").unwrap();
 
-    // Create nodes with labels
+    // Create nodes with unique labels
     engine
-        .execute_cypher("CREATE (n:Person {name: 'Alice', age: 30})")
+        .execute_cypher(&format!(
+            "CREATE (n:{} {{name: 'Alice', age: 30}})",
+            person_label
+        ))
         .unwrap();
     engine
-        .execute_cypher("CREATE (n:Person {name: 'Bob', age: 25})")
+        .execute_cypher(&format!(
+            "CREATE (n:{} {{name: 'Bob', age: 25}})",
+            person_label
+        ))
         .unwrap();
     engine
-        .execute_cypher("CREATE (n:Company {name: 'Acme Corp'})")
+        .execute_cypher(&format!(
+            "CREATE (n:{} {{name: 'Acme Corp'}})",
+            company_label
+        ))
         .unwrap();
     engine
-        .execute_cypher("CREATE (n:Person:Employee {name: 'Charlie', age: 35})")
+        .execute_cypher(&format!(
+            "CREATE (n:{}:{} {{name: 'Charlie', age: 35}})",
+            person_label, employee_label
+        ))
         .unwrap();
 
     // Commit transaction (this applies pending index updates)
@@ -44,19 +66,28 @@ fn test_label_index_consistency_after_batch_updates() {
 
     // Query nodes by label to verify index consistency
     let result = engine
-        .execute_cypher("MATCH (n:Person) RETURN count(n) as count")
+        .execute_cypher(&format!(
+            "MATCH (n:{}) RETURN count(n) as count",
+            person_label
+        ))
         .unwrap();
     let count = extract_count(result);
     assert_eq!(count, 3, "Should have 3 Person nodes (Alice, Bob, Charlie)");
 
     let result = engine
-        .execute_cypher("MATCH (n:Company) RETURN count(n) as count")
+        .execute_cypher(&format!(
+            "MATCH (n:{}) RETURN count(n) as count",
+            company_label
+        ))
         .unwrap();
     let count = extract_count(result);
     assert_eq!(count, 1, "Should have 1 Company node");
 
     let result = engine
-        .execute_cypher("MATCH (n:Employee) RETURN count(n) as count")
+        .execute_cypher(&format!(
+            "MATCH (n:{}) RETURN count(n) as count",
+            employee_label
+        ))
         .unwrap();
     let count = extract_count(result);
     assert_eq!(count, 1, "Should have 1 Employee node");
