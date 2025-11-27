@@ -120,7 +120,6 @@ fn test_extract_function_null() {
 // ============================================================================
 
 #[test]
-#[test]
 #[ignore] // TODO: Fix - function may not handle NULL correctly yet
 fn test_all_function_null() {
     let dir = TempDir::new().unwrap();
@@ -131,7 +130,6 @@ fn test_all_function_null() {
     assert!(!get_single_value(&result).as_bool().unwrap());
 }
 
-#[test]
 #[test]
 #[ignore] // TODO: Fix - function may not handle NULL correctly yet
 fn test_any_function_null() {
@@ -188,7 +186,6 @@ fn test_todate_function() {
     assert_eq!(get_single_value(&result).as_str().unwrap(), "2025-11-12");
 }
 
-#[test]
 #[test]
 #[ignore] // TODO: Fix - toDate may not handle NULL correctly yet
 fn test_todate_with_null() {

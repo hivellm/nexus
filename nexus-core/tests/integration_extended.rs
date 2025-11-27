@@ -451,7 +451,6 @@ fn integration_engine_distinct() {
 }
 
 #[test]
-#[test]
 #[ignore] // TODO: Fix - may have race condition with stats in parallel tests
 fn integration_engine_stats() {
     let dir = TempDir::new().unwrap();
@@ -1555,7 +1554,6 @@ fn integration_test_83() {
     }
 }
 
-#[test]
 #[test]
 #[ignore] // TODO: Fix - temp dir race condition in parallel tests
 fn integration_test_84() {
