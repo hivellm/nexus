@@ -18,9 +18,9 @@ $global:FailedTests = 0
 $global:SkippedTests = 0
 $global:TestResults = @()
 
-Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = ╗" -ForegroundColor Cyan
+Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
 Write-Host "|  Neo4j vs Nexus Compatibility Test Suite - 200+ Tests      |" -ForegroundColor Cyan
-Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = ╝" -ForegroundColor Cyan
+Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Neo4j:  $Neo4jUri" -ForegroundColor Yellow
 Write-Host "Nexus:  $NexusUri" -ForegroundColor Yellow
@@ -116,7 +116,7 @@ function Compare-QueryResults {
         $testEntry.Message = "Neo4j error: $($Neo4jResult.error)"
         $global:SkippedTests++
         $global:TestResults += $testEntry
-        Write-Host "⏭  SKIP: $TestName" -ForegroundColor Yellow
+        Write-Host "SKIP: $TestName" -ForegroundColor Yellow
         if ($Verbose) { Write-Host "   Reason: $($testEntry.Message)" -ForegroundColor Gray }
         return
     }
@@ -303,7 +303,7 @@ function Run-Test {
 }
 
 # Setup: Clean databases
-Write-Host "`n🔧 Setting up test environment..." -ForegroundColor Cyan
+Write-Host "`nSetting up test environment..." -ForegroundColor Cyan
 Invoke-Neo4jQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
 Invoke-NexusQuery -Cypher "MATCH (n) DETACH DELETE n" | Out-Null
 Write-Host "OK Databases cleaned`n" -ForegroundColor Green
@@ -649,12 +649,14 @@ if ($global:FailedTests -gt 0) {
     Write-Host '|                      FAILED TESTS                           |' -ForegroundColor Red
     Write-Host '+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +' -ForegroundColor Red
     Write-Host ""
-    
     $failedResults = $global:TestResults | Where-Object { $_.Status -eq "FAILED" }
     foreach ($test in $failedResults) {
-        Write-Host "ERROR $($test.Name)" -ForegroundColor Red
-        Write-Host "   Query: $($test.Query)" -ForegroundColor Gray
-        Write-Host ('   ' + $test.Message) -ForegroundColor Yellow
+        $testName = $test.Name
+        $testQuery = $test.Query
+        $testMessage = $test.Message
+        Write-Host "ERROR $testName" -ForegroundColor Red
+        Write-Host "   Query: $testQuery" -ForegroundColor Gray
+        Write-Host "   $testMessage" -ForegroundColor Yellow
         Write-Host ""
     }
 }

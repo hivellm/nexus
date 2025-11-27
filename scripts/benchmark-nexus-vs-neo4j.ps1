@@ -169,51 +169,174 @@ function Run-Benchmark {
     }
 }
 
-# Setup test data
+# Helper function to execute Neo4j batch (multiple statements in one transaction)
+function Execute-Neo4jBatch {
+    param(
+        [array]$Statements
+    )
+
+    $headers = @{
+        "Authorization" = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${Neo4jUser}:${Neo4jPassword}"))
+        "Content-Type" = "application/json"
+    }
+
+    $stmts = $Statements | ForEach-Object { @{ statement = $_ } }
+    $body = @{ statements = $stmts } | ConvertTo-Json -Depth 10
+
+    try {
+        $response = Invoke-RestMethod -Uri "$Neo4jUrl/db/neo4j/tx/commit" `
+            -Method POST `
+            -Headers $headers `
+            -Body $body `
+            -TimeoutSec 120 `
+            -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Host "  [ERROR] Neo4j batch failed: $_" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Setup test data - OPTIMIZED with batch operations
 function Setup-TestData {
     Write-Host "`n[Setup] Creating test data..." -ForegroundColor Cyan
-    
+
     # Clear existing data
+    Write-Host "  Clearing existing data..." -ForegroundColor Yellow
     Execute-NexusQuery -Query "MATCH (n) DETACH DELETE n" -Iterations 1 | Out-Null
     Execute-Neo4jQuery -Query "MATCH (n) DETACH DELETE n" -Iterations 1 | Out-Null
-    
-    # Create nodes
-    Write-Host "  Creating 1000 Person nodes..." -ForegroundColor Yellow
-    for ($i = 0; $i -lt 1000; $i++) {
-        $name = "Person$i"
-        $age = Get-Random -Minimum 18 -Maximum 80
-        $cities = @("New York", "London", "Tokyo", "Paris", "Berlin")
-        $cityIndex = Get-Random -Maximum 5
-        $city = $cities[$cityIndex]
-        
-        Execute-NexusQuery -Query "CREATE (n:Person {name: '$name', age: $age, city: '$city'})" -Iterations 1 | Out-Null
-        Execute-Neo4jQuery -Query "CREATE (n:Person {name: '$name', age: $age, city: '$city'})" -Iterations 1 | Out-Null
+
+    # Generate Person data (reduced for faster setup - 200 persons)
+    $cities = @("New York", "London", "Tokyo", "Paris", "Berlin")
+    $personData = @()
+    for ($i = 0; $i -lt 200; $i++) {
+        $personData += @{
+            name = "Person$i"
+            age = Get-Random -Minimum 18 -Maximum 80
+            city = $cities[(Get-Random -Maximum 5)]
+        }
     }
-    
-    # Create Company nodes
-    Write-Host "  Creating 100 Company nodes..." -ForegroundColor Yellow
+
+    # Generate Company data (reduced - 20 companies)
+    $industries = @("Tech", "Finance", "Healthcare", "Education", "Retail")
+    $companyData = @()
+    for ($i = 0; $i -lt 20; $i++) {
+        $companyData += @{
+            name = "Company$i"
+            industry = $industries[(Get-Random -Maximum 5)]
+        }
+    }
+
+    # Generate Relationship data (reduced - 100 relationships)
+    $relData = @()
     for ($i = 0; $i -lt 100; $i++) {
-        $name = "Company$i"
-        $industries = @("Tech", "Finance", "Healthcare", "Education", "Retail")
-        $industryIndex = Get-Random -Maximum 5
-        $industry = $industries[$industryIndex]
-        
-        Execute-NexusQuery -Query "CREATE (n:Company {name: '$name', industry: '$industry'})" -Iterations 1 | Out-Null
-        Execute-Neo4jQuery -Query "CREATE (n:Company {name: '$name', industry: '$industry'})" -Iterations 1 | Out-Null
+        $relData += @{
+            personId = Get-Random -Minimum 0 -Maximum 200
+            companyId = Get-Random -Minimum 0 -Maximum 20
+            since = Get-Random -Minimum 2010 -Maximum 2024
+        }
     }
-    
-    # Create relationships
-    Write-Host "  Creating 500 WORKS_AT relationships..." -ForegroundColor Yellow
-    for ($i = 0; $i -lt 500; $i++) {
-        $personId = Get-Random -Minimum 0 -Maximum 1000
-        $companyId = Get-Random -Minimum 0 -Maximum 100
-        $since = Get-Random -Minimum 2010 -Maximum 2024
-        
-        Execute-NexusQuery -Query "MATCH (p:Person), (c:Company) WHERE p.name = 'Person$personId' AND c.name = 'Company$companyId' CREATE (p)-[:WORKS_AT {since: $since}]->(c)" -Iterations 1 | Out-Null
-        Execute-Neo4jQuery -Query "MATCH (p:Person), (c:Company) WHERE p.name = 'Person$personId' AND c.name = 'Company$companyId' CREATE (p)-[:WORKS_AT {since: $since}]->(c)" -Iterations 1 | Out-Null
+
+    # ========== NEXUS: Use multiple CREATE in single query ==========
+    Write-Host "  Creating 200 Person nodes in Nexus (batch)..." -ForegroundColor Yellow
+    $nexusPersonStart = Get-Date
+
+    # Nexus: Create all 200 nodes in 2 batches of 100
+    for ($batch = 0; $batch -lt 200; $batch += 100) {
+        $batchEnd = [Math]::Min($batch + 100, 200)
+        $creates = @()
+        for ($i = $batch; $i -lt $batchEnd; $i++) {
+            $p = $personData[$i]
+            $creates += "CREATE (:Person {name: '$($p.name)', age: $($p.age), city: '$($p.city)'})"
+        }
+        $batchQuery = $creates -join " "
+        Execute-NexusQuery -Query $batchQuery -Iterations 1 | Out-Null
     }
-    
-    Write-Host "  Test data created successfully!" -ForegroundColor Green
+    $nexusPersonTime = ((Get-Date) - $nexusPersonStart).TotalSeconds
+    Write-Host "    Nexus Person nodes: $([math]::Round($nexusPersonTime, 2))s" -ForegroundColor Gray
+
+    Write-Host "  Creating 20 Company nodes in Nexus (batch)..." -ForegroundColor Yellow
+    $nexusCompanyStart = Get-Date
+
+    # All 20 companies in one query
+    $creates = @()
+    foreach ($c in $companyData) {
+        $creates += "CREATE (:Company {name: '$($c.name)', industry: '$($c.industry)'})"
+    }
+    $batchQuery = $creates -join " "
+    Execute-NexusQuery -Query $batchQuery -Iterations 1 | Out-Null
+
+    $nexusCompanyTime = ((Get-Date) - $nexusCompanyStart).TotalSeconds
+    Write-Host "    Nexus Company nodes: $([math]::Round($nexusCompanyTime, 2))s" -ForegroundColor Gray
+
+    Write-Host "  Creating 100 WORKS_AT relationships in Nexus (batch)..." -ForegroundColor Yellow
+    $nexusRelStart = Get-Date
+
+    # Nexus: Use UNWIND to create all relationships in batches
+    for ($batch = 0; $batch -lt 100; $batch += 50) {
+        $batchEnd = [Math]::Min($batch + 50, 100)
+        $relItems = @()
+        for ($i = $batch; $i -lt $batchEnd; $i++) {
+            $r = $relData[$i]
+            $relItems += "{pname: 'Person$($r.personId)', cname: 'Company$($r.companyId)', since: $($r.since)}"
+        }
+        $relList = $relItems -join ", "
+        $unwindQuery = "UNWIND [$relList] AS r MATCH (p:Person {name: r.pname}), (c:Company {name: r.cname}) CREATE (p)-[:WORKS_AT {since: r.since}]->(c)"
+        Execute-NexusQuery -Query $unwindQuery -Iterations 1 | Out-Null
+    }
+    $nexusRelTime = ((Get-Date) - $nexusRelStart).TotalSeconds
+    Write-Host "    Nexus relationships: $([math]::Round($nexusRelTime, 2))s" -ForegroundColor Gray
+
+    # ========== NEO4J: Use batch transaction API ==========
+    Write-Host "  Creating 200 Person nodes in Neo4j (batch)..." -ForegroundColor Yellow
+    $neo4jPersonStart = Get-Date
+
+    # Neo4j: All 200 persons in 2 batches of 100
+    for ($batch = 0; $batch -lt 200; $batch += 100) {
+        $batchEnd = [Math]::Min($batch + 100, 200)
+        $statements = @()
+        for ($i = $batch; $i -lt $batchEnd; $i++) {
+            $p = $personData[$i]
+            $statements += "CREATE (n:Person {name: '$($p.name)', age: $($p.age), city: '$($p.city)'})"
+        }
+        Execute-Neo4jBatch -Statements $statements | Out-Null
+    }
+    $neo4jPersonTime = ((Get-Date) - $neo4jPersonStart).TotalSeconds
+    Write-Host "    Neo4j Person nodes: $([math]::Round($neo4jPersonTime, 2))s" -ForegroundColor Gray
+
+    Write-Host "  Creating 20 Company nodes in Neo4j (batch)..." -ForegroundColor Yellow
+    $neo4jCompanyStart = Get-Date
+
+    # Neo4j: All 20 companies in one batch
+    $statements = @()
+    foreach ($c in $companyData) {
+        $statements += "CREATE (n:Company {name: '$($c.name)', industry: '$($c.industry)'})"
+    }
+    Execute-Neo4jBatch -Statements $statements | Out-Null
+
+    $neo4jCompanyTime = ((Get-Date) - $neo4jCompanyStart).TotalSeconds
+    Write-Host "    Neo4j Company nodes: $([math]::Round($neo4jCompanyTime, 2))s" -ForegroundColor Gray
+
+    Write-Host "  Creating 100 WORKS_AT relationships in Neo4j (batch)..." -ForegroundColor Yellow
+    $neo4jRelStart = Get-Date
+
+    # Neo4j: All 100 relationships in 2 batches of 50
+    for ($batch = 0; $batch -lt 100; $batch += 50) {
+        $batchEnd = [Math]::Min($batch + 50, 100)
+        $statements = @()
+        for ($i = $batch; $i -lt $batchEnd; $i++) {
+            $r = $relData[$i]
+            $statements += "MATCH (p:Person {name: 'Person$($r.personId)'}), (c:Company {name: 'Company$($r.companyId)'}) CREATE (p)-[:WORKS_AT {since: $($r.since)}]->(c)"
+        }
+        Execute-Neo4jBatch -Statements $statements | Out-Null
+    }
+    $neo4jRelTime = ((Get-Date) - $neo4jRelStart).TotalSeconds
+    Write-Host "    Neo4j relationships: $([math]::Round($neo4jRelTime, 2))s" -ForegroundColor Gray
+
+    Write-Host "`n  Test data created successfully!" -ForegroundColor Green
+    Write-Host "  Total Nexus time: $([math]::Round($nexusPersonTime + $nexusCompanyTime + $nexusRelTime, 2))s" -ForegroundColor Cyan
+    Write-Host "  Total Neo4j time: $([math]::Round($neo4jPersonTime + $neo4jCompanyTime + $neo4jRelTime, 2))s" -ForegroundColor Cyan
 }
 
 # ============================================================================

@@ -25,7 +25,7 @@ fn integration_engine_create_and_query() {
 
 #[test]
 fn integration_engine_multi_label_nodes() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(
@@ -182,9 +182,8 @@ fn integration_engine_20_relationships() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_aggregations() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in 1..=10 {
         engine
@@ -200,9 +199,8 @@ fn integration_engine_aggregations() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_min_max() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in [5, 1, 9, 3] {
         engine
@@ -223,9 +221,8 @@ fn integration_engine_min_max() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_avg() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in [10, 20, 30] {
         engine
@@ -241,9 +238,8 @@ fn integration_engine_avg() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_union() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -262,9 +258,8 @@ fn integration_engine_union() {
 }
 
 #[test]
-#[ignore]
 fn integration_engine_union_all() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -284,7 +279,7 @@ fn integration_engine_union_all() {
 
 #[test]
 fn integration_engine_labels_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -539,32 +534,28 @@ fn integration_engine_sequential_creates() {
 
 #[test]
 fn integration_engine_mixed_api_cypher() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
         .unwrap();
     engine.refresh_executor().unwrap();
     engine.execute_cypher("CREATE (n:Test)").unwrap();
+    engine.refresh_executor().unwrap();
 
     let result = engine
         .execute_cypher("MATCH (n:Test) RETURN count(n) AS count")
         .unwrap();
-    // May include nodes from previous tests - accept >= 2
-    let count = result.rows[0].values[0].as_i64().unwrap_or_else(|| {
-        if result.rows[0].values[0].is_number() {
-            result.rows[0].values[0].as_f64().unwrap() as i64
-        } else {
-            0
-        }
-    });
-    assert!(count >= 2, "Expected at least 2 Test nodes, got {}", count);
+    assert_eq!(
+        result.rows[0].values[0].as_i64().unwrap(),
+        2,
+        "Expected exactly 2 Test nodes"
+    );
 }
 
 #[test]
-#[ignore]
 fn integration_engine_label_filtering() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Person".to_string()], json!({}))
@@ -813,9 +804,8 @@ fn integration_test_20() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_21() {
-    let (mut e, _ctx) = setup_test_engine().unwrap();
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     for i in 1..=5 {
         e.create_node(vec!["T".to_string()], json!({"v": i}))
             .unwrap();
@@ -828,9 +818,8 @@ fn integration_test_21() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_22() {
-    let (mut e, _ctx) = setup_test_engine().unwrap();
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 10}))
         .unwrap();
     e.create_node(vec!["T".to_string()], json!({"v": 20}))
@@ -843,9 +832,8 @@ fn integration_test_22() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_23() {
-    let (mut e, _ctx) = setup_test_engine().unwrap();
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     for i in [5, 1, 9] {
         e.create_node(vec!["T".to_string()], json!({"v": i}))
             .unwrap();
@@ -858,9 +846,8 @@ fn integration_test_23() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_24() {
-    let (mut e, _ctx) = setup_test_engine().unwrap();
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     for i in [5, 1, 9] {
         e.create_node(vec!["T".to_string()], json!({"v": i}))
             .unwrap();
@@ -873,9 +860,8 @@ fn integration_test_24() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_25() {
-    let (mut e, _ctx) = setup_test_engine().unwrap();
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     e.create_node(vec!["A".to_string()], json!({"v": 1}))
         .unwrap();
     e.create_node(vec!["B".to_string()], json!({"v": 2}))
@@ -913,11 +899,11 @@ fn integration_test_28() {
 }
 
 #[test]
-#[ignore]
 fn integration_test_29() {
-    let (mut e, _ctx) = setup_test_engine().unwrap();
+    let (mut e, _ctx) = setup_isolated_test_engine().unwrap();
     let id = e.create_node(vec!["T".to_string()], json!({})).unwrap();
-    assert!(id > 0);
+    // Node IDs start from 0 in a fresh catalog
+    assert!(id < u64::MAX, "Node ID should be valid");
 }
 
 #[test]

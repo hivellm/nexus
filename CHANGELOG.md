@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance - MATCH+CREATE Relationship Optimization (2025-11-27) 🚀
+
+**95% Performance Improvement - Now 56.7% Faster than Neo4j!**
+
+- **Storage Layer Optimizations**:
+  - Removed synchronous `nodes_mmap.flush()` calls inside `create_relationship()` - main bottleneck (~8ms each)
+  - Replaced `SeqCst` memory barriers with `Release`/`Acquire` in storage layer
+  - Optimized `write_node()`, `write_rel()`, `read_node()` memory barriers
+  - Files: `nexus-core/src/storage/mod.rs`
+
+- **Executor Layer Optimizations**:
+  - Replaced `flush()` with `flush_async()` in executor
+  - Added shared `TransactionManager` to avoid per-operation creation
+  - Pre-allocated HashMaps with expected capacity
+  - Added fast-path for single-value variable binding
+  - Files: `nexus-core/src/executor/mod.rs`
+
+- **Benchmark Results** (vs Neo4j):
+
+  | Operation | Before | After | Improvement | vs Neo4j |
+  |-----------|--------|-------|-------------|----------|
+  | MATCH+CREATE Rel | 34ms | **1.75ms** | **95%** | **56.7% faster** |
+  | CREATE Single Node | 1.5ms | **0.45ms** | **70%** | **83.5% faster** |
+  | CREATE with Props | - | **0.49ms** | - | **85.4% faster** |
+  | Throughput | 358 q/s | **655 q/s** | **83%** | **8.6% faster** |
+
+- **Overall**: Nexus now wins **22/22 benchmarks** against Neo4j
+
 ### Fixed - LMDB Parallel Test Isolation (2025-11-27) 🔧
 
 - **Centralized Testing Infrastructure**: Created `nexus_core::testing` module with `TestContext` for proper test isolation

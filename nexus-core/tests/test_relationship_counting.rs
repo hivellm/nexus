@@ -1,43 +1,30 @@
-﻿use nexus_core::Error;
-use nexus_core::testing::setup_test_engine;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-/// Counter for unique test labels to prevent cross-test interference
-static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+use nexus_core::Error;
+use nexus_core::testing::setup_isolated_test_engine;
 
 #[test]
 fn test_directed_relationship_counting() -> Result<(), Error> {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonDir{}", test_id);
-    let knows_type = format!("KNOWS_DIR{}", test_id);
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
-    // Create nodes with unique labels
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Bob'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Charlie'}})", person_label))?;
+    // Create nodes
+    engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
+    engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
+    engine.execute_cypher("CREATE (:Person {name: 'Charlie'})")?;
     engine.refresh_executor()?;
 
-    // Create directed relationships with unique type
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-        person_label, person_label, knows_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (c:{} {{name: 'Charlie'}}) CREATE (a)-[:{}]->(c)",
-        person_label, person_label, knows_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (b:{} {{name: 'Bob'}}), (c:{} {{name: 'Charlie'}}) CREATE (b)-[:{}]->(c)",
-        person_label, person_label, knows_type
-    ))?;
+    // Create directed relationships
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (c:Person {name: 'Charlie'}) CREATE (a)-[:KNOWS]->(c)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'}) CREATE (b)-[:KNOWS]->(c)",
+    )?;
     engine.refresh_executor()?;
 
     // Test directed relationship count
-    let result = engine.execute_cypher(&format!(
-        "MATCH (a)-[r:{}]->(b) RETURN count(r) AS count",
-        knows_type
-    ))?;
+    let result = engine.execute_cypher("MATCH (a)-[r:KNOWS]->(b) RETURN count(r) AS count")?;
 
     assert_eq!(result.rows.len(), 1, "Should return 1 row");
     let count = result.rows[0].values[0].as_i64().unwrap();
@@ -51,40 +38,30 @@ fn test_directed_relationship_counting() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix bidirectional relationship counting - returns 5 instead of 6
 fn test_bidirectional_relationship_counting() -> Result<(), Error> {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonBi{}", test_id);
-    let knows_type = format!("KNOWS_BI{}", test_id);
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
-    // Create nodes with unique labels
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Bob'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Charlie'}})", person_label))?;
+    // Create nodes
+    engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
+    engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
+    engine.execute_cypher("CREATE (:Person {name: 'Charlie'})")?;
     engine.refresh_executor()?;
 
-    // Create directed relationships with unique type
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-        person_label, person_label, knows_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (c:{} {{name: 'Charlie'}}) CREATE (a)-[:{}]->(c)",
-        person_label, person_label, knows_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (b:{} {{name: 'Bob'}}), (c:{} {{name: 'Charlie'}}) CREATE (b)-[:{}]->(c)",
-        person_label, person_label, knows_type
-    ))?;
+    // Create directed relationships
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (c:Person {name: 'Charlie'}) CREATE (a)-[:KNOWS]->(c)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'}) CREATE (b)-[:KNOWS]->(c)",
+    )?;
     engine.refresh_executor()?;
 
     // Test bidirectional relationship count: (a)-[r:TYPE]-(b)
     // This should match each relationship TWICE (once in each direction)
-    let result = engine.execute_cypher(&format!(
-        "MATCH (a)-[r:{}]-(b) RETURN count(r) AS count",
-        knows_type
-    ))?;
+    let result = engine.execute_cypher("MATCH (a)-[r:KNOWS]-(b) RETURN count(r) AS count")?;
 
     assert_eq!(result.rows.len(), 1, "Should return 1 row");
     let count = result.rows[0].values[0].as_i64().unwrap();
@@ -99,39 +76,30 @@ fn test_bidirectional_relationship_counting() -> Result<(), Error> {
 
 #[test]
 fn test_relationship_type_filtering() -> Result<(), Error> {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonFilter{}", test_id);
-    let company_label = format!("CompanyFilter{}", test_id);
-    let knows_type = format!("KNOWS_F{}", test_id);
-    let works_type = format!("WORKS_AT_F{}", test_id);
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
-    // Create nodes with unique labels
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Bob'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Acme'}})", company_label))?;
+    // Create nodes
+    engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
+    engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
+    engine.execute_cypher("CREATE (:Company {name: 'Acme'})")?;
     engine.refresh_executor()?;
 
     // Create different relationship types
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-        person_label, person_label, knows_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (c:{} {{name: 'Acme'}}) CREATE (a)-[:{}]->(c)",
-        person_label, company_label, works_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (b:{} {{name: 'Bob'}}), (c:{} {{name: 'Acme'}}) CREATE (b)-[:{}]->(c)",
-        person_label, company_label, works_type
-    ))?;
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(c)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT]->(c)",
+    )?;
     engine.refresh_executor()?;
 
     // Test filtering by relationship type using type() function
-    let result = engine.execute_cypher(&format!(
-        "MATCH ()-[r]->() WHERE type(r) IN ['{}', '{}'] RETURN count(r) AS count",
-        knows_type, works_type
-    ))?;
+    let result = engine.execute_cypher(
+        "MATCH ()-[r]->() WHERE type(r) IN ['KNOWS', 'WORKS_AT'] RETURN count(r) AS count",
+    )?;
 
     assert_eq!(result.rows.len(), 1, "Should return 1 row");
     let count = result.rows[0].values[0].as_i64().unwrap();
@@ -146,39 +114,28 @@ fn test_relationship_type_filtering() -> Result<(), Error> {
 
 #[test]
 fn test_relationship_type_filtering_single_type() -> Result<(), Error> {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonSingle{}", test_id);
-    let company_label = format!("CompanySingle{}", test_id);
-    let knows_type = format!("KNOWS_S{}", test_id);
-    let works_type = format!("WORKS_AT_S{}", test_id);
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
-    // Create nodes with unique labels
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Bob'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Acme'}})", company_label))?;
+    // Create nodes
+    engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
+    engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
+    engine.execute_cypher("CREATE (:Company {name: 'Acme'})")?;
     engine.refresh_executor()?;
 
     // Create different relationship types
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-        person_label, person_label, knows_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (c:{} {{name: 'Acme'}}) CREATE (a)-[:{}]->(c)",
-        person_label, company_label, works_type
-    ))?;
-    engine.execute_cypher(&format!(
-        "MATCH (b:{} {{name: 'Bob'}}), (c:{} {{name: 'Acme'}}) CREATE (b)-[:{}]->(c)",
-        person_label, company_label, works_type
-    ))?;
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'Acme'}) CREATE (a)-[:WORKS_AT]->(c)",
+    )?;
+    engine.execute_cypher(
+        "MATCH (b:Person {name: 'Bob'}), (c:Company {name: 'Acme'}) CREATE (b)-[:WORKS_AT]->(c)",
+    )?;
     engine.refresh_executor()?;
 
     // Test filtering for WORKS_AT only
-    let result = engine.execute_cypher(&format!(
-        "MATCH ()-[r:{}]->() RETURN count(r) AS count",
-        works_type
-    ))?;
+    let result = engine.execute_cypher("MATCH ()-[r:WORKS_AT]->() RETURN count(r) AS count")?;
 
     assert_eq!(result.rows.len(), 1, "Should return 1 row");
     let count = result.rows[0].values[0].as_i64().unwrap();
@@ -192,30 +149,23 @@ fn test_relationship_type_filtering_single_type() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix directed relationship matching with labels - count is 0 when should be 1
 fn test_relationship_direction_with_labels() -> Result<(), Error> {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonLabel{}", test_id);
-    let knows_type = format!("KNOWS_L{}", test_id);
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
-    // Create nodes with unique labels
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Alice'}})", person_label))?;
-    engine.execute_cypher(&format!("CREATE (:{} {{name: 'Bob'}})", person_label))?;
+    // Create nodes
+    engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
+    engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
     engine.refresh_executor()?;
 
     // Create a single directed relationship
-    engine.execute_cypher(&format!(
-        "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-        person_label, person_label, knows_type
-    ))?;
+    engine.execute_cypher(
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+    )?;
     engine.refresh_executor()?;
 
     // Test directed count
-    let result_directed = engine.execute_cypher(&format!(
-        "MATCH (a:{})-[r:{}]->(b:{}) RETURN count(r) AS count",
-        person_label, knows_type, person_label
-    ))?;
+    let result_directed =
+        engine.execute_cypher("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN count(r) AS count")?;
     assert_eq!(result_directed.rows.len(), 1);
     let count_directed = result_directed.rows[0].values[0].as_i64().unwrap();
     assert_eq!(
@@ -224,10 +174,8 @@ fn test_relationship_direction_with_labels() -> Result<(), Error> {
     );
 
     // Test bidirectional count
-    let result_bidirectional = engine.execute_cypher(&format!(
-        "MATCH (a:{})-[r:{}]-(b:{}) RETURN count(r) AS count",
-        person_label, knows_type, person_label
-    ))?;
+    let result_bidirectional =
+        engine.execute_cypher("MATCH (a:Person)-[r:KNOWS]-(b:Person) RETURN count(r) AS count")?;
     assert_eq!(result_bidirectional.rows.len(), 1);
     let count_bidirectional = result_bidirectional.rows[0].values[0].as_i64().unwrap();
     assert_eq!(

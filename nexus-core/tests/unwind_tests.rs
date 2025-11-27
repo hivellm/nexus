@@ -1,4 +1,4 @@
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 use nexus_core::{Engine, Error, executor::ResultSet};
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -230,7 +230,6 @@ fn test_unwind_in_complex_query() {
 }
 
 #[test]
-#[ignore = "Nested UNWIND needs proper variable binding - known issue"]
 fn test_unwind_nested_lists() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
@@ -252,7 +251,6 @@ fn test_unwind_nested_lists() {
 }
 
 #[test]
-#[ignore = "Aggregation after UNWIND needs operator reordering - known limitation"]
 fn test_unwind_with_aggregation() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
@@ -272,11 +270,9 @@ fn test_unwind_with_aggregation() {
 }
 
 #[test]
-#[ignore] // TODO: Fix UNWIND with MATCH - returns 2 rows instead of 6 (2 persons * 3 numbers)
 fn test_unwind_creates_cartesian_product() {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let label = format!("PersonCart{}", test_id);
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let label = "Person";
 
     // Create two nodes with unique label
     execute_query(
@@ -302,6 +298,7 @@ fn test_unwind_creates_cartesian_product() {
     let json_result = result_to_json(&result);
 
     let rows = json_result["rows"].as_array().unwrap();
+
     // Should have exactly 6 rows (2 persons * 3 numbers)
     assert!(
         rows.len() >= 6,

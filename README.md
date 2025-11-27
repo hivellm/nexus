@@ -294,9 +294,10 @@ LIMIT 5
 - **Storage**: SSD recommended, NVMe ideal
 
 ### **Performance vs Neo4j** 🏆
-- **Throughput**: 15% higher (603.91 vs 525.03 queries/sec)
-- **Write Operations**: 77-78% faster CREATE operations
-- **Query Execution**: Competitive read performance with advanced optimizations
+- **Throughput**: 8.6% higher (655 vs 603 queries/sec)
+- **Write Operations**: 56-85% faster (CREATE nodes 83.5% faster, CREATE relationships 56.7% faster)
+- **Query Execution**: **Nexus wins 22/22 benchmarks** with advanced optimizations
+- **MATCH+CREATE**: 95% improvement (34ms → 1.75ms) - **56.7% faster than Neo4j**
 
 See [Performance Analysis](docs/PERFORMANCE.md) for comprehensive benchmarks.
 

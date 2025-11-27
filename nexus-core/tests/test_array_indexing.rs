@@ -55,7 +55,7 @@ fn test_array_property_index_out_of_bounds() -> Result<(), Error> {
 }
 
 #[test]
-fn test_array_property_index_negative() -> Result<(), Error> {
+fn test_array_property_index_expression() -> Result<(), Error> {
     let (mut engine, _ctx) = setup_test_engine()?;
 
     // Test accessing with expression index
@@ -66,6 +66,41 @@ fn test_array_property_index_negative() -> Result<(), Error> {
         result.rows[0].values[0].as_str().unwrap(),
         "c",
         "array[2] should return 'c'"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_array_negative_index() -> Result<(), Error> {
+    let (mut engine, _ctx) = setup_test_engine()?;
+
+    // Test accessing with negative index (Python-style: -1 = last element)
+    let result = engine.execute_cypher("RETURN ['a', 'b', 'c'][-1] AS last")?;
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(
+        result.rows[0].values[0].as_str().unwrap(),
+        "c",
+        "array[-1] should return 'c' (last element)"
+    );
+
+    // Test -2 for second-to-last
+    let result2 = engine.execute_cypher("RETURN ['a', 'b', 'c'][-2] AS second_last")?;
+    assert_eq!(result2.rows.len(), 1);
+    assert_eq!(
+        result2.rows[0].values[0].as_str().unwrap(),
+        "b",
+        "array[-2] should return 'b' (second-to-last)"
+    );
+
+    // Test -3 for first element
+    let result3 = engine.execute_cypher("RETURN ['a', 'b', 'c'][-3] AS first")?;
+    assert_eq!(result3.rows.len(), 1);
+    assert_eq!(
+        result3.rows[0].values[0].as_str().unwrap(),
+        "a",
+        "array[-3] should return 'a' (first element)"
     );
 
     Ok(())

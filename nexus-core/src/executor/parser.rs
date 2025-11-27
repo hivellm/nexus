@@ -3901,10 +3901,11 @@ impl CypherParser {
                         self.pos = saved_pos;
                         true
                     } else if let Some(c) = self.peek_char_at(check_pos) {
-                        // Check if we have a number followed by '..'
-                        if c.is_ascii_digit() {
-                            // Skip the number
-                            let mut num_end = check_pos + 1;
+                        // Check if we have a number (including negative) followed by '..'
+                        if c.is_ascii_digit() || c == '-' {
+                            // Skip the '-' if present
+                            let mut num_end = if c == '-' { check_pos + 1 } else { check_pos };
+                            // Skip digits
                             while let Some(ch) = self.peek_char_at(num_end) {
                                 if ch.is_ascii_digit() {
                                     num_end += 1;
@@ -4238,10 +4239,11 @@ impl CypherParser {
                     self.pos = saved_pos;
                     true
                 } else if let Some(c) = self.peek_char_at(check_pos) {
-                    // Check if we have a number followed by '..'
-                    if c.is_ascii_digit() {
-                        // Skip the number
-                        let mut num_end = check_pos + 1;
+                    // Check if we have a number (including negative) followed by '..'
+                    if c.is_ascii_digit() || c == '-' {
+                        // Skip the '-' if present
+                        let mut num_end = if c == '-' { check_pos + 1 } else { check_pos };
+                        // Skip digits
                         while let Some(ch) = self.peek_char_at(num_end) {
                             if ch.is_ascii_digit() {
                                 num_end += 1;
@@ -4277,11 +4279,15 @@ impl CypherParser {
 
             let start_expr = if is_slice {
                 // For slice, we need to parse the start expression carefully
-                // Check if we start with a number
+                // Check if we start with a number (including negative)
                 if let Some(c) = self.peek_char() {
-                    if c.is_ascii_digit() {
+                    if c.is_ascii_digit() || c == '-' {
                         // Parse number manually to avoid consuming the '.' after it
                         let start = self.pos;
+                        // Consume '-' if present
+                        if c == '-' {
+                            self.consume_char();
+                        }
                         while self.pos < self.input.len() {
                             if let Some(ch) = self.peek_char() {
                                 if ch.is_ascii_digit() {
@@ -4294,13 +4300,15 @@ impl CypherParser {
                             }
                         }
                         let num_str = &self.input[start..self.pos];
-                        if !num_str.is_empty() {
+                        if !num_str.is_empty() && num_str != "-" {
                             let num = num_str
                                 .parse::<i64>()
                                 .map_err(|_| self.error("Invalid number in slice"))?;
                             Some(Box::new(Expression::Literal(Literal::Integer(num))))
                         } else {
-                            None
+                            // Not a number, parse as regular expression
+                            self.pos = start; // Reset position
+                            Some(Box::new(self.parse_expression()?))
                         }
                     } else if c == '.' || c == ':' {
                         None

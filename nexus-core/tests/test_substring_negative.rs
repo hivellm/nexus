@@ -18,7 +18,6 @@ fn test_substring_positive_index() {
 }
 
 #[test]
-#[ignore] // TODO: Fix negative index calculation in substring
 fn test_substring_negative_index() {
     let (mut executor, _ctx) = create_test_executor();
 
@@ -35,7 +34,6 @@ fn test_substring_negative_index() {
 }
 
 #[test]
-#[ignore] // TODO: Fix negative index calculation in substring
 fn test_substring_negative_index_no_length() {
     let (mut executor, _ctx) = create_test_executor();
 

@@ -280,9 +280,8 @@ fn regression_create_50_nodes() {
 }
 
 #[test]
-#[ignore]
 fn regression_create_nodes_different_labels() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({}))
@@ -610,9 +609,8 @@ fn regression_match_count_nodes() {
 }
 
 #[test]
-#[ignore]
 fn regression_match_property_pattern() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"name": "Alice"}))
@@ -665,9 +663,8 @@ fn regression_match_return_multiple_cols() {
 }
 
 #[test]
-#[ignore]
 fn regression_match_with_and_condition() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"a": 10, "b": 20}))
@@ -687,9 +684,8 @@ fn regression_match_with_and_condition() {
 }
 
 #[test]
-#[ignore]
 fn regression_match_with_or_condition() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 10}))
@@ -711,9 +707,8 @@ fn regression_match_with_or_condition() {
 }
 
 #[test]
-#[ignore]
 fn regression_match_nonexistent_label() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({}))
@@ -863,9 +858,8 @@ fn regression_rel_incoming_direction() {
 }
 
 #[test]
-#[ignore]
 fn regression_rel_bidirectional_pattern() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({"name": "A"}))
@@ -1197,9 +1191,8 @@ fn regression_rel_10_relationships() {
 }
 
 #[test]
-#[ignore]
 fn regression_rel_self_loop() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1448,9 +1441,8 @@ fn regression_count_function() {
 }
 
 #[test]
-#[ignore]
 fn regression_sum_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in 1..=5 {
         engine
@@ -1466,9 +1458,8 @@ fn regression_sum_function() {
 }
 
 #[test]
-#[ignore]
 fn regression_avg_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 10}))
@@ -1485,9 +1476,8 @@ fn regression_avg_function() {
 }
 
 #[test]
-#[ignore]
 fn regression_min_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in [50, 10, 30] {
         engine
@@ -1503,9 +1493,8 @@ fn regression_min_function() {
 }
 
 #[test]
-#[ignore]
 fn regression_max_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in [10, 50, 30] {
         engine
@@ -1535,9 +1524,8 @@ fn regression_id_sequential() {
 }
 
 #[test]
-#[ignore]
 fn regression_labels_empty() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let _id = engine.create_node(vec![], json!({})).unwrap();
     engine.refresh_executor().unwrap();
@@ -1566,9 +1554,8 @@ fn regression_keys_empty() {
 }
 
 #[test]
-#[ignore]
 fn regression_count_zero() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = engine
         .execute_cypher("MATCH (n:NonExistent) RETURN count(n) AS count")
@@ -1577,9 +1564,8 @@ fn regression_count_zero() {
 }
 
 #[test]
-#[ignore]
 fn regression_sum_zero() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 0}))
@@ -1593,9 +1579,8 @@ fn regression_sum_zero() {
 }
 
 #[test]
-#[ignore]
 fn regression_avg_single() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 42}))
@@ -1609,9 +1594,8 @@ fn regression_avg_single() {
 }
 
 #[test]
-#[ignore]
 fn regression_min_max_same() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Test".to_string()], json!({"value": 100}))
@@ -1677,9 +1661,8 @@ fn regression_type_rel_different() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn regression_union_basic() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -1700,9 +1683,8 @@ fn regression_union_basic() {
 }
 
 #[test]
-#[ignore]
 fn regression_union_all() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -1776,9 +1758,8 @@ fn regression_union_both_empty() {
 }
 
 #[test]
-#[ignore]
 fn regression_union_different_types() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": "text"}))
@@ -1876,9 +1857,8 @@ fn regression_union_multiple() {
 }
 
 #[test]
-#[ignore]
 fn regression_union_with_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string()], json!({"value": 1}))
@@ -1908,9 +1888,8 @@ fn regression_engine_new() {
 }
 
 #[test]
-#[ignore]
 fn regression_engine_create_node_api() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let id = engine
         .create_node(vec!["Test".to_string()], json!({"name": "test"}))
@@ -1919,9 +1898,8 @@ fn regression_engine_create_node_api() {
 }
 
 #[test]
-#[ignore]
 fn regression_engine_create_relationship_api() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let a = engine
         .create_node(vec!["Node".to_string()], json!({}))
@@ -1993,7 +1971,6 @@ fn regression_engine_health_check() {
 }
 
 #[test]
-#[ignore = "CREATE with RETURN not yet implemented - created nodes not returned in result"]
 fn regression_engine_execute_cypher() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 

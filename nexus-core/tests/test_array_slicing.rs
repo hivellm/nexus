@@ -66,7 +66,6 @@ fn test_array_slice_to_end() {
 }
 
 #[test]
-#[ignore] // TODO: Fix parser to handle negative numbers in array slices
 fn test_array_slice_negative_start() {
     let (mut executor, _ctx) = create_test_executor();
 
@@ -86,7 +85,6 @@ fn test_array_slice_negative_start() {
 }
 
 #[test]
-#[ignore] // TODO: Fix negative end index calculation in array slicing
 fn test_array_slice_negative_end() {
     let (mut executor, _ctx) = create_test_executor();
 

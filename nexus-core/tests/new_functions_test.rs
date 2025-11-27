@@ -1,6 +1,6 @@
 //! Tests for newly implemented functions: sin, cos, tan, reduce, extract, all, any, none, single, toDate
 
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 use nexus_core::{Engine, executor::ResultSet};
 
 fn execute_query(engine: &mut Engine, query: &str) -> ResultSet {
@@ -114,7 +114,6 @@ fn test_extract_function_null() {
 // ============================================================================
 
 #[test]
-#[ignore] // TODO: Fix - function may not handle NULL correctly yet
 fn test_all_function_null() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
@@ -124,7 +123,6 @@ fn test_all_function_null() {
 }
 
 #[test]
-#[ignore] // TODO: Fix - function may not handle NULL correctly yet
 fn test_any_function_null() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
@@ -176,7 +174,6 @@ fn test_todate_function() {
 }
 
 #[test]
-#[ignore] // TODO: Fix - toDate may not handle NULL correctly yet
 fn test_todate_with_null() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
@@ -191,40 +188,22 @@ fn test_todate_with_null() {
 
 #[test]
 fn test_todate_in_queries() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(
         &mut engine,
         "CREATE (e:Event {name: 'Meeting', date: '2025-11-12T14:00:00Z'})",
     );
+    engine.refresh_executor().unwrap();
 
     // Extract date from datetime string
     let result = execute_query(
         &mut engine,
         "MATCH (e:Event) RETURN e.name, toDate(e.date) AS event_date",
     );
-    // May include events from previous tests - accept >= 1
-    assert!(
-        !result.rows.is_empty(),
-        "Expected at least 1 event, got {}",
-        result.rows.len()
-    );
-
-    // Verify that at least one row has the expected values
-    let found_meeting = result.rows.iter().any(|row| {
-        row.values[0]
-            .as_str()
-            .map(|s| s == "Meeting")
-            .unwrap_or(false)
-            && row.values[1]
-                .as_str()
-                .map(|s| s == "2025-11-12")
-                .unwrap_or(false)
-    });
-    assert!(
-        found_meeting,
-        "Should find Meeting event with date 2025-11-12"
-    );
+    assert_eq!(result.rows.len(), 1, "Should have exactly 1 event");
+    assert_eq!(result.rows[0].values[0].as_str().unwrap(), "Meeting");
+    assert_eq!(result.rows[0].values[1].as_str().unwrap(), "2025-11-12");
 }
 
 // ============================================================================
@@ -233,12 +212,14 @@ fn test_todate_in_queries() {
 
 #[test]
 fn test_trigonometric_in_expressions() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(&mut engine, "CREATE (p:Point {angle: 1.57079632679})");
+    engine.refresh_executor().unwrap();
 
     // Use sin in RETURN
     let result = execute_query(&mut engine, "MATCH (p:Point) RETURN sin(p.angle) AS y");
+    assert_eq!(result.rows.len(), 1, "Should have exactly 1 point");
     assert!((result.rows[0].values[0].as_f64().unwrap() - 1.0).abs() < 0.0001);
 
     // Use cos in RETURN

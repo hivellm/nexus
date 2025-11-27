@@ -353,11 +353,9 @@ impl RecordStore {
         let record_bytes = bytemuck::bytes_of(record);
         self.nodes_mmap[start..end].copy_from_slice(record_bytes);
 
-        // CRITICAL FIX: Ensure write is visible before subsequent reads
-        // Use memory barrier to guarantee write visibility in same-thread scenarios
-        // This is especially important when multiple relationships are created in sequence
-        // to the same node, where the second relationship must see the updated first_rel_ptr
-        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        // Memory barrier to ensure write is visible to subsequent reads
+        // Release is sufficient for single-writer model
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
         Ok(())
     }
@@ -406,10 +404,9 @@ impl RecordStore {
 
     /// Read a node record
     pub fn read_node(&self, node_id: u64) -> Result<NodeRecord> {
-        // CRITICAL FIX: Memory barrier before reading to ensure we see latest writes
-        // This is essential when reading nodes that were just modified in a previous transaction
-        // Without this, we might read stale values from CPU cache or memory ordering issues
-        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        // Memory barrier to ensure visibility of writes from other threads
+        // Acquire is sufficient - pairs with Release barriers in write operations
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
         let offset = (node_id as usize * NODE_RECORD_SIZE) as u64;
 
@@ -470,11 +467,9 @@ impl RecordStore {
         let record_bytes = bytemuck::bytes_of(record);
         self.rels_mmap[start..end].copy_from_slice(record_bytes);
 
-        // CRITICAL FIX: Ensure write is visible before subsequent reads
-        // Use memory barrier to guarantee write visibility in same-thread scenarios
-        // This is especially important for linked list traversal where relationship records
-        // are read in sequence and must see the latest next_src_ptr values
-        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        // Memory barrier to ensure write is visible to subsequent reads
+        // Release is sufficient for single-writer model
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
         Ok(())
     }
@@ -728,10 +723,9 @@ impl RecordStore {
         let mut source_node_opt = None;
         let mut target_node_opt = None;
 
-        // CRITICAL FIX: Ensure all previous writes are visible before reading nodes
-        // This is essential when creating multiple relationships in separate transactions
-        // Without this, we might read stale first_rel_ptr values from mmap cache
-        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        // Memory barrier to ensure visibility of previous writes
+        // Acquire is sufficient for single-writer model
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
         // PHASE 1: Read source node ONCE at the beginning and preserve prop_ptr
         let mut source_node = self.read_node(from)?;
@@ -938,17 +932,10 @@ impl RecordStore {
                 from,
                 source_node.first_rel_ptr
             );
-            // CRITICAL FIX: Make flush synchronous and treat failure as error
-            // This ensures writes are persisted before the next query reads the node
-            if let Err(e) = self.nodes_mmap.flush() {
-                tracing::error!("Failed to flush source node {} after write: {}", from, e);
-                // Don't return error here - relationship is already created, but log it
-                // The relationship will still be found via the updated next_src_ptr fix above
-            }
-            // CRITICAL FIX: Memory barrier after flush to ensure writes are visible to subsequent reads
-            // This is essential when creating multiple relationships in separate transactions
-            // Without this, the second transaction might read stale values from CPU cache
-            std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            // PERFORMANCE OPTIMIZATION: Skip per-node flush - let executor batch flush at end
+            // The memory barrier below is sufficient for single-writer model
+            // Durability is ensured by flush_async() at executor level
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
         }
         if let Some(target_node) = target_node_opt {
             tracing::debug!(
@@ -958,12 +945,7 @@ impl RecordStore {
             );
             self.write_node(to, &target_node)?;
 
-            // CRITICAL FIX: Flush target node synchronously if different from source
-            if to != from {
-                if let Err(e) = self.nodes_mmap.flush() {
-                    tracing::error!("Failed to flush target node {} after write: {}", to, e);
-                }
-            }
+            // PERFORMANCE OPTIMIZATION: Skip per-node flush - handled at executor level
         }
 
         record.next_src_ptr = source_prev_ptr;

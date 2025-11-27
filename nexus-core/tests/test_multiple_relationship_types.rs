@@ -1,52 +1,36 @@
 use nexus_core::executor::Query;
-use nexus_core::testing::create_test_executor;
+use nexus_core::testing::create_isolated_test_executor;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-/// Counter for unique test labels to prevent cross-test interference
-static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[test]
 fn test_multiple_relationship_types_single() {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonSingle{}", test_id);
-    let company_label = format!("CompanySingle{}", test_id);
-    let knows_type = format!("KNOWS_S{}", test_id);
-    let works_type = format!("WORKS_AT_S{}", test_id);
-    let (mut executor, _ctx) = create_test_executor();
+    let (mut executor, _ctx) = create_isolated_test_executor();
 
-    // Create test data with unique labels
+    // Create test data
     let query = Query {
-        cypher: format!(
-            "CREATE (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}), (c:{} {{name: 'TechCorp'}})",
-            person_label, person_label, company_label
-        ),
+        cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}), (c:Company {name: 'TechCorp'})".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-            person_label, person_label, knows_type
-        ),
+        cypher:
+            "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)"
+                .to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (c:{} {{name: 'TechCorp'}}) CREATE (a)-[:{}]->(c)",
-            person_label, company_label, works_type
-        ),
+        cypher: "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'}) CREATE (a)-[:WORKS_AT]->(c)".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     // Test single type (should match 1 relationship)
     let query = Query {
-        cypher: format!("MATCH (a)-[r:{}]->(b) RETURN count(r) AS cnt", knows_type),
+        cypher: "MATCH (a)-[r:KNOWS]->(b) RETURN count(r) AS cnt".to_string(),
         params: HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
@@ -60,47 +44,32 @@ fn test_multiple_relationship_types_single() {
 
 #[test]
 fn test_multiple_relationship_types_or() {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonOr{}", test_id);
-    let company_label = format!("CompanyOr{}", test_id);
-    let knows_type = format!("KNOWS_O{}", test_id);
-    let works_type = format!("WORKS_AT_O{}", test_id);
-    let (mut executor, _ctx) = create_test_executor();
+    let (mut executor, _ctx) = create_isolated_test_executor();
 
-    // Create test data with unique labels
+    // Create test data
     let query = Query {
-        cypher: format!(
-            "CREATE (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}), (c:{} {{name: 'TechCorp'}})",
-            person_label, person_label, company_label
-        ),
+        cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}), (c:Company {name: 'TechCorp'})".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-            person_label, person_label, knows_type
-        ),
+        cypher:
+            "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)"
+                .to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (c:{} {{name: 'TechCorp'}}) CREATE (a)-[:{}]->(c)",
-            person_label, company_label, works_type
-        ),
+        cypher: "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'}) CREATE (a)-[:WORKS_AT]->(c)".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     // Test multiple types with | (should match 2 relationships)
     let query = Query {
-        cypher: format!(
-            "MATCH (a)-[r:{}|{}]->(b) RETURN count(r) AS cnt",
-            knows_type, works_type
-        ),
+        cypher: "MATCH (a)-[r:KNOWS|WORKS_AT]->(b) RETURN count(r) AS cnt".to_string(),
         params: HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
@@ -113,59 +82,39 @@ fn test_multiple_relationship_types_or() {
 }
 
 #[test]
-#[ignore] // TODO: Fix multiple relationship types with RETURN clause
 fn test_multiple_relationship_types_with_return() {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonRet{}", test_id);
-    let company_label = format!("CompanyRet{}", test_id);
-    let knows_type = format!("KNOWS_R{}", test_id);
-    let works_type = format!("WORKS_AT_R{}", test_id);
-    let likes_type = format!("LIKES_R{}", test_id);
-    let (mut executor, _ctx) = create_test_executor();
+    let (mut executor, _ctx) = create_isolated_test_executor();
 
-    // Create test data with unique labels
+    // Create test data
     let query = Query {
-        cypher: format!(
-            "CREATE (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}), (c:{} {{name: 'TechCorp'}}), (d:{} {{name: 'Charlie'}})",
-            person_label, person_label, company_label, person_label
-        ),
+        cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}), (c:Company {name: 'TechCorp'}), (d:Person {name: 'Charlie'})".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-            person_label, person_label, knows_type
-        ),
+        cypher:
+            "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)"
+                .to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (c:{} {{name: 'TechCorp'}}) CREATE (a)-[:{}]->(c)",
-            person_label, company_label, works_type
-        ),
+        cypher: "MATCH (a:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'}) CREATE (a)-[:WORKS_AT]->(c)".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (d:{} {{name: 'Charlie'}}) CREATE (a)-[:{}]->(d)",
-            person_label, person_label, likes_type
-        ),
+        cypher: "MATCH (a:Person {name: 'Alice'}), (d:Person {name: 'Charlie'}) CREATE (a)-[:LIKES]->(d)".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     // Test multiple types and return target names
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}})-[r:{}|{}]->(b) RETURN b.name AS name ORDER BY name",
-            person_label, knows_type, works_type
-        ),
+        cypher: "MATCH (a:Person {name: 'Alice'})-[r:KNOWS|WORKS_AT]->(b) RETURN b.name AS name ORDER BY name".to_string(),
         params: HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();
@@ -181,37 +130,26 @@ fn test_multiple_relationship_types_with_return() {
 
 #[test]
 fn test_multiple_relationship_types_nonexistent() {
-    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let person_label = format!("PersonNE{}", test_id);
-    let knows_type = format!("KNOWS_NE{}", test_id);
-    let nonexistent_type = format!("NONEXISTENT{}", test_id);
-    let (mut executor, _ctx) = create_test_executor();
+    let (mut executor, _ctx) = create_isolated_test_executor();
 
     // Create test data with only KNOWS relationship
     let query = Query {
-        cypher: format!(
-            "CREATE (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}})",
-            person_label, person_label
-        ),
+        cypher: "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})".to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     let query = Query {
-        cypher: format!(
-            "MATCH (a:{} {{name: 'Alice'}}), (b:{} {{name: 'Bob'}}) CREATE (a)-[:{}]->(b)",
-            person_label, person_label, knows_type
-        ),
+        cypher:
+            "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)"
+                .to_string(),
         params: HashMap::new(),
     };
     executor.execute(&query).unwrap();
 
     // Test multiple types where one doesn't exist (should match 1 relationship)
     let query = Query {
-        cypher: format!(
-            "MATCH (a)-[r:{}|{}]->(b) RETURN count(r) AS cnt",
-            knows_type, nonexistent_type
-        ),
+        cypher: "MATCH (a)-[r:KNOWS|NONEXISTENT]->(b) RETURN count(r) AS cnt".to_string(),
         params: HashMap::new(),
     };
     let result = executor.execute(&query).unwrap();

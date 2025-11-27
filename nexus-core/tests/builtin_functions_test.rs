@@ -774,7 +774,7 @@ fn test_duration_function() {
 
 #[test]
 fn test_temporal_functions_with_nodes() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create nodes with temporal data
     execute_query(
@@ -785,8 +785,9 @@ fn test_temporal_functions_with_nodes() {
         &mut engine,
         "CREATE (e:Event {name: 'Lunch', date: '2024-11-01', time: '12:00:00'})",
     );
+    engine.refresh_executor().unwrap();
 
-    // Query with date function (may include more events from previous tests)
+    // Query with date function
     let result = execute_query(
         &mut engine,
         "MATCH (e:Event) WHERE e.date = date('2024-11-01') RETURN count(e) AS event_count",
@@ -798,7 +799,7 @@ fn test_temporal_functions_with_nodes() {
             0
         }
     });
-    assert!(count >= 2);
+    assert_eq!(count, 2, "Should find exactly 2 events");
 
     // Query with time comparison
     let result = execute_query(

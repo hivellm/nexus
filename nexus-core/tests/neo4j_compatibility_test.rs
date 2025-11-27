@@ -297,9 +297,8 @@ fn test_multiple_labels_filtering() {
 
 #[test]
 #[serial]
-#[ignore = "Known bug: MATCH with multiple labels + relationships duplicates results"]
 fn test_complex_multiple_labels_query() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     setup_test_data(&mut engine).unwrap();
 
@@ -467,7 +466,7 @@ fn test_id_function_consistency() {
 #[serial]
 
 fn test_multiple_labels_with_count() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(
@@ -507,7 +506,7 @@ fn test_multiple_labels_with_count() {
 #[test]
 #[serial]
 fn test_multiple_labels_order_by() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(
@@ -706,7 +705,6 @@ fn test_id_function_on_relationships() {
 /// Test LIMIT with UNION
 #[test]
 #[serial]
-#[ignore = "LIMIT after UNION not fully supported yet"]
 fn test_union_with_limit() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
@@ -739,7 +737,7 @@ fn test_union_with_limit() {
 #[test]
 #[serial]
 fn test_match_with_three_labels() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(
@@ -774,7 +772,7 @@ fn test_match_with_three_labels() {
 #[serial]
 
 fn test_count_with_multiple_labels() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     for i in 0..10 {
         let labels = if i < 5 {
@@ -841,7 +839,6 @@ fn test_relationship_direction_specificity() {
 /// Test UNION with ORDER BY
 #[test]
 #[serial]
-#[ignore = "ORDER BY after UNION not fully supported yet"]
 fn test_union_with_order_by() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
@@ -876,7 +873,7 @@ fn test_union_with_order_by() {
 #[serial]
 
 fn test_where_with_property_checks() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(
@@ -1113,9 +1110,8 @@ fn test_properties_with_special_keys() {
 /// Test DISTINCT with labels()
 #[test]
 #[serial]
-#[ignore = "UNWIND with aggregation needs operator reordering"]
 fn test_distinct_labels() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["Person".to_string()], json!({}))
@@ -1264,7 +1260,7 @@ fn test_count_star_with_where() {
 #[test]
 #[serial]
 fn test_count_star_multiple_labels() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     engine
         .create_node(vec!["A".to_string(), "B".to_string()], json!({}))

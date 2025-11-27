@@ -1,7 +1,7 @@
 /// Tests that verify Nexus behavior matches Neo4j specifications
 /// These tests encode expected Neo4j behavior based on official documentation
 use nexus_core::Error;
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 
 // ============================================================================
 // AGGREGATION BEHAVIOR TESTS
@@ -10,7 +10,7 @@ use nexus_core::testing::setup_test_engine;
 #[test]
 fn test_count_star_includes_all_rows() -> Result<(), Error> {
     // Neo4j: COUNT(*) counts all rows, including those with NULL values
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 1})")?;
     engine.execute_cypher("CREATE (n:Node {value: 2})")?;
@@ -20,19 +20,14 @@ fn test_count_star_includes_all_rows() -> Result<(), Error> {
     let result = engine.execute_cypher("MATCH (n:Node) RETURN count(*) AS count")?;
     let count = result.rows[0].values[0].as_i64().unwrap();
 
-    // May include nodes from previous tests - accept >= 3
-    assert!(
-        count >= 3,
-        "COUNT(*) should count all rows including NULL (expected >= 3, got {})",
-        count
-    );
+    assert_eq!(count, 3, "COUNT(*) should count all rows including NULL");
     Ok(())
 }
 
 #[test]
 fn test_count_property_excludes_nulls() -> Result<(), Error> {
     // Neo4j: COUNT(property) only counts non-NULL values
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 1})")?;
     engine.execute_cypher("CREATE (n:Node {value: 2})")?;
@@ -42,19 +37,14 @@ fn test_count_property_excludes_nulls() -> Result<(), Error> {
     let result = engine.execute_cypher("MATCH (n:Node) RETURN count(n.value) AS count")?;
     let count = result.rows[0].values[0].as_i64().unwrap();
 
-    // May include nodes from previous tests - accept >= 2
-    assert!(
-        count >= 2,
-        "COUNT(property) should exclude NULL values (expected >= 2, got {})",
-        count
-    );
+    assert_eq!(count, 2, "COUNT(property) should exclude NULL values");
     Ok(())
 }
 
 #[test]
 fn test_count_distinct_deduplicates() -> Result<(), Error> {
     // Neo4j: COUNT(DISTINCT ...) returns unique non-NULL values
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 1})")?;
     engine.execute_cypher("CREATE (n:Node {value: 2})")?;
@@ -75,7 +65,7 @@ fn test_count_distinct_deduplicates() -> Result<(), Error> {
 #[test]
 fn test_avg_ignores_nulls() -> Result<(), Error> {
     // Neo4j: AVG() calculates average of non-NULL values only
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 10})")?;
     engine.execute_cypher("CREATE (n:Node {value: 20})")?;
@@ -85,11 +75,9 @@ fn test_avg_ignores_nulls() -> Result<(), Error> {
     let result = engine.execute_cypher("MATCH (n:Node) RETURN avg(n.value) AS avg")?;
     let avg = result.rows[0].values[0].as_f64().unwrap();
 
-    // AVG should ignore NULL values - may include more values from previous tests
-    // Accept avg >= 15.0 (the correct calculation for 10+20)
     assert!(
-        avg >= 15.0,
-        "AVG should ignore NULL values (expected >= 15.0, got {})",
+        (avg - 15.0).abs() < 0.001,
+        "AVG should ignore NULL values (expected 15.0, got {})",
         avg
     );
     Ok(())
@@ -98,7 +86,7 @@ fn test_avg_ignores_nulls() -> Result<(), Error> {
 #[test]
 fn test_min_max_ignore_nulls() -> Result<(), Error> {
     // Neo4j: MIN/MAX ignore NULL values
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 5})")?;
     engine.execute_cypher("CREATE (n:Node {value: 10})")?;
@@ -119,7 +107,7 @@ fn test_min_max_ignore_nulls() -> Result<(), Error> {
 #[test]
 fn test_sum_ignores_nulls() -> Result<(), Error> {
     // Neo4j: SUM() ignores NULL values
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Node {value: 5})")?;
     engine.execute_cypher("CREATE (n:Node {value: 10})")?;
@@ -129,11 +117,9 @@ fn test_sum_ignores_nulls() -> Result<(), Error> {
     let result = engine.execute_cypher("MATCH (n:Node) RETURN sum(n.value) AS sum")?;
     let sum = result.rows[0].values[0].as_f64().unwrap();
 
-    // SUM should ignore NULL - may include more values from previous tests
-    // Accept sum >= 15.0 (the correct calculation for 5+10)
     assert!(
-        sum >= 15.0,
-        "SUM should ignore NULL (expected >= 15.0, got {})",
+        (sum - 15.0).abs() < 0.001,
+        "SUM should ignore NULL (expected 15.0, got {})",
         sum
     );
     Ok(())
@@ -146,7 +132,7 @@ fn test_sum_ignores_nulls() -> Result<(), Error> {
 #[test]
 fn test_union_removes_duplicates() -> Result<(), Error> {
     // Neo4j: UNION removes duplicate rows
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:A {value: 1})")?;
     engine.execute_cypher("CREATE (n:A {value: 2})")?;
@@ -162,10 +148,9 @@ fn test_union_removes_duplicates() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore = "CREATE via Cypher duplicates nodes - investigating"]
 fn test_union_all_keeps_duplicates() -> Result<(), Error> {
     // Neo4j: UNION ALL keeps all rows including duplicates
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:A {value: 1})")?;
     engine.execute_cypher("CREATE (n:A {value: 2})")?;
@@ -399,10 +384,9 @@ fn test_where_property_equals() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore] // TODO: Fix - may have interference from other tests using Person label
 fn test_where_property_comparison() -> Result<(), Error> {
     // Neo4j: WHERE supports comparison operators
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (n:Person {age: 20})")?;
     engine.execute_cypher("CREATE (n:Person {age: 30})")?;
@@ -413,17 +397,15 @@ fn test_where_property_comparison() -> Result<(), Error> {
         engine.execute_cypher("MATCH (n:Person) WHERE n.age >= 30 RETURN count(*) AS count")?;
     let count = result.rows[0].values[0].as_i64().unwrap();
 
-    // May include nodes from previous tests - accept >= 2
-    assert!(
-        count >= 2,
-        "Should match at least 2 people with age >= 30 (got {})",
+    assert_eq!(
+        count, 2,
+        "Should match exactly 2 people with age >= 30 (got {})",
         count
     );
     Ok(())
 }
 
 #[test]
-#[ignore = "IS NOT NULL syntax not yet implemented"]
 fn test_where_null_check() -> Result<(), Error> {
     // Neo4j: WHERE property IS NOT NULL filters NULL values
     let (mut engine, _ctx) = setup_test_engine()?;

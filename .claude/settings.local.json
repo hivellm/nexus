@@ -8,7 +8,16 @@
       "Bash(do echo \"=== Run $i ===\")",
       "Bash(done)",
       "Bash(cargo install:*)",
-      "Bash(RUST_LOG=debug cargo test:*)"
+      "Bash(RUST_LOG=debug cargo test:*)",
+      "Bash(curl:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File:*)",
+      "Bash(cargo build:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout:*)",
+      "Bash(powershell:*)",
+      "Bash(xxd:*)",
+      "Bash(RUST_LOG=nexus_core::executor=debug cargo test:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

@@ -68,7 +68,7 @@ fn test_union_operator() {
 
 #[test]
 fn test_union_different_labels() {
-    let (mut executor, _ctx) = create_test_executor();
+    let (mut executor, _ctx) = create_isolated_test_executor();
 
     // Create test data with Person and Company nodes
     let setup_query = Query {
