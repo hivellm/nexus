@@ -18,5 +18,8 @@ pub mod io;
 
 pub use compression::RelationshipCompressor;
 pub use engine::GraphStorageEngine;
-pub use format::{NodeRecord, RelationshipRecord, RelationshipSegment, StorageLayout};
+pub use format::{
+    BloomFilter, BloomFilterStats, NodeRecord, RelationshipRecord, RelationshipSegment, SkipList,
+    SkipListNode, SkipListStats, StorageLayout,
+};
 pub use io::DirectFile;

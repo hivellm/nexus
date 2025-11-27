@@ -641,6 +641,46 @@ impl GraphStorageEngine {
         }
     }
 
+    /// Fast check if an edge might exist between two nodes for a given type
+    ///
+    /// Uses a Bloom filter for O(1) probabilistic lookup.
+    /// Returns false if the edge definitely does NOT exist.
+    /// Returns true if the edge MIGHT exist (requires verification with actual lookup).
+    ///
+    /// This is useful for quickly filtering out non-existent edges before
+    /// performing more expensive disk I/O operations.
+    #[inline]
+    pub fn might_have_edge(&self, from_node: NodeId, to_node: NodeId, type_id: TypeId) -> bool {
+        if let Some(segment) = self.layout.relationships.get(&type_id) {
+            segment.might_have_edge(from_node, to_node)
+        } else {
+            false // Type doesn't exist, so edge definitely doesn't exist
+        }
+    }
+
+    /// Check if an edge exists (verified lookup after bloom filter)
+    ///
+    /// First uses bloom filter for fast rejection, then performs actual lookup
+    /// if the filter returns positive.
+    pub fn has_edge(&self, from_node: NodeId, to_node: NodeId, type_id: TypeId) -> Result<bool> {
+        // Fast path: use bloom filter to quickly reject non-existent edges
+        if !self.might_have_edge(from_node, to_node, type_id) {
+            return Ok(false);
+        }
+
+        // Bloom filter returned positive, need to verify with actual lookup
+        let outgoing = self.get_outgoing_relationships(from_node, type_id)?;
+        Ok(outgoing.iter().any(|rel| rel.to_node == to_node))
+    }
+
+    /// Get bloom filter statistics for a relationship type
+    pub fn bloom_filter_stats(&self, type_id: TypeId) -> Option<BloomFilterStats> {
+        self.layout
+            .relationships
+            .get(&type_id)
+            .map(|segment| segment.filter_stats())
+    }
+
     // Internal helper methods
 
     fn node_offset(&self, node_id: NodeId) -> u64 {
@@ -690,6 +730,10 @@ impl GraphStorageEngine {
         let adjacency_data_size = INITIAL_REL_CAPACITY as u64 * 8; // Estimate 8 bytes per relationship
         let adjacency_data_start = self.allocate_space(adjacency_data_size);
 
+        // Create bloom filter for edge existence checks
+        // Size it for expected relationship capacity with 1% false positive rate
+        let edge_filter = BloomFilter::with_capacity(INITIAL_REL_CAPACITY as u64);
+
         RelationshipSegment {
             type_id,
             data_range: rel_segment_start..(rel_segment_start + rel_segment_size),
@@ -699,6 +743,7 @@ impl GraphStorageEngine {
                 ..(adjacency_data_start + adjacency_data_size),
             count: 0,
             compression: CompressionType::VarInt,
+            edge_filter,
         }
     }
 
@@ -829,8 +874,11 @@ impl GraphStorageEngine {
         // Update outgoing adjacency index
         segment.outgoing_index.add_relationship(from_node, rel_id);
 
-        // Update incoming adjacency  index
+        // Update incoming adjacency index
         segment.incoming_index.add_relationship(to_node, rel_id);
+
+        // Update bloom filter for fast edge existence checks
+        segment.add_edge_to_filter(from_node, to_node);
 
         segment.count += 1;
 
@@ -1134,5 +1182,110 @@ mod tests {
         assert!(stats.total_indexed_relationships >= 4); // At least the 4 relationships we created
         assert!(stats.index_memory_usage > 0);
         assert!(stats.relationship_types_indexed >= 2); // Types 10 and 20
+    }
+
+    #[test]
+    fn test_bloom_filter_edge_existence() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        let mut engine = GraphStorageEngine::create(path).unwrap();
+
+        // Create nodes
+        let node1 = engine.create_node(1).unwrap();
+        let node2 = engine.create_node(2).unwrap();
+        let node3 = engine.create_node(3).unwrap();
+        let node4 = engine.create_node(4).unwrap();
+
+        // Create relationships
+        engine.create_relationship(node1, node2, 10).unwrap();
+        engine.create_relationship(node2, node3, 10).unwrap();
+        engine.create_relationship(node1, node3, 10).unwrap();
+
+        // Test bloom filter: edges that exist should return true
+        assert!(engine.might_have_edge(node1, node2, 10));
+        assert!(engine.might_have_edge(node2, node3, 10));
+        assert!(engine.might_have_edge(node1, node3, 10));
+
+        // Test bloom filter: edges that don't exist should return false
+        // (or true due to false positives, but false positives should be rare)
+        assert!(!engine.might_have_edge(node2, node1, 10)); // Reverse direction
+        assert!(!engine.might_have_edge(node3, node1, 10)); // Reverse direction
+        assert!(!engine.might_have_edge(node4, node1, 10)); // Node4 not connected
+        assert!(!engine.might_have_edge(node1, node4, 10)); // Node4 not connected
+
+        // Test has_edge with verified lookup
+        assert!(engine.has_edge(node1, node2, 10).unwrap());
+        assert!(engine.has_edge(node2, node3, 10).unwrap());
+        assert!(!engine.has_edge(node2, node1, 10).unwrap()); // Reverse direction
+
+        // Test non-existent type
+        assert!(!engine.might_have_edge(node1, node2, 99));
+
+        // Test bloom filter stats
+        let stats = engine.bloom_filter_stats(10).unwrap();
+        assert_eq!(stats.count, 3); // 3 edges inserted
+        assert!(stats.memory_bytes > 0);
+        assert!(stats.estimated_fpr < 0.1); // Should be well below 10%
+    }
+
+    #[test]
+    fn test_bloom_filter_performance() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        let mut engine = GraphStorageEngine::create(path).unwrap();
+
+        // Create many nodes
+        let num_nodes = 100;
+        let mut nodes = Vec::new();
+        for i in 0..num_nodes {
+            nodes.push(engine.create_node(i as u32).unwrap());
+        }
+
+        // Create many relationships (linear chain)
+        for i in 0..(num_nodes - 1) {
+            engine
+                .create_relationship(nodes[i], nodes[i + 1], 1)
+                .unwrap();
+        }
+
+        // Test that bloom filter correctly identifies existing edges
+        for i in 0..(num_nodes - 1) {
+            assert!(
+                engine.might_have_edge(nodes[i], nodes[i + 1], 1),
+                "Edge {}->{} should exist",
+                i,
+                i + 1
+            );
+        }
+
+        // Test that bloom filter rejects many non-existing edges
+        let mut false_positives = 0;
+        for i in 0..num_nodes {
+            for j in 0..num_nodes {
+                if j != i + 1 && j != i {
+                    // Not consecutive nodes
+                    if engine.might_have_edge(nodes[i], nodes[j], 1) {
+                        false_positives += 1;
+                    }
+                }
+            }
+        }
+
+        // With 99 edges and checking ~9800 non-edges, expect ~98 false positives at 1% FPR
+        // Allow some margin for statistical variation
+        let expected_checks = (num_nodes * num_nodes) - num_nodes - (num_nodes - 1);
+        let expected_fp = (expected_checks as f64 * 0.02) as usize; // 2% margin
+        assert!(
+            false_positives < expected_fp,
+            "Too many false positives: {} (expected < {})",
+            false_positives,
+            expected_fp
+        );
+
+        // Verify bloom filter stats
+        let stats = engine.bloom_filter_stats(1).unwrap();
+        assert_eq!(stats.count, (num_nodes - 1) as u64);
     }
 }

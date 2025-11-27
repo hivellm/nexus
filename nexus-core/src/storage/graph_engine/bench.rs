@@ -326,6 +326,160 @@ fn benchmark_mixed_operations(engine: &mut GraphStorageEngine) -> BenchResults {
     }
 }
 
+/// Benchmark bloom filter performance for edge existence checks
+pub fn benchmark_bloom_filter() -> Vec<BenchResults> {
+    let temp_file = NamedTempFile::new().unwrap();
+    let mut engine = GraphStorageEngine::create(temp_file.path()).unwrap();
+
+    let mut results = Vec::new();
+
+    // Setup: Create nodes and relationships
+    let num_nodes = 1000;
+    let num_edges = 5000;
+
+    for i in 0..num_nodes {
+        engine.create_node(1).unwrap();
+    }
+
+    for i in 0..num_edges {
+        let from = (i * 37) % num_nodes;
+        let to = ((i * 73) + 17) % num_nodes;
+        if from != to {
+            engine
+                .create_relationship(from as u64, to as u64, 10)
+                .unwrap();
+        }
+    }
+
+    // Benchmark 1: Bloom filter fast rejection (edges that don't exist)
+    let iterations = 10000;
+    let start = Instant::now();
+    let mut rejections = 0;
+
+    for i in 0..iterations {
+        // Query for edges that almost certainly don't exist
+        let from = (i * 13 + 500) as u64 % num_nodes as u64;
+        let to = (i * 17 + 700) as u64 % num_nodes as u64;
+        if !engine.might_have_edge(from, to, 10) {
+            rejections += 1;
+        }
+    }
+
+    let total_time = start.elapsed();
+    results.push(BenchResults {
+        operation: format!("Bloom Filter: Fast Rejection ({} rejections)", rejections),
+        iterations,
+        total_time,
+        avg_time: total_time / iterations as u32,
+        throughput: iterations as f64 / total_time.as_secs_f64(),
+    });
+
+    // Benchmark 2: Bloom filter with verification (has_edge)
+    let iterations = 1000;
+    let start = Instant::now();
+
+    for i in 0..iterations {
+        let from = (i * 37) % num_nodes;
+        let to = ((i * 73) + 17) % num_nodes;
+        let _ = engine.has_edge(from as u64, to as u64, 10);
+    }
+
+    let total_time = start.elapsed();
+    results.push(BenchResults {
+        operation: "Bloom Filter: Verified Edge Check (has_edge)".to_string(),
+        iterations,
+        total_time,
+        avg_time: total_time / iterations as u32,
+        throughput: iterations as f64 / total_time.as_secs_f64(),
+    });
+
+    // Get bloom filter stats
+    if let Some(stats) = engine.bloom_filter_stats(10) {
+        tracing::info!(
+            "Bloom Filter Stats: {} edges, {} bytes, {:.4}% estimated FPR",
+            stats.count,
+            stats.memory_bytes,
+            stats.estimated_fpr * 100.0
+        );
+    }
+
+    results
+}
+
+/// Benchmark skip list performance for large adjacency lists
+pub fn benchmark_skip_list() -> Vec<BenchResults> {
+    use super::format::SkipList;
+
+    let mut results = Vec::new();
+
+    // Benchmark 1: Skip list insertion
+    let iterations = 10000;
+    let mut skip_list = SkipList::with_max_level(12);
+    let start = Instant::now();
+
+    for i in 0..iterations {
+        skip_list.insert(i as u64, (i * 10) as u64);
+    }
+
+    let total_time = start.elapsed();
+    results.push(BenchResults {
+        operation: "Skip List: Insertion".to_string(),
+        iterations,
+        total_time,
+        avg_time: total_time / iterations as u32,
+        throughput: iterations as f64 / total_time.as_secs_f64(),
+    });
+
+    // Benchmark 2: Skip list lookup
+    let iterations = 100000;
+    let start = Instant::now();
+
+    for i in 0..iterations {
+        let key = (i * 7) % 10000;
+        let _ = skip_list.find(key as u64);
+    }
+
+    let total_time = start.elapsed();
+    results.push(BenchResults {
+        operation: "Skip List: Lookup (O(log n))".to_string(),
+        iterations,
+        total_time,
+        avg_time: total_time / iterations as u32,
+        throughput: iterations as f64 / total_time.as_secs_f64(),
+    });
+
+    // Benchmark 3: Skip list range query
+    let iterations = 10000;
+    let start = Instant::now();
+
+    for i in 0..iterations {
+        let start_key = (i * 11) % 9000;
+        let end_key = start_key + 100;
+        let _ = skip_list.range(start_key as u64, end_key as u64);
+    }
+
+    let total_time = start.elapsed();
+    results.push(BenchResults {
+        operation: "Skip List: Range Query (100 elements)".to_string(),
+        iterations,
+        total_time,
+        avg_time: total_time / iterations as u32,
+        throughput: iterations as f64 / total_time.as_secs_f64(),
+    });
+
+    // Log skip list stats
+    let stats = skip_list.stats();
+    tracing::info!(
+        "Skip List Stats: {} elements, {} levels, {} bytes, {:.1} avg/level",
+        stats.len,
+        stats.levels,
+        stats.memory_bytes,
+        stats.avg_level_size
+    );
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +580,66 @@ mod tests {
                     result.throughput / 20.0
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_bloom_filter_benchmarks() {
+        let results = benchmark_bloom_filter();
+
+        // Should have 2 benchmark results
+        assert_eq!(results.len(), 2);
+
+        // Check that bloom filter operations are fast
+        for result in &results {
+            assert!(result.iterations > 0);
+            assert!(
+                result.throughput > 1000.0,
+                "Bloom filter throughput {} ops/sec is too low for operation: {}",
+                result.throughput,
+                result.operation
+            );
+        }
+
+        println!("\nBloom Filter Benchmark Results:");
+        for result in &results {
+            println!(
+                "  {}: {} iterations, avg {:.3}µs, throughput {:.0} ops/sec",
+                result.operation,
+                result.iterations,
+                result.avg_time.as_secs_f64() * 1_000_000.0,
+                result.throughput
+            );
+        }
+    }
+
+    #[test]
+    fn test_skip_list_benchmarks() {
+        let results = benchmark_skip_list();
+
+        // Should have 3 benchmark results
+        assert_eq!(results.len(), 3);
+
+        // Check that skip list operations are fast
+        for result in &results {
+            assert!(result.iterations > 0);
+            assert!(
+                result.throughput > 10000.0,
+                "Skip list throughput {} ops/sec is too low for operation: {}",
+                result.throughput,
+                result.operation
+            );
+        }
+
+        println!("\nSkip List Benchmark Results:");
+        for result in &results {
+            println!(
+                "  {}: {} iterations, avg {:.3}µs, throughput {:.0} ops/sec",
+                result.operation,
+                result.iterations,
+                result.avg_time.as_secs_f64() * 1_000_000.0,
+                result.throughput
+            );
         }
     }
 }
