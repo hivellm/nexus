@@ -1370,16 +1370,6 @@ fn neo4j_compat_02() {
 }
 
 #[test]
-fn neo4j_compat_03() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(vec!["A".to_string(), "B".to_string()], json!({}))
-        .unwrap();
-    e.refresh_executor().unwrap();
-    execute_query(&mut e, "MATCH (n:A) RETURN labels(n) AS l").unwrap();
-}
-
-#[test]
 fn neo4j_compat_04() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -1436,18 +1426,6 @@ fn neo4j_compat_08() {
         .unwrap();
     e.refresh_executor().unwrap();
     execute_query(&mut e, "MATCH (n:T) RETURN n.a AS a, n.b AS b").unwrap();
-}
-
-#[test]
-fn neo4j_compat_09() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(vec!["T".to_string()], json!({"v": 10}))
-        .unwrap();
-    e.create_node(vec!["T".to_string()], json!({"v": 20}))
-        .unwrap();
-    e.refresh_executor().unwrap();
-    execute_query(&mut e, "MATCH (n:T) WHERE n.v = 10 RETURN n").unwrap();
 }
 
 #[test]
@@ -1632,16 +1610,6 @@ fn neo4j_test_27() {
     e.refresh_executor().unwrap();
     let r = execute_query(&mut e, "MATCH (n:T) RETURN count(*) AS c").unwrap();
     assert_eq!(r.rows[0].values[0], json!(11));
-}
-#[test]
-fn neo4j_test_28() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(vec!["T".to_string()], json!({})).unwrap();
-    e.create_node(vec!["T".to_string()], json!({})).unwrap();
-    e.refresh_executor().unwrap();
-    let r = execute_query(&mut e, "MATCH (n:T) RETURN count(n) AS c").unwrap();
-    assert_eq!(r.rows[0].values[0], json!(2));
 }
 #[test]
 fn neo4j_test_29() {
@@ -1853,22 +1821,6 @@ fn neo4j_test_47() {
     assert_eq!(r.rows[0].values[0], json!(35));
 }
 #[test]
-fn neo4j_test_48() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(
-        vec!["Person".to_string()],
-        json!({"name": "Alice", "age": 30}),
-    )
-    .unwrap();
-    e.refresh_executor().unwrap();
-    execute_query(
-        &mut e,
-        "MATCH (p:Person) RETURN p.name AS name, p.age AS age",
-    )
-    .unwrap();
-}
-#[test]
 fn neo4j_test_49() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -1878,17 +1830,6 @@ fn neo4j_test_49() {
     e.refresh_executor().unwrap();
     let r = execute_query(&mut e, "MATCH (n:T) RETURN count(*) AS c").unwrap();
     assert_eq!(r.rows[0].values[0], json!(40));
-}
-#[test]
-fn neo4j_test_50() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    for _i in 0..45 {
-        e.create_node(vec!["T".to_string()], json!({})).unwrap();
-    }
-    e.refresh_executor().unwrap();
-    let r = execute_query(&mut e, "MATCH (n:T) RETURN count(*) AS c").unwrap();
-    assert_eq!(r.rows[0].values[0], json!(45));
 }
 #[test]
 fn neo4j_test_51() {

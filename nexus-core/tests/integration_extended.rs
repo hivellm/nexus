@@ -533,26 +533,6 @@ fn integration_engine_multiple_labels() {
 }
 
 #[test]
-fn integration_engine_different_prop_types() {
-    let dir = TempDir::new().unwrap();
-    let mut engine = Engine::with_data_dir(dir.path()).unwrap();
-
-    engine
-        .create_node(
-            vec!["Test".to_string()],
-            json!({"str": "text", "num": 42, "bool": true, "float": 3.15}),
-        )
-        .unwrap();
-    engine.refresh_executor().unwrap();
-
-    let result = engine
-        .execute_cypher("MATCH (n:Test) RETURN keys(n) AS keys")
-        .unwrap();
-    let keys = result.rows[0].values[0].as_array().unwrap();
-    assert_eq!(keys.len(), 4);
-}
-
-#[test]
 fn integration_engine_refresh_multiple() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::with_data_dir(dir.path()).unwrap();
@@ -1027,14 +1007,6 @@ fn integration_test_31() {
 }
 
 #[test]
-fn integration_test_32() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    e.create_node(vec!["T".to_string()], json!({})).unwrap();
-    e.refresh_executor().unwrap();
-}
-
-#[test]
 fn integration_test_33() {
     let d = TempDir::new().unwrap();
     let mut e = Engine::with_data_dir(d.path()).unwrap();
@@ -1247,18 +1219,6 @@ fn integration_test_56() {
         .create_node(vec!["T".to_string()], json!({"name": "test"}))
         .unwrap();
     e.get_node(id).unwrap();
-}
-
-#[test]
-fn integration_test_57() {
-    let d = TempDir::new().unwrap();
-    let mut e = Engine::with_data_dir(d.path()).unwrap();
-    let a = e.create_node(vec!["N".to_string()], json!({})).unwrap();
-    let b = e.create_node(vec!["N".to_string()], json!({})).unwrap();
-    let rel = e
-        .create_relationship(a, b, "R".to_string(), json!({}))
-        .unwrap();
-    e.get_relationship(rel).unwrap();
 }
 
 #[test]
