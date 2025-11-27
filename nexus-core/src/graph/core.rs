@@ -1200,7 +1200,10 @@ mod tests {
     fn create_test_graph() -> (Graph, TempDir) {
         let dir = TempDir::new().unwrap();
         let store = RecordStore::new(dir.path()).unwrap();
-        let catalog = Arc::new(Catalog::new(dir.path().join("catalog")).unwrap());
+        // Ensure catalog directory exists before creating Catalog
+        let catalog_path = dir.path().join("catalog");
+        std::fs::create_dir_all(&catalog_path).unwrap();
+        let catalog = Arc::new(Catalog::new(&catalog_path).unwrap());
         let graph = Graph::new(store, catalog);
         (graph, dir)
     }

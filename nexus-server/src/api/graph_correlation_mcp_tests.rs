@@ -51,7 +51,9 @@ impl TestServer {
 
         if engine_guard.is_none() {
             let temp_dir = TempDir::new().unwrap();
-            let engine = nexus_core::Engine::with_data_dir(temp_dir.path()).unwrap();
+            let data_dir = temp_dir.path();
+            std::fs::create_dir_all(data_dir).unwrap();
+            let engine = nexus_core::Engine::with_data_dir(data_dir).unwrap();
             let engine_arc = Arc::new(RwLock::new(engine));
 
             let executor = Arc::new(Executor::default());
