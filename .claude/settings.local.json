@@ -17,7 +17,9 @@
       "Bash(powershell:*)",
       "Bash(xxd:*)",
       "Bash(RUST_LOG=nexus_core::executor=debug cargo test:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(npm install)"
     ],
     "deny": [],
     "ask": []
