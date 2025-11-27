@@ -1,0 +1,39 @@
+# Dockerfile for running tests in Ubuntu environment (similar to GitHub Actions)
+# Usage: docker build -f scripts/docker/Dockerfile.test-ubuntu -t nexus-test-ubuntu .
+#        docker run --rm -v $(pwd):/workspace nexus-test-ubuntu
+
+FROM ubuntu:22.04
+
+# Avoid prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    pkg-config \
+    libssl-dev \
+    clang \
+    lld \
+    mold \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust stable
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install cargo-nextest (same as GitHub Actions)
+RUN cargo install cargo-nextest --locked
+
+# Configure mold linker (same as GitHub Actions)
+RUN mkdir -p /root/.cargo && \
+    echo '[target.x86_64-unknown-linux-gnu]' >> /root/.cargo/config.toml && \
+    echo 'linker = "clang"' >> /root/.cargo/config.toml && \
+    echo 'rustflags = ["-C", "link-arg=-fuse-ld=mold"]' >> /root/.cargo/config.toml
+
+WORKDIR /workspace
+
+# Default command: run tests
+CMD ["cargo", "nextest", "run", "--workspace", "--no-default-features"]
+
