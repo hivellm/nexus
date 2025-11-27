@@ -372,10 +372,13 @@ mod tests {
     async fn test_list_labels_without_catalog() {
         let response = list_labels().await;
         // Check if catalog is initialized (may be initialized by other tests)
+        // If not initialized, should have an error
+        // If initialized by other tests, labels may not be empty
         if response.error.is_some() {
             assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
         }
-        assert_eq!(response.labels.len(), 0);
+        // Note: Cannot assert labels.len() == 0 because other tests may have added labels
+        // The catalog is global and shared across tests
     }
 
     #[tokio::test]
@@ -385,8 +388,11 @@ mod tests {
         let _ = init_catalog(catalog.clone());
 
         let response = list_labels().await;
+        // Note: Cannot assert labels.len() == 0 because the global catalog
+        // may have been initialized by other tests with existing labels.
+        // The OnceLock only allows the first initialization to succeed.
+        // Just verify there's no error.
         assert!(response.error.is_none());
-        assert_eq!(response.labels.len(), 0); // Empty for new catalog
     }
 
     #[tokio::test]
@@ -472,7 +478,10 @@ mod tests {
         let _ = init_catalog(catalog.clone());
 
         let response = list_rel_types().await;
+        // Note: Cannot assert types.len() == 0 because the global catalog
+        // may have been initialized by other tests with existing rel types.
+        // The OnceLock only allows the first initialization to succeed.
+        // Just verify there's no error.
         assert!(response.error.is_none());
-        assert_eq!(response.types.len(), 0); // Empty for new catalog
     }
 }
