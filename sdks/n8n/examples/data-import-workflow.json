@@ -1,0 +1,69 @@
+{
+  "name": "Nexus Data Import Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeCypher",
+        "cypher": "CREATE (p:Person {name: $name, age: $age, email: $email}) RETURN p",
+        "queryParams": {
+          "parameter": [
+            { "name": "name", "value": "={{ $json.name }}" },
+            { "name": "age", "value": "={{ $json.age }}" },
+            { "name": "email", "value": "={{ $json.email }}" }
+          ]
+        }
+      },
+      "id": "nexus-create",
+      "name": "Create Person Node",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            { "name": "name", "value": "Alice Johnson" },
+            { "name": "email", "value": "alice@example.com" }
+          ],
+          "number": [
+            { "name": "age", "value": 30 }
+          ]
+        }
+      },
+      "id": "set-data",
+      "name": "Set Sample Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [350, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [{ "node": "Set Sample Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Sample Data": {
+      "main": [
+        [{ "node": "Create Person Node", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null
+}

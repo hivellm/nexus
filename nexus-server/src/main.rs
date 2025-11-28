@@ -393,6 +393,54 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         .route("/schema/labels", get(api::schema::list_labels))
         .route("/schema/rel_types", post(api::schema::create_rel_type))
         .route("/schema/rel_types", get(api::schema::list_rel_types))
+        .route("/schema/indexes", get({
+            let server = nexus_server.clone();
+            move || {
+                let state = api::indexes::IndexState {
+                    engine: server.engine.clone(),
+                };
+                api::indexes::list_indexes(axum::extract::State(state))
+            }
+        }))
+        .route("/schema/indexes", post({
+            let server = nexus_server.clone();
+            move |req: axum::extract::Json<api::indexes::CreateIndexRequest>| {
+                let state = api::indexes::IndexState {
+                    engine: server.engine.clone(),
+                };
+                api::indexes::create_index(axum::extract::State(state), req)
+            }
+        }))
+        .route("/schema/indexes/{name}", delete({
+            let server = nexus_server.clone();
+            move |path: axum::extract::Path<String>| {
+                let state = api::indexes::IndexState {
+                    engine: server.engine.clone(),
+                };
+                api::indexes::delete_index(axum::extract::State(state), path)
+            }
+        }))
+        // Property keys endpoint
+        .route("/property_keys", get({
+            let server = nexus_server.clone();
+            move || {
+                let state = api::property_keys::PropertyKeysState {
+                    engine: server.engine.clone(),
+                };
+                api::property_keys::list_property_keys(axum::extract::State(state))
+            }
+        }))
+        // Logs endpoint
+        .route("/logs", get(api::logs::get_logs))
+        // Query history endpoint (placeholder - will be implemented when query history is added to server)
+        .route("/query-history", get(|| async {
+            axum::Json(serde_json::json!({
+                "queries": [],
+                "total": 0
+            }))
+        }))
+        // Config endpoint
+        .route("/config", get(api::config::get_config))
         // Data management endpoints
         .route("/data/nodes", get(api::data::get_node_by_id))
         .route("/data/nodes", post(api::data::create_node))

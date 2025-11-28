@@ -1,0 +1,131 @@
+{
+  "name": "Build Social Network Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "batchCreateNodes",
+        "nodesJson": "[{\"labels\": [\"Person\"], \"properties\": {\"name\": \"Alice\", \"age\": 30}}, {\"labels\": [\"Person\"], \"properties\": {\"name\": \"Bob\", \"age\": 25}}, {\"labels\": [\"Person\"], \"properties\": {\"name\": \"Carol\", \"age\": 28}}, {\"labels\": [\"Person\"], \"properties\": {\"name\": \"David\", \"age\": 35}}]"
+      },
+      "id": "create-people",
+      "name": "Create People",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeCypher",
+        "cypher": "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS {since: '2020'}]->(b) CREATE (b)-[:KNOWS {since: '2020'}]->(a) RETURN a, b"
+      },
+      "id": "create-friendship-1",
+      "name": "Alice knows Bob",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [680, 200],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeCypher",
+        "cypher": "MATCH (b:Person {name: 'Bob'}), (c:Person {name: 'Carol'}) CREATE (b)-[:KNOWS {since: '2021'}]->(c) RETURN b, c"
+      },
+      "id": "create-friendship-2",
+      "name": "Bob knows Carol",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [680, 350],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeCypher",
+        "cypher": "MATCH (c:Person {name: 'Carol'}), (d:Person {name: 'David'}) CREATE (c)-[:KNOWS {since: '2022'}]->(d) CREATE (d)-[:KNOWS {since: '2019'}]->(c) RETURN c, d"
+      },
+      "id": "create-friendship-3",
+      "name": "Carol knows David",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [680, 500],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeCypher",
+        "cypher": "MATCH path = (a:Person {name: 'Alice'})-[:KNOWS*]-(d:Person {name: 'David'}) RETURN path LIMIT 1"
+      },
+      "id": "find-path",
+      "name": "Find Path Alice to David",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [900, 350],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [{ "node": "Create People", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create People": {
+      "main": [
+        [
+          { "node": "Alice knows Bob", "type": "main", "index": 0 },
+          { "node": "Bob knows Carol", "type": "main", "index": 0 },
+          { "node": "Carol knows David", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Alice knows Bob": {
+      "main": [
+        [{ "node": "Find Path Alice to David", "type": "main", "index": 0 }]
+      ]
+    },
+    "Bob knows Carol": {
+      "main": [
+        [{ "node": "Find Path Alice to David", "type": "main", "index": 0 }]
+      ]
+    },
+    "Carol knows David": {
+      "main": [
+        [{ "node": "Find Path Alice to David", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null
+}

@@ -88,16 +88,39 @@ export class NexusApiClient {
     try {
       const startTime = Date.now();
       const response = await this.client.post('/cypher', {
-        query,
+        cypher: query,
         params: params || {},
       });
       const executionTime = Date.now() - startTime;
 
+      // Handle different response formats
+      const data = response.data;
+      let columns: string[] = [];
+      let rows: any[] = [];
+
+      if (data.columns && data.rows) {
+        // Standard format: { columns: [...], rows: [...] }
+        columns = data.columns;
+        rows = data.rows;
+      } else if (Array.isArray(data)) {
+        // Array format: [{ ... }, { ... }]
+        rows = data;
+        if (rows.length > 0) {
+          columns = Object.keys(rows[0]);
+        }
+      } else if (data.result) {
+        // Wrapped format: { result: [...] }
+        rows = Array.isArray(data.result) ? data.result : [data.result];
+        if (rows.length > 0) {
+          columns = Object.keys(rows[0]);
+        }
+      }
+
       const result: QueryResult = {
-        columns: response.data.columns || [],
-        rows: response.data.rows || [],
+        columns,
+        rows,
         executionTime,
-        rowCount: response.data.rows?.length || 0,
+        rowCount: rows.length,
       };
 
       return { success: true, data: result };

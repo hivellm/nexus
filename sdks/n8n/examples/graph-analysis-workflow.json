@@ -1,0 +1,87 @@
+{
+  "name": "Nexus Graph Analysis Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 1 }]
+        }
+      },
+      "id": "schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeCypher",
+        "cypher": "MATCH (p:Person)-[:KNOWS]->(friend) RETURN p.name AS person, count(friend) AS friendCount ORDER BY friendCount DESC LIMIT 10"
+      },
+      "id": "nexus-query",
+      "name": "Get Top Connected People",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeCypher",
+        "cypher": "MATCH (p:Person) RETURN count(p) AS totalPeople, avg(p.age) AS averageAge"
+      },
+      "id": "nexus-stats",
+      "name": "Get Statistics",
+      "type": "@hivellm/n8n-nodes-nexus.nexus",
+      "typeVersion": 1,
+      "position": [460, 450],
+      "credentials": {
+        "nexusApi": {
+          "id": "1",
+          "name": "Nexus API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeByFields": {
+          "values": []
+        },
+        "options": {}
+      },
+      "id": "merge",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [680, 375]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          { "node": "Get Top Connected People", "type": "main", "index": 0 },
+          { "node": "Get Statistics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Top Connected People": {
+      "main": [
+        [{ "node": "Merge Results", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Statistics": {
+      "main": [
+        [{ "node": "Merge Results", "type": "main", "index": 1 }]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null
+}

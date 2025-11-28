@@ -24,7 +24,10 @@
       "Bash(npx tsc:*)",
       "Bash(npx vite build)",
       "Bash(npm install:*)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(dir:*)",
+      "Bash(mkdir:*)",
+      "Bash(npm run test:*)"
     ],
     "deny": [],
     "ask": []

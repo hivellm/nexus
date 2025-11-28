@@ -30,6 +30,12 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function applyTheme(): void {
+    // Use dark-mode class like Untitled UI / Vectorizer
+    if (theme.value === 'dark') {
+      document.documentElement.classList.add('dark-mode');
+    } else {
+      document.documentElement.classList.remove('dark-mode');
+    }
     document.documentElement.setAttribute('data-theme', theme.value);
   }
 

@@ -1,62 +1,57 @@
 <template>
   <div class="flex flex-col h-full">
     <!-- Query Editor -->
-    <div class="flex-shrink-0 border-b border-border">
+    <div class="flex-shrink-0 border-b border-neutral-200 dark:border-neutral-800">
       <div class="p-4">
         <div class="flex items-center justify-between mb-2">
-          <h3 class="text-sm font-medium text-text-secondary">Cypher Query</h3>
+          <h3 class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Cypher Query</h3>
           <div class="flex items-center gap-2">
             <button
               @click="showSavedQueries = true"
-              class="btn btn-secondary text-xs"
+              class="px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors"
               title="Saved Queries"
             >
-              <i class="fas fa-bookmark mr-1"></i>
               Saved
             </button>
             <button
               @click="showHistory = true"
-              class="btn btn-secondary text-xs"
+              class="px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors"
               title="Query History"
             >
-              <i class="fas fa-history mr-1"></i>
               History
             </button>
             <button
               @click="saveCurrentQuery"
-              class="btn btn-secondary text-xs"
+              class="px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors disabled:opacity-50"
               :disabled="!currentQuery.trim()"
               title="Save Current Query"
             >
-              <i class="fas fa-save mr-1"></i>
               Save
             </button>
             <button
               @click="clearQuery"
-              class="btn btn-secondary text-xs"
+              class="px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors disabled:opacity-50"
               :disabled="!currentQuery"
             >
-              <i class="fas fa-eraser mr-1"></i>
               Clear
             </button>
             <button
               @click="executeQuery"
-              class="btn btn-primary"
+              class="px-4 py-1.5 text-sm font-medium text-white bg-neutral-900 dark:bg-neutral-100 dark:text-neutral-900 rounded-lg hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors disabled:opacity-50"
               :disabled="isExecuting || !currentQuery.trim()"
             >
-              <i :class="['fas mr-1', isExecuting ? 'fa-spinner fa-spin' : 'fa-play']"></i>
               {{ isExecuting ? 'Executing...' : 'Run Query' }}
             </button>
           </div>
         </div>
-        <div class="h-40 rounded-lg overflow-hidden border border-border">
+        <div class="h-40 rounded-lg overflow-hidden border border-neutral-200 dark:border-neutral-700">
           <MonacoEditor
             v-model="currentQuery"
             :theme="editorTheme"
             @execute="executeQuery"
           />
         </div>
-        <div class="flex items-center justify-between mt-2 text-xs text-text-muted">
+        <div class="flex items-center justify-between mt-2 text-xs text-neutral-500 dark:text-neutral-400">
           <span>Press Ctrl+Enter to execute</span>
           <span v-if="lastExecutionTime">Last execution: {{ lastExecutionTime }}ms</span>
         </div>
@@ -66,12 +61,11 @@
     <!-- Results -->
     <div class="flex-1 flex flex-col min-h-0 p-4">
       <!-- Error message -->
-      <div v-if="error" class="mb-4 p-4 bg-error/10 border border-error/20 rounded-lg">
-        <div class="flex items-center gap-2 text-error">
-          <i class="fas fa-exclamation-circle"></i>
+      <div v-if="error" class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+        <div class="flex items-center gap-2 text-red-800 dark:text-red-300">
           <span class="font-medium">Query Error</span>
         </div>
-        <p class="mt-1 text-sm text-text-secondary">{{ error }}</p>
+        <p class="mt-1 text-sm text-red-700 dark:text-red-400">{{ error }}</p>
       </div>
 
       <!-- Results header -->
@@ -80,30 +74,26 @@
           <div class="flex items-center gap-2">
             <button
               @click="viewMode = 'table'"
-              :class="['px-3 py-1 rounded text-sm', viewMode === 'table' ? 'bg-accent text-white' : 'bg-bg-tertiary text-text-secondary']"
+              :class="['px-3 py-1 rounded text-sm transition-colors', viewMode === 'table' ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900' : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300']"
             >
-              <i class="fas fa-table mr-1"></i>
               Table
             </button>
             <button
               @click="viewMode = 'json'"
-              :class="['px-3 py-1 rounded text-sm', viewMode === 'json' ? 'bg-accent text-white' : 'bg-bg-tertiary text-text-secondary']"
+              :class="['px-3 py-1 rounded text-sm transition-colors', viewMode === 'json' ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900' : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300']"
             >
-              <i class="fas fa-code mr-1"></i>
               JSON
             </button>
           </div>
-          <span class="text-sm text-text-muted">
+          <span class="text-sm text-neutral-500 dark:text-neutral-400">
             {{ lastResult.rowCount }} rows in {{ lastResult.executionTime }}ms
           </span>
         </div>
         <div class="flex items-center gap-2">
-          <button @click="exportResults('json')" class="btn btn-secondary text-xs">
-            <i class="fas fa-download mr-1"></i>
+          <button @click="exportResults('json')" class="px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors">
             Export JSON
           </button>
-          <button @click="exportResults('csv')" class="btn btn-secondary text-xs">
-            <i class="fas fa-file-csv mr-1"></i>
+          <button @click="exportResults('csv')" class="px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors">
             Export CSV
           </button>
         </div>
@@ -111,15 +101,15 @@
 
       <!-- Table view -->
       <div v-if="lastResult && viewMode === 'table'" class="flex-1 overflow-auto">
-        <table class="table">
-          <thead>
+        <table class="min-w-full divide-y divide-neutral-200 dark:divide-neutral-700">
+          <thead class="bg-neutral-50 dark:bg-neutral-800/50">
             <tr>
-              <th v-for="column in lastResult.columns" :key="column">{{ column }}</th>
+              <th v-for="column in lastResult.columns" :key="column" class="px-4 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">{{ column }}</th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="(row, index) in lastResult.rows" :key="index">
-              <td v-for="column in lastResult.columns" :key="column">
+          <tbody class="bg-white dark:bg-neutral-900 divide-y divide-neutral-200 dark:divide-neutral-800/50">
+            <tr v-for="(row, index) in lastResult.rows" :key="index" class="hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
+              <td v-for="column in lastResult.columns" :key="column" class="px-4 py-3 text-sm text-neutral-900 dark:text-neutral-100">
                 <span v-if="isObject(row[column])" class="font-mono text-xs">
                   {{ JSON.stringify(row[column]).substring(0, 100) }}{{ JSON.stringify(row[column]).length > 100 ? '...' : '' }}
                 </span>
@@ -132,32 +122,33 @@
 
       <!-- JSON view -->
       <div v-if="lastResult && viewMode === 'json'" class="flex-1 overflow-auto">
-        <pre class="p-4 bg-bg-tertiary rounded-lg font-mono text-sm text-text-primary overflow-auto">{{ JSON.stringify(lastResult.rows, null, 2) }}</pre>
+        <pre class="p-4 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg font-mono text-sm text-neutral-900 dark:text-neutral-100 overflow-auto">{{ JSON.stringify(lastResult.rows, null, 2) }}</pre>
       </div>
 
       <!-- Empty state -->
       <div v-if="!lastResult && !error" class="flex-1 flex items-center justify-center">
-        <div class="text-center text-text-muted">
-          <i class="fas fa-terminal text-4xl mb-4"></i>
+        <div class="text-center text-neutral-500 dark:text-neutral-400">
           <p>Enter a Cypher query and click Run to see results</p>
         </div>
       </div>
     </div>
 
     <!-- Query History Sidebar -->
-    <div v-if="showHistory" class="fixed right-0 top-0 bottom-0 w-96 bg-bg-secondary border-l border-border p-4 z-50 shadow-lg">
+    <div v-if="showHistory" class="fixed right-0 top-0 bottom-0 w-96 bg-white dark:bg-neutral-900 border-l border-neutral-200 dark:border-neutral-800 p-4 z-50 shadow-lg">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="font-semibold">Query History</h3>
+        <h3 class="font-semibold text-neutral-900 dark:text-white">Query History</h3>
         <div class="flex items-center gap-2">
           <button
             @click="clearHistory"
-            class="text-xs text-text-muted hover:text-error"
+            class="text-xs text-neutral-500 hover:text-red-600 dark:hover:text-red-400"
             title="Clear History"
           >
-            <i class="fas fa-trash"></i>
+            Clear
           </button>
-          <button @click="showHistory = false" class="text-text-muted hover:text-text-primary">
-            <i class="fas fa-times"></i>
+          <button @click="showHistory = false" class="text-neutral-500 hover:text-neutral-900 dark:hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
       </div>
@@ -165,74 +156,74 @@
         <div
           v-for="item in history"
           :key="item.id"
-          class="p-3 bg-bg-tertiary rounded-lg cursor-pointer hover:bg-bg-hover group"
+          class="p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg cursor-pointer hover:bg-neutral-100 dark:hover:bg-neutral-800 group"
           @click="loadFromHistory(item.query)"
         >
-          <div class="font-mono text-xs text-text-primary truncate">{{ item.query }}</div>
+          <div class="font-mono text-xs text-neutral-900 dark:text-white truncate">{{ item.query }}</div>
           <div class="flex items-center justify-between mt-1 text-xs">
-            <div class="flex items-center gap-2">
-              <span :class="item.success ? 'text-success' : 'text-error'">
-                <i :class="item.success ? 'fas fa-check' : 'fas fa-times'"></i>
+            <div class="flex items-center gap-2 text-neutral-500 dark:text-neutral-400">
+              <span :class="item.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'">
+                {{ item.success ? '✓' : '✗' }}
               </span>
-              <span class="text-text-muted">{{ item.rowCount }} rows</span>
-              <span class="text-text-muted">{{ item.executionTime }}ms</span>
+              <span>{{ item.rowCount }} rows</span>
+              <span>{{ item.executionTime }}ms</span>
             </div>
             <button
               @click.stop="saveQueryFromHistory(item)"
-              class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-accent"
+              class="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
               title="Save this query"
             >
-              <i class="fas fa-bookmark"></i>
+              Save
             </button>
           </div>
         </div>
-        <div v-if="history.length === 0" class="text-center text-text-muted py-8">
-          <i class="fas fa-history text-2xl mb-2"></i>
+        <div v-if="history.length === 0" class="text-center text-neutral-500 dark:text-neutral-400 py-8">
           <p>No query history yet</p>
         </div>
       </div>
     </div>
 
     <!-- Saved Queries Sidebar -->
-    <div v-if="showSavedQueries" class="fixed right-0 top-0 bottom-0 w-96 bg-bg-secondary border-l border-border p-4 z-50 shadow-lg">
+    <div v-if="showSavedQueries" class="fixed right-0 top-0 bottom-0 w-96 bg-white dark:bg-neutral-900 border-l border-neutral-200 dark:border-neutral-800 p-4 z-50 shadow-lg">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="font-semibold">Saved Queries</h3>
-        <button @click="showSavedQueries = false" class="text-text-muted hover:text-text-primary">
-          <i class="fas fa-times"></i>
+        <h3 class="font-semibold text-neutral-900 dark:text-white">Saved Queries</h3>
+        <button @click="showSavedQueries = false" class="text-neutral-500 hover:text-neutral-900 dark:hover:text-white">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
       <div class="space-y-2 overflow-y-auto h-full pb-20">
         <div
           v-for="saved in savedQueries"
           :key="saved.id"
-          class="p-3 bg-bg-tertiary rounded-lg group"
+          class="p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg group"
         >
           <div class="flex items-center justify-between mb-1">
-            <span class="font-medium text-sm text-text-primary">{{ saved.name }}</span>
+            <span class="font-medium text-sm text-neutral-900 dark:text-white">{{ saved.name }}</span>
             <div class="flex items-center gap-1">
               <button
                 @click="loadSavedQuery(saved)"
-                class="text-xs text-text-muted hover:text-accent px-2 py-1"
+                class="text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-white px-2 py-1"
                 title="Load query"
               >
-                <i class="fas fa-play"></i>
+                Load
               </button>
               <button
                 @click="deleteSavedQuery(saved.id)"
-                class="text-xs text-text-muted hover:text-error px-2 py-1"
+                class="text-xs text-neutral-500 hover:text-red-600 dark:hover:text-red-400 px-2 py-1"
                 title="Delete query"
               >
-                <i class="fas fa-trash"></i>
+                Delete
               </button>
             </div>
           </div>
-          <div class="font-mono text-xs text-text-secondary truncate">{{ saved.query }}</div>
-          <div class="text-xs text-text-muted mt-1">
+          <div class="font-mono text-xs text-neutral-600 dark:text-neutral-400 truncate">{{ saved.query }}</div>
+          <div class="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
             {{ formatDate(saved.createdAt) }}
           </div>
         </div>
-        <div v-if="savedQueries.length === 0" class="text-center text-text-muted py-8">
-          <i class="fas fa-bookmark text-2xl mb-2"></i>
+        <div v-if="savedQueries.length === 0" class="text-center text-neutral-500 dark:text-neutral-400 py-8">
           <p>No saved queries yet</p>
           <p class="text-xs mt-1">Click "Save" to bookmark a query</p>
         </div>
@@ -241,31 +232,31 @@
 
     <!-- Save Query Modal -->
     <div v-if="showSaveModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div class="bg-bg-secondary rounded-lg p-6 w-full max-w-md mx-4">
-        <h3 class="text-lg font-semibold mb-4">Save Query</h3>
+      <div class="bg-white dark:bg-neutral-900 rounded-lg p-6 w-full max-w-md mx-4 border border-neutral-200 dark:border-neutral-800">
+        <h3 class="text-lg font-semibold text-neutral-900 dark:text-white mb-4">Save Query</h3>
         <div class="space-y-4">
           <div>
-            <label class="block text-sm text-text-secondary mb-1">Query Name</label>
+            <label class="block text-sm text-neutral-600 dark:text-neutral-400 mb-1">Query Name</label>
             <input
               v-model="saveQueryName"
               type="text"
-              class="w-full px-3 py-2 bg-bg-tertiary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
+              class="w-full px-3 py-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-neutral-500 text-neutral-900 dark:text-white"
               placeholder="e.g., Get all users"
               @keydown.enter="confirmSaveQuery"
             />
           </div>
           <div>
-            <label class="block text-sm text-text-secondary mb-1">Query</label>
-            <div class="font-mono text-xs text-text-muted bg-bg-tertiary p-3 rounded-lg max-h-32 overflow-auto">
+            <label class="block text-sm text-neutral-600 dark:text-neutral-400 mb-1">Query</label>
+            <div class="font-mono text-xs text-neutral-600 dark:text-neutral-400 bg-neutral-50 dark:bg-neutral-800/50 p-3 rounded-lg max-h-32 overflow-auto">
               {{ queryToSave }}
             </div>
           </div>
         </div>
         <div class="flex justify-end gap-2 mt-6">
-          <button @click="cancelSaveQuery" class="btn btn-secondary">Cancel</button>
+          <button @click="cancelSaveQuery" class="px-4 py-2 text-sm font-medium text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors">Cancel</button>
           <button
             @click="confirmSaveQuery"
-            class="btn btn-primary"
+            class="px-4 py-2 text-sm font-medium text-white bg-neutral-900 dark:bg-neutral-100 dark:text-neutral-900 rounded-lg hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors disabled:opacity-50"
             :disabled="!saveQueryName.trim()"
           >
             Save
