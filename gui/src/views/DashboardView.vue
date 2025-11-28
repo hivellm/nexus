@@ -1,117 +1,119 @@
 <template>
-  <div class="space-y-6">
-    <div>
-      <h1 class="text-xl sm:text-2xl font-bold text-neutral-900 dark:text-white">Dashboard</h1>
-      <p class="text-sm sm:text-base text-neutral-600 dark:text-neutral-400 mt-1">Welcome to Nexus Graph Database</p>
+  <div class="p-8">
+    <!-- Stats Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <StatCard
+        icon="fas fa-circle-nodes"
+        :value="formatNumber(stats?.nodeCount || 0)"
+        label="Nodes"
+        variant="primary"
+      />
+
+      <StatCard
+        icon="fas fa-arrows-left-right"
+        :value="formatNumber(stats?.relationshipCount || 0)"
+        label="Relationships"
+        variant="success"
+      />
+
+      <StatCard
+        icon="fas fa-tags"
+        :value="formatNumber(stats?.labelCount || 0)"
+        label="Labels"
+        variant="info"
+      />
+
+      <StatCard
+        icon="fas fa-list"
+        :value="formatNumber(stats?.indexCount || 0)"
+        label="Indexes"
+        variant="secondary"
+      />
     </div>
 
-    <!-- Stats Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800/50 rounded-lg p-6">
-        <div class="text-sm font-medium text-neutral-500 dark:text-neutral-400">Nodes</div>
-        <div class="text-2xl font-semibold text-neutral-900 dark:text-white mt-1">{{ stats?.nodeCount || 0 }}</div>
-        <div class="text-xs text-neutral-500 dark:text-neutral-400 mt-1">Total nodes in database</div>
-      </div>
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800/50 rounded-lg p-6">
-        <div class="text-sm font-medium text-neutral-500 dark:text-neutral-400">Relationships</div>
-        <div class="text-2xl font-semibold text-neutral-900 dark:text-white mt-1">{{ stats?.relationshipCount || 0 }}</div>
-        <div class="text-xs text-neutral-500 dark:text-neutral-400 mt-1">Total relationships</div>
-      </div>
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800/50 rounded-lg p-6">
-        <div class="text-sm font-medium text-neutral-500 dark:text-neutral-400">Labels</div>
-        <div class="text-2xl font-semibold text-neutral-900 dark:text-white mt-1">{{ stats?.labelCount || 0 }}</div>
-        <div class="text-xs text-neutral-500 dark:text-neutral-400 mt-1">Node labels</div>
-      </div>
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800/50 rounded-lg p-6">
-        <div class="text-sm font-medium text-neutral-500 dark:text-neutral-400">Indexes</div>
-        <div class="text-2xl font-semibold text-neutral-900 dark:text-white mt-1">{{ stats?.indexCount || 0 }}</div>
-        <div class="text-xs text-neutral-500 dark:text-neutral-400 mt-1">Active indexes</div>
+    <!-- Quick Actions -->
+    <div class="bg-bg-secondary border border-border rounded-xl p-6 mb-8">
+      <h2 class="text-xl font-semibold text-text-primary mb-6">Quick Actions</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <button @click="$router.push('/query')" class="bg-bg-tertiary border border-border rounded-lg p-6 text-left hover:bg-bg-hover hover:border-border-light transition-colors group">
+          <i class="fas fa-terminal text-2xl text-text-secondary group-hover:text-text-primary mb-3 block"></i>
+          <h3 class="text-lg font-medium text-text-primary mb-2">Query Editor</h3>
+          <p class="text-sm text-text-secondary">Run Cypher queries</p>
+        </button>
+
+        <button @click="$router.push('/graph')" class="bg-bg-tertiary border border-border rounded-lg p-6 text-left hover:bg-bg-hover hover:border-border-light transition-colors group">
+          <i class="fas fa-project-diagram text-2xl text-text-secondary group-hover:text-text-primary mb-3 block"></i>
+          <h3 class="text-lg font-medium text-text-primary mb-2">Explore Graph</h3>
+          <p class="text-sm text-text-secondary">Visualize relationships</p>
+        </button>
+
+        <button @click="$router.push('/schema')" class="bg-bg-tertiary border border-border rounded-lg p-6 text-left hover:bg-bg-hover hover:border-border-light transition-colors group">
+          <i class="fas fa-sitemap text-2xl text-text-secondary group-hover:text-text-primary mb-3 block"></i>
+          <h3 class="text-lg font-medium text-text-primary mb-2">View Schema</h3>
+          <p class="text-sm text-text-secondary">Labels and types</p>
+        </button>
+
+        <button @click="refreshData" class="bg-bg-tertiary border border-border rounded-lg p-6 text-left hover:bg-bg-hover hover:border-border-light transition-colors group">
+          <i class="fas fa-sync text-2xl text-text-secondary group-hover:text-text-primary mb-3 block"></i>
+          <h3 class="text-lg font-medium text-text-primary mb-2">Refresh Data</h3>
+          <p class="text-sm text-text-secondary">Reload statistics</p>
+        </button>
       </div>
     </div>
 
     <!-- Server Health -->
-    <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800/50 rounded-lg p-6">
-      <h2 class="text-lg font-semibold text-neutral-900 dark:text-white mb-4">Server Health</h2>
-      <div v-if="health" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4">
-          <div class="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Status</div>
+    <div class="bg-bg-secondary border border-border rounded-xl p-6 mb-8">
+      <h2 class="text-xl font-semibold text-text-primary mb-6">Server Health</h2>
+      <div v-if="health" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="bg-bg-tertiary border border-border rounded-lg p-4">
+          <div class="text-sm text-text-secondary mb-2">Status</div>
           <div class="flex items-center gap-2">
-            <span :class="['w-3 h-3 rounded-full', health.status === 'healthy' ? 'bg-green-500' : 'bg-red-500']"></span>
-            <span class="text-lg font-semibold text-neutral-900 dark:text-white capitalize">{{ health.status }}</span>
+            <span :class="['w-3 h-3 rounded-full', health.status === 'healthy' ? 'bg-success' : 'bg-error']"></span>
+            <span class="text-lg font-semibold text-text-primary capitalize">{{ health.status }}</span>
           </div>
         </div>
-        <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4">
-          <div class="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Memory Usage</div>
-          <div class="text-lg font-semibold text-neutral-900 dark:text-white">{{ formatBytes(health.memory?.used || 0) }} / {{ formatBytes(health.memory?.total || 0) }}</div>
-          <div class="w-full bg-neutral-200 dark:bg-neutral-700 rounded-full h-2 mt-2">
+        <div class="bg-bg-tertiary border border-border rounded-lg p-4">
+          <div class="text-sm text-text-secondary mb-2">Memory Usage</div>
+          <div class="text-lg font-semibold text-text-primary">{{ formatBytes(health.memory?.used || 0) }} / {{ formatBytes(health.memory?.total || 0) }}</div>
+          <div class="w-full bg-bg-primary rounded-full h-2 mt-2">
             <div
-              class="bg-neutral-600 dark:bg-neutral-400 h-2 rounded-full transition-all"
+              class="bg-info h-2 rounded-full transition-all"
               :style="{ width: `${health.memory?.percentage || 0}%` }"
             ></div>
           </div>
         </div>
-        <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-4">
-          <div class="text-sm text-neutral-500 dark:text-neutral-400 mb-1">Uptime</div>
-          <div class="text-lg font-semibold text-neutral-900 dark:text-white">{{ formatUptime(health.uptime || 0) }}</div>
+        <div class="bg-bg-tertiary border border-border rounded-lg p-4">
+          <div class="text-sm text-text-secondary mb-2">Uptime</div>
+          <div class="text-lg font-semibold text-text-primary">{{ formatUptime(health.uptime || 0) }}</div>
         </div>
       </div>
-      <div v-else class="text-neutral-500 dark:text-neutral-400 text-center py-8">
-        <p>Loading server health...</p>
+      <div v-else class="text-text-secondary text-center py-8">
+        <i class="fas fa-spinner fa-spin text-2xl mb-3 block"></i>
+        <p class="text-sm">Loading server health...</p>
       </div>
     </div>
 
-    <!-- Quick Actions & Recent Queries -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800/50 rounded-lg p-6">
-        <h2 class="text-lg font-semibold text-neutral-900 dark:text-white mb-4">Quick Actions</h2>
-        <div class="space-y-2">
-          <router-link to="/query" class="flex items-center gap-3 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">
-            <div class="w-8 h-8 bg-neutral-200 dark:bg-neutral-700 rounded-lg flex items-center justify-center">
-              <svg class="w-4 h-4 text-neutral-600 dark:text-neutral-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <span class="text-neutral-900 dark:text-white">Open Query Editor</span>
-          </router-link>
-          <router-link to="/graph" class="flex items-center gap-3 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">
-            <div class="w-8 h-8 bg-neutral-200 dark:bg-neutral-700 rounded-lg flex items-center justify-center">
-              <svg class="w-4 h-4 text-neutral-600 dark:text-neutral-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
-            <span class="text-neutral-900 dark:text-white">Explore Graph</span>
-          </router-link>
-          <router-link to="/schema" class="flex items-center gap-3 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors">
-            <div class="w-8 h-8 bg-neutral-200 dark:bg-neutral-700 rounded-lg flex items-center justify-center">
-              <svg class="w-4 h-4 text-neutral-600 dark:text-neutral-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
-              </svg>
-            </div>
-            <span class="text-neutral-900 dark:text-white">View Schema</span>
-          </router-link>
-        </div>
-      </div>
-
-      <div class="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800/50 rounded-lg p-6">
-        <h2 class="text-lg font-semibold text-neutral-900 dark:text-white mb-4">Recent Queries</h2>
-        <div v-if="recentQueries.length > 0" class="space-y-2">
-          <div
-            v-for="query in recentQueries.slice(0, 5)"
-            :key="query.id"
-            class="p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg cursor-pointer hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-            @click="runQuery(query.query)"
-          >
-            <div class="font-mono text-sm text-neutral-900 dark:text-white truncate">{{ query.query }}</div>
-            <div class="flex items-center gap-3 mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-              <span>{{ formatTime(query.timestamp) }}</span>
-              <span>{{ query.rowCount }} rows</span>
-              <span>{{ query.executionTime }}ms</span>
-            </div>
+    <!-- Recent Queries -->
+    <div class="bg-bg-secondary border border-border rounded-xl p-6">
+      <h2 class="text-xl font-semibold text-text-primary mb-6">Recent Queries</h2>
+      <div v-if="recentQueries.length > 0" class="space-y-2">
+        <div
+          v-for="query in recentQueries.slice(0, 5)"
+          :key="query.id"
+          class="p-4 bg-bg-tertiary border border-border rounded-lg cursor-pointer hover:bg-bg-hover hover:border-border-light transition-colors"
+          @click="runQuery(query.query)"
+        >
+          <div class="font-mono text-sm text-text-primary truncate">{{ query.query }}</div>
+          <div class="flex items-center gap-4 mt-2 text-xs text-text-secondary">
+            <span><i class="fas fa-clock mr-1"></i>{{ formatTime(query.timestamp) }}</span>
+            <span><i class="fas fa-table mr-1"></i>{{ query.rowCount }} rows</span>
+            <span><i class="fas fa-bolt mr-1"></i>{{ query.executionTime }}ms</span>
           </div>
         </div>
-        <div v-else class="text-neutral-500 dark:text-neutral-400 text-center py-4">
-          <p>No recent queries</p>
-        </div>
+      </div>
+      <div v-else class="text-text-secondary text-center py-8">
+        <i class="fas fa-history text-2xl mb-3 block"></i>
+        <p class="text-sm">No recent queries</p>
       </div>
     </div>
   </div>
@@ -122,6 +124,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useServersStore } from '@/stores/servers';
 import { useQueryStore } from '@/stores/query';
+import StatCard from '@/components/StatCard.vue';
 import type { DatabaseStats, ServerHealth } from '@/types';
 
 const router = useRouter();
@@ -155,9 +158,17 @@ async function loadData(): Promise<void> {
   }
 }
 
+async function refreshData(): Promise<void> {
+  await loadData();
+}
+
 function runQuery(query: string): void {
   queryStore.setQuery(query);
   router.push('/query');
+}
+
+function formatNumber(num: number): string {
+  return new Intl.NumberFormat().format(num);
 }
 
 function formatBytes(bytes: number): string {

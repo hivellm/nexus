@@ -88,7 +88,7 @@ export class NexusApiClient {
     try {
       const startTime = Date.now();
       const response = await this.client.post('/cypher', {
-        cypher: query,
+        query: query,
         params: params || {},
       });
       const executionTime = Date.now() - startTime;
@@ -99,9 +99,18 @@ export class NexusApiClient {
       let rows: any[] = [];
 
       if (data.columns && data.rows) {
-        // Standard format: { columns: [...], rows: [...] }
+        // Nexus format: { columns: ["n"], rows: [[{...}], [{...}]] }
+        // Each row is an array of column values
         columns = data.columns;
-        rows = data.rows;
+
+        // Transform rows from [[val1], [val2]] to [{col1: val1}, {col2: val2}]
+        rows = data.rows.map((row: any[]) => {
+          const rowObj: Record<string, any> = {};
+          columns.forEach((col, idx) => {
+            rowObj[col] = row[idx];
+          });
+          return rowObj;
+        });
       } else if (Array.isArray(data)) {
         // Array format: [{ ... }, { ... }]
         rows = data;
@@ -133,7 +142,22 @@ export class NexusApiClient {
   async getStats(): Promise<ApiResponse<DatabaseStats>> {
     try {
       const response = await this.client.get('/stats');
-      return { success: true, data: response.data };
+      const data = response.data;
+
+      // Map API response to DatabaseStats interface
+      // API returns: { catalog: { label_count, rel_type_count, node_count, rel_count }, label_index: {...}, knn_index: {...} }
+      const stats: DatabaseStats = {
+        nodeCount: data.catalog?.node_count ?? 0,
+        relationshipCount: data.catalog?.rel_count ?? 0,
+        labelCount: data.catalog?.label_count ?? 0,
+        relationshipTypeCount: data.catalog?.rel_type_count ?? 0,
+        propertyKeyCount: 0,
+        indexCount: data.label_index?.indexed_labels ?? 0,
+        storageSize: 0,
+        uptime: 0,
+      };
+
+      return { success: true, data: stats };
     } catch (error) {
       return this.handleError(error as AxiosError);
     }
@@ -204,25 +228,57 @@ export class NexusApiClient {
       }
 
       // Transform query result to graph data
+      // Nexus returns: rows like [{n: {...}, r: {...}, m: {...}}]
+      // where n/m are nodes and r is relationship
       const nodes: Map<string | number, any> = new Map();
       const relationships: any[] = [];
+      const columns = result.data.columns;
 
       for (const row of result.data.rows) {
-        for (const value of Object.values(row)) {
-          if (this.isNode(value)) {
-            nodes.set(value._nexus_id || value.id, {
-              id: value._nexus_id || value.id,
-              labels: value._nexus_labels || value.labels || [],
-              properties: this.extractProperties(value),
-            });
-          } else if (this.isRelationship(value)) {
-            relationships.push({
-              id: value._nexus_id || value.id,
-              type: value.type || value._nexus_type,
-              startNode: value._nexus_start || value.startNode,
-              endNode: value._nexus_end || value.endNode,
-              properties: this.extractProperties(value),
-            });
+        // Process each column value
+        for (let i = 0; i < columns.length; i++) {
+          const colName = columns[i];
+          const value = row[colName];
+
+          if (!value || typeof value !== 'object') continue;
+
+          // Determine if it's a relationship:
+          // - Column name is 'r' or contains 'rel'
+          // - AND there are adjacent columns (pattern: n, r, m)
+          // - AND has 'type' property (relationships always have type)
+          const hasAdjacentColumns = columns.length >= 3 && i > 0 && i < columns.length - 1;
+          const isRelColumn = colName.toLowerCase() === 'r' || colName.toLowerCase().includes('rel');
+          const hasTypeNoCommonNodeProps = value.type && !value.name && !value.title && !value.age && !value.city;
+
+          const isRel = hasAdjacentColumns && (isRelColumn || hasTypeNoCommonNodeProps);
+
+          if (isRel) {
+            // It's a relationship - we need to find connected nodes
+            // Look for nodes in adjacent columns
+            const prevCol = columns[i - 1];
+            const nextCol = columns[i + 1];
+            const startNode = prevCol ? row[prevCol]?._nexus_id : null;
+            const endNode = nextCol ? row[nextCol]?._nexus_id : null;
+
+            if (startNode && endNode) {
+              relationships.push({
+                id: value._nexus_id || `rel-${relationships.length}`,
+                type: value.type || 'RELATED',
+                startNode: startNode,
+                endNode: endNode,
+                properties: this.extractProperties(value),
+              });
+            }
+          } else {
+            // It's a node
+            const nodeId = value._nexus_id || value.id;
+            if (nodeId && !nodes.has(nodeId)) {
+              nodes.set(nodeId, {
+                id: nodeId,
+                labels: value._nexus_labels || value.labels || [colName.toUpperCase()],
+                properties: this.extractProperties(value),
+              });
+            }
           }
         }
       }
@@ -239,20 +295,10 @@ export class NexusApiClient {
     }
   }
 
-  private isNode(value: any): boolean {
-    return value && typeof value === 'object' &&
-      (value._nexus_type === 'node' || value._nexus_labels || value.labels);
-  }
-
-  private isRelationship(value: any): boolean {
-    return value && typeof value === 'object' &&
-      (value._nexus_type === 'relationship' || (value.type && (value._nexus_start || value.startNode)));
-  }
-
   private extractProperties(value: any): Record<string, any> {
     const props: Record<string, any> = {};
     for (const [key, val] of Object.entries(value)) {
-      if (!key.startsWith('_nexus_') && key !== 'labels' && key !== 'type') {
+      if (!key.startsWith('_nexus_') && key !== 'labels' && key !== 'type' && key !== 'id') {
         props[key] = val;
       }
     }

@@ -1,114 +1,116 @@
 <template>
-  <div class="flex h-screen bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-50">
-    <!-- Sidebar - Hidden on mobile, shown on desktop -->
-    <aside class="hidden lg:flex w-64 h-full bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800/50 flex-col">
-      <!-- Logo/Header -->
-      <div class="h-16 flex items-center justify-between px-6 border-b border-neutral-200 dark:border-neutral-800">
-        <div>
-          <h1 class="text-xl font-semibold text-neutral-900 dark:text-white leading-none">Nexus</h1>
-          <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-1 leading-none">Graph Database</p>
-        </div>
+  <div id="app" class="flex flex-col h-screen bg-bg-primary text-text-primary">
+    <!-- Custom Titlebar -->
+    <div class="h-8 bg-bg-secondary border-b border-border flex items-center justify-between px-4 drag-region flex-shrink-0">
+      <div class="flex items-center gap-2 text-xs text-text-secondary">
+        <i class="fas fa-project-diagram"></i>
+        <span>Nexus GUI</span>
       </div>
-
-      <!-- Navigation -->
-      <nav class="flex-1 overflow-y-auto p-4">
-        <ul class="space-y-1">
-          <li v-for="item in menuItems" :key="item.path">
-            <router-link
-              :to="item.path"
-              :class="[
-                'flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                isActive(item.path)
-                  ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
-                  : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800/50'
-              ]"
-            >
-              <span class="ml-3">{{ item.label }}</span>
-            </router-link>
-          </li>
-        </ul>
-      </nav>
-
-      <!-- Theme Toggle -->
-      <div class="p-4 border-t border-neutral-200 dark:border-neutral-800">
-        <button
-          @click="toggleTheme"
-          class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
-        >
-          <span>Theme</span>
-          <svg v-if="isDarkMode" class="w-4 h-4 text-neutral-600 dark:text-neutral-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-          </svg>
-          <svg v-else class="w-4 h-4 text-neutral-600 dark:text-neutral-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-          </svg>
+      <div class="flex items-center gap-1 no-drag">
+        <button @click="minimizeWindow" class="p-1 w-8 h-8 hover:bg-bg-hover transition-colors rounded">
+          <i class="fas fa-window-minimize text-xs"></i>
+        </button>
+        <button @click="maximizeWindow" class="p-1 w-8 h-8 hover:bg-bg-hover transition-colors rounded">
+          <i class="fas fa-window-maximize text-xs"></i>
+        </button>
+        <button @click="closeWindow" class="p-1 w-8 h-8 hover:bg-red-600 hover:text-white transition-colors rounded">
+          <i class="fas fa-times text-xs"></i>
         </button>
       </div>
-    </aside>
+    </div>
 
-    <!-- Mobile Sidebar Overlay -->
-    <div v-if="sidebarOpen" class="fixed inset-0 bg-black/50 z-40 lg:hidden" @click="sidebarOpen = false" />
+    <!-- Main Content -->
+    <div class="flex flex-1 min-h-0">
+      <!-- Sidebar -->
+      <aside class="w-64 bg-bg-secondary border-r border-border flex flex-col">
 
-    <!-- Mobile Sidebar -->
-    <aside v-if="sidebarOpen" class="fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800/50 flex flex-col lg:hidden">
-      <!-- Logo/Header -->
-      <div class="h-16 flex items-center justify-between px-6 border-b border-neutral-200 dark:border-neutral-800">
-        <div>
-          <h1 class="text-xl font-semibold text-neutral-900 dark:text-white leading-none">Nexus</h1>
-          <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-1 leading-none">Graph Database</p>
-        </div>
-        <button @click="sidebarOpen = false" class="lg:hidden p-2 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-      <nav class="flex-1 overflow-y-auto p-4">
-        <ul class="space-y-1">
-          <li v-for="item in menuItems" :key="item.path">
-            <router-link
-              :to="item.path"
-              @click="sidebarOpen = false"
-              :class="[
-                'flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                isActive(item.path)
-                  ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
-                  : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800/50'
-              ]"
+        <!-- Connection Selector -->
+        <div class="h-14 flex items-center px-4 border-b border-border flex-shrink-0">
+          <div class="connection-dropdown relative w-full" :class="{ 'z-50': isDropdownOpen }">
+            <button
+              @click="serverList.length === 0 ? openConnectionManager() : toggleDropdown()"
+              class="w-full flex items-center justify-between gap-3 p-3 rounded-lg bg-bg-tertiary hover:bg-bg-hover transition-colors cursor-pointer"
             >
-              <span class="ml-3">{{ item.label }}</span>
-            </router-link>
-          </li>
-        </ul>
-      </nav>
-    </aside>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 whitespace-nowrap overflow-hidden text-ellipsis">
+                  <span class="text-sm font-medium text-text-primary">{{ activeServer?.name || 'Select Connection' }}</span>
+                  <span class="text-text-muted">•</span>
+                  <span :class="['w-2 h-2 rounded-full', activeServer?.status === 'online' ? 'bg-success' : 'bg-text-muted']"></span>
+                  <span class="text-xs text-text-secondary">{{ activeServer?.status || 'No connections' }}</span>
+                </div>
+              </div>
+              <i class="fas fa-chevron-down text-xs text-text-muted transition-transform" :class="{ 'rotate-180': isDropdownOpen }"></i>
+            </button>
 
-    <!-- Main Content Area -->
-    <div class="flex-1 flex flex-col overflow-hidden min-w-0">
-      <!-- Header -->
-      <header class="h-16 bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800/50 flex items-center justify-between px-3 sm:px-4 md:px-6">
-        <div class="flex items-center gap-3">
-          <!-- Mobile Menu Button -->
-          <button
-            @click="sidebarOpen = !sidebarOpen"
-            class="lg:hidden p-2 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            <div v-if="isDropdownOpen" class="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-lg z-50">
+              <div v-if="serverList.length === 0" class="p-4 text-center text-text-secondary">
+                <i class="fas fa-exclamation-circle mb-2 block"></i>
+                <span class="text-sm">No connections available</span>
+              </div>
+              <div v-else>
+                <div
+                  v-for="server in serverList"
+                  :key="server.id"
+                  :class="['flex items-center justify-between p-3 hover:bg-bg-hover cursor-pointer transition-colors', { 'bg-bg-hover': activeServerId === server.id }]"
+                  @click="selectConnection(server.id)"
+                >
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-medium text-text-primary truncate">{{ server.name }}</div>
+                    <div class="flex items-center gap-2 text-xs text-text-secondary">
+                      <span :class="['w-1.5 h-1.5 rounded-full', server.status === 'online' ? 'bg-success' : 'bg-text-muted']"></span>
+                      {{ server.host || server.url }}:{{ server.port }}
+                    </div>
+                  </div>
+                  <div v-if="activeServerId === server.id" class="text-success">
+                    <i class="fas fa-check text-sm"></i>
+                  </div>
+                </div>
+              </div>
+
+              <div class="border-t border-border p-3">
+                <button @click="openConnectionManager" class="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded transition-colors">
+                  <i class="fas fa-cog"></i>
+                  Manage Connections
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="flex-1 overflow-y-auto p-4">
+          <router-link
+            v-for="item in menuItems"
+            :key="item.path"
+            :to="item.path"
+            :class="[
+              'flex items-center gap-3 py-2 text-text-secondary hover:text-text-primary transition-colors cursor-pointer text-sm',
+              { 'text-text-primary': isActive(item.path) }
+            ]"
           >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <h2 class="text-base sm:text-lg font-semibold text-neutral-900 dark:text-white leading-none">
-            {{ pageTitle }}
-          </h2>
-        </div>
-        <div class="flex items-center gap-4">
-          <!-- Add header actions here -->
-        </div>
-      </header>
+            <i :class="[item.icon, 'w-4 text-center']"></i>
+            <span>{{ item.label }}</span>
+          </router-link>
+        </nav>
+      </aside>
 
       <!-- Main Content -->
-      <main class="flex-1 overflow-y-auto bg-white dark:bg-neutral-950">
-        <div class="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 lg:px-8 py-4 sm:py-6 lg:py-8">
+      <main class="flex-1 flex flex-col">
+        <header class="h-14 border-b border-border flex items-center justify-between px-6 bg-bg-secondary">
+          <div class="flex items-center gap-3">
+            <i :class="[pageIcon, 'text-text-secondary']"></i>
+            <span class="text-lg font-semibold text-text-primary">{{ pageTitle }}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <!-- Global connection status -->
+            <div class="flex items-center gap-2 ml-4 pl-4 border-l border-border">
+              <span :class="['w-2 h-2 rounded-full', isConnected ? 'bg-success' : 'bg-text-muted']"></span>
+              <span class="text-xs text-text-secondary">{{ isConnected ? 'Connected' : 'Disconnected' }}</span>
+            </div>
+          </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto">
           <router-view />
         </div>
       </main>
@@ -121,45 +123,110 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { useRoute } from 'vue-router';
-import { useThemeStore } from '@/stores/theme';
+import { useRoute, useRouter } from 'vue-router';
+import { useServersStore } from '@/stores/servers';
 import NotificationCenter from '@/components/NotificationCenter.vue';
 
 const route = useRoute();
-const themeStore = useThemeStore();
+const router = useRouter();
+const serversStore = useServersStore();
 
-const isDarkMode = computed(() => themeStore.theme === 'dark');
+const serverList = computed(() => serversStore.serverList);
+const activeServer = computed(() => serversStore.activeServer);
+const activeServerId = computed(() => serversStore.activeServerId);
+const isConnected = computed(() => activeServer.value?.status === 'online');
 
-const sidebarOpen = ref(false);
+const isDropdownOpen = ref(false);
 
 const menuItems = [
-  { path: '/', label: 'Dashboard' },
-  { path: '/query', label: 'Query' },
-  { path: '/graph', label: 'Graph' },
-  { path: '/schema', label: 'Schema' },
-  { path: '/data', label: 'Data' },
-  { path: '/indexes', label: 'Indexes' },
-  { path: '/vector-search', label: 'Vector Search' },
-  { path: '/logs', label: 'Logs' },
-  { path: '/config', label: 'Configuration' },
+  { path: '/', label: 'Dashboard', icon: 'fas fa-tachometer-alt' },
+  { path: '/query', label: 'Query', icon: 'fas fa-terminal' },
+  { path: '/graph', label: 'Graph', icon: 'fas fa-project-diagram' },
+  { path: '/schema', label: 'Schema', icon: 'fas fa-sitemap' },
+  { path: '/data', label: 'Data', icon: 'fas fa-database' },
+  { path: '/indexes', label: 'Indexes', icon: 'fas fa-list' },
+  { path: '/vector-search', label: 'Vector Search', icon: 'fas fa-search' },
+  { path: '/logs', label: 'Logs', icon: 'fas fa-file-alt' },
+  { path: '/config', label: 'Configuration', icon: 'fas fa-cog' },
 ];
 
 const pageTitle = computed(() => {
-  const path = route.path;
-  if (path === '/' || path === '/dashboard') return 'Dashboard';
-  const item = menuItems.find(m => m.path === path);
-  return item?.label || 'Nexus';
+  const titles: Record<string, string> = {
+    '/': 'Dashboard',
+    '/query': 'Query Editor',
+    '/graph': 'Graph Visualization',
+    '/schema': 'Schema',
+    '/data': 'Data Management',
+    '/indexes': 'Indexes',
+    '/vector-search': 'Vector Search',
+    '/logs': 'Logs',
+    '/config': 'Configuration',
+  };
+  return titles[route.path] || 'Nexus GUI';
+});
+
+const pageIcon = computed(() => {
+  const item = menuItems.find(m => m.path === route.path);
+  return item?.icon || 'fas fa-project-diagram';
 });
 
 function isActive(path: string): boolean {
   return route.path === path;
 }
 
-function toggleTheme(): void {
-  themeStore.toggleTheme();
+function toggleDropdown(): void {
+  isDropdownOpen.value = !isDropdownOpen.value;
 }
 
-onMounted(() => {
-  themeStore.loadTheme();
+async function selectConnection(serverId: string): Promise<void> {
+  isDropdownOpen.value = false;
+  serversStore.setActiveServer(serverId);
+}
+
+function openConnectionManager(): void {
+  isDropdownOpen.value = false;
+  router.push('/config');
+}
+
+function minimizeWindow(): void {
+  window.electronAPI?.windowControl('minimize');
+}
+
+function maximizeWindow(): void {
+  window.electronAPI?.windowControl('maximize');
+}
+
+function closeWindow(): void {
+  window.electronAPI?.windowControl('close');
+}
+
+onMounted(async () => {
+  // Auto-connect to active server on mount
+  if (serversStore.activeServerId) {
+    await serversStore.connectServer(serversStore.activeServerId);
+  }
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', handleClickOutside);
 });
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside);
+});
+
+function handleClickOutside(event: MouseEvent): void {
+  const target = event.target as HTMLElement;
+  if (!target.closest('.connection-dropdown')) {
+    isDropdownOpen.value = false;
+  }
+}
 </script>
+
+<style scoped>
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+</style>

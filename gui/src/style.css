@@ -1,567 +1,188 @@
-/**
- * Tailwind CSS v4 with Untitled UI theme configuration
- * FORCE GRAY COLORS ONLY - NO BLUE
- */
-
 @import "tailwindcss";
 
-/**
- * Untitled UI uses 'dark-mode' class, not 'dark'
- * Configure custom variant for dark mode
- */
-@custom-variant dark (&:where(.dark-mode, .dark-mode *));
-
-/**
- * Override Tailwind default colors to use ONLY gray
- * This ensures no blue colors appear anywhere
- */
 @theme {
-  /* Force all primary colors to be gray */
-  --color-primary-50: rgb(249 250 251);
-  --color-primary-100: rgb(243 244 246);
-  --color-primary-200: rgb(229 231 235);
-  --color-primary-300: rgb(209 213 218);
-  --color-primary-400: rgb(164 167 174);
-  --color-primary-500: rgb(113 118 128);
-  --color-primary-600: rgb(83 88 98);
-  --color-primary-700: rgb(65 70 81);
-  --color-primary-800: rgb(37 43 55);
-  --color-primary-900: rgb(24 29 39);
-  --color-primary-950: rgb(10 13 18);
+  /* Background Colors */
+  --color-bg-primary: oklch(14.5% 0 0);
+  --color-bg-secondary: oklch(18% 0 0);
+  --color-bg-tertiary: oklch(22% 0 0);
+  --color-bg-card: oklch(20% 0 0);
+  --color-bg-hover: oklch(25% 0 0);
+  --color-bg-elevated: oklch(27% 0 0);
 
-  /* Gray colors - Untitled UI standard */
-  --color-gray-50: rgb(250 250 250);
-  --color-gray-100: rgb(245 245 245);
-  --color-gray-200: rgb(233 234 235);
-  --color-gray-300: rgb(213 215 218);
-  --color-gray-400: rgb(164 167 174);
-  --color-gray-500: rgb(113 118 128);
-  --color-gray-600: rgb(83 88 98);
-  --color-gray-700: rgb(65 70 81);
-  --color-gray-800: rgb(37 43 55);
-  --color-gray-900: rgb(24 29 39);
-  --color-gray-950: rgb(10 13 18);
+  /* Text Colors */
+  --color-text-primary: oklch(96% 0 0);
+  --color-text-secondary: oklch(75% 0 0);
+  --color-text-muted: oklch(45% 0 0);
+  --color-text-disabled: oklch(30% 0 0);
 
-  /* Neutral colors - same as gray */
-  --color-neutral-50: rgb(250 250 250);
-  --color-neutral-100: rgb(245 245 245);
-  --color-neutral-200: rgb(233 234 235);
-  --color-neutral-300: rgb(213 215 218);
-  --color-neutral-400: rgb(164 167 174);
-  --color-neutral-500: rgb(113 118 128);
-  --color-neutral-600: rgb(83 88 98);
-  --color-neutral-700: rgb(65 70 81);
-  --color-neutral-800: rgb(37 43 55);
-  --color-neutral-900: rgb(24 29 39);
-  --color-neutral-950: rgb(10 13 18);
+  /* Border Colors */
+  --color-border: oklch(20% 0 0);
+  --color-border-light: oklch(25% 0 0);
+  --color-border-focus: oklch(30% 0 0);
+
+  /* Status Colors */
+  --color-success: oklch(65% 0.15 140);
+  --color-warning: oklch(75% 0.15 80);
+  --color-error: oklch(60% 0.15 20);
+  --color-info: oklch(65% 0.15 260);
+
+  /* Custom Breakpoints */
+  --breakpoint-3xl: 1920px;
+
+  /* Custom Easing */
+  --ease-fluid: cubic-bezier(0.3, 0, 0, 1);
+  --ease-snappy: cubic-bezier(0.2, 0, 0, 1);
 }
 
-/**
- * Dark mode overrides - ensure NO blue
- */
 @layer base {
-  .dark-mode {
-    /* Dark mode gray colors - Untitled UI standard (darker) */
-    --color-gray-50: rgb(250 250 250);
-    --color-gray-100: rgb(247 247 247);
-    --color-gray-200: rgb(236 236 237);
-    --color-gray-300: rgb(206 207 210);
-    --color-gray-400: rgb(148 151 156);
-    --color-gray-500: rgb(133 136 142);
-    --color-gray-600: rgb(97 101 108);
-    --color-gray-700: rgb(55 58 65);
-    --color-gray-800: rgb(28 32 40);
-    --color-gray-900: rgb(15 18 24);
-    --color-gray-950: rgb(8 10 14);
+  body {
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 
-    /* Override any blue colors to gray */
-    --color-blue-50: var(--color-gray-900);
-    --color-blue-100: var(--color-gray-800);
-    --color-blue-200: var(--color-gray-700);
-    --color-blue-300: var(--color-gray-600);
-    --color-blue-400: var(--color-gray-500);
-    --color-blue-500: var(--color-gray-500);
-    --color-blue-600: var(--color-gray-600);
-    --color-blue-700: var(--color-gray-700);
-    --color-blue-800: var(--color-gray-800);
-    --color-blue-900: var(--color-gray-900);
-    --color-blue-950: var(--color-gray-950);
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: oklch(18% 0 0);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: oklch(35% 0 0);
+    border-radius: 4px;
+    transition: all 200ms ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(45% 0 0);
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    background: oklch(50% 0 0);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: oklch(18% 0 0);
+  }
+
+  /* Firefox scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(35% 0 0) oklch(18% 0 0);
   }
 }
 
-/**
- * Base styles
- */
-html,
-body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background-color: rgb(250 250 250);
-  color: rgb(24 29 39);
+/* Custom Utilities using @utility directive (Tailwind v4) */
+@utility bg-bg-primary {
+  background-color: var(--color-bg-primary);
 }
 
-html.dark-mode {
-  color-scheme: dark;
-  background-color: rgb(8 10 14);
-  color: rgb(250 250 250);
+@utility bg-bg-secondary {
+  background-color: var(--color-bg-secondary);
 }
 
-html.dark-mode body {
-  background-color: rgb(8 10 14);
-  color: rgb(250 250 250);
+@utility bg-bg-tertiary {
+  background-color: var(--color-bg-tertiary);
 }
 
-body {
-  margin: 0;
-  padding: 0;
+@utility bg-bg-card {
+  background-color: var(--color-bg-card);
 }
 
-#app {
-  min-height: 100vh;
-  width: 100%;
+@utility bg-bg-hover {
+  background-color: var(--color-bg-hover);
 }
 
-/**
- * Force all links and interactive elements to use gray, never blue
- * IMPORTANT: Override ALL possible blue colors
- */
-a,
-a:link,
-a:visited,
-a:active {
-  color: rgb(24 29 39) !important;
-  text-decoration: none;
+@utility bg-bg-elevated {
+  background-color: var(--color-bg-elevated);
 }
 
-.dark-mode a,
-.dark-mode a:link,
-.dark-mode a:visited,
-.dark-mode a:active {
-  color: rgb(250 250 250) !important;
+@utility text-text-primary {
+  color: var(--color-text-primary);
 }
 
-a:hover {
-  color: rgb(37 43 55) !important;
+@utility text-text-secondary {
+  color: var(--color-text-secondary);
 }
 
-.dark-mode a:hover {
-  color: rgb(206 207 210) !important;
+@utility text-text-muted {
+  color: var(--color-text-muted);
 }
 
-/**
- * Remove any blue from focus rings and selection
- */
-*:focus-visible {
-  outline-color: rgb(113 118 128) !important;
+@utility text-text-disabled {
+  color: var(--color-text-disabled);
 }
 
-.dark-mode *:focus-visible {
-  outline-color: rgb(148 151 156) !important;
+@utility border-border {
+  border-color: var(--color-border);
 }
 
-::selection {
-  background-color: rgb(229 231 235) !important;
-  color: rgb(24 29 39) !important;
+@utility border-border-light {
+  border-color: var(--color-border-light);
 }
 
-.dark-mode ::selection {
-  background-color: rgb(55 58 65) !important;
-  color: rgb(250 250 250) !important;
+@utility border-border-focus {
+  border-color: var(--color-border-focus);
 }
 
-/**
- * Override any Tailwind blue utilities that might be applied
- */
-.bg-blue-50,
-.bg-blue-100,
-.bg-blue-200,
-.bg-blue-300,
-.bg-blue-400,
-.bg-blue-500,
-.bg-blue-600,
-.bg-blue-700,
-.bg-blue-800,
-.bg-blue-900,
-.bg-blue-950 {
-  background-color: var(--color-gray-800) !important;
+@utility bg-success {
+  background-color: var(--color-success);
 }
 
-.dark-mode .bg-blue-50,
-.dark-mode .bg-blue-100,
-.dark-mode .bg-blue-200,
-.dark-mode .bg-blue-300,
-.dark-mode .bg-blue-400,
-.dark-mode .bg-blue-500,
-.dark-mode .bg-blue-600,
-.dark-mode .bg-blue-700,
-.dark-mode .bg-blue-800,
-.dark-mode .bg-blue-900,
-.dark-mode .bg-blue-950 {
-  background-color: var(--color-gray-800) !important;
+@utility bg-warning {
+  background-color: var(--color-warning);
 }
 
-.text-blue-50,
-.text-blue-100,
-.text-blue-200,
-.text-blue-300,
-.text-blue-400,
-.text-blue-500,
-.text-blue-600,
-.text-blue-700,
-.text-blue-800,
-.text-blue-900,
-.text-blue-950 {
-  color: var(--color-gray-700) !important;
+@utility bg-error {
+  background-color: var(--color-error);
 }
 
-.dark-mode .text-blue-50,
-.dark-mode .text-blue-100,
-.dark-mode .text-blue-200,
-.dark-mode .text-blue-300,
-.dark-mode .text-blue-400,
-.dark-mode .text-blue-500,
-.dark-mode .text-blue-600,
-.dark-mode .text-blue-700,
-.dark-mode .text-blue-800,
-.dark-mode .text-blue-900,
-.dark-mode .text-blue-950 {
-  color: var(--color-gray-300) !important;
+@utility bg-info {
+  background-color: var(--color-info);
 }
 
-/**
- * Custom Scrollbar - Dark mode
- */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+@utility text-success {
+  color: var(--color-success);
 }
 
-::-webkit-scrollbar-track {
-  background: rgb(245 245 245);
-  border-radius: 4px;
+@utility text-warning {
+  color: var(--color-warning);
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgb(164 167 174);
-  border-radius: 4px;
-  transition: all 200ms ease;
+@utility text-error {
+  color: var(--color-error);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgb(113 118 128);
+@utility text-info {
+  color: var(--color-info);
 }
 
-::-webkit-scrollbar-corner {
-  background: rgb(245 245 245);
+@utility border-error {
+  border-color: var(--color-error);
 }
 
-.dark-mode ::-webkit-scrollbar-track {
-  background: rgb(24 29 39);
+/* Animation utilities */
+@utility animate-slide-in {
+  animation: slideIn 0.3s var(--ease-fluid);
 }
 
-.dark-mode ::-webkit-scrollbar-thumb {
-  background: rgb(65 70 81);
-}
-
-.dark-mode ::-webkit-scrollbar-thumb:hover {
-  background: rgb(83 88 98);
-}
-
-.dark-mode ::-webkit-scrollbar-corner {
-  background: rgb(24 29 39);
-}
-
-/* Firefox scrollbar */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgb(164 167 174) rgb(245 245 245);
-}
-
-.dark-mode * {
-  scrollbar-color: rgb(65 70 81) rgb(24 29 39);
-}
-
-/**
- * Component Classes
- */
-@layer components {
-  /* Card */
-  .card {
-    background-color: rgb(255 255 255);
-    border: 1px solid rgb(233 234 235);
-    border-radius: 0.5rem;
-    padding: 1.5rem;
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
   }
-
-  .dark-mode .card {
-    background-color: rgb(24 29 39);
-    border-color: rgb(37 43 55);
-  }
-
-  /* Button - Primary (Gray) */
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    border-radius: 0.5rem;
-    transition: all 0.15s ease;
-    cursor: pointer;
-  }
-
-  .btn-primary {
-    background-color: rgb(24 29 39);
-    color: rgb(250 250 250);
-    border: 1px solid rgb(37 43 55);
-  }
-
-  .btn-primary:hover {
-    background-color: rgb(37 43 55);
-  }
-
-  .dark-mode .btn-primary {
-    background-color: rgb(37 43 55);
-    border-color: rgb(55 58 65);
-  }
-
-  .dark-mode .btn-primary:hover {
-    background-color: rgb(55 58 65);
-  }
-
-  .btn-secondary {
-    background-color: transparent;
-    color: rgb(65 70 81);
-    border: 1px solid rgb(233 234 235);
-  }
-
-  .btn-secondary:hover {
-    background-color: rgb(245 245 245);
-  }
-
-  .dark-mode .btn-secondary {
-    color: rgb(213 215 218);
-    border-color: rgb(55 58 65);
-  }
-
-  .dark-mode .btn-secondary:hover {
-    background-color: rgb(37 43 55);
-  }
-
-  .btn-ghost {
-    background-color: transparent;
-    color: rgb(65 70 81);
-    border: none;
-  }
-
-  .btn-ghost:hover {
-    background-color: rgb(245 245 245);
-  }
-
-  .dark-mode .btn-ghost {
-    color: rgb(213 215 218);
-  }
-
-  .dark-mode .btn-ghost:hover {
-    background-color: rgb(37 43 55);
-  }
-
-  .btn-danger {
-    background-color: rgb(185 28 28);
-    color: white;
-    border: 1px solid rgb(185 28 28);
-  }
-
-  .btn-danger:hover {
-    background-color: rgb(153 27 27);
-  }
-
-  /* Input */
-  .input {
-    width: 100%;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.875rem;
-    background-color: rgb(255 255 255);
-    border: 1px solid rgb(233 234 235);
-    border-radius: 0.5rem;
-    color: rgb(24 29 39);
-    transition: border-color 0.15s ease;
-  }
-
-  .input:focus {
-    outline: none;
-    border-color: rgb(113 118 128);
-  }
-
-  .input::placeholder {
-    color: rgb(164 167 174);
-  }
-
-  .dark-mode .input {
-    background-color: rgb(24 29 39);
-    border-color: rgb(55 58 65);
-    color: rgb(250 250 250);
-  }
-
-  .dark-mode .input::placeholder {
-    color: rgb(113 118 128);
-  }
-
-  /* Table */
-  .table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  .table th {
-    padding: 0.75rem 1rem;
-    text-align: left;
-    font-size: 0.75rem;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: rgb(113 118 128);
-    background-color: rgb(245 245 245);
-    border-bottom: 1px solid rgb(233 234 235);
-  }
-
-  .table td {
-    padding: 0.75rem 1rem;
-    font-size: 0.875rem;
-    color: rgb(65 70 81);
-    border-bottom: 1px solid rgb(245 245 245);
-  }
-
-  .table tr:hover td {
-    background-color: rgb(250 250 250);
-  }
-
-  .dark-mode .table th {
-    color: rgb(164 167 174);
-    background-color: rgb(37 43 55);
-    border-bottom-color: rgb(55 58 65);
-  }
-
-  .dark-mode .table td {
-    color: rgb(213 215 218);
-    border-bottom-color: rgb(37 43 55);
-  }
-
-  .dark-mode .table tr:hover td {
-    background-color: rgb(37 43 55);
-  }
-
-  /* Stat Card */
-  .stat-card {
-    background-color: rgb(255 255 255);
-    border: 1px solid rgb(233 234 235);
-    border-radius: 0.5rem;
-    padding: 1.5rem;
-  }
-
-  .dark-mode .stat-card {
-    background-color: rgb(24 29 39);
-    border-color: rgb(37 43 55);
-  }
-
-  .stat-card-title {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: rgb(113 118 128);
-  }
-
-  .dark-mode .stat-card-title {
-    color: rgb(164 167 174);
-  }
-
-  .stat-card-value {
-    font-size: 1.875rem;
-    font-weight: 600;
-    color: rgb(24 29 39);
-    margin-top: 0.25rem;
-  }
-
-  .dark-mode .stat-card-value {
-    color: rgb(250 250 250);
-  }
-
-  .stat-card-subtitle {
-    font-size: 0.75rem;
-    color: rgb(164 167 174);
-    margin-top: 0.25rem;
-  }
-
-  .dark-mode .stat-card-subtitle {
-    color: rgb(113 118 128);
-  }
-
-  /* Monaco editor container */
-  .monaco-editor-container {
-    border: 1px solid rgb(233 234 235);
-    border-radius: 0.5rem;
-    overflow: hidden;
-  }
-
-  .dark-mode .monaco-editor-container {
-    border-color: rgb(55 58 65);
-  }
-
-  /* Graph visualization container */
-  .graph-container {
-    width: 100%;
-    height: 100%;
-    background-color: rgb(250 250 250);
-    border: 1px solid rgb(233 234 235);
-    border-radius: 0.5rem;
-  }
-
-  .dark-mode .graph-container {
-    background-color: rgb(10 13 18);
-    border-color: rgb(37 43 55);
-  }
-
-  /* Error/Warning/Success messages */
-  .alert-error {
-    background-color: rgb(254 242 242);
-    border: 1px solid rgb(254 202 202);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    color: rgb(153 27 27);
-  }
-
-  .dark-mode .alert-error {
-    background-color: rgb(127 29 29 / 0.2);
-    border-color: rgb(153 27 27);
-    color: rgb(252 165 165);
-  }
-
-  .alert-success {
-    background-color: rgb(240 253 244);
-    border: 1px solid rgb(187 247 208);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    color: rgb(22 101 52);
-  }
-
-  .dark-mode .alert-success {
-    background-color: rgb(20 83 45 / 0.2);
-    border-color: rgb(22 101 52);
-    color: rgb(134 239 172);
-  }
-
-  .alert-warning {
-    background-color: rgb(254 252 232);
-    border: 1px solid rgb(254 240 138);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    color: rgb(146 64 14);
-  }
-
-  .dark-mode .alert-warning {
-    background-color: rgb(113 63 18 / 0.2);
-    border-color: rgb(146 64 14);
-    color: rgb(253 224 71);
+  to {
+    transform: translateX(0);
+    opacity: 1;
   }
 }
