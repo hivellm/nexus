@@ -69,7 +69,8 @@
       "Bash(NEXUS_REPLICATION_ROLE=master ./target/release/nexus-server.exe:*)",
       "Bash(cargo clippy:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(cargo fmt:*)"
     ],
     "deny": [],
     "ask": []
