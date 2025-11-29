@@ -34,6 +34,11 @@ logs/
 *.so
 *.dylib
 
+# GUI build outputs
+gui/dist/
+gui/dist-electron/
+gui/release/
+
 # Environment
 .env
 .env.local
@@ -44,6 +49,8 @@ lcov.info
 coverage/
 *.profdata
 *.profraw
+coverage-report
+coverage-report/
 
 # Temporary
 *.tmp

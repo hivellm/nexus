@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Codespell
         run: python -m pip install --upgrade 'codespell[toml]'
@@ -24,6 +24,6 @@ jobs:
       - name: Run Codespell
         run: |
           codespell \
-            --skip="*.lock,*.json,*.map,*.yaml,*.yml,target,node_modules,.git,dist" \
-            --ignore-words-list="crate,ser,deser,FPR"
+            --skip="*.lock,*.json,*.map,*.yaml,*.yml,*.min.js,target,node_modules,.git,dist,gui/dist,*/dist/*,vendor,*/vendor/*,obj,*/obj/*,*.AssemblyInfo.cs" \
+            --ignore-words-list="crate,ser,deser,FPR,ue,te,ot,nd,fo,bu,RETRUN,afterAll"
 

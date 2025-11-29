@@ -71,7 +71,8 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(cargo fmt:*)",
-      "Bash(RUST_LOG=nexus_core::replication::snapshot=debug cargo test:*)"
+      "Bash(RUST_LOG=nexus_core::replication::snapshot=debug cargo test:*)",
+      "Bash(codespell:*)"
     ],
     "deny": [],
     "ask": []
