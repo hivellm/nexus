@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Reduce memory usage during compilation
+  CARGO_BUILD_JOBS: 2
+  RUSTFLAGS: "-C codegen-units=1"
 
 jobs:
   rust-tests:
