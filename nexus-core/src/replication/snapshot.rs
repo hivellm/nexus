@@ -286,8 +286,10 @@ impl Snapshot {
         // Create data directory
         std::fs::create_dir_all(&self.config.data_dir)?;
 
-        // Extract tar archive
+        // Extract tar archive with set_preserve_permissions to ensure proper file creation
         let mut archive = tar::Archive::new(archive_data.as_slice());
+        archive.set_preserve_permissions(true);
+        archive.set_unpack_xattrs(false);
         archive.unpack(&self.config.data_dir)?;
 
         tracing::info!(
