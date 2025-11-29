@@ -216,11 +216,12 @@ impl Snapshot {
             if path.is_dir() {
                 self.collect_files(base_dir, &path, files)?;
             } else if path.is_file() {
+                // Normalize path separators to forward slashes for cross-platform compatibility
                 let relative_path = path
                     .strip_prefix(base_dir)
                     .map_err(|e| Error::replication(format!("Path error: {}", e)))?
                     .to_string_lossy()
-                    .to_string();
+                    .replace('\\', "/");
 
                 let metadata = std::fs::metadata(&path)?;
                 let size = metadata.len();
@@ -288,23 +289,35 @@ impl Snapshot {
 
         // Extract tar archive manually to ensure proper file creation on all platforms
         let mut archive = tar::Archive::new(archive_data.as_slice());
+        let mut files_extracted = 0usize;
+
         for entry in archive.entries()? {
             let mut entry = entry?;
+            let entry_type = entry.header().entry_type();
+
+            // Skip non-file entries (directories are created as needed)
+            if !entry_type.is_file() {
+                continue;
+            }
+
             let path = entry.path()?;
             let dest_path = self.config.data_dir.join(&*path);
+
+            tracing::debug!("Extracting file: {:?} -> {:?}", path, dest_path);
 
             // Create parent directories if needed
             if let Some(parent) = dest_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
 
-            // Extract file content manually
-            if entry.header().entry_type().is_file() {
-                let mut content = Vec::new();
-                std::io::Read::read_to_end(&mut entry, &mut content)?;
-                std::fs::write(&dest_path, &content)?;
-            }
+            // Read content and write to destination
+            let mut content = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut content)?;
+            std::fs::write(&dest_path, &content)?;
+            files_extracted += 1;
         }
+
+        tracing::debug!("Extracted {} files", files_extracted);
 
         tracing::info!(
             "Snapshot restored in {:?} ({} bytes)",
@@ -389,8 +402,19 @@ mod tests {
         // Restore snapshot
         snapshot.restore(&snapshot_data).await.unwrap();
 
-        // Verify restoration
-        let content = std::fs::read_to_string(data_dir.join("test.txt")).unwrap();
+        // Verify restoration - list directory contents for debugging if file not found
+        let test_file_path = data_dir.join("test.txt");
+        if !test_file_path.exists() {
+            let contents: Vec<_> = std::fs::read_dir(&data_dir)
+                .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+                .unwrap_or_default();
+            panic!(
+                "test.txt not found after restore. data_dir exists: {}, contents: {:?}",
+                data_dir.exists(),
+                contents
+            );
+        }
+        let content = std::fs::read_to_string(&test_file_path).unwrap();
         assert_eq!(content, "Original content");
     }
 
