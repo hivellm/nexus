@@ -286,11 +286,25 @@ impl Snapshot {
         // Create data directory
         std::fs::create_dir_all(&self.config.data_dir)?;
 
-        // Extract tar archive with set_preserve_permissions to ensure proper file creation
+        // Extract tar archive manually to ensure proper file creation on all platforms
         let mut archive = tar::Archive::new(archive_data.as_slice());
-        archive.set_preserve_permissions(true);
-        archive.set_unpack_xattrs(false);
-        archive.unpack(&self.config.data_dir)?;
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let path = entry.path()?;
+            let dest_path = self.config.data_dir.join(&*path);
+
+            // Create parent directories if needed
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            // Extract file content manually
+            if entry.header().entry_type().is_file() {
+                let mut content = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut content)?;
+                std::fs::write(&dest_path, &content)?;
+            }
+        }
 
         tracing::info!(
             "Snapshot restored in {:?} ({} bytes)",
