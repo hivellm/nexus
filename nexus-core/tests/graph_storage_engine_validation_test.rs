@@ -506,6 +506,7 @@ fn test_crash_recovery_header_integrity() {
 // ============================================================================
 
 #[test]
+#[ignore] // Stress test - requires significant disk space, run manually
 fn test_stress_many_relationship_types() {
     let temp_dir = TempDir::new().unwrap();
     let path = temp_dir.path().join("test.graph");
