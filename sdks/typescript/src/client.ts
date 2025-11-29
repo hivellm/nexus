@@ -20,7 +20,6 @@ import type {
 } from './types';
 import {
   NexusSDKError,
-  AuthenticationError,
   ConnectionError,
   ValidationError,
 } from './errors';
