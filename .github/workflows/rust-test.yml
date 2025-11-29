@@ -9,8 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Reduce memory usage during compilation
-  CARGO_BUILD_JOBS: 2
-  RUSTFLAGS: "-C codegen-units=1"
+  CARGO_BUILD_JOBS: 1
 
 jobs:
   rust-tests:
@@ -26,7 +25,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev
+          sudo apt-get install -y build-essential pkg-config libssl-dev lld
+          mkdir -p .cargo
+          echo '[target.x86_64-unknown-linux-gnu]' >> .cargo/config.toml
+          echo 'linker = "clang"' >> .cargo/config.toml
+          echo 'rustflags = ["-C", "link-arg=-fuse-ld=lld"]' >> .cargo/config.toml
 
       - name: Install minimal stable
         uses: dtolnay/rust-toolchain@stable
