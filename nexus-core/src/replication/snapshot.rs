@@ -155,8 +155,26 @@ impl Snapshot {
             for file_info in &files {
                 let full_path = self.config.data_dir.join(&file_info.path);
                 if full_path.is_file() {
-                    let mut file = std::fs::File::open(&full_path)?;
-                    builder.append_file(&file_info.path, &mut file)?;
+                    // Read file content
+                    let content = std::fs::read(&full_path)?;
+                    let metadata = std::fs::metadata(&full_path)?;
+
+                    // Create tar header
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(content.len() as u64);
+                    header.set_mode(0o644);
+                    header.set_mtime(
+                        metadata
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    );
+                    header.set_cksum();
+
+                    // Append with normalized path (forward slashes)
+                    builder.append_data(&mut header, &file_info.path, content.as_slice())?;
                 }
             }
 
