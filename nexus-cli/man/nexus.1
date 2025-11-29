@@ -1,0 +1,165 @@
+.TH NEXUS 1 "November 2025" "Nexus CLI 0.11.0" "User Commands"
+.SH NAME
+nexus \- command-line interface for Nexus graph database
+.SH SYNOPSIS
+.B nexus
+[\fIOPTIONS\fR] \fICOMMAND\fR [\fISUBCOMMAND\fR] [\fIARGS\fR]
+.SH DESCRIPTION
+.B nexus
+is the official command-line interface for interacting with Nexus graph database.
+It provides commands for executing Cypher queries, managing users and API keys,
+importing/exporting data, and administering the database.
+.SH OPTIONS
+.TP
+.BR \-\-url " " \fIURL\fR
+Nexus server URL (default: http://localhost:3000).
+Can also be set via NEXUS_URL environment variable.
+.TP
+.BR \-\-api\-key " " \fIKEY\fR
+API key for authentication.
+Can also be set via NEXUS_API_KEY environment variable.
+.TP
+.BR \-\-username " " \fIUSER\fR
+Username for authentication.
+Can also be set via NEXUS_USERNAME environment variable.
+.TP
+.BR \-\-password " " \fIPASS\fR
+Password for authentication.
+Can also be set via NEXUS_PASSWORD environment variable.
+.TP
+.BR \-\-profile " " \fINAME\fR
+Connection profile name from configuration file.
+Can also be set via NEXUS_PROFILE environment variable.
+.TP
+.BR \-\-config " " \fIPATH\fR
+Path to configuration file.
+Can also be set via NEXUS_CONFIG environment variable.
+.TP
+.BR \-\-json
+Output results in JSON format.
+.TP
+.BR \-\-csv
+Output results in CSV format.
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose output.
+.TP
+.BR \-\-debug
+Enable debug output.
+.TP
+.BR \-h ", " \-\-help
+Print help information.
+.TP
+.BR \-V ", " \-\-version
+Print version information.
+.SH COMMANDS
+.TP
+.B query
+Execute Cypher queries against the database.
+.TP
+.B db
+Database management commands (ping, info, clear).
+.TP
+.B user
+User management commands (list, create, get, delete).
+.TP
+.B key
+API key management commands (list, create, get, revoke).
+.TP
+.B schema
+Schema operations (labels, types, indexes).
+.TP
+.B data
+Data import/export operations.
+.TP
+.B admin
+Administrative operations (status, health, stats).
+.TP
+.B config
+Configuration management.
+.SH EXAMPLES
+.TP
+Execute a Cypher query:
+.B nexus query "MATCH (n:Person) RETURN n.name"
+.TP
+Start interactive mode:
+.B nexus query --interactive
+.TP
+Check server health:
+.B nexus admin health
+.TP
+Create a new user:
+.B nexus user create myuser --password secret --roles admin
+.TP
+Export data to JSON:
+.B nexus data export backup.json --format json
+.SH CONFIGURATION
+Configuration is stored in a TOML file at:
+.IP
+Linux/macOS: ~/.config/nexus/config.toml
+.IP
+Windows: %APPDATA%\\nexus\\config.toml
+.PP
+Example configuration:
+.PP
+.nf
+url = "http://localhost:3000"
+username = "root"
+
+[profiles.production]
+url = "http://production:3000"
+api_key = "your-api-key"
+.fi
+.SH ENVIRONMENT
+.TP
+.B NEXUS_URL
+Default server URL.
+.TP
+.B NEXUS_API_KEY
+Default API key.
+.TP
+.B NEXUS_USERNAME
+Default username.
+.TP
+.B NEXUS_PASSWORD
+Default password.
+.TP
+.B NEXUS_PROFILE
+Default connection profile.
+.TP
+.B NEXUS_CONFIG
+Path to configuration file.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+General error.
+.TP
+.B 2
+Connection error.
+.TP
+.B 3
+Authentication error.
+.TP
+.B 4
+Query error.
+.SH FILES
+.TP
+.I ~/.config/nexus/config.toml
+User configuration file (Linux/macOS).
+.TP
+.I %APPDATA%\\nexus\\config.toml
+User configuration file (Windows).
+.SH SEE ALSO
+.BR nexus-query (1),
+.BR nexus-db (1),
+.BR nexus-user (1),
+.BR nexus-key (1)
+.SH AUTHORS
+HiveLLM Contributors <team@hivellm.org>
+.SH BUGS
+Report bugs at https://github.com/hivellm/nexus/issues
+.SH COPYRIGHT
+Copyright 2025 HiveLLM Contributors. Licensed under Apache-2.0.

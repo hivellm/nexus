@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "UA0pZv/+4To=",
+  "success": true,
+  "projectFilePath": "F:\\Node\\hivellm\\nexus\\sdks\\TestConsoleSimple\\TestConsoleSimple.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Bolado\\.nuget\\packages\\system.text.encodings.web\\8.0.0\\system.text.encodings.web.8.0.0.nupkg.sha512",
+    "C:\\Users\\Bolado\\.nuget\\packages\\system.text.json\\8.0.0\\system.text.json.8.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}

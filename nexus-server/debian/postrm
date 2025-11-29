@@ -1,0 +1,34 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Remove user and group
+        if getent passwd nexus > /dev/null; then
+            userdel nexus 2>/dev/null || true
+        fi
+        if getent group nexus > /dev/null; then
+            groupdel nexus 2>/dev/null || true
+        fi
+
+        # Optionally remove data directories
+        # Uncomment if you want to remove data on purge
+        # rm -rf /var/lib/nexus
+        # rm -rf /var/log/nexus
+
+        echo "Nexus Server purged."
+        echo "Data directories preserved in /var/lib/nexus and /var/log/nexus"
+        echo "To completely remove data: sudo rm -rf /var/lib/nexus /var/log/nexus"
+        ;;
+
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

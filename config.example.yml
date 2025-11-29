@@ -1,150 +1,167 @@
-# Nexus Configuration Example
+# Nexus Graph Database Configuration Example
 # Copy to config.yml and customize for your environment
+# Neo4j-compatible graph database with vector search integration
 
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
 server:
   # Server bind address
   # Use 127.0.0.1 for localhost only
   # Use 0.0.0.0 for all interfaces (REQUIRES authentication)
   addr: "127.0.0.1:15474"
-  
+
   # Number of worker threads (default: number of CPUs)
   workers: 8
-  
+
   # Request timeout in seconds
   timeout_secs: 30
-  
+
   # Max request body size in MB
   max_body_size_mb: 10
 
+# =============================================================================
+# STORAGE CONFIGURATION
+# =============================================================================
 storage:
   # Data directory path
   data_dir: "./data"
-  
+
   # Page cache configuration
   page_cache:
     # Cache capacity (number of 8KB pages)
     # 10,000 pages = 80MB
     # 100,000 pages = 800MB
     capacity: 10000
-    
+
     # Eviction policy: clock, 2q, tinylfu
     eviction_policy: "clock"
-  
-  # WAL configuration
+
+  # WAL (Write-Ahead Log) configuration
   wal:
     # Checkpoint interval in seconds
-    checkpoint_interval_secs: 300  # 5 minutes
-    
+    checkpoint_interval_secs: 300 # 5 minutes
+
     # Max WAL size before forced checkpoint (MB)
-    max_wal_size_mb: 1024  # 1GB
-    
+    max_wal_size_mb: 1024 # 1GB
+
     # fsync on every commit (slower but safer)
     fsync_on_commit: true
-  
-  # MVCC configuration
+
+  # MVCC (Multi-Version Concurrency Control) configuration
   mvcc:
     # Enable MVCC (false = single-version, faster but no snapshots)
     enabled: true
-    
+
     # Garbage collection interval in seconds
     gc_interval_secs: 60
-    
+
     # Max versions per record
     max_versions: 100
 
+# =============================================================================
+# AUTHENTICATION CONFIGURATION
+# =============================================================================
 authentication:
   # Enable authentication
   # Default: false (disabled for localhost development)
   # REQUIRED: true when binding to 0.0.0.0
   enabled: false
-  
+
   # Require authentication for public binding
   require_for_public_bind: true
-  
+
   # JWT secret for token signing (CHANGE IN PRODUCTION!)
   jwt_secret: "change-this-secret-in-production"
-  
+
   # JWT token expiration in seconds
-  jwt_expiration: 3600  # 1 hour
-  
+  jwt_expiration: 3600 # 1 hour
+
   # API key length
   api_key_length: 32
-  
+
   # Rate limiting
   rate_limit:
     per_minute: 1000
     per_hour: 10000
 
-# Replication configuration (V1)
+# =============================================================================
+# REPLICATION CONFIGURATION (V1)
+# =============================================================================
 replication:
   # Role: master, replica
   role: "master"
-  
+
   # Master URL (for replicas)
-  master_url: null  # "http://master-host:15474"
-  
+  master_url: null # "http://master-host:15474"
+
   # Replication mode: async, sync
   mode: "async"
-  
+
   # Sync replication quorum (number of replicas to wait for ACK)
   sync_quorum: 1
-  
+
   # Replication timeout in milliseconds
   timeout_ms: 5000
-  
+
   # Auto-reconnect settings
   reconnect:
     enabled: true
     initial_delay_ms: 1000
     max_delay_ms: 60000
-    max_retries: -1  # -1 = infinite
+    max_retries: -1 # -1 = infinite
 
-# Vectorizer integration
+# =============================================================================
+# VECTORIZER INTEGRATION CONFIGURATION
+# =============================================================================
 vectorizer:
   # Vectorizer server URL
   url: "http://localhost:15002"
-  
+
   # Enable bidirectional sync
   sync_enabled: false
-  
+
   # Collections to sync
   sync_collections:
     - "documents"
     - "knowledge_base"
-  
+
   # Fields to auto-embed
   auto_embed_fields:
     - "title"
     - "content"
     - "description"
-  
+
   # RRF constant for hybrid search
   rrf_k: 60
 
-# Logging configuration
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
 logging:
   # Log level: trace, debug, info, warn, error
   level: "info"
-  
+
   # Log format: json, pretty
   format: "pretty"
-  
+
   # Log to file
   file:
     enabled: false
     path: "./logs/nexus.log"
-    rotation: "daily"  # daily, hourly, size-based
+    rotation: "daily" # daily, hourly, size-based
 
-# Metrics configuration (V1)
+# =============================================================================
+# METRICS CONFIGURATION (V1)
+# =============================================================================
 metrics:
   # Enable Prometheus metrics
   enabled: false
-  
+
   # Metrics endpoint
   endpoint: "/metrics"
-  
+
   # OpenTelemetry tracing
   tracing:
     enabled: false
-    endpoint: "http://localhost:4317"  # OTLP gRPC endpoint
-
+    endpoint: "http://localhost:4317" # OTLP gRPC endpoint

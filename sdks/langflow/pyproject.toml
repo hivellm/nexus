@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langflow-nexus"
+version = "0.1.0"
+description = "LangFlow custom components for Nexus graph database integration"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "HiveLLM", email = "team@hivellm.org"}
+]
+keywords = ["langflow", "nexus", "graph", "database", "vector", "search", "rag", "llm", "components"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "langflow>=1.0.0",
+    "langchain-nexus>=0.1.0",
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/hivellm/nexus"
+Documentation = "https://docs.hivellm.org/nexus/langflow"
+Repository = "https://github.com/hivellm/nexus"
+Issues = "https://github.com/hivellm/nexus/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["langflow_nexus*"]
+
+# LangFlow component registration
+[project.entry-points."langflow.components"]
+nexus = "langflow_nexus"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

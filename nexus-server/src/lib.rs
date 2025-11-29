@@ -15,8 +15,9 @@
 //! - GET /stats - Database statistics
 //! - POST /mcp - MCP StreamableHTTP endpoint
 
+use parking_lot::RwLock;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 
 pub mod api;
 pub mod config;
@@ -31,11 +32,11 @@ pub struct NexusServer {
     /// Executor is Clone and contains only Arc internally, so no RwLock needed
     pub executor: Arc<nexus_core::executor::Executor>,
     /// Engine for all operations (contains Catalog, LabelIndex, KnnIndex, etc.)
-    pub engine: Arc<RwLock<nexus_core::Engine>>,
+    pub engine: Arc<TokioRwLock<nexus_core::Engine>>,
     /// Database manager for multi-database support
     pub database_manager: Arc<RwLock<nexus_core::database::DatabaseManager>>,
     /// RBAC system for user management
-    pub rbac: Arc<RwLock<nexus_core::auth::RoleBasedAccessControl>>,
+    pub rbac: Arc<TokioRwLock<nexus_core::auth::RoleBasedAccessControl>>,
     /// Authentication manager for API key management
     pub auth_manager: Arc<nexus_core::auth::AuthManager>,
     /// JWT manager for token generation and validation
@@ -51,9 +52,9 @@ impl NexusServer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         executor: Arc<nexus_core::executor::Executor>,
-        engine: Arc<RwLock<nexus_core::Engine>>,
+        engine: Arc<TokioRwLock<nexus_core::Engine>>,
         database_manager: Arc<RwLock<nexus_core::database::DatabaseManager>>,
-        rbac: Arc<RwLock<nexus_core::auth::RoleBasedAccessControl>>,
+        rbac: Arc<TokioRwLock<nexus_core::auth::RoleBasedAccessControl>>,
         auth_manager: Arc<nexus_core::auth::AuthManager>,
         jwt_manager: Arc<nexus_core::auth::JwtManager>,
         audit_logger: Arc<nexus_core::auth::AuditLogger>,

@@ -1,0 +1,788 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>Nexus.SDK</name>
+    </assembly>
+    <members>
+        <member name="T:Nexus.SDK.NexusException">
+            <summary>
+            Base exception for Nexus SDK errors.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.NexusApiException">
+            <summary>
+            Exception thrown when an HTTP request to the Nexus API fails.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NexusApiException.StatusCode">
+            <summary>
+            HTTP status code.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NexusApiException.ResponseBody">
+            <summary>
+            Response body.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.NexusTransactionException">
+            <summary>
+            Exception thrown when a transaction operation fails.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.Node">
+            <summary>
+            Represents a graph node.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Node.Id">
+            <summary>
+            Unique node identifier.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Node.Labels">
+            <summary>
+            Node labels.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Node.Properties">
+            <summary>
+            Node properties.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.Relationship">
+            <summary>
+            Represents a graph relationship.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Relationship.Id">
+            <summary>
+            Unique relationship identifier.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Relationship.Type">
+            <summary>
+            Relationship type.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Relationship.StartNode">
+            <summary>
+            Start node ID.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Relationship.EndNode">
+            <summary>
+            End node ID.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Relationship.Properties">
+            <summary>
+            Relationship properties.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.QueryResult">
+            <summary>
+            Represents the result of a Cypher query.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryResult.Columns">
+            <summary>
+            Column names in the result.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryResult.Rows">
+            <summary>
+            Result rows as arrays (Neo4j-compatible format).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryResult.Stats">
+            <summary>
+            Query execution statistics.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryResult.RowsAsMap">
+            <summary>
+            Converts array-based rows to dictionary-based rows using column names as keys.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.QueryStats">
+            <summary>
+            Contains execution statistics for a query.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryStats.NodesCreated">
+            <summary>
+            Number of nodes created.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryStats.NodesDeleted">
+            <summary>
+            Number of nodes deleted.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryStats.RelationshipsCreated">
+            <summary>
+            Number of relationships created.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryStats.RelationshipsDeleted">
+            <summary>
+            Number of relationships deleted.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryStats.PropertiesSet">
+            <summary>
+            Number of properties set.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryStats.ExecutionTimeMs">
+            <summary>
+            Query execution time in milliseconds.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.Index">
+            <summary>
+            Represents a database index.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Index.Name">
+            <summary>
+            Index name.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Index.Label">
+            <summary>
+            Label the index is on.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Index.Properties">
+            <summary>
+            Properties included in the index.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.Index.Type">
+            <summary>
+            Index type (e.g., btree, fulltext).
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.NexusClientConfig">
+            <summary>
+            Configuration for the Nexus client.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NexusClientConfig.BaseUrl">
+            <summary>
+            Base URL of the Nexus server (required).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NexusClientConfig.ApiKey">
+            <summary>
+            API key for authentication (optional).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NexusClientConfig.Username">
+            <summary>
+            Username for authentication (optional).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NexusClientConfig.Password">
+            <summary>
+            Password for authentication (optional).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NexusClientConfig.Timeout">
+            <summary>
+            HTTP request timeout (default: 30 seconds).
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.BatchNodesRequest">
+            <summary>
+            Request body for batch node creation.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.BatchNodesRequest.Nodes">
+            <summary>
+            Nodes to create.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.NodeInput">
+            <summary>
+            Input for creating a node.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NodeInput.Labels">
+            <summary>
+            Node labels.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.NodeInput.Properties">
+            <summary>
+            Node properties.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.BatchRelationshipsRequest">
+            <summary>
+            Request body for batch relationship creation.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.BatchRelationshipsRequest.Relationships">
+            <summary>
+            Relationships to create.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.RelationshipInput">
+            <summary>
+            Input for creating a relationship.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RelationshipInput.StartNode">
+            <summary>
+            Start node ID.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RelationshipInput.EndNode">
+            <summary>
+            End node ID.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RelationshipInput.Type">
+            <summary>
+            Relationship type.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RelationshipInput.Properties">
+            <summary>
+            Relationship properties.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.NexusClient">
+            <summary>
+            Client for interacting with Nexus graph database.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.#ctor(Nexus.SDK.NexusClientConfig)">
+            <summary>
+            Creates a new Nexus client with the specified configuration.
+            </summary>
+            <param name="config">Client configuration.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.SetToken(System.String)">
+            <summary>
+            Sets the bearer token for authentication.
+            </summary>
+            <param name="token">Bearer token.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.PingAsync(System.Threading.CancellationToken)">
+            <summary>
+            Checks if the server is reachable.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.ExecuteCypherAsync(System.String,System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Executes a Cypher query and returns the results.
+            </summary>
+            <param name="query">Cypher query string.</param>
+            <param name="parameters">Query parameters (optional).</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Query result.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.CreateNodeAsync(System.Collections.Generic.List{System.String},System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Creates a new node with the given labels and properties.
+            </summary>
+            <param name="labels">Node labels.</param>
+            <param name="properties">Node properties.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Created node.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.GetNodeAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Retrieves a node by its ID.
+            </summary>
+            <param name="id">Node ID.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Node.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.UpdateNodeAsync(System.String,System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Updates a node's properties.
+            </summary>
+            <param name="id">Node ID.</param>
+            <param name="properties">New properties.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Updated node.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.DeleteNodeAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Deletes a node by its ID.
+            </summary>
+            <param name="id">Node ID.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.BatchCreateNodesAsync(System.Collections.Generic.List{Nexus.SDK.NodeInput},System.Threading.CancellationToken)">
+            <summary>
+            Batch creates multiple nodes.
+            </summary>
+            <param name="nodes">Nodes to create.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Created nodes.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.CreateRelationshipAsync(System.String,System.String,System.String,System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Creates a new relationship between two nodes.
+            </summary>
+            <param name="startNode">Start node ID.</param>
+            <param name="endNode">End node ID.</param>
+            <param name="type">Relationship type.</param>
+            <param name="properties">Relationship properties.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Created relationship.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.GetRelationshipAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Retrieves a relationship by its ID.
+            </summary>
+            <param name="id">Relationship ID.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Relationship.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.DeleteRelationshipAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Deletes a relationship by its ID.
+            </summary>
+            <param name="id">Relationship ID.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.BatchCreateRelationshipsAsync(System.Collections.Generic.List{Nexus.SDK.RelationshipInput},System.Threading.CancellationToken)">
+            <summary>
+            Batch creates multiple relationships.
+            </summary>
+            <param name="relationships">Relationships to create.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Created relationships.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.ListLabelsAsync(System.Threading.CancellationToken)">
+            <summary>
+            Retrieves all node labels in the database.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>List of labels.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.ListRelationshipTypesAsync(System.Threading.CancellationToken)">
+            <summary>
+            Retrieves all relationship types in the database.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>List of relationship types.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.CreateIndexAsync(System.String,System.String,System.Collections.Generic.List{System.String},System.Threading.CancellationToken)">
+            <summary>
+            Creates a new index on node properties.
+            </summary>
+            <param name="name">Index name.</param>
+            <param name="label">Node label.</param>
+            <param name="properties">Properties to index.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.ListIndexesAsync(System.Threading.CancellationToken)">
+            <summary>
+            Retrieves all indexes in the database.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>List of indexes.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.DeleteIndexAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Deletes an index by name.
+            </summary>
+            <param name="name">Index name.</param>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusClient.BeginTransactionAsync(System.Threading.CancellationToken)">
+            <summary>
+            Begins a new transaction.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Transaction object.</returns>
+        </member>
+        <member name="T:Nexus.SDK.NexusTransaction">
+            <summary>
+            Represents a database transaction.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NexusTransaction.ExecuteCypherAsync(System.String,System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Executes a Cypher query within the transaction.
+            </summary>
+            <param name="query">Cypher query string.</param>
+            <param name="parameters">Query parameters (optional).</param>
+            <param name="cancellationToken">Cancellation token.</param>
+            <returns>Query result.</returns>
+        </member>
+        <member name="M:Nexus.SDK.NexusTransaction.CommitAsync(System.Threading.CancellationToken)">
+            <summary>
+            Commits the transaction.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="M:Nexus.SDK.NexusTransaction.RollbackAsync(System.Threading.CancellationToken)">
+            <summary>
+            Rolls back the transaction.
+            </summary>
+            <param name="cancellationToken">Cancellation token.</param>
+        </member>
+        <member name="T:Nexus.SDK.QueryBuilder">
+            <summary>
+            Fluent API for constructing Cypher queries.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Create">
+            <summary>
+            Creates a new QueryBuilder instance.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Match(System.String)">
+            <summary>
+            Adds a MATCH clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.OptionalMatch(System.String)">
+            <summary>
+            Adds an OPTIONAL MATCH clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Where(System.String)">
+            <summary>
+            Adds a WHERE clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.And(System.String)">
+            <summary>
+            Adds an AND condition to the WHERE clause.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Or(System.String)">
+            <summary>
+            Adds an OR condition to the WHERE clause.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.CreatePattern(System.String)">
+            <summary>
+            Adds a CREATE clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Merge(System.String)">
+            <summary>
+            Adds a MERGE clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Set(System.String)">
+            <summary>
+            Adds a SET clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Delete(System.String)">
+            <summary>
+            Adds a DELETE clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.DetachDelete(System.String)">
+            <summary>
+            Adds a DETACH DELETE clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Return(System.String[])">
+            <summary>
+            Adds a RETURN clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.ReturnDistinct(System.String[])">
+            <summary>
+            Adds a RETURN DISTINCT clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.OrderBy(System.String[])">
+            <summary>
+            Adds an ORDER BY clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.OrderByDesc(System.String)">
+            <summary>
+            Adds an ORDER BY ... DESC clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Skip(System.Int32)">
+            <summary>
+            Adds a SKIP clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Limit(System.Int32)">
+            <summary>
+            Adds a LIMIT clause to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.WithParam(System.String,System.Object)">
+            <summary>
+            Adds a parameter to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.WithParams(System.Collections.Generic.Dictionary{System.String,System.Object})">
+            <summary>
+            Adds multiple parameters to the query.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.QueryBuilder.Build">
+            <summary>
+            Builds the final Cypher query string.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.QueryBuilder.Parameters">
+            <summary>
+            Gets the parameters for the query.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.NodePatternBuilder">
+            <summary>
+            Builder for node patterns in Cypher queries.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.Create(System.String)">
+            <summary>
+            Creates a new NodePatternBuilder.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.Variable(System.String)">
+            <summary>
+            Sets the variable name.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.WithLabel(System.String)">
+            <summary>
+            Adds a label to the node.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.WithLabels(System.String[])">
+            <summary>
+            Adds multiple labels to the node.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.WithProperty(System.String,System.Object)">
+            <summary>
+            Adds a property to the node.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.WithProperties(System.Collections.Generic.Dictionary{System.String,System.Object})">
+            <summary>
+            Adds multiple properties to the node.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.Build">
+            <summary>
+            Builds the node pattern string.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.NodePatternBuilder.op_Implicit(Nexus.SDK.NodePatternBuilder)~System.String">
+            <summary>
+            Implicit conversion to string.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.RelationshipPatternBuilder">
+            <summary>
+            Builder for relationship patterns in Cypher queries.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.Create(System.String)">
+            <summary>
+            Creates a new RelationshipPatternBuilder.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.Variable(System.String)">
+            <summary>
+            Sets the variable name.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.WithType(System.String)">
+            <summary>
+            Sets the relationship type.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.Outgoing">
+            <summary>
+            Sets the direction to outgoing (->).
+            </summary>
+        </member>
+        <!-- Badly formed XML comment ignored for member "M:Nexus.SDK.RelationshipPatternBuilder.Incoming" -->
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.Undirected">
+            <summary>
+            Sets the relationship to undirected (-).
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.WithHops(System.Int32,System.Int32)">
+            <summary>
+            Sets variable length path hops.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.WithMinHops(System.Int32)">
+            <summary>
+            Sets minimum hops for variable length path.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.WithMaxHops(System.Int32)">
+            <summary>
+            Sets maximum hops for variable length path.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.Build">
+            <summary>
+            Builds the relationship pattern string.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RelationshipPatternBuilder.op_Implicit(Nexus.SDK.RelationshipPatternBuilder)~System.String">
+            <summary>
+            Implicit conversion to string.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.RelationshipDirection">
+            <summary>
+            Direction of a relationship in a Cypher pattern.
+            </summary>
+        </member>
+        <member name="F:Nexus.SDK.RelationshipDirection.Outgoing">
+            <summary>Outgoing relationship (->)</summary>
+        </member>
+        <!-- Badly formed XML comment ignored for member "F:Nexus.SDK.RelationshipDirection.Incoming" -->
+        <member name="F:Nexus.SDK.RelationshipDirection.Undirected">
+            <summary>Undirected relationship (-)</summary>
+        </member>
+        <member name="T:Nexus.SDK.PathBuilder">
+            <summary>
+            Helper class for building path patterns.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.PathBuilder.Path(System.String[])">
+            <summary>
+            Combines patterns into a path.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.RetryConfig">
+            <summary>
+            Configuration for retry behavior.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RetryConfig.MaxRetries">
+            <summary>
+            Maximum number of retry attempts (default: 3).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RetryConfig.InitialBackoff">
+            <summary>
+            Initial backoff duration (default: 100ms).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RetryConfig.MaxBackoff">
+            <summary>
+            Maximum backoff duration (default: 10s).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RetryConfig.BackoffMultiplier">
+            <summary>
+            Multiplier for exponential backoff (default: 2.0).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RetryConfig.Jitter">
+            <summary>
+            Whether to add jitter to backoff (default: true).
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RetryConfig.RetryableStatusCodes">
+            <summary>
+            HTTP status codes that should trigger a retry.
+            </summary>
+        </member>
+        <member name="P:Nexus.SDK.RetryConfig.Default">
+            <summary>
+            Creates a default retry configuration.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.RetryExtensions">
+            <summary>
+            Extension methods for adding retry support to NexusClient.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryExtensions.WithRetry(Nexus.SDK.NexusClient,Nexus.SDK.RetryConfig)">
+            <summary>
+            Creates a retryable client wrapper.
+            </summary>
+        </member>
+        <member name="T:Nexus.SDK.RetryableNexusClient">
+            <summary>
+            A wrapper around NexusClient that adds automatic retry functionality.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.#ctor(Nexus.SDK.NexusClient,Nexus.SDK.RetryConfig)">
+            <summary>
+            Creates a new retryable client.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.#ctor(Nexus.SDK.NexusClientConfig,Nexus.SDK.RetryConfig)">
+            <summary>
+            Creates a new retryable client with configuration.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.ExecuteWithRetryAsync``1(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{``0}},System.Threading.CancellationToken)">
+            <summary>
+            Executes an operation with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.ExecuteWithRetryAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task},System.Threading.CancellationToken)">
+            <summary>
+            Executes an operation with automatic retry (void return).
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.PingAsync(System.Threading.CancellationToken)">
+            <summary>
+            Checks if the server is reachable with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.ExecuteCypherAsync(System.String,System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Executes a Cypher query with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.CreateNodeAsync(System.Collections.Generic.List{System.String},System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Creates a new node with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.GetNodeAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Retrieves a node by ID with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.UpdateNodeAsync(System.String,System.Collections.Generic.Dictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>
+            Updates a node with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.DeleteNodeAsync(System.String,System.Threading.CancellationToken)">
+            <summary>
+            Deletes a node with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.ListLabelsAsync(System.Threading.CancellationToken)">
+            <summary>
+            Retrieves all node labels with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.ListRelationshipTypesAsync(System.Threading.CancellationToken)">
+            <summary>
+            Retrieves all relationship types with automatic retry.
+            </summary>
+        </member>
+        <member name="M:Nexus.SDK.RetryableNexusClient.ListIndexesAsync(System.Threading.CancellationToken)">
+            <summary>
+            Retrieves all indexes with automatic retry.
+            </summary>
+        </member>
+    </members>
+</doc>

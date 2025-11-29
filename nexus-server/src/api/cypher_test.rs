@@ -12,6 +12,7 @@ mod tests {
     use nexus_core::database::DatabaseManager;
     use nexus_core::executor::parser::CypherParser;
     use nexus_core::testing::TestContext;
+    use parking_lot::RwLock as ParkingLotRwLock;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -26,7 +27,7 @@ mod tests {
         let db_path = ctx.path().join("databases");
         std::fs::create_dir_all(&db_path).unwrap();
         let database_manager = DatabaseManager::new(db_path).unwrap();
-        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let database_manager_arc = Arc::new(ParkingLotRwLock::new(database_manager));
 
         let rbac = RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));

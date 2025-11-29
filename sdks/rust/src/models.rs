@@ -228,3 +228,88 @@ pub struct CypherRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<HashMap<String, Value>>,
 }
+
+// ============================================================================
+// Database Management Models
+// ============================================================================
+
+/// Database information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseInfo {
+    /// Database name
+    pub name: String,
+    /// Database path
+    pub path: String,
+    /// Creation timestamp
+    #[serde(rename = "created_at")]
+    pub created_at: i64,
+    /// Number of nodes
+    #[serde(rename = "node_count")]
+    pub node_count: u64,
+    /// Number of relationships
+    #[serde(rename = "relationship_count")]
+    pub relationship_count: u64,
+    /// Storage size in bytes
+    #[serde(rename = "storage_size")]
+    pub storage_size: u64,
+}
+
+/// Response for listing databases
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListDatabasesResponse {
+    /// List of databases
+    pub databases: Vec<DatabaseInfo>,
+    /// Default database name
+    #[serde(rename = "default_database")]
+    pub default_database: String,
+}
+
+/// Request to create a database
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateDatabaseRequest {
+    /// Database name
+    pub name: String,
+}
+
+/// Response for creating a database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateDatabaseResponse {
+    /// Success flag
+    pub success: bool,
+    /// Database name
+    pub name: String,
+    /// Message
+    pub message: String,
+}
+
+/// Response for dropping a database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropDatabaseResponse {
+    /// Success flag
+    pub success: bool,
+    /// Message
+    pub message: String,
+}
+
+/// Response for session database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDatabaseResponse {
+    /// Current database name
+    pub database: String,
+}
+
+/// Request to switch database
+#[derive(Debug, Clone, Serialize)]
+pub struct SwitchDatabaseRequest {
+    /// Database name to switch to
+    pub name: String,
+}
+
+/// Response for switching database
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwitchDatabaseResponse {
+    /// Success flag
+    pub success: bool,
+    /// Message
+    pub message: String,
+}

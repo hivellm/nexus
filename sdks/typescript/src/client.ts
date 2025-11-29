@@ -11,6 +11,12 @@ import type {
   SchemaInfo,
   QueryStatistics,
   BatchOperation,
+  // Database management types
+  DatabaseInfo,
+  ListDatabasesResponse,
+  CreateDatabaseResponse,
+  DropDatabaseResponse,
+  SwitchDatabaseResponse,
 } from './types';
 import {
   NexusSDKError,
@@ -135,9 +141,9 @@ export class NexusClient {
    */
   async executeCypher(cypher: string, params?: QueryParams): Promise<QueryResult> {
     try {
-      const response = await this.client.post<QueryResult>('/query', {
-        cypher,
-        params: params ?? {},
+      const response = await this.client.post<QueryResult>('/cypher', {
+        query: cypher,
+        parameters: params ?? {},
       });
       return response.data;
     } catch (error) {
@@ -410,6 +416,98 @@ export class NexusClient {
   async clearPlanCache(): Promise<void> {
     try {
       await this.client.post('/admin/plan-cache/clear');
+    } catch (error) {
+      throw NexusSDKError.fromAxiosError(error);
+    }
+  }
+
+  // ==========================================================================
+  // Database Management Methods
+  // ==========================================================================
+
+  /**
+   * List all databases
+   *
+   * @returns List of databases and default database name
+   */
+  async listDatabases(): Promise<ListDatabasesResponse> {
+    try {
+      const response = await this.client.get<ListDatabasesResponse>('/databases');
+      return response.data;
+    } catch (error) {
+      throw NexusSDKError.fromAxiosError(error);
+    }
+  }
+
+  /**
+   * Create a new database
+   *
+   * @param name - Database name (alphanumeric with underscores and hyphens)
+   * @returns Response indicating success
+   */
+  async createDatabase(name: string): Promise<CreateDatabaseResponse> {
+    try {
+      const response = await this.client.post<CreateDatabaseResponse>('/databases', { name });
+      return response.data;
+    } catch (error) {
+      throw NexusSDKError.fromAxiosError(error);
+    }
+  }
+
+  /**
+   * Get database information
+   *
+   * @param name - Database name
+   * @returns Database information
+   */
+  async getDatabase(name: string): Promise<DatabaseInfo> {
+    try {
+      const response = await this.client.get<DatabaseInfo>(`/databases/${name}`);
+      return response.data;
+    } catch (error) {
+      throw NexusSDKError.fromAxiosError(error);
+    }
+  }
+
+  /**
+   * Drop a database
+   *
+   * @param name - Database name
+   * @returns Response indicating success
+   */
+  async dropDatabase(name: string): Promise<DropDatabaseResponse> {
+    try {
+      const response = await this.client.delete<DropDatabaseResponse>(`/databases/${name}`);
+      return response.data;
+    } catch (error) {
+      throw NexusSDKError.fromAxiosError(error);
+    }
+  }
+
+  /**
+   * Get the current session database
+   *
+   * @returns Current database name
+   */
+  async getCurrentDatabase(): Promise<string> {
+    try {
+      const response = await this.client.get<{ database: string }>('/session/database');
+      return response.data.database;
+    } catch (error) {
+      throw NexusSDKError.fromAxiosError(error);
+    }
+  }
+
+  /**
+   * Switch to a different database
+   *
+   * @param name - Database name to switch to
+   * @returns Response indicating success
+   */
+  async switchDatabase(name: string): Promise<SwitchDatabaseResponse> {
+    try {
+      const response = await this.client.put<SwitchDatabaseResponse>('/session/database', { name });
+      return response.data;
     } catch (error) {
       throw NexusSDKError.fromAxiosError(error);
     }

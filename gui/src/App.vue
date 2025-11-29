@@ -77,6 +77,54 @@
           </div>
         </div>
 
+        <!-- Database Selector -->
+        <div v-if="isConnected" class="h-12 flex items-center px-4 border-b border-border flex-shrink-0">
+          <div class="database-dropdown relative w-full" :class="{ 'z-40': isDatabaseDropdownOpen }">
+            <button
+              @click="toggleDatabaseDropdown"
+              class="w-full flex items-center justify-between gap-3 p-2 rounded-lg bg-bg-tertiary hover:bg-bg-hover transition-colors cursor-pointer"
+              :disabled="isLoadingDatabases"
+            >
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 whitespace-nowrap overflow-hidden text-ellipsis">
+                  <i class="fas fa-layer-group text-xs text-text-muted"></i>
+                  <span class="text-xs font-medium text-text-primary">{{ currentDatabase }}</span>
+                </div>
+              </div>
+              <i v-if="isLoadingDatabases" class="fas fa-spinner fa-spin text-xs text-text-muted"></i>
+              <i v-else class="fas fa-chevron-down text-xs text-text-muted transition-transform" :class="{ 'rotate-180': isDatabaseDropdownOpen }"></i>
+            </button>
+
+            <div v-if="isDatabaseDropdownOpen" class="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-lg z-40">
+              <div v-if="databases.length === 0" class="p-3 text-center text-text-secondary">
+                <span class="text-xs">No databases available</span>
+              </div>
+              <div v-else class="max-h-48 overflow-y-auto">
+                <div
+                  v-for="db in databases"
+                  :key="db.name"
+                  :class="['flex items-center justify-between p-2 hover:bg-bg-hover cursor-pointer transition-colors', { 'bg-bg-hover': currentDatabase === db.name }]"
+                  @click="selectDatabase(db.name)"
+                >
+                  <div class="flex-1 min-w-0">
+                    <div class="text-xs font-medium text-text-primary truncate">{{ db.name }}</div>
+                  </div>
+                  <div v-if="currentDatabase === db.name" class="text-success">
+                    <i class="fas fa-check text-xs"></i>
+                  </div>
+                </div>
+              </div>
+
+              <div class="border-t border-border p-2">
+                <button @click="openDatabaseManager" class="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded transition-colors">
+                  <i class="fas fa-cog"></i>
+                  Manage Databases
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Navigation -->
         <nav class="flex-1 overflow-y-auto p-4">
           <router-link
@@ -122,14 +170,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useServersStore } from '@/stores/servers';
+import { useDatabasesStore } from '@/stores/databases';
 import NotificationCenter from '@/components/NotificationCenter.vue';
 
 const route = useRoute();
 const router = useRouter();
 const serversStore = useServersStore();
+const databasesStore = useDatabasesStore();
 
 const serverList = computed(() => serversStore.serverList);
 const activeServer = computed(() => serversStore.activeServer);
@@ -137,12 +187,19 @@ const activeServerId = computed(() => serversStore.activeServerId);
 const isConnected = computed(() => activeServer.value?.status === 'online');
 
 const isDropdownOpen = ref(false);
+const isDatabaseDropdownOpen = ref(false);
+
+// Database computed properties
+const databases = computed(() => databasesStore.databases);
+const currentDatabase = computed(() => databasesStore.currentDatabase);
+const isLoadingDatabases = computed(() => databasesStore.isLoading);
 
 const menuItems = [
   { path: '/', label: 'Dashboard', icon: 'fas fa-tachometer-alt' },
   { path: '/query', label: 'Query', icon: 'fas fa-terminal' },
   { path: '/graph', label: 'Graph', icon: 'fas fa-project-diagram' },
   { path: '/schema', label: 'Schema', icon: 'fas fa-sitemap' },
+  { path: '/databases', label: 'Databases', icon: 'fas fa-layer-group' },
   { path: '/data', label: 'Data', icon: 'fas fa-database' },
   { path: '/indexes', label: 'Indexes', icon: 'fas fa-list' },
   { path: '/vector-search', label: 'Vector Search', icon: 'fas fa-search' },
@@ -156,6 +213,7 @@ const pageTitle = computed(() => {
     '/query': 'Query Editor',
     '/graph': 'Graph Visualization',
     '/schema': 'Schema',
+    '/databases': 'Databases',
     '/data': 'Data Management',
     '/indexes': 'Indexes',
     '/vector-search': 'Vector Search',
@@ -188,6 +246,20 @@ function openConnectionManager(): void {
   router.push('/config');
 }
 
+function toggleDatabaseDropdown(): void {
+  isDatabaseDropdownOpen.value = !isDatabaseDropdownOpen.value;
+}
+
+async function selectDatabase(name: string): Promise<void> {
+  isDatabaseDropdownOpen.value = false;
+  await databasesStore.switchDatabase(name);
+}
+
+function openDatabaseManager(): void {
+  isDatabaseDropdownOpen.value = false;
+  router.push('/databases');
+}
+
 function minimizeWindow(): void {
   window.electronAPI?.windowControl('minimize');
 }
@@ -204,10 +276,21 @@ onMounted(async () => {
   // Auto-connect to active server on mount
   if (serversStore.activeServerId) {
     await serversStore.connectServer(serversStore.activeServerId);
+    // Fetch databases after connecting
+    if (isConnected.value) {
+      await databasesStore.fetchDatabases();
+    }
   }
 
   // Close dropdown when clicking outside
   document.addEventListener('click', handleClickOutside);
+});
+
+// Watch for connection status changes to fetch databases
+watch(isConnected, async (connected) => {
+  if (connected) {
+    await databasesStore.fetchDatabases();
+  }
 });
 
 onUnmounted(() => {
@@ -218,6 +301,9 @@ function handleClickOutside(event: MouseEvent): void {
   const target = event.target as HTMLElement;
   if (!target.closest('.connection-dropdown')) {
     isDropdownOpen.value = false;
+  }
+  if (!target.closest('.database-dropdown')) {
+    isDatabaseDropdownOpen.value = false;
   }
 }
 </script>

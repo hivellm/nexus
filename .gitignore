@@ -58,5 +58,6 @@ test-*
 !test-*.sh
 
 # Secrets
+secrets
 secrets/
 secrets/*.txt

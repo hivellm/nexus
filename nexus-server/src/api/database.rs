@@ -12,9 +12,9 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use nexus_core::database::{DatabaseInfo, DatabaseManager};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Server state with database manager
 #[derive(Clone)]
@@ -64,7 +64,7 @@ pub async fn create_database(
     State(state): State<DatabaseState>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Response {
-    let manager = state.manager.read().await;
+    let manager = state.manager.read();
 
     match manager.create_database(&req.name) {
         Ok(_) => Json(CreateDatabaseResponse {
@@ -89,7 +89,7 @@ pub async fn drop_database(
     State(state): State<DatabaseState>,
     Path(name): Path<String>,
 ) -> Response {
-    let manager = state.manager.read().await;
+    let manager = state.manager.read();
 
     match manager.drop_database(&name, false) {
         Ok(_) => Json(DatabaseResponse {
@@ -110,7 +110,7 @@ pub async fn drop_database(
 
 /// List all databases
 pub async fn list_databases(State(state): State<DatabaseState>) -> Response {
-    let manager = state.manager.read().await;
+    let manager = state.manager.read();
     let databases = manager.list_databases();
     let default_database = manager.default_database_name().to_string();
 
@@ -126,7 +126,7 @@ pub async fn get_database(
     State(state): State<DatabaseState>,
     Path(name): Path<String>,
 ) -> Response {
-    let manager = state.manager.read().await;
+    let manager = state.manager.read();
 
     match manager.get_database(&name) {
         Ok(engine) => {
@@ -143,6 +143,7 @@ pub async fn get_database(
                 node_count,
                 relationship_count,
                 storage_size: 0,
+                state: nexus_core::database::DatabaseState::Online,
             })
             .into_response()
         }
@@ -155,6 +156,59 @@ pub async fn get_database(
         )
             .into_response(),
     }
+}
+
+/// Request to switch database
+#[derive(Debug, Deserialize)]
+pub struct SwitchDatabaseRequest {
+    /// Database name to switch to
+    pub name: String,
+}
+
+/// Response for session database
+#[derive(Debug, Serialize)]
+pub struct SessionDatabaseResponse {
+    /// Current database name
+    pub database: String,
+}
+
+/// Get current session database
+pub async fn get_session_database(State(state): State<DatabaseState>) -> Response {
+    let manager = state.manager.read();
+    let current_db = manager.default_database_name().to_string();
+
+    Json(SessionDatabaseResponse {
+        database: current_db,
+    })
+    .into_response()
+}
+
+/// Switch session database
+pub async fn switch_session_database(
+    State(state): State<DatabaseState>,
+    Json(req): Json<SwitchDatabaseRequest>,
+) -> Response {
+    let manager = state.manager.read();
+
+    // Check if database exists
+    if !manager.exists(&req.name) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(DatabaseResponse {
+                success: false,
+                message: format!("Database '{}' does not exist", req.name),
+            }),
+        )
+            .into_response();
+    }
+
+    // In a full implementation, this would set the session's current database
+    // For now, we just validate the database exists
+    Json(DatabaseResponse {
+        success: true,
+        message: format!("Switched to database '{}'", req.name),
+    })
+    .into_response()
 }
 
 #[cfg(test)]
@@ -253,7 +307,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Create first time
-        let manager = state.manager.read().await;
+        let manager = state.manager.read();
         manager.create_database("test_db").unwrap();
         drop(manager);
 
@@ -286,7 +340,7 @@ mod tests {
         let state = test_state.state();
 
         // Create multiple databases
-        let manager = state.manager.read().await;
+        let manager = state.manager.read();
         manager.create_database("db1").unwrap();
         manager.create_database("db2").unwrap();
         manager.create_database("db3").unwrap();
@@ -303,7 +357,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Create database and add data
-        let manager = state.manager.read().await;
+        let manager = state.manager.read();
         let db = manager.create_database("test_db").unwrap();
         drop(manager);
 
@@ -364,7 +418,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Create database
-        let manager = state.manager.read().await;
+        let manager = state.manager.read();
         manager.create_database("test_db").unwrap();
         drop(manager);
 

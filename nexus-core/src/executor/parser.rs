@@ -55,6 +55,8 @@ pub enum Clause {
     CreateDatabase(CreateDatabaseClause),
     /// DROP DATABASE command
     DropDatabase(DropDatabaseClause),
+    /// ALTER DATABASE command
+    AlterDatabase(AlterDatabaseClause),
     /// SHOW DATABASES command
     ShowDatabases,
     /// USE DATABASE command
@@ -447,6 +449,24 @@ pub struct DropDatabaseClause {
     pub name: String,
     /// Optional IF EXISTS flag
     pub if_exists: bool,
+}
+
+/// ALTER DATABASE clause
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlterDatabaseClause {
+    /// Database name
+    pub name: String,
+    /// Alteration type
+    pub alteration: DatabaseAlteration,
+}
+
+/// Database alteration types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DatabaseAlteration {
+    /// Set access mode (READ WRITE or READ ONLY)
+    SetAccess { read_only: bool },
+    /// Set option (generic key-value)
+    SetOption { key: String, value: String },
 }
 
 /// USE DATABASE clause
@@ -1223,6 +1243,15 @@ impl CypherParser {
                 } else {
                     let revoke_clause = self.parse_revoke_clause()?;
                     Ok(Clause::Revoke(revoke_clause))
+                }
+            }
+            "ALTER" => {
+                self.skip_whitespace();
+                if self.peek_keyword("DATABASE") {
+                    let alter_db_clause = self.parse_alter_database_clause()?;
+                    Ok(Clause::AlterDatabase(alter_db_clause))
+                } else {
+                    Err(self.error("ALTER must be followed by DATABASE"))
                 }
             }
             _ => Err(self.error(&format!("Unexpected keyword: {}", keyword))),
@@ -2215,6 +2244,63 @@ impl CypherParser {
 
         let name = self.parse_identifier()?;
         Ok(DropDatabaseClause { name, if_exists })
+    }
+
+    /// Parse ALTER DATABASE clause
+    /// Syntax: ALTER DATABASE name SET ACCESS {READ WRITE | READ ONLY}
+    ///         ALTER DATABASE name SET OPTION key value
+    fn parse_alter_database_clause(&mut self) -> Result<AlterDatabaseClause> {
+        self.expect_keyword("DATABASE")?;
+        self.skip_whitespace();
+
+        let name = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        self.expect_keyword("SET")?;
+        self.skip_whitespace();
+
+        // Parse alteration type
+        let alteration = if self.peek_keyword("ACCESS") {
+            self.parse_keyword()?; // consume "ACCESS"
+            self.skip_whitespace();
+
+            // Parse READ WRITE or READ ONLY
+            self.expect_keyword("READ")?;
+            self.skip_whitespace();
+
+            let read_only = if self.peek_keyword("ONLY") {
+                self.parse_keyword()?;
+                true
+            } else if self.peek_keyword("WRITE") {
+                self.parse_keyword()?;
+                false
+            } else {
+                return Err(self.error("Expected ONLY or WRITE after READ in ALTER DATABASE"));
+            };
+
+            DatabaseAlteration::SetAccess { read_only }
+        } else if self.peek_keyword("OPTION") {
+            self.parse_keyword()?; // consume "OPTION"
+            self.skip_whitespace();
+
+            let key = self.parse_identifier()?;
+            self.skip_whitespace();
+
+            // Parse value - can be identifier or number
+            let value = if self.peek_char().map_or(false, |c| c.is_ascii_digit()) {
+                // Parse as number and convert to string
+                self.parse_number()?.to_string()
+            } else {
+                // Parse as identifier
+                self.parse_identifier()?
+            };
+
+            DatabaseAlteration::SetOption { key, value }
+        } else {
+            return Err(self.error("Expected ACCESS or OPTION after SET in ALTER DATABASE"));
+        };
+
+        Ok(AlterDatabaseClause { name, alteration })
     }
 
     /// Parse USE DATABASE clause
@@ -4810,6 +4896,7 @@ impl CypherParser {
             || self.peek_keyword("USE")  // For USE DATABASE
             || self.peek_keyword("LOAD")  // For LOAD CSV
             || self.peek_keyword("FOREACH") // For FOREACH clause
+            || self.peek_keyword("ALTER") // For ALTER DATABASE
     }
 
     /// Check if character is identifier start

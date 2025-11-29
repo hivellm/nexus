@@ -30,5 +30,12 @@ export type {
     TransactionOptions,
     BatchOperation,
     NexusError,
+    // Database management types
+    DatabaseInfo,
+    ListDatabasesResponse,
+    CreateDatabaseResponse,
+    DropDatabaseResponse,
+    SessionDatabaseResponse,
+    SwitchDatabaseResponse,
 } from './types';
 

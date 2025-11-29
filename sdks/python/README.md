@@ -163,12 +163,201 @@ result = await tx.execute("CREATE (n:Person {name: $name}) RETURN n", {"name": "
 await tx.commit()  # or tx.rollback()
 ```
 
+### Multi-Database Support
+
+```python
+# List all databases
+databases = await client.list_databases()
+print(f"Available databases: {databases.databases}")
+print(f"Default database: {databases.default_database}")
+
+# Create a new database
+create_result = await client.create_database("mydb")
+print(f"Created: {create_result.name}")
+
+# Switch to the new database
+switch_result = await client.switch_database("mydb")
+print(f"Switched to: mydb")
+
+# Get current database
+current_db = await client.get_current_database()
+print(f"Current database: {current_db}")
+
+# Create data in the current database
+result = await client.execute_cypher(
+    "CREATE (n:Product {name: $name}) RETURN n",
+    {"name": "Laptop"}
+)
+
+# Get database information
+db_info = await client.get_database("mydb")
+print(f"Nodes: {db_info.node_count}, Relationships: {db_info.relationship_count}")
+
+# Drop database (must not be current database)
+await client.switch_database("neo4j")  # Switch away first
+drop_result = await client.drop_database("mydb")
+
+# Or connect directly to a specific database
+async with NexusClient("http://localhost:15474", database="mydb") as client:
+    # All operations will use 'mydb'
+    result = await client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None)
+```
+
 ### Using Context Manager
 
 ```python
 async with NexusClient("http://localhost:15474") as client:
     result = await client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None)
     print(f"Found {len(result.rows)} rows")
+```
+
+### High Availability with Replication
+
+Nexus supports master-replica replication for high availability and read scaling.
+Use the **master** for all write operations and **replicas** for read operations.
+
+```python
+import asyncio
+from nexus_sdk import NexusClient
+
+class NexusCluster:
+    """Client for Nexus cluster with master-replica topology."""
+
+    def __init__(self, master_url: str, replica_urls: list[str]):
+        """
+        Initialize cluster client.
+
+        Args:
+            master_url: URL of the master node (for writes)
+            replica_urls: List of replica URLs (for reads)
+        """
+        self.master = NexusClient(master_url)
+        self.replicas = [NexusClient(url) for url in replica_urls]
+        self._replica_index = 0
+
+    def _get_replica(self) -> NexusClient:
+        """Round-robin replica selection."""
+        if not self.replicas:
+            return self.master
+        replica = self.replicas[self._replica_index]
+        self._replica_index = (self._replica_index + 1) % len(self.replicas)
+        return replica
+
+    async def write(self, query: str, params: dict = None):
+        """Execute write query on master."""
+        return await self.master.execute_cypher(query, params)
+
+    async def read(self, query: str, params: dict = None):
+        """Execute read query on replica (round-robin)."""
+        return await self._get_replica().execute_cypher(query, params)
+
+    async def close(self):
+        """Close all connections."""
+        await self.master.close()
+        for replica in self.replicas:
+            await replica.close()
+
+async def main():
+    # Connect to cluster
+    # Master handles all writes, replicas handle reads
+    cluster = NexusCluster(
+        master_url="http://master:15474",
+        replica_urls=[
+            "http://replica1:15474",
+            "http://replica2:15474",
+        ]
+    )
+
+    # Write operations go to master
+    await cluster.write(
+        "CREATE (n:Person {name: $name, age: $age}) RETURN n",
+        {"name": "Alice", "age": 30}
+    )
+
+    # Read operations are distributed across replicas
+    result = await cluster.read(
+        "MATCH (n:Person) WHERE n.age > $min_age RETURN n",
+        {"min_age": 25}
+    )
+    print(f"Found {len(result.rows)} persons")
+
+    # High-volume reads are load-balanced
+    for i in range(100):
+        result = await cluster.read("MATCH (n) RETURN count(n) as total", None)
+
+    await cluster.close()
+
+asyncio.run(main())
+```
+
+#### Replication Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Application                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │              NexusCluster Client                     │   │
+│   │   write() ──────────┐     read() ───────────────┐   │   │
+│   └─────────────────────┼───────────────────────────┼───┘   │
+└─────────────────────────┼───────────────────────────┼───────┘
+                          │                           │
+                          ▼                           ▼
+              ┌───────────────────┐     ┌─────────────────────┐
+              │      MASTER       │     │      REPLICAS       │
+              │   (writes only)   │────▶│   (reads only)      │
+              │                   │ WAL │  ┌───────────────┐  │
+              │ • CREATE          │────▶│  │   Replica 1   │  │
+              │ • UPDATE          │     │  └───────────────┘  │
+              │ • DELETE          │     │  ┌───────────────┐  │
+              │ • MERGE           │────▶│  │   Replica 2   │  │
+              └───────────────────┘     │  └───────────────┘  │
+                                        └─────────────────────┘
+```
+
+#### Starting a Nexus Cluster
+
+```bash
+# Start master node
+NEXUS_REPLICATION_ROLE=master \
+NEXUS_REPLICATION_BIND_ADDR=0.0.0.0:15475 \
+./nexus-server
+
+# Start replica 1
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+
+# Start replica 2
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+```
+
+#### Monitoring Replication Status
+
+```python
+import httpx
+
+async def check_replication_status(master_url: str):
+    async with httpx.AsyncClient() as client:
+        # Check master status
+        response = await client.get(f"{master_url}/replication/status")
+        status = response.json()
+        print(f"Role: {status['role']}")
+        print(f"Running: {status['running']}")
+        print(f"Connected replicas: {status.get('replica_count', 0)}")
+
+        # Get master stats
+        response = await client.get(f"{master_url}/replication/master/stats")
+        stats = response.json()
+        print(f"Entries replicated: {stats['entries_replicated']}")
+        print(f"Connected replicas: {stats['connected_replicas']}")
+
+        # List replicas
+        response = await client.get(f"{master_url}/replication/replicas")
+        replicas = response.json()
+        for replica in replicas['replicas']:
+            print(f"  - {replica['id']}: lag={replica['lag']}, healthy={replica['healthy']}")
 ```
 
 ## Features
@@ -184,6 +373,7 @@ async with NexusClient("http://localhost:15474") as client:
 - ✅ **Performance monitoring** (query statistics, slow queries, plan cache)
 - ✅ **Query Builder** (type-safe Cypher query construction)
 - ✅ **Advanced Transaction** (Transaction class with state management)
+- ✅ **Multi-database support** (create, list, switch, drop databases)
 - ✅ Proper error handling
 - ✅ Type-safe models with Pydantic
 - ✅ Async/await support
@@ -223,6 +413,7 @@ See the `examples/` directory for complete examples:
 - `query_builder.py` - Query builder usage examples
 - `batch_operations.py` - Batch create operations
 - `performance_monitoring.py` - Performance monitoring examples
+- `multi_database.py` - Multi-database support examples
 
 Run examples with:
 
@@ -233,6 +424,7 @@ python examples/transactions.py
 python examples/query_builder.py
 python examples/batch_operations.py
 python examples/performance_monitoring.py
+python examples/multi_database.py
 ```
 
 ## Testing

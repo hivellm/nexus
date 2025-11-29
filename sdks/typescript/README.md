@@ -14,6 +14,7 @@ Official TypeScript/JavaScript SDK for [Nexus Graph Database](https://github.com
 - 🎯 **Cypher query execution** with parameter support
 - 🔗 **Node and relationship CRUD operations**
 - 📊 **Schema management** and introspection
+- 🗄️ **Multi-database support** (create, list, switch, drop databases)
 - 🛡️ **Comprehensive error handling**
 - ✅ **Well-tested** with high code coverage
 
@@ -233,6 +234,49 @@ console.log('Query statistics:', stats);
 await client.clearPlanCache();
 ```
 
+### Multi-Database Support
+
+```typescript
+// List all databases
+const databases = await client.listDatabases();
+console.log('Available databases:', databases.databases);
+console.log('Default database:', databases.defaultDatabase);
+
+// Create a new database
+const createResult = await client.createDatabase('mydb');
+console.log('Created:', createResult.name);
+
+// Switch to the new database
+const switchResult = await client.switchDatabase('mydb');
+console.log('Switched to: mydb');
+
+// Get current database
+const currentDb = await client.getCurrentDatabase();
+console.log('Current database:', currentDb);
+
+// Create data in the current database
+const result = await client.executeCypher(
+  'CREATE (n:Product {name: $name}) RETURN n',
+  { name: 'Laptop' }
+);
+
+// Get database information
+const dbInfo = await client.getDatabase('mydb');
+console.log(`Nodes: ${dbInfo.nodeCount}, Relationships: ${dbInfo.relationshipCount}`);
+
+// Drop database (must not be current database)
+await client.switchDatabase('neo4j');  // Switch away first
+const dropResult = await client.dropDatabase('mydb');
+
+// Or connect directly to a specific database
+const dbClient = new NexusClient({
+  baseUrl: 'http://localhost:15474',
+  database: 'mydb',  // Connect to specific database
+});
+// All operations will use 'mydb'
+const result = await dbClient.executeCypher('MATCH (n) RETURN n LIMIT 10', {});
+```
+
 ## Configuration Options
 
 ```typescript
@@ -242,6 +286,166 @@ interface NexusConfig {
   timeout?: number;          // Request timeout (default: 30000ms)
   retries?: number;          // Number of retries (default: 3)
   debug?: boolean;           // Enable debug logging (default: false)
+}
+```
+
+## High Availability with Replication
+
+Nexus supports master-replica replication for high availability and read scaling.
+Use the **master** for all write operations and **replicas** for read operations.
+
+### NexusCluster Class
+
+```typescript
+import { NexusClient } from '@hivellm/nexus-sdk';
+
+/**
+ * Client for Nexus cluster with master-replica topology.
+ * Routes writes to master, reads to replicas (round-robin).
+ */
+class NexusCluster {
+  private master: NexusClient;
+  private replicas: NexusClient[];
+  private replicaIndex = 0;
+
+  constructor(masterUrl: string, replicaUrls: string[]) {
+    this.master = new NexusClient({ baseUrl: masterUrl });
+    this.replicas = replicaUrls.map(url => new NexusClient({ baseUrl: url }));
+  }
+
+  private getNextReplica(): NexusClient {
+    if (this.replicas.length === 0) return this.master;
+    const replica = this.replicas[this.replicaIndex];
+    this.replicaIndex = (this.replicaIndex + 1) % this.replicas.length;
+    return replica;
+  }
+
+  /** Execute write query on master */
+  async write(query: string, params: Record<string, unknown> = {}) {
+    return this.master.executeCypher(query, params);
+  }
+
+  /** Execute read query on replica (round-robin) */
+  async read(query: string, params: Record<string, unknown> = {}) {
+    return this.getNextReplica().executeCypher(query, params);
+  }
+
+  /** Get master client for direct access */
+  getMaster(): NexusClient {
+    return this.master;
+  }
+
+  /** Get all replica clients */
+  getReplicas(): NexusClient[] {
+    return this.replicas;
+  }
+}
+```
+
+### Usage Example
+
+```typescript
+import { NexusClient } from '@hivellm/nexus-sdk';
+
+async function main() {
+  // Connect to cluster
+  // Master handles all writes, replicas handle reads
+  const cluster = new NexusCluster(
+    'http://master:15474',
+    [
+      'http://replica1:15474',
+      'http://replica2:15474',
+    ]
+  );
+
+  // Write operations go to master
+  await cluster.write(
+    'CREATE (n:Person {name: $name, age: $age}) RETURN n',
+    { name: 'Alice', age: 30 }
+  );
+
+  // Read operations are distributed across replicas
+  const result = await cluster.read(
+    'MATCH (n:Person) WHERE n.age > $minAge RETURN n',
+    { minAge: 25 }
+  );
+  console.log(`Found ${result.rows.length} persons`);
+
+  // High-volume reads are load-balanced
+  for (let i = 0; i < 100; i++) {
+    await cluster.read('MATCH (n) RETURN count(n) as total', {});
+  }
+}
+
+main();
+```
+
+### Replication Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Application                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │              NexusCluster Client                     │   │
+│   │   write() ──────────┐     read() ───────────────┐   │   │
+│   └─────────────────────┼───────────────────────────┼───┘   │
+└─────────────────────────┼───────────────────────────┼───────┘
+                          │                           │
+                          ▼                           ▼
+              ┌───────────────────┐     ┌─────────────────────┐
+              │      MASTER       │     │      REPLICAS       │
+              │   (writes only)   │────▶│   (reads only)      │
+              │                   │ WAL │  ┌───────────────┐  │
+              │ • CREATE          │────▶│  │   Replica 1   │  │
+              │ • UPDATE          │     │  └───────────────┘  │
+              │ • DELETE          │     │  ┌───────────────┐  │
+              │ • MERGE           │────▶│  │   Replica 2   │  │
+              └───────────────────┘     │  └───────────────┘  │
+                                        └─────────────────────┘
+```
+
+### Starting a Nexus Cluster
+
+```bash
+# Start master node
+NEXUS_REPLICATION_ROLE=master \
+NEXUS_REPLICATION_BIND_ADDR=0.0.0.0:15475 \
+./nexus-server
+
+# Start replica 1
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+
+# Start replica 2
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+```
+
+### Monitoring Replication Status
+
+```typescript
+async function checkReplicationStatus(masterUrl: string) {
+  // Check master status
+  const statusRes = await fetch(`${masterUrl}/replication/status`);
+  const status = await statusRes.json();
+  console.log(`Role: ${status.role}`);
+  console.log(`Running: ${status.running}`);
+  console.log(`Connected replicas: ${status.replica_count ?? 0}`);
+
+  // Get master stats
+  const statsRes = await fetch(`${masterUrl}/replication/master/stats`);
+  const stats = await statsRes.json();
+  console.log(`Entries replicated: ${stats.entries_replicated}`);
+  console.log(`Connected replicas: ${stats.connected_replicas}`);
+
+  // List replicas
+  const replicasRes = await fetch(`${masterUrl}/replication/replicas`);
+  const replicas = await replicasRes.json();
+  for (const replica of replicas.replicas) {
+    console.log(`  - ${replica.id}: lag=${replica.lag}, healthy=${replica.healthy}`);
+  }
 }
 ```
 
@@ -307,6 +511,7 @@ Check the [examples](./examples) directory for more usage examples:
 
 - [basic-usage.ts](./examples/basic-usage.ts) - Basic CRUD operations
 - [advanced-queries.ts](./examples/advanced-queries.ts) - Complex Cypher queries
+- [multi-database.ts](./examples/multi-database.ts) - Multi-database support
 
 ## API Reference
 

@@ -9,6 +9,11 @@ import type {
   RelationshipTypeInfo,
   IndexInfo,
   GraphData,
+  DatabaseInfo,
+  ListDatabasesResponse,
+  CreateDatabaseResponse,
+  DropDatabaseResponse,
+  SwitchDatabaseResponse,
 } from '@/types';
 
 export class NexusApiClient {
@@ -366,6 +371,70 @@ export class NexusApiClient {
   async getConfig(): Promise<ApiResponse<any>> {
     try {
       const response = await this.client.get('/config');
+      return { success: true, data: response.data };
+    } catch (error) {
+      return this.handleError(error as AxiosError);
+    }
+  }
+
+  // =========================================================================
+  // Database Management Methods
+  // =========================================================================
+
+  // List all databases
+  async listDatabases(): Promise<ApiResponse<ListDatabasesResponse>> {
+    try {
+      const response = await this.client.get('/databases');
+      return { success: true, data: response.data };
+    } catch (error) {
+      return this.handleError(error as AxiosError);
+    }
+  }
+
+  // Create a new database
+  async createDatabase(name: string): Promise<ApiResponse<CreateDatabaseResponse>> {
+    try {
+      const response = await this.client.post('/databases', { name });
+      return { success: true, data: response.data };
+    } catch (error) {
+      return this.handleError(error as AxiosError);
+    }
+  }
+
+  // Get database information
+  async getDatabase(name: string): Promise<ApiResponse<DatabaseInfo>> {
+    try {
+      const response = await this.client.get(`/databases/${name}`);
+      return { success: true, data: response.data };
+    } catch (error) {
+      return this.handleError(error as AxiosError);
+    }
+  }
+
+  // Drop a database
+  async dropDatabase(name: string): Promise<ApiResponse<DropDatabaseResponse>> {
+    try {
+      const response = await this.client.delete(`/databases/${name}`);
+      return { success: true, data: response.data };
+    } catch (error) {
+      return this.handleError(error as AxiosError);
+    }
+  }
+
+  // Get current session database
+  async getCurrentDatabase(): Promise<ApiResponse<string>> {
+    try {
+      const response = await this.client.get('/session/database');
+      return { success: true, data: response.data.database };
+    } catch (error) {
+      return this.handleError(error as AxiosError);
+    }
+  }
+
+  // Switch to a different database
+  async switchDatabase(name: string): Promise<ApiResponse<SwitchDatabaseResponse>> {
+    try {
+      const response = await this.client.put('/session/database', { name });
       return { success: true, data: response.data };
     } catch (error) {
       return this.handleError(error as AxiosError);

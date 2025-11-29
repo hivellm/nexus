@@ -5,7 +5,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.11.0%20%7C%20All%20Tests%20Passing-success.svg)
+![Status](https://img.shields.io/badge/status-v0.12.0%20%7C%20All%20Tests%20Passing-success.svg)
 ![Tests](https://img.shields.io/badge/tests-1478%2B%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
@@ -19,7 +19,7 @@ Nexus is a modern **property graph database** built for **read-heavy workloads**
 
 Think of it as **Neo4j meets Vector Search** - optimized for AI applications that need both structured relationships and semantic similarity search.
 
-### 🎉 **Current Status (v0.11.0)**
+### 🎉 **Current Status (v0.12.0)**
 
 **Production Ready!** 🚀
 
@@ -215,6 +215,59 @@ RETURN product.name, product.category, COUNT(*) AS friend_count
 ORDER BY friend_count DESC
 LIMIT 5
 ```
+
+## 🗄️ **Multi-Database Support**
+
+Nexus supports multiple isolated databases within a single server instance, enabling multi-tenancy and logical data separation.
+
+### **Cypher Commands**
+
+```cypher
+-- List all databases
+SHOW DATABASES
+
+-- Create a new database
+CREATE DATABASE mydb
+
+-- Switch to a database
+:USE mydb
+
+-- Get current database
+RETURN database() AS current_db
+
+-- Drop a database (permanent!)
+DROP DATABASE mydb
+```
+
+### **REST API**
+
+```bash
+# List databases
+curl http://localhost:15474/databases
+
+# Create database
+curl -X POST http://localhost:15474/databases \
+  -H "Content-Type: application/json" \
+  -d '{"name": "mydb"}'
+
+# Switch session database
+curl -X PUT http://localhost:15474/session/database \
+  -H "Content-Type: application/json" \
+  -d '{"name": "mydb"}'
+
+# Drop database
+curl -X DELETE http://localhost:15474/databases/mydb
+```
+
+### **SDK Support**
+
+All official SDKs (Python, TypeScript, Rust) include database management methods:
+- `list_databases()` / `listDatabases()`
+- `create_database(name)` / `createDatabase(name)`
+- `switch_database(name)` / `switchDatabase(name)`
+- `drop_database(name)` / `dropDatabase(name)`
+
+See [User Guide - Multi-Database Support](docs/USER_GUIDE.md#multi-database-support) for complete documentation.
 
 ## 🏗️ **Architecture**
 

@@ -257,3 +257,63 @@ class PlanCacheStatisticsResponse(BaseModel):
     max_memory_bytes: int = 0
     hit_rate: float = 0.0
 
+
+# Database management models
+
+class DatabaseInfo(BaseModel):
+    """Database information."""
+
+    name: str
+    path: str = ""
+    created_at: int = 0
+    node_count: int = 0
+    relationship_count: int = 0
+    storage_size: int = 0
+
+
+class ListDatabasesResponse(BaseModel):
+    """Response for listing databases."""
+
+    databases: List[DatabaseInfo] = Field(default_factory=list)
+    default_database: str = "neo4j"
+
+
+class CreateDatabaseRequest(BaseModel):
+    """Request to create a database."""
+
+    name: str
+
+
+class CreateDatabaseResponse(BaseModel):
+    """Response from creating a database."""
+
+    success: bool = True
+    name: str = ""
+    message: str = ""
+
+
+class DropDatabaseResponse(BaseModel):
+    """Response from dropping a database."""
+
+    success: bool = True
+    message: str = ""
+
+
+class SessionDatabaseResponse(BaseModel):
+    """Response for session database operations."""
+
+    database: str = ""
+
+
+class SwitchDatabaseRequest(BaseModel):
+    """Request to switch database."""
+
+    name: str
+
+
+class SwitchDatabaseResponse(BaseModel):
+    """Response from switching database."""
+
+    success: bool = True
+    message: str = ""
+

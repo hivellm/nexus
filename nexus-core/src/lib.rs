@@ -61,6 +61,7 @@ pub mod performance;
 pub mod plugin;
 pub mod query_cache;
 pub mod relationship;
+pub mod replication;
 pub mod retry;
 pub mod security;
 pub mod session;

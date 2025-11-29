@@ -33,11 +33,22 @@ pub struct Session {
     pub last_activity: Instant,
     /// Session timeout (default: 30 minutes)
     pub timeout: Duration,
+    /// Current database name (for multi-database support)
+    pub current_database: String,
 }
 
 impl Session {
     /// Create a new session
     pub fn new(id: SessionId, transaction_manager: Arc<RwLock<TransactionManager>>) -> Self {
+        Self::new_with_database(id, transaction_manager, "neo4j".to_string())
+    }
+
+    /// Create a new session with a specific database
+    pub fn new_with_database(
+        id: SessionId,
+        transaction_manager: Arc<RwLock<TransactionManager>>,
+        database: String,
+    ) -> Self {
         Self {
             id,
             active_transaction: None,
@@ -47,6 +58,7 @@ impl Session {
             pending_index_updates: crate::index::pending_updates::PendingIndexUpdates::new(),
             last_activity: Instant::now(),
             timeout: Duration::from_secs(30 * 60), // 30 minutes
+            current_database: database,
         }
     }
 
@@ -118,6 +130,31 @@ impl Session {
     pub fn touch(&mut self) {
         self.last_activity = Instant::now();
     }
+
+    /// Get the current database for this session
+    pub fn get_current_database(&self) -> &str {
+        &self.current_database
+    }
+
+    /// Switch to a different database
+    /// Note: This will fail if there's an active transaction
+    pub fn switch_database(&mut self, database: String) -> Result<()> {
+        if self.has_active_transaction() {
+            return Err(Error::transaction(format!(
+                "Cannot switch database while transaction is active in session {}",
+                self.id
+            )));
+        }
+
+        self.current_database = database;
+        self.last_activity = Instant::now();
+        Ok(())
+    }
+
+    /// Set the current database (internal use)
+    pub(crate) fn set_current_database(&mut self, database: String) {
+        self.current_database = database;
+    }
 }
 
 /// Session manager for tracking active sessions and their transactions
@@ -128,15 +165,26 @@ pub struct SessionManager {
     transaction_manager: Arc<RwLock<TransactionManager>>,
     /// Session timeout (default: 30 minutes)
     timeout: Duration,
+    /// Default database name
+    default_database: String,
 }
 
 impl SessionManager {
     /// Create a new session manager
     pub fn new(transaction_manager: Arc<RwLock<TransactionManager>>) -> Self {
+        Self::new_with_default_database(transaction_manager, "neo4j".to_string())
+    }
+
+    /// Create a new session manager with a specific default database
+    pub fn new_with_default_database(
+        transaction_manager: Arc<RwLock<TransactionManager>>,
+        default_database: String,
+    ) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             transaction_manager,
             timeout: Duration::from_secs(30 * 60), // 30 minutes
+            default_database,
         }
     }
 
@@ -158,8 +206,53 @@ impl SessionManager {
             }
         }
 
-        // Create new session
-        let session = Session::new(session_id.clone(), self.transaction_manager.clone());
+        // Create new session with default database
+        let session = Session::new_with_database(
+            session_id.clone(),
+            self.transaction_manager.clone(),
+            self.default_database.clone(),
+        );
+        sessions.insert(session_id.clone(), session.clone());
+        session
+    }
+
+    /// Get or create a session with a specific database
+    pub fn get_or_create_session_with_database(
+        &self,
+        session_id: SessionId,
+        database: Option<String>,
+    ) -> Session {
+        let mut sessions = self.sessions.write();
+
+        // Check if session exists and is not expired
+        if let Some(session) = sessions.get(&session_id) {
+            if !session.is_expired() {
+                // Touch session to update last activity
+                let mut session = session.clone();
+                session.touch();
+
+                // If database is specified and different, switch to it
+                if let Some(db) = database {
+                    if session.current_database != db && !session.has_active_transaction() {
+                        session.set_current_database(db);
+                    }
+                }
+
+                sessions.insert(session_id.clone(), session.clone());
+                return session;
+            } else {
+                // Session expired, remove it
+                sessions.remove(&session_id);
+            }
+        }
+
+        // Create new session with specified or default database
+        let db_name = database.unwrap_or_else(|| self.default_database.clone());
+        let session = Session::new_with_database(
+            session_id.clone(),
+            self.transaction_manager.clone(),
+            db_name,
+        );
         sessions.insert(session_id.clone(), session.clone());
         session
     }
@@ -182,6 +275,7 @@ impl SessionManager {
                 pending_index_updates: session.pending_index_updates.clone(),
                 last_activity: Instant::now(),
                 timeout: session.timeout,
+                current_database: session.current_database.clone(),
             };
             sessions.insert(session_id.clone(), session.clone());
             Some(session)
@@ -216,6 +310,42 @@ impl SessionManager {
             .filter(|id| sessions.get(*id).map(|s| !s.is_expired()).unwrap_or(false))
             .cloned()
             .collect()
+    }
+
+    /// Get the default database name
+    pub fn default_database(&self) -> &str {
+        &self.default_database
+    }
+
+    /// Switch database for a session
+    /// Returns an error if the session has an active transaction
+    pub fn switch_session_database(&self, session_id: &SessionId, database: String) -> Result<()> {
+        let mut sessions = self.sessions.write();
+
+        if let Some(session) = sessions.get_mut(session_id) {
+            if session.is_expired() {
+                return Err(Error::transaction(format!(
+                    "Session '{}' has expired",
+                    session_id
+                )));
+            }
+
+            if session.has_active_transaction() {
+                return Err(Error::transaction(format!(
+                    "Cannot switch database while transaction is active in session '{}'",
+                    session_id
+                )));
+            }
+
+            session.set_current_database(database);
+            session.touch();
+            Ok(())
+        } else {
+            Err(Error::transaction(format!(
+                "Session '{}' not found",
+                session_id
+            )))
+        }
     }
 }
 
@@ -263,5 +393,106 @@ mod tests {
         // Get same session
         let session2 = session_mgr.get_or_create_session("test-session".to_string());
         assert_eq!(session2.id, "test-session");
+    }
+
+    #[test]
+    fn test_session_database_binding() {
+        let tx_mgr = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+        let session_mgr = SessionManager::new(tx_mgr);
+
+        // Create session - should use default database
+        let session = session_mgr.get_or_create_session("test-session".to_string());
+        assert_eq!(session.get_current_database(), "neo4j");
+        assert_eq!(session_mgr.default_database(), "neo4j");
+    }
+
+    #[test]
+    fn test_session_switch_database() {
+        let tx_mgr = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+        let mut session = Session::new("test-session".to_string(), tx_mgr);
+
+        // Default database
+        assert_eq!(session.get_current_database(), "neo4j");
+
+        // Switch to another database
+        session.switch_database("testdb".to_string()).unwrap();
+        assert_eq!(session.get_current_database(), "testdb");
+
+        // Switch back
+        session.switch_database("neo4j".to_string()).unwrap();
+        assert_eq!(session.get_current_database(), "neo4j");
+    }
+
+    #[test]
+    fn test_session_switch_database_with_transaction_fails() {
+        let tx_mgr = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+        let mut session = Session::new("test-session".to_string(), tx_mgr);
+
+        // Begin transaction
+        session.begin_transaction().unwrap();
+
+        // Try to switch database - should fail
+        let result = session.switch_database("testdb".to_string());
+        assert!(result.is_err());
+
+        // Commit transaction
+        session.commit_transaction().unwrap();
+
+        // Now switch should work
+        let result = session.switch_database("testdb".to_string());
+        assert!(result.is_ok());
+        assert_eq!(session.get_current_database(), "testdb");
+    }
+
+    #[test]
+    fn test_session_manager_switch_database() {
+        let tx_mgr = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+        let session_mgr = SessionManager::new(tx_mgr);
+
+        // Create session
+        let session = session_mgr.get_or_create_session("test-session".to_string());
+        assert_eq!(session.get_current_database(), "neo4j");
+
+        // Switch database via manager
+        session_mgr
+            .switch_session_database(&"test-session".to_string(), "testdb".to_string())
+            .unwrap();
+
+        // Get session again - should have new database
+        let session = session_mgr
+            .get_session(&"test-session".to_string())
+            .unwrap();
+        assert_eq!(session.get_current_database(), "testdb");
+    }
+
+    #[test]
+    fn test_session_manager_with_database() {
+        let tx_mgr = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+        let session_mgr = SessionManager::new(tx_mgr);
+
+        // Create session with specific database
+        let session = session_mgr.get_or_create_session_with_database(
+            "test-session".to_string(),
+            Some("customdb".to_string()),
+        );
+        assert_eq!(session.get_current_database(), "customdb");
+
+        // Get or create with None should use existing session
+        let session2 =
+            session_mgr.get_or_create_session_with_database("test-session".to_string(), None);
+        assert_eq!(session2.get_current_database(), "customdb");
+    }
+
+    #[test]
+    fn test_session_manager_default_database() {
+        let tx_mgr = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+        let session_mgr =
+            SessionManager::new_with_default_database(tx_mgr, "mydefault".to_string());
+
+        assert_eq!(session_mgr.default_database(), "mydefault");
+
+        // New sessions should use the custom default
+        let session = session_mgr.get_or_create_session("test-session".to_string());
+        assert_eq!(session.get_current_database(), "mydefault");
     }
 }

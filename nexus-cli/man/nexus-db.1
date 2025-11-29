@@ -1,0 +1,31 @@
+.TH NEXUS-DB 1 "November 2025" "Nexus CLI 0.11.0" "User Commands"
+.SH NAME
+nexus-db \- database management commands for Nexus
+.SH SYNOPSIS
+.B nexus db
+\fICOMMAND\fR
+.SH DESCRIPTION
+Database management commands for Nexus graph database.
+.SH COMMANDS
+.TP
+.B ping
+Test connection to the server. Returns response time.
+.TP
+.B info
+Display database information including node and relationship counts.
+.TP
+.B clear
+Clear all data from the database. Use with caution!
+.SH EXAMPLES
+.TP
+Ping the server:
+.B nexus db ping
+.TP
+Get database info:
+.B nexus db info
+.TP
+Clear all data:
+.B nexus db clear
+.SH SEE ALSO
+.BR nexus (1),
+.BR nexus-admin (1)

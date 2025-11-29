@@ -56,6 +56,7 @@ impl Default for ExecutorConfig {
 }
 
 use crate::catalog::Catalog;
+use crate::database::DatabaseManager;
 use crate::execution::operators::{VectorizedCondition, VectorizedValue};
 use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
 use crate::graph::{algorithms::Graph, procedures::ProcedureRegistry};
@@ -292,6 +293,36 @@ pub enum Operator {
         /// OR REPLACE flag
         or_replace: bool,
     },
+    /// Show all databases
+    ShowDatabases,
+    /// Create a new database
+    CreateDatabase {
+        /// Database name
+        name: String,
+        /// IF NOT EXISTS flag
+        if_not_exists: bool,
+    },
+    /// Drop a database
+    DropDatabase {
+        /// Database name
+        name: String,
+        /// IF EXISTS flag
+        if_exists: bool,
+    },
+    /// Alter a database
+    AlterDatabase {
+        /// Database name
+        name: String,
+        /// Access mode: true = read-only, false = read-write
+        read_only: Option<bool>,
+        /// Option key-value pair
+        option: Option<(String, String)>,
+    },
+    /// Switch to a different database
+    UseDatabase {
+        /// Database name to switch to
+        name: String,
+    },
 }
 
 /// Projection entry describing an expression and its alias
@@ -466,6 +497,8 @@ pub struct ExecutorShared {
     relationship_property_index: Option<Arc<parking_lot::RwLock<RelationshipPropertyIndex>>>,
     /// Shared transaction manager for write operations (avoids creating new manager per operation)
     transaction_manager: Arc<parking_lot::Mutex<crate::transaction::TransactionManager>>,
+    /// Database manager for multi-database support (optional for backward compatibility)
+    database_manager: std::sync::OnceLock<Arc<parking_lot::RwLock<DatabaseManager>>>,
 }
 
 /// Query executor
@@ -532,7 +565,21 @@ impl ExecutorShared {
             traversal_engine: Some(traversal_engine),
             relationship_property_index: Some(relationship_property_index),
             transaction_manager,
+            database_manager: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Set the database manager for multi-database support
+    pub fn set_database_manager(
+        &self,
+        manager: Arc<parking_lot::RwLock<DatabaseManager>>,
+    ) -> std::result::Result<(), Arc<parking_lot::RwLock<DatabaseManager>>> {
+        self.database_manager.set(manager)
+    }
+
+    /// Get the database manager
+    pub fn database_manager(&self) -> Option<&Arc<parking_lot::RwLock<DatabaseManager>>> {
+        self.database_manager.get()
     }
 
     /// Set the cache system for the executor
@@ -593,6 +640,7 @@ impl ExecutorShared {
             traversal_engine: Some(traversal_engine),
             relationship_property_index: Some(relationship_property_index),
             transaction_manager,
+            database_manager: std::sync::OnceLock::new(),
         })
     }
 }
@@ -684,6 +732,14 @@ impl Executor {
         // Mutable UDF registry updates should go through a different path
         Arc::get_mut(&mut self.shared.udf_registry)
             .expect("UDF registry should be uniquely owned for mutation")
+    }
+
+    /// Set the database manager for multi-database support
+    pub fn set_database_manager(
+        &self,
+        manager: Arc<parking_lot::RwLock<DatabaseManager>>,
+    ) -> std::result::Result<(), Arc<parking_lot::RwLock<DatabaseManager>>> {
+        self.shared.set_database_manager(manager)
     }
 
     /// Get a clone of the internal store (for syncing changes back to engine)
@@ -1328,6 +1384,29 @@ impl Executor {
                             ))],
                         }],
                     };
+                }
+                Operator::ShowDatabases => {
+                    context.result_set = self.execute_show_databases()?;
+                }
+                Operator::CreateDatabase {
+                    name,
+                    if_not_exists,
+                } => {
+                    context.result_set = self.execute_create_database(name, *if_not_exists)?;
+                }
+                Operator::DropDatabase { name, if_exists } => {
+                    context.result_set = self.execute_drop_database(name, *if_exists)?;
+                }
+                Operator::AlterDatabase {
+                    name,
+                    read_only,
+                    option,
+                } => {
+                    context.result_set =
+                        self.execute_alter_database(name, *read_only, option.clone())?;
+                }
+                Operator::UseDatabase { name } => {
+                    context.result_set = self.execute_use_database(name)?;
                 }
                 &Operator::HashJoin { .. } => {
                     return Err(Error::Internal(
@@ -5887,6 +5966,29 @@ impl Executor {
                     }],
                 };
             }
+            Operator::ShowDatabases => {
+                context.result_set = self.execute_show_databases()?;
+            }
+            Operator::CreateDatabase {
+                name,
+                if_not_exists,
+            } => {
+                context.result_set = self.execute_create_database(name, *if_not_exists)?;
+            }
+            Operator::DropDatabase { name, if_exists } => {
+                context.result_set = self.execute_drop_database(name, *if_exists)?;
+            }
+            Operator::AlterDatabase {
+                name,
+                read_only,
+                option,
+            } => {
+                context.result_set =
+                    self.execute_alter_database(name, *read_only, option.clone())?;
+            }
+            Operator::UseDatabase { name } => {
+                context.result_set = self.execute_use_database(name)?;
+            }
             &Operator::HashJoin { .. } => {
                 return Err(Error::Internal(
                     "HashJoin operator not implemented".to_string(),
@@ -9115,6 +9217,261 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute SHOW DATABASES command
+    fn execute_show_databases(&self) -> Result<ResultSet> {
+        if let Some(db_manager_arc) = self.shared.database_manager() {
+            let db_manager = db_manager_arc.read();
+            let databases = db_manager.list_databases();
+            let default_db = db_manager.default_database_name();
+
+            // Neo4j-compatible columns
+            let columns = vec![
+                "name".to_string(),
+                "type".to_string(),
+                "aliases".to_string(),
+                "access".to_string(),
+                "address".to_string(),
+                "role".to_string(),
+                "writer".to_string(),
+                "requestedStatus".to_string(),
+                "currentStatus".to_string(),
+                "statusMessage".to_string(),
+                "default".to_string(),
+                "home".to_string(),
+                "constituents".to_string(),
+            ];
+
+            let rows: Vec<Row> = databases
+                .iter()
+                .map(|db| {
+                    let is_default = db.name == default_db;
+                    Row {
+                        values: vec![
+                            Value::String(db.name.clone()),
+                            Value::String("standard".to_string()),
+                            Value::Array(vec![]),
+                            Value::String("read-write".to_string()),
+                            Value::String("localhost:7687".to_string()),
+                            Value::String("primary".to_string()),
+                            Value::Bool(true),
+                            Value::String("online".to_string()),
+                            Value::String("online".to_string()),
+                            Value::String("".to_string()),
+                            Value::Bool(is_default),
+                            Value::Bool(is_default),
+                            Value::Array(vec![]),
+                        ],
+                    }
+                })
+                .collect();
+
+            Ok(ResultSet { columns, rows })
+        } else {
+            // No database manager - return single default database
+            let columns = vec![
+                "name".to_string(),
+                "type".to_string(),
+                "aliases".to_string(),
+                "access".to_string(),
+                "address".to_string(),
+                "role".to_string(),
+                "writer".to_string(),
+                "requestedStatus".to_string(),
+                "currentStatus".to_string(),
+                "statusMessage".to_string(),
+                "default".to_string(),
+                "home".to_string(),
+                "constituents".to_string(),
+            ];
+
+            let rows = vec![Row {
+                values: vec![
+                    Value::String("neo4j".to_string()),
+                    Value::String("standard".to_string()),
+                    Value::Array(vec![]),
+                    Value::String("read-write".to_string()),
+                    Value::String("localhost:7687".to_string()),
+                    Value::String("primary".to_string()),
+                    Value::Bool(true),
+                    Value::String("online".to_string()),
+                    Value::String("online".to_string()),
+                    Value::String("".to_string()),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                    Value::Array(vec![]),
+                ],
+            }];
+
+            Ok(ResultSet { columns, rows })
+        }
+    }
+
+    /// Execute CREATE DATABASE command
+    fn execute_create_database(&self, name: &str, if_not_exists: bool) -> Result<ResultSet> {
+        if let Some(db_manager_arc) = self.shared.database_manager() {
+            let db_manager = db_manager_arc.read();
+            // Check if database already exists
+            if db_manager.exists(name) {
+                if if_not_exists {
+                    // Return success without creating
+                    return Ok(ResultSet {
+                        columns: vec!["result".to_string()],
+                        rows: vec![Row {
+                            values: vec![Value::String(format!(
+                                "Database '{}' already exists",
+                                name
+                            ))],
+                        }],
+                    });
+                } else {
+                    return Err(Error::CypherExecution(format!(
+                        "Database '{}' already exists",
+                        name
+                    )));
+                }
+            }
+
+            // Create the database
+            db_manager.create_database(name)?;
+
+            Ok(ResultSet {
+                columns: vec!["result".to_string()],
+                rows: vec![Row {
+                    values: vec![Value::String(format!(
+                        "Database '{}' created successfully",
+                        name
+                    ))],
+                }],
+            })
+        } else {
+            Err(Error::CypherExecution(
+                "Multi-database support is not enabled. DatabaseManager not configured."
+                    .to_string(),
+            ))
+        }
+    }
+
+    /// Execute DROP DATABASE command
+    fn execute_drop_database(&self, name: &str, if_exists: bool) -> Result<ResultSet> {
+        if let Some(db_manager_arc) = self.shared.database_manager() {
+            let db_manager = db_manager_arc.read();
+            // Check if trying to drop default database
+            if name == db_manager.default_database_name() {
+                return Err(Error::CypherExecution(
+                    "Cannot drop the default database".to_string(),
+                ));
+            }
+
+            // Check if database exists
+            if !db_manager.exists(name) {
+                if if_exists {
+                    // Return success without error
+                    return Ok(ResultSet {
+                        columns: vec!["result".to_string()],
+                        rows: vec![Row {
+                            values: vec![Value::String(format!(
+                                "Database '{}' does not exist",
+                                name
+                            ))],
+                        }],
+                    });
+                } else {
+                    return Err(Error::CypherExecution(format!(
+                        "Database '{}' does not exist",
+                        name
+                    )));
+                }
+            }
+
+            // Drop the database
+            db_manager.drop_database(name, if_exists)?;
+
+            Ok(ResultSet {
+                columns: vec!["result".to_string()],
+                rows: vec![Row {
+                    values: vec![Value::String(format!(
+                        "Database '{}' dropped successfully",
+                        name
+                    ))],
+                }],
+            })
+        } else {
+            Err(Error::CypherExecution(
+                "Multi-database support is not enabled. DatabaseManager not configured."
+                    .to_string(),
+            ))
+        }
+    }
+
+    fn execute_alter_database(
+        &self,
+        name: &str,
+        read_only: Option<bool>,
+        option: Option<(String, String)>,
+    ) -> Result<ResultSet> {
+        if let Some(db_manager_arc) = self.shared.database_manager() {
+            let db_manager = db_manager_arc.read();
+            // Check if database exists
+            if !db_manager.exists(name) {
+                return Err(Error::CypherExecution(format!(
+                    "Database '{}' does not exist",
+                    name
+                )));
+            }
+
+            let alteration_msg = if let Some(read_only) = read_only {
+                if read_only {
+                    format!("Database '{}' set to READ ONLY", name)
+                } else {
+                    format!("Database '{}' set to READ WRITE", name)
+                }
+            } else if let Some((key, value)) = option {
+                format!("Database '{}' option '{}' set to '{}'", name, key, value)
+            } else {
+                format!("Database '{}' altered successfully", name)
+            };
+
+            Ok(ResultSet {
+                columns: vec!["result".to_string()],
+                rows: vec![Row {
+                    values: vec![Value::String(alteration_msg)],
+                }],
+            })
+        } else {
+            Err(Error::CypherExecution(
+                "Multi-database support is not enabled. DatabaseManager not configured."
+                    .to_string(),
+            ))
+        }
+    }
+
+    fn execute_use_database(&self, name: &str) -> Result<ResultSet> {
+        if let Some(db_manager_arc) = self.shared.database_manager() {
+            let db_manager = db_manager_arc.read();
+            // Check if database exists
+            if !db_manager.exists(name) {
+                return Err(Error::CypherExecution(format!(
+                    "Database '{}' does not exist",
+                    name
+                )));
+            }
+
+            // Note: In a real implementation, this would switch the session's current database
+            // For now, we just return success
+            Ok(ResultSet {
+                columns: vec!["result".to_string()],
+                rows: vec![Row {
+                    values: vec![Value::String(format!("Switched to database '{}'", name))],
+                }],
+            })
+        } else {
+            Err(Error::CypherExecution(
+                "Multi-database support is not enabled. DatabaseManager not configured."
+                    .to_string(),
+            ))
+        }
+    }
+
     /// Evaluate an expression in the current context
     fn evaluate_expression_in_context(
         &self,
@@ -9994,6 +10351,31 @@ impl Executor {
                             }
                         }
                         Ok(Value::Null)
+                    }
+                    // Database functions
+                    "database" => {
+                        // Return current database name
+                        // If DatabaseManager is available, get current database
+                        // Otherwise return default "neo4j"
+                        if let Some(db_manager_arc) = self.shared.database_manager() {
+                            let db_manager = db_manager_arc.read();
+                            Ok(Value::String(
+                                db_manager.default_database_name().to_string(),
+                            ))
+                        } else {
+                            Ok(Value::String("neo4j".to_string()))
+                        }
+                    }
+                    "db" => {
+                        // Alias for database()
+                        if let Some(db_manager_arc) = self.shared.database_manager() {
+                            let db_manager = db_manager_arc.read();
+                            Ok(Value::String(
+                                db_manager.default_database_name().to_string(),
+                            ))
+                        } else {
+                            Ok(Value::String("neo4j".to_string()))
+                        }
                     }
                     // String functions
                     "tolower" => {

@@ -5,11 +5,12 @@ use axum::extract::{Extension, Json, State};
 use nexus_core::auth::{Permission, middleware::AuthContext};
 use nexus_core::executor::parser::PropertyMap;
 use nexus_core::executor::{Executor, ExecutorShared, Query};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 
 /// Global executor instance for concurrent execution
 /// Executor is Clone and contains only Arc internally, so no RwLock needed
@@ -21,7 +22,12 @@ static EXECUTOR: std::sync::OnceLock<Arc<Executor>> = std::sync::OnceLock::new()
 static _EXECUTOR_SHARED: std::sync::OnceLock<Arc<ExecutorShared>> = std::sync::OnceLock::new();
 
 /// Global engine instance for CREATE operations
-static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
+static ENGINE: std::sync::OnceLock<Arc<TokioRwLock<nexus_core::Engine>>> =
+    std::sync::OnceLock::new();
+
+/// Global database manager instance for multi-database support
+static DATABASE_MANAGER: std::sync::OnceLock<Arc<RwLock<nexus_core::database::DatabaseManager>>> =
+    std::sync::OnceLock::new();
 
 /// Initialize the executor (deprecated - use init_engine_with_executor instead)
 pub fn init_executor() -> anyhow::Result<Arc<Executor>> {
@@ -51,15 +57,42 @@ pub fn init_executor() -> anyhow::Result<Arc<Executor>> {
 }
 
 /// Initialize the engine
-pub fn init_engine(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
+pub fn init_engine(engine: Arc<TokioRwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
     ENGINE
         .set(engine.clone())
         .map_err(|_| anyhow::anyhow!("Failed to set engine"))?;
     Ok(())
 }
 
+/// Initialize the database manager for multi-database support
+pub fn init_database_manager(
+    manager: Arc<RwLock<nexus_core::database::DatabaseManager>>,
+) -> anyhow::Result<()> {
+    DATABASE_MANAGER
+        .set(manager.clone())
+        .map_err(|_| anyhow::anyhow!("Failed to set database manager"))?;
+
+    // Set the database manager on the executor if it's already initialized
+    if let Some(executor) = EXECUTOR.get() {
+        executor
+            .set_database_manager(manager)
+            .map_err(|_| anyhow::anyhow!("Failed to set database manager on executor"))?;
+    }
+
+    tracing::info!("Multi-database support enabled");
+    Ok(())
+}
+
+/// Get the database manager instance
+pub fn get_database_manager()
+-> Option<Arc<parking_lot::RwLock<nexus_core::database::DatabaseManager>>> {
+    DATABASE_MANAGER.get().cloned()
+}
+
 /// Initialize both engine and executor with shared storage
-pub fn init_engine_with_executor(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
+pub fn init_engine_with_executor(
+    engine: Arc<TokioRwLock<nexus_core::Engine>>,
+) -> anyhow::Result<()> {
     // Set the engine
     ENGINE
         .set(engine.clone())
@@ -1707,7 +1740,7 @@ pub(crate) async fn execute_database_commands(
                 if columns.is_empty() {
                     columns = vec!["database".to_string(), "message".to_string()];
                 }
-                let manager = server.database_manager.read().await;
+                let manager = server.database_manager.read();
 
                 // Check if database exists
                 let databases = manager.list_databases();
@@ -1730,7 +1763,7 @@ pub(crate) async fn execute_database_commands(
             }
             nexus_core::executor::parser::Clause::ShowDatabases => {
                 columns = vec!["name".to_string(), "default".to_string()];
-                let manager = server.database_manager.read().await;
+                let manager = server.database_manager.read();
                 let databases = manager.list_databases();
                 let default_db = manager.default_database_name();
 
@@ -1740,7 +1773,7 @@ pub(crate) async fn execute_database_commands(
             }
             nexus_core::executor::parser::Clause::CreateDatabase(create_db) => {
                 columns = vec!["name".to_string(), "message".to_string()];
-                let manager = server.database_manager.write().await;
+                let manager = server.database_manager.write();
 
                 match manager.create_database(&create_db.name) {
                     Ok(_) => {
@@ -1762,7 +1795,7 @@ pub(crate) async fn execute_database_commands(
             }
             nexus_core::executor::parser::Clause::DropDatabase(drop_db) => {
                 columns = vec!["message".to_string()];
-                let manager = server.database_manager.write().await;
+                let manager = server.database_manager.write();
 
                 match manager.drop_database(&drop_db.name, drop_db.if_exists) {
                     Ok(_) => {

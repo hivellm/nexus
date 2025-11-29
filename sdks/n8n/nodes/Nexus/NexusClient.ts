@@ -82,7 +82,7 @@ export class NexusClient {
   }
 
   async executeCypher(cypher: string, params: IDataObject = {}): Promise<QueryResult> {
-    return this.request<QueryResult>('POST', '/query', { cypher, params });
+    return this.request<QueryResult>('POST', '/cypher', { query: cypher, parameters: params });
   }
 
   async createNode(labels: string[], properties: IDataObject): Promise<NexusNode> {

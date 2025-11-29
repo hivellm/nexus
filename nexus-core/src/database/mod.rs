@@ -15,6 +15,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing;
 
+/// Database state
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DatabaseState {
+    /// Database is online and accepting requests
+    Online,
+    /// Database is offline (maintenance, stopped)
+    Offline,
+    /// Database is starting up
+    Starting,
+    /// Database is shutting down
+    Stopping,
+    /// Database encountered an error
+    Error(String),
+}
+
 /// Database metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseInfo {
@@ -30,12 +45,16 @@ pub struct DatabaseInfo {
     pub relationship_count: u64,
     /// Storage size in bytes
     pub storage_size: u64,
+    /// Current database state
+    pub state: DatabaseState,
 }
 
 /// Database manager for multiple isolated databases
 pub struct DatabaseManager {
     /// Map of database name to Engine instance
     databases: Arc<RwLock<HashMap<String, Arc<RwLock<Engine>>>>>,
+    /// Map of database name to state
+    states: Arc<RwLock<HashMap<String, DatabaseState>>>,
     /// Base directory for all databases
     base_dir: PathBuf,
     /// Default database name
@@ -47,9 +66,11 @@ impl DatabaseManager {
     pub fn new(base_dir: PathBuf) -> Result<Self> {
         let default_db = "neo4j".to_string();
         let databases = Arc::new(RwLock::new(HashMap::new()));
+        let states = Arc::new(RwLock::new(HashMap::new()));
 
         let manager = Self {
             databases,
+            states,
             base_dir: base_dir.clone(),
             default_db: default_db.clone(),
         };
@@ -94,6 +115,11 @@ impl DatabaseManager {
         // Store database
         dbs.insert(name.to_string(), engine_arc.clone());
 
+        // Set state to Online
+        self.states
+            .write()
+            .insert(name.to_string(), DatabaseState::Online);
+
         Ok(engine_arc)
     }
 
@@ -126,6 +152,9 @@ impl DatabaseManager {
             // Explicitly drop the Arc to ensure Engine is destroyed
             drop(engine_arc);
         }
+
+        // Remove state
+        self.states.write().remove(name);
 
         // Release the write lock before attempting file operations
         drop(dbs);
@@ -212,6 +241,14 @@ impl DatabaseManager {
                 // Calculate storage size by summing all files in the database directory
                 let storage_size = Self::calculate_directory_size(&db_path).unwrap_or(0);
 
+                // Get database state
+                let state = self
+                    .states
+                    .read()
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(DatabaseState::Online);
+
                 DatabaseInfo {
                     name: name.clone(),
                     path: db_path,
@@ -219,6 +256,7 @@ impl DatabaseManager {
                     node_count,
                     relationship_count,
                     storage_size,
+                    state,
                 }
             })
             .collect();
@@ -263,6 +301,95 @@ impl DatabaseManager {
     /// Get the default database name
     pub fn default_database_name(&self) -> &str {
         &self.default_db
+    }
+
+    /// Get the state of a database
+    pub fn get_database_state(&self, name: &str) -> Option<DatabaseState> {
+        self.states.read().get(name).cloned()
+    }
+
+    /// Set the state of a database
+    pub fn set_database_state(&self, name: &str, state: DatabaseState) -> Result<()> {
+        if !self.exists(name) {
+            return Err(Error::InvalidInput(format!(
+                "Database '{}' does not exist",
+                name
+            )));
+        }
+
+        self.states.write().insert(name.to_string(), state);
+        Ok(())
+    }
+
+    /// Check if a database is online
+    pub fn is_database_online(&self, name: &str) -> bool {
+        matches!(self.get_database_state(name), Some(DatabaseState::Online))
+    }
+
+    /// Stop a database (set to offline)
+    pub fn stop_database(&self, name: &str) -> Result<()> {
+        if name == self.default_db {
+            return Err(Error::InvalidInput(
+                "Cannot stop default database".to_string(),
+            ));
+        }
+
+        if !self.exists(name) {
+            return Err(Error::InvalidInput(format!(
+                "Database '{}' does not exist",
+                name
+            )));
+        }
+
+        // Set state to Stopping, then Offline
+        self.set_database_state(name, DatabaseState::Stopping)?;
+        tracing::info!("Stopping database '{}'", name);
+
+        // In a real implementation, we would wait for active transactions to complete
+        // For now, we just set it to Offline immediately
+        self.set_database_state(name, DatabaseState::Offline)?;
+        tracing::info!("Database '{}' is now offline", name);
+
+        Ok(())
+    }
+
+    /// Start a database (set to online)
+    pub fn start_database(&self, name: &str) -> Result<()> {
+        if !self.exists(name) {
+            return Err(Error::InvalidInput(format!(
+                "Database '{}' does not exist",
+                name
+            )));
+        }
+
+        // Set state to Starting, then Online
+        self.set_database_state(name, DatabaseState::Starting)?;
+        tracing::info!("Starting database '{}'", name);
+
+        // In a real implementation, we would initialize resources
+        // For now, we just set it to Online immediately
+        self.set_database_state(name, DatabaseState::Online)?;
+        tracing::info!("Database '{}' is now online", name);
+
+        Ok(())
+    }
+
+    /// Get a database only if it's online
+    pub fn get_database_if_online(&self, name: &str) -> Result<Arc<RwLock<Engine>>> {
+        // Check if database is online
+        if !self.is_database_online(name) {
+            let state = self
+                .get_database_state(name)
+                .map(|s| format!("{:?}", s))
+                .unwrap_or_else(|| "Unknown".to_string());
+            return Err(Error::InvalidInput(format!(
+                "Database '{}' is not online (current state: {})",
+                name, state
+            )));
+        }
+
+        // Get the database
+        self.get_database(name)
     }
 }
 
@@ -517,5 +644,131 @@ mod tests {
 
         assert_eq!(manager.default_database_name(), "neo4j");
         assert!(manager.exists("neo4j"));
+    }
+
+    #[test]
+    fn test_database_state_management() {
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+
+        manager.create_database("statedb").unwrap();
+
+        // Database should be online by default
+        assert!(manager.is_database_online("statedb"));
+        assert_eq!(
+            manager.get_database_state("statedb"),
+            Some(DatabaseState::Online)
+        );
+
+        // Stop database
+        manager.stop_database("statedb").unwrap();
+        assert!(!manager.is_database_online("statedb"));
+        assert_eq!(
+            manager.get_database_state("statedb"),
+            Some(DatabaseState::Offline)
+        );
+
+        // Start database again
+        manager.start_database("statedb").unwrap();
+        assert!(manager.is_database_online("statedb"));
+        assert_eq!(
+            manager.get_database_state("statedb"),
+            Some(DatabaseState::Online)
+        );
+    }
+
+    #[test]
+    fn test_cannot_stop_default_database() {
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+
+        let result = manager.stop_database("neo4j");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_database_if_online() {
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+
+        manager.create_database("onlinetest").unwrap();
+
+        // Should succeed when online
+        let db = manager.get_database_if_online("onlinetest");
+        assert!(db.is_ok());
+
+        // Stop database
+        manager.stop_database("onlinetest").unwrap();
+
+        // Should fail when offline
+        let db = manager.get_database_if_online("onlinetest");
+        assert!(db.is_err());
+
+        // Start database again
+        manager.start_database("onlinetest").unwrap();
+
+        // Should succeed again
+        let db = manager.get_database_if_online("onlinetest");
+        assert!(db.is_ok());
+    }
+
+    #[test]
+    fn test_database_info_includes_state() {
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+
+        manager.create_database("infostate").unwrap();
+
+        let databases = manager.list_databases();
+        let db_info = databases.iter().find(|d| d.name == "infostate").unwrap();
+
+        assert_eq!(db_info.state, DatabaseState::Online);
+
+        // Stop database and check state in info
+        manager.stop_database("infostate").unwrap();
+
+        let databases = manager.list_databases();
+        let db_info = databases.iter().find(|d| d.name == "infostate").unwrap();
+
+        assert_eq!(db_info.state, DatabaseState::Offline);
+    }
+
+    #[test]
+    fn test_set_database_state_custom() {
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+
+        manager.create_database("customstate").unwrap();
+
+        // Set custom error state
+        manager
+            .set_database_state(
+                "customstate",
+                DatabaseState::Error("Test error".to_string()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            manager.get_database_state("customstate"),
+            Some(DatabaseState::Error("Test error".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_stop_nonexistent_database() {
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+
+        let result = manager.stop_database("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_start_nonexistent_database() {
+        let ctx = TestContext::new();
+        let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+
+        let result = manager.start_database("nonexistent");
+        assert!(result.is_err());
     }
 }

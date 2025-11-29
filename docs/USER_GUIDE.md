@@ -4,15 +4,16 @@
 
 1. [Introduction](#introduction)
 2. [Quick Start](#quick-start)
-3. [Basic Operations](#basic-operations)
-4. [Cypher Query Language](#cypher-query-language)
-5. [User-Defined Functions (UDFs) and Procedures](#user-defined-functions-udfs-and-procedures)
-6. [KNN Vector Search](#knn-vector-search)
-7. [Graph Comparison](#graph-comparison)
-8. [API Reference](#api-reference)
-9. [Performance Tips](#performance-tips)
-10. [Examples](#examples)
-11. [Troubleshooting](#troubleshooting)
+3. [Multi-Database Support](#multi-database-support)
+4. [Basic Operations](#basic-operations)
+5. [Cypher Query Language](#cypher-query-language)
+6. [User-Defined Functions (UDFs) and Procedures](#user-defined-functions-udfs-and-procedures)
+7. [KNN Vector Search](#knn-vector-search)
+8. [Graph Comparison](#graph-comparison)
+9. [API Reference](#api-reference)
+10. [Performance Tips](#performance-tips)
+11. [Examples](#examples)
+12. [Troubleshooting](#troubleshooting)
 
 ## Introduction
 
@@ -44,6 +45,238 @@ cargo run --bin nexus-server
 ```
 
 The server will start on `http://localhost:3000` by default.
+
+## Multi-Database Support
+
+Nexus supports multiple databases within a single server instance, enabling data isolation, multi-tenancy, and logical separation of different data sets.
+
+### Key Concepts
+
+- **Database**: An isolated data store with its own nodes, relationships, and indexes
+- **Default Database**: The `neo4j` database is created automatically and is the default
+- **Session Database**: Each session maintains a current database context
+- **Data Isolation**: Each database is completely isolated from others
+
+### Managing Databases with Cypher
+
+#### List All Databases
+
+```cypher
+SHOW DATABASES
+```
+
+Returns a list of all databases with their status:
+
+| name | status |
+|------|--------|
+| neo4j | online |
+| mydb | online |
+
+#### Create a Database
+
+```cypher
+CREATE DATABASE mydb
+```
+
+Database names must be alphanumeric with underscores and hyphens (e.g., `my_database`, `test-db`).
+
+#### Drop a Database
+
+```cypher
+DROP DATABASE mydb
+```
+
+**Warning**: This permanently deletes all data in the database.
+
+#### Switch Database
+
+Use the `:USE` command to switch to a different database:
+
+```cypher
+:USE mydb
+```
+
+After switching, all subsequent queries will execute against the selected database.
+
+#### Get Current Database
+
+```cypher
+RETURN database() AS current_db
+```
+
+Or use the alias:
+
+```cypher
+RETURN db() AS current_db
+```
+
+### REST API Endpoints
+
+#### List Databases
+
+```bash
+GET /databases
+```
+
+Response:
+```json
+{
+  "databases": [
+    {
+      "name": "neo4j",
+      "path": "data/neo4j",
+      "created_at": 1700000000,
+      "node_count": 1000,
+      "relationship_count": 5000,
+      "storage_size": 1048576
+    }
+  ],
+  "default_database": "neo4j"
+}
+```
+
+#### Create Database
+
+```bash
+POST /databases
+Content-Type: application/json
+
+{
+  "name": "mydb"
+}
+```
+
+#### Get Database Info
+
+```bash
+GET /databases/mydb
+```
+
+#### Drop Database
+
+```bash
+DELETE /databases/mydb
+```
+
+#### Get Current Session Database
+
+```bash
+GET /session/database
+```
+
+Response:
+```json
+{
+  "database": "neo4j"
+}
+```
+
+#### Switch Session Database
+
+```bash
+PUT /session/database
+Content-Type: application/json
+
+{
+  "name": "mydb"
+}
+```
+
+### SDK Examples
+
+#### Python SDK
+
+```python
+from nexus_sdk import NexusClient
+
+client = NexusClient("http://localhost:15474")
+
+# List databases
+response = client.list_databases()
+for db in response.databases:
+    print(f"Database: {db.name}, Nodes: {db.node_count}")
+
+# Create a database
+client.create_database("mydb")
+
+# Switch to the database
+client.switch_database("mydb")
+
+# Get current database
+current = client.get_current_database()
+print(f"Current database: {current}")
+
+# Drop database
+client.drop_database("mydb")
+```
+
+#### TypeScript SDK
+
+```typescript
+import { NexusClient } from '@hivellm/nexus-sdk';
+
+const client = new NexusClient({
+  baseUrl: 'http://localhost:15474',
+  auth: { apiKey: 'your-api-key' }
+});
+
+// List databases
+const { databases, defaultDatabase } = await client.listDatabases();
+databases.forEach(db => console.log(`Database: ${db.name}`));
+
+// Create a database
+await client.createDatabase('mydb');
+
+// Switch to the database
+await client.switchDatabase('mydb');
+
+// Get current database
+const current = await client.getCurrentDatabase();
+console.log(`Current database: ${current}`);
+
+// Drop database
+await client.dropDatabase('mydb');
+```
+
+#### Rust SDK
+
+```rust
+use nexus_sdk::NexusClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = NexusClient::new("http://localhost:15474")?;
+
+    // List databases
+    let response = client.list_databases().await?;
+    for db in &response.databases {
+        println!("Database: {}, Nodes: {}", db.name, db.node_count);
+    }
+
+    // Create a database
+    client.create_database("mydb").await?;
+
+    // Switch to the database
+    client.switch_database("mydb").await?;
+
+    // Get current database
+    let current = client.get_current_database().await?;
+    println!("Current database: {}", current);
+
+    // Drop database
+    client.drop_database("mydb").await?;
+
+    Ok(())
+}
+```
+
+### Best Practices
+
+1. **Use Meaningful Names**: Choose descriptive database names (e.g., `production`, `staging`, `test`)
+2. **Separate Environments**: Use different databases for development, testing, and production data
+3. **Multi-Tenancy**: Use separate databases for each tenant's data
+4. **Backup Strategy**: Implement backup procedures for each database independently
+5. **Avoid Dropping Active Databases**: Switch to a different database before dropping
 
 ### First Query
 

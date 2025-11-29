@@ -80,6 +80,246 @@ let types = client.list_rel_types().await?;
 println!("Types: {:?}", types.types);
 ```
 
+### Multi-Database Support
+
+```rust
+// List all databases
+let databases = client.list_databases().await?;
+println!("Available databases: {:?}", databases.databases);
+println!("Default database: {}", databases.default_database);
+
+// Create a new database
+let create_result = client.create_database("mydb").await?;
+println!("Created: {}", create_result.name);
+
+// Switch to the new database
+let switch_result = client.switch_database("mydb").await?;
+println!("Switched to: mydb");
+
+// Get current database
+let current_db = client.get_current_database().await?;
+println!("Current database: {}", current_db);
+
+// Create data in the current database
+let result = client.execute_cypher(
+    "CREATE (n:Product {name: $name}) RETURN n",
+    Some(serde_json::json!({"name": "Laptop"}))
+).await?;
+
+// Get database information
+let db_info = client.get_database("mydb").await?;
+println!("Nodes: {}, Relationships: {}", db_info.node_count, db_info.relationship_count);
+
+// Drop database (must not be current database)
+client.switch_database("neo4j").await?;  // Switch away first
+let drop_result = client.drop_database("mydb").await?;
+
+// Or connect directly to a specific database
+let db_client = NexusClient::builder()
+    .url("http://localhost:15474")
+    .database("mydb")
+    .build()?;
+// All operations will use 'mydb'
+let result = db_client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None).await?;
+```
+
+### High Availability with Replication
+
+Nexus supports master-replica replication for high availability and read scaling.
+Use the **master** for all write operations and **replicas** for read operations.
+
+```rust
+use nexus_sdk::NexusClient;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+/// Client for Nexus cluster with master-replica topology.
+pub struct NexusCluster {
+    master: NexusClient,
+    replicas: Vec<NexusClient>,
+    replica_index: AtomicUsize,
+}
+
+impl NexusCluster {
+    /// Create a new cluster client.
+    ///
+    /// # Arguments
+    /// * `master_url` - URL of the master node (for writes)
+    /// * `replica_urls` - List of replica URLs (for reads)
+    pub fn new(master_url: &str, replica_urls: &[&str]) -> Result<Self, nexus_sdk::Error> {
+        let master = NexusClient::new(master_url)?;
+        let replicas = replica_urls
+            .iter()
+            .map(|url| NexusClient::new(url))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            master,
+            replicas,
+            replica_index: AtomicUsize::new(0),
+        })
+    }
+
+    /// Get next replica using round-robin selection.
+    fn get_replica(&self) -> &NexusClient {
+        if self.replicas.is_empty() {
+            return &self.master;
+        }
+        let index = self.replica_index.fetch_add(1, Ordering::Relaxed) % self.replicas.len();
+        &self.replicas[index]
+    }
+
+    /// Execute write query on master.
+    pub async fn write(
+        &self,
+        query: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<nexus_sdk::QueryResult, nexus_sdk::Error> {
+        self.master.execute_cypher(query, params).await
+    }
+
+    /// Execute read query on replica (round-robin).
+    pub async fn read(
+        &self,
+        query: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<nexus_sdk::QueryResult, nexus_sdk::Error> {
+        self.get_replica().execute_cypher(query, params).await
+    }
+
+    /// Get reference to master client.
+    pub fn master(&self) -> &NexusClient {
+        &self.master
+    }
+
+    /// Get reference to all replicas.
+    pub fn replicas(&self) -> &[NexusClient] {
+        &self.replicas
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to cluster
+    // Master handles all writes, replicas handle reads
+    let cluster = NexusCluster::new(
+        "http://master:15474",
+        &["http://replica1:15474", "http://replica2:15474"],
+    )?;
+
+    // Write operations go to master
+    cluster.write(
+        "CREATE (n:Person {name: $name, age: $age}) RETURN n",
+        Some(serde_json::json!({"name": "Alice", "age": 30})),
+    ).await?;
+
+    // Read operations are distributed across replicas
+    let result = cluster.read(
+        "MATCH (n:Person) WHERE n.age > $min_age RETURN n",
+        Some(serde_json::json!({"min_age": 25})),
+    ).await?;
+    println!("Found {} persons", result.rows.len());
+
+    // High-volume reads are load-balanced
+    for _ in 0..100 {
+        cluster.read("MATCH (n) RETURN count(n) as total", None).await?;
+    }
+
+    Ok(())
+}
+```
+
+#### Replication Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Application                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │              NexusCluster Client                     │   │
+│   │   write() ──────────┐     read() ───────────────┐   │   │
+│   └─────────────────────┼───────────────────────────┼───┘   │
+└─────────────────────────┼───────────────────────────┼───────┘
+                          │                           │
+                          ▼                           ▼
+              ┌───────────────────┐     ┌─────────────────────┐
+              │      MASTER       │     │      REPLICAS       │
+              │   (writes only)   │────▶│   (reads only)      │
+              │                   │ WAL │  ┌───────────────┐  │
+              │ • CREATE          │────▶│  │   Replica 1   │  │
+              │ • UPDATE          │     │  └───────────────┘  │
+              │ • DELETE          │     │  ┌───────────────┐  │
+              │ • MERGE           │────▶│  │   Replica 2   │  │
+              └───────────────────┘     │  └───────────────┘  │
+                                        └─────────────────────┘
+```
+
+#### Starting a Nexus Cluster
+
+```bash
+# Start master node
+NEXUS_REPLICATION_ROLE=master \
+NEXUS_REPLICATION_BIND_ADDR=0.0.0.0:15475 \
+./nexus-server
+
+# Start replica 1
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+
+# Start replica 2
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+```
+
+#### Monitoring Replication Status
+
+```rust
+use reqwest::Client;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct ReplicationStatus {
+    role: String,
+    running: bool,
+    mode: String,
+    replica_count: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MasterStats {
+    entries_replicated: u64,
+    connected_replicas: u32,
+}
+
+async fn check_replication_status(master_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    // Check master status
+    let status: ReplicationStatus = client
+        .get(format!("{}/replication/status", master_url))
+        .send()
+        .await?
+        .json()
+        .await?;
+    println!("Role: {}", status.role);
+    println!("Running: {}", status.running);
+    println!("Connected replicas: {}", status.replica_count.unwrap_or(0));
+
+    // Get master stats
+    let stats: MasterStats = client
+        .get(format!("{}/replication/master/stats", master_url))
+        .send()
+        .await?
+        .json()
+        .await?;
+    println!("Entries replicated: {}", stats.entries_replicated);
+    println!("Connected replicas: {}", stats.connected_replicas);
+
+    Ok(())
+}
+```
+
 ## Features
 
 - ✅ Cypher query execution
@@ -92,6 +332,7 @@ println!("Types: {:?}", types.types);
 - ✅ Performance monitoring (Query statistics, slow queries, plan cache)
 - ✅ Transaction support (BEGIN, COMMIT, ROLLBACK)
 - ✅ Query builder for type-safe query construction
+- ✅ Multi-database support (create, list, switch, drop databases)
 - ✅ Retry logic with exponential backoff (basic implementation)
 - ✅ API key authentication
 - ✅ Username/password authentication
@@ -122,6 +363,7 @@ See the `examples/` directory for complete examples:
 - `performance_monitoring.rs` - Performance monitoring and statistics
 - `transactions.rs` - Transaction management examples
 - `query_builder.rs` - Query builder usage examples
+- `multi_database.rs` - Multi-database support examples
 
 Run examples with:
 
@@ -131,6 +373,7 @@ cargo run --example with_auth
 cargo run --example performance_monitoring
 cargo run --example transactions
 cargo run --example query_builder
+cargo run --example multi_database
 ```
 
 ## Testing
@@ -149,6 +392,7 @@ cargo test --test integration_test
 cargo test --test transaction_test
 cargo test --test query_builder_test
 cargo test --test relationship_test
+cargo test --test multi_database_test
 ```
 
 ### Test Coverage
@@ -164,6 +408,7 @@ The SDK includes comprehensive tests for:
 - ✅ Query builder functionality
 - ✅ Performance monitoring
 - ✅ Batch operations
+- ✅ Multi-database support (Create, list, switch, drop databases)
 
 ## Roadmap
 

@@ -5,6 +5,22 @@ All notable changes to the Nexus TypeScript SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2025-11-28
+
+### Added
+- Multi-database support:
+  - `listDatabases()` - List all databases
+  - `createDatabase(name)` - Create a new database
+  - `getDatabase(name)` - Get database information
+  - `dropDatabase(name)` - Drop a database
+  - `getCurrentDatabase()` - Get current session database
+  - `switchDatabase(name)` - Switch to a different database
+- Full data isolation between databases
+- Database lifecycle management support
+
+### Changed
+- Updated to work with Nexus Server v0.12.0
+
 ## [0.11.0] - 2025-11-16
 
 ### Added

@@ -1,0 +1,44 @@
+.TH NEXUS-USER 1 "November 2025" "Nexus CLI 0.11.0" "User Commands"
+.SH NAME
+nexus-user \- user management commands for Nexus
+.SH SYNOPSIS
+.B nexus user
+\fICOMMAND\fR [\fIARGS\fR]
+.SH DESCRIPTION
+User management commands for Nexus graph database.
+.SH COMMANDS
+.TP
+.B list
+List all users in the system.
+.TP
+.B create \fIUSERNAME\fR
+Create a new user with the specified username.
+.TP
+.B get \fIUSERNAME\fR
+Get information about a specific user.
+.TP
+.B delete \fIUSERNAME\fR
+Delete a user from the system.
+.SH OPTIONS FOR CREATE
+.TP
+.BR \-\-password " " \fIPASS\fR
+Set the user's password (required).
+.TP
+.BR \-\-roles " " \fIROLES\fR
+Comma-separated list of roles to assign.
+.SH EXAMPLES
+.TP
+List all users:
+.B nexus user list
+.TP
+Create a new user:
+.B nexus user create myuser --password secret --roles admin,reader
+.TP
+Get user info:
+.B nexus user get myuser
+.TP
+Delete a user:
+.B nexus user delete myuser
+.SH SEE ALSO
+.BR nexus (1),
+.BR nexus-key (1)

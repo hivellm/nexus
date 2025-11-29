@@ -126,6 +126,10 @@ pub enum Error {
     /// Regex compilation errors
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
+
+    /// Replication errors
+    #[error("Replication error: {0}")]
+    Replication(String),
 }
 
 impl Error {
@@ -192,5 +196,10 @@ impl Error {
     /// Create an invalid input error
     pub fn invalid_input(msg: impl Into<String>) -> Self {
         Self::InvalidInput(msg.into())
+    }
+
+    /// Create a replication error
+    pub fn replication(msg: impl Into<String>) -> Self {
+        Self::Replication(msg.into())
     }
 }

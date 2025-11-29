@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Master-Replica Replication 🔄
+
+**V1 Replication implementation with WAL streaming and full sync support**
+
+- **Master Node** (`nexus-core/src/replication/master.rs`):
+  - WAL streaming to connected replicas
+  - Replica tracking with health monitoring
+  - Async replication (default) - no ACK wait
+  - Sync replication with configurable quorum
+  - Circular replication log (1M operations max)
+  - Heartbeat-based health monitoring
+
+- **Replica Node** (`nexus-core/src/replication/replica.rs`):
+  - TCP connection to master
+  - WAL entry receiving and application
+  - CRC32 validation on all messages
+  - Automatic reconnection with exponential backoff
+  - Replication lag tracking
+  - Promotion to master support
+
+- **Full Sync** (`nexus-core/src/replication/snapshot.rs`):
+  - Snapshot creation (tar + zstd compression)
+  - Chunked transfer with CRC32 validation
+  - Automatic snapshot for new replicas
+  - Incremental sync after snapshot restore
+
+- **Wire Protocol** (`nexus-core/src/replication/protocol.rs`):
+  - Binary format: `[type:1][length:4][payload:N][crc32:4]`
+  - Message types: Hello, Welcome, Ping, Pong, WalEntry, WalAck, Snapshot*
+
+- **REST API Endpoints** (`nexus-server/src/api/replication.rs`):
+  - `GET /replication/status` - Get replication status
+  - `GET /replication/master/stats` - Master statistics
+  - `GET /replication/replica/stats` - Replica statistics
+  - `GET /replication/replicas` - List connected replicas
+  - `POST /replication/promote` - Promote replica to master
+  - `POST /replication/snapshot` - Create snapshot
+  - `GET /replication/snapshot` - Get last snapshot info
+  - `POST /replication/stop` - Stop replication
+
+- **Configuration** (via environment variables):
+  - `NEXUS_REPLICATION_ROLE`: master/replica/standalone
+  - `NEXUS_REPLICATION_BIND_ADDR`: Master bind address
+  - `NEXUS_REPLICATION_MASTER_ADDR`: Master address for replicas
+  - `NEXUS_REPLICATION_MODE`: async/sync
+  - `NEXUS_REPLICATION_SYNC_QUORUM`: Quorum size for sync mode
+
+- **Documentation**:
+  - `docs/REPLICATION.md` - Complete replication guide
+  - OpenAPI specification updated with replication endpoints
+
+- **Testing**: 26 unit tests covering all replication components
+
+## [0.12.0] - 2025-11-28
+
+### Added - Multi-Database Support 🎉
+
+**Full multi-database support enabling data isolation and multi-tenancy**
+
+- **Core Infrastructure**:
+  - `DatabaseManager` for managing multiple database instances
+  - Database lifecycle management (create, start, stop, drop)
+  - Database state tracking (online, offline, starting, stopping)
+  - Complete data isolation between databases
+  - Each database has its own storage directory
+  - Files: `nexus-core/src/database/mod.rs`
+
+- **Cypher Commands**:
+  - `SHOW DATABASES` - List all databases with status
+  - `CREATE DATABASE <name>` - Create a new database
+  - `DROP DATABASE <name>` - Drop an existing database
+  - `:USE <name>` - Switch to a different database
+  - `database()` / `db()` - Return current database name
+  - Files: `nexus-core/src/executor/mod.rs`, `nexus-core/src/executor/parser.rs`
+
+- **REST API Endpoints**:
+  - `GET /databases` - List all databases
+  - `POST /databases` - Create a database
+  - `GET /databases/{name}` - Get database info
+  - `DELETE /databases/{name}` - Drop a database
+  - `GET /session/database` - Get current session database
+  - `PUT /session/database` - Switch session database
+  - Files: `nexus-server/src/api/database.rs`, `nexus-server/src/main.rs`
+
+- **SDK Updates**:
+  - **Python SDK**: `list_databases()`, `create_database()`, `get_database()`, `drop_database()`, `get_current_database()`, `switch_database()`
+  - **TypeScript SDK**: `listDatabases()`, `createDatabase()`, `getDatabase()`, `dropDatabase()`, `getCurrentDatabase()`, `switchDatabase()`
+  - **Rust SDK**: `list_databases()`, `create_database()`, `get_database()`, `drop_database()`, `get_current_database()`, `switch_database()`
+
+- **GUI Updates**:
+  - Database selector dropdown in sidebar
+  - DatabasesView for database management
+  - Create/drop database dialogs
+  - Database stats display (nodes, relationships, storage size)
+  - Files: `gui/src/views/DatabasesView.vue`, `gui/src/stores/databases.ts`
+
+- **Testing**:
+  - 18 integration tests for multi-database functionality
+  - Tests for data isolation, concurrent access, session switching
+  - Files: `nexus-core/tests/multi_database_integration_test.rs`
+
 ### Performance - MATCH+CREATE Relationship Optimization (2025-11-27) 🚀
 
 **95% Performance Improvement - Now 56.7% Faster than Neo4j!**

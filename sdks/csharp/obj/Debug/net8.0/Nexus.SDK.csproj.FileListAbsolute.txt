@@ -1,0 +1,14 @@
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.GeneratedMSBuildEditorConfig.editorconfig
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.AssemblyInfoInputs.cache
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.AssemblyInfo.cs
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.csproj.CoreCompileInputs.cache
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.sourcelink.json
+F:\Node\hivellm\nexus\sdks\csharp\bin\Debug\net8.0\Nexus.SDK.deps.json
+F:\Node\hivellm\nexus\sdks\csharp\bin\Debug\net8.0\Nexus.SDK.dll
+F:\Node\hivellm\nexus\sdks\csharp\bin\Debug\net8.0\Nexus.SDK.pdb
+F:\Node\hivellm\nexus\sdks\csharp\bin\Debug\net8.0\Nexus.SDK.xml
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.dll
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\refint\Nexus.SDK.dll
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.xml
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\Nexus.SDK.pdb
+F:\Node\hivellm\nexus\sdks\csharp\obj\Debug\net8.0\ref\Nexus.SDK.dll

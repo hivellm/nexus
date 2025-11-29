@@ -1,0 +1,149 @@
+name: Build and publish Nexus CLI releases
+permissions:
+  contents: write
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., cli-v0.12.0)'
+        required: true
+        type: string
+
+jobs:
+  # Linux GNU builds
+  build-linux-x86_64-gnu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib clang cmake
+          rustup default stable
+          rustup update
+      - name: Build and publish nexus CLI
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: nexus
+          manifest_path: nexus-cli/Cargo.toml
+          target: x86_64-unknown-linux-gnu
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Linux MUSL builds (static binaries)
+  build-linux-x86_64-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib clang cmake musl-tools
+          rustup default stable
+          rustup update
+          rustup target add x86_64-unknown-linux-musl
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build musl binary with cross
+        run: |
+          cd nexus-cli
+          cross build --release --target x86_64-unknown-linux-musl
+          mkdir -p ../dist
+          cp ../target/x86_64-unknown-linux-musl/release/nexus ../dist/nexus-x86_64-unknown-linux-musl
+      - name: Upload musl binary
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/*
+          tag: ${{ github.ref }}
+          overwrite: true
+          file_glob: true
+      - name: Build Debian Package
+        run: |
+          cargo install cargo-deb
+          cd nexus-cli
+          cross build --release --target x86_64-unknown-linux-musl
+          cargo deb --no-build --no-strip --target x86_64-unknown-linux-musl
+      - name: Upload Debian package
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: target/x86_64-unknown-linux-musl/debian/*.deb
+          tag: ${{ github.ref }}
+          overwrite: true
+          file_glob: true
+
+  # Linux ARM64 MUSL build
+  build-linux-aarch64-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib clang cmake
+          rustup default stable
+          rustup update
+          rustup target add aarch64-unknown-linux-musl
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build musl binary with cross
+        run: |
+          cd nexus-cli
+          cross build --release --target aarch64-unknown-linux-musl
+          mkdir -p ../dist
+          cp ../target/aarch64-unknown-linux-musl/release/nexus ../dist/nexus-aarch64-unknown-linux-musl
+      - name: Upload musl binary
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/*
+          tag: ${{ github.ref }}
+          overwrite: true
+          file_glob: true
+
+  # macOS builds
+  build-mac-binaries:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install dependencies
+        run: |
+          brew update-reset
+          brew install gcc cmake
+          rustup default stable
+          rustup update
+          rustup show
+          cargo -Vv
+      - uses: actions/checkout@v6
+      - name: Build and publish nexus CLI
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: nexus
+          manifest_path: nexus-cli/Cargo.toml
+          target: ${{ matrix.target }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Windows builds
+  build-windows-binaries:
+    runs-on: windows-latest
+    steps:
+      - name: Install minimal stable
+        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cd nexus-cli && cargo build --release
+      - name: Build and publish nexus CLI
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: nexus
+          manifest_path: nexus-cli/Cargo.toml
+          token: ${{ secrets.GITHUB_TOKEN }}

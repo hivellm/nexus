@@ -28,6 +28,7 @@ pub mod performance;
 pub mod prometheus;
 pub mod property_keys;
 pub mod query_history;
+pub mod replication;
 pub mod schema;
 pub mod stats;
 pub mod streaming;

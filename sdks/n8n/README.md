@@ -69,6 +69,136 @@ The node supports two authentication methods:
 - **Password**: Nexus password
 - **Use HTTPS**: Enable for secure connections
 
+## High Availability with Replication
+
+Nexus supports master-replica replication for high availability and read scaling.
+In n8n workflows, use **separate credentials** for master (writes) and replicas (reads).
+
+### Setting Up Replication Credentials
+
+1. **Create Master Credentials**:
+   - Go to **Credentials** > **Add Credential**
+   - Select **Nexus API** or **Nexus User**
+   - Name: `Nexus Master`
+   - Host: `master.yourdomain.com`
+   - Port: `15474`
+
+2. **Create Replica Credentials**:
+   - Add another credential
+   - Name: `Nexus Replica 1`
+   - Host: `replica1.yourdomain.com`
+   - Port: `15474`
+
+3. **Create Second Replica** (optional):
+   - Name: `Nexus Replica 2`
+   - Host: `replica2.yourdomain.com`
+   - Port: `15474`
+
+### Workflow Pattern: Write to Master, Read from Replicas
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     n8n Workflow                             │
+│                                                              │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐   │
+│   │   Trigger   │────▶│   Nexus     │────▶│   Nexus     │   │
+│   │   (HTTP)    │     │   (Write)   │     │   (Read)    │   │
+│   └─────────────┘     │  ↓ Master   │     │  ↓ Replica  │   │
+│                       └─────────────┘     └─────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                              │                    │
+                              ▼                    ▼
+              ┌───────────────────┐     ┌─────────────────────┐
+              │      MASTER       │     │      REPLICAS       │
+              │   (writes only)   │────▶│   (reads only)      │
+              │                   │ WAL │  ┌───────────────┐  │
+              │ • CREATE          │────▶│  │   Replica 1   │  │
+              │ • UPDATE          │     │  └───────────────┘  │
+              │ • DELETE          │     │  ┌───────────────┐  │
+              │ • MERGE           │────▶│  │   Replica 2   │  │
+              └───────────────────┘     │  └───────────────┘  │
+                                        └─────────────────────┘
+```
+
+### Example: High Availability Data Sync Workflow
+
+```
+1. Schedule Trigger (every 5 minutes)
+        │
+        ▼
+2. Nexus (Read) ──────────────────────────────▶ Replica credentials
+   Query: MATCH (n:Person) WHERE n.synced = false RETURN n LIMIT 100
+        │
+        ▼
+3. External API
+   Process records
+        │
+        ▼
+4. Nexus (Write) ─────────────────────────────▶ Master credentials
+   Query: MATCH (n:Person) WHERE id(n) = $id SET n.synced = true
+```
+
+### Load Balancing Reads Across Replicas
+
+For workflows with high read volume, use multiple Nexus nodes with different replica credentials:
+
+```
+                    ┌─────────────────┐
+                    │     Switch      │
+                    │  (Round Robin)  │
+                    └────────┬────────┘
+                             │
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+          ▼                  ▼                  ▼
+    ┌───────────┐      ┌───────────┐      ┌───────────┐
+    │  Nexus    │      │  Nexus    │      │  Nexus    │
+    │ Replica 1 │      │ Replica 2 │      │  Master   │
+    └───────────┘      └───────────┘      └───────────┘
+    (30% traffic)      (30% traffic)      (40% traffic)
+```
+
+### Starting a Nexus Cluster
+
+```bash
+# Start master node
+NEXUS_REPLICATION_ROLE=master \
+NEXUS_REPLICATION_BIND_ADDR=0.0.0.0:15475 \
+./nexus-server
+
+# Start replica 1
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+
+# Start replica 2
+NEXUS_REPLICATION_ROLE=replica \
+NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
+./nexus-server
+```
+
+### Monitoring Replication in n8n
+
+Create a monitoring workflow to check replication health:
+
+```
+1. Schedule Trigger (every 1 minute)
+        │
+        ▼
+2. HTTP Request
+   GET http://master:15474/replication/status
+        │
+        ▼
+3. IF node
+   Check: status.running == true && status.replica_count > 0
+        │
+   ┌────┴────┐
+   │         │
+   ▼         ▼
+ OK       ALERT
+          Send notification
+```
+
 ## Usage Examples
 
 ### Example 1: Execute Cypher Query

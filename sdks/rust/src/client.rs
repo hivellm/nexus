@@ -315,4 +315,176 @@ impl NexusClient {
             })
         }
     }
+
+    // =========================================================================
+    // Database Management Methods
+    // =========================================================================
+
+    /// List all databases
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let response = client.list_databases().await?;
+    /// for db in &response.databases {
+    ///     println!("Database: {}", db.name);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn list_databases(&self) -> Result<ListDatabasesResponse> {
+        let url = self.get_base_url().join("/databases")?;
+        let mut request_builder = self.get_client().get(url);
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        let result: ListDatabasesResponse = response.json().await?;
+        Ok(result)
+    }
+
+    /// Create a new database
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Database name (alphanumeric with underscores and hyphens)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let response = client.create_database("mydb").await?;
+    /// println!("Created database: {}", response.name);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn create_database(&self, name: &str) -> Result<CreateDatabaseResponse> {
+        let url = self.get_base_url().join("/databases")?;
+        let request = CreateDatabaseRequest {
+            name: name.to_string(),
+        };
+        let mut request_builder = self.get_client().post(url).json(&request);
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        let result: CreateDatabaseResponse = response.json().await?;
+        Ok(result)
+    }
+
+    /// Get database information
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Database name
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let db = client.get_database("neo4j").await?;
+    /// println!("Nodes: {}", db.node_count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_database(&self, name: &str) -> Result<DatabaseInfo> {
+        let url = self.get_base_url().join(&format!("/databases/{}", name))?;
+        let mut request_builder = self.get_client().get(url);
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        let result: DatabaseInfo = response.json().await?;
+        Ok(result)
+    }
+
+    /// Drop a database
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Database name
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let response = client.drop_database("mydb").await?;
+    /// println!("Dropped: {}", response.success);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn drop_database(&self, name: &str) -> Result<DropDatabaseResponse> {
+        let url = self.get_base_url().join(&format!("/databases/{}", name))?;
+        let mut request_builder = self.get_client().delete(url);
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        let result: DropDatabaseResponse = response.json().await?;
+        Ok(result)
+    }
+
+    /// Get the current session database
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let db = client.get_current_database().await?;
+    /// println!("Current database: {}", db);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_current_database(&self) -> Result<String> {
+        let url = self.get_base_url().join("/session/database")?;
+        let mut request_builder = self.get_client().get(url);
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        let result: SessionDatabaseResponse = response.json().await?;
+        Ok(result.database)
+    }
+
+    /// Switch to a different database
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Database name to switch to
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use nexus_sdk::NexusClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
+    /// # let client = NexusClient::new("http://localhost:15474")?;
+    /// let response = client.switch_database("mydb").await?;
+    /// println!("Switched: {}", response.success);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn switch_database(&self, name: &str) -> Result<SwitchDatabaseResponse> {
+        let url = self.get_base_url().join("/session/database")?;
+        let request = SwitchDatabaseRequest {
+            name: name.to_string(),
+        };
+        let mut request_builder = self.get_client().put(url).json(&request);
+        request_builder = self.add_auth_headers(request_builder)?;
+
+        let response = self.execute_with_retry(request_builder).await?;
+        let result: SwitchDatabaseResponse = response.json().await?;
+        Ok(result)
+    }
 }

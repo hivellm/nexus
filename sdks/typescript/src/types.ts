@@ -164,3 +164,75 @@ export interface NexusError {
   details?: unknown;
 }
 
+// ============================================================================
+// Database Management Types
+// ============================================================================
+
+/**
+ * Database information
+ */
+export interface DatabaseInfo {
+  /** Database name */
+  name: string;
+  /** Database path */
+  path: string;
+  /** Creation timestamp */
+  createdAt: number;
+  /** Number of nodes */
+  nodeCount: number;
+  /** Number of relationships */
+  relationshipCount: number;
+  /** Storage size in bytes */
+  storageSize: number;
+}
+
+/**
+ * Response for listing databases
+ */
+export interface ListDatabasesResponse {
+  /** List of databases */
+  databases: DatabaseInfo[];
+  /** Default database name */
+  defaultDatabase: string;
+}
+
+/**
+ * Response for creating a database
+ */
+export interface CreateDatabaseResponse {
+  /** Success flag */
+  success: boolean;
+  /** Database name */
+  name: string;
+  /** Message */
+  message: string;
+}
+
+/**
+ * Response for dropping a database
+ */
+export interface DropDatabaseResponse {
+  /** Success flag */
+  success: boolean;
+  /** Message */
+  message: string;
+}
+
+/**
+ * Response for session database operations
+ */
+export interface SessionDatabaseResponse {
+  /** Current database name */
+  database: string;
+}
+
+/**
+ * Response for switching database
+ */
+export interface SwitchDatabaseResponse {
+  /** Success flag */
+  success: boolean;
+  /** Message */
+  message: string;
+}
+

@@ -60,6 +60,7 @@ toml = "0.8"
 chrono.workspace = true
 uuid = { version = "1.10", features = ["v4"] }
 argon2 = "0.5"
+parking_lot.workspace = true
 
 # Error handling
 anyhow.workspace = true
@@ -80,4 +81,27 @@ sysinfo = "0.32"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+
+[package.metadata.deb]
+maintainer = "HiveLLM Contributors <info@hivellm.org>"
+depends = "$auto"
+license-file = ["../LICENSE", "0"]
+section = "database"
+priority = "optional"
+extended-description = """\
+Nexus is a high-performance, Neo4j-compatible graph database server built in Rust. \
+It provides full Cypher query language support, multi-database architecture, \
+vector search capabilities, and comprehensive authentication with RBAC. \
+Features include sub-millisecond query times, concurrent execution, and production-ready reliability.\
+"""
+assets = [
+    ["target/release/nexus-server", "usr/bin/", "755"],
+    ["../README.md", "usr/share/doc/nexus-server/README", "644"],
+    ["../config.yml", "etc/nexus/config.yml", "644"],
+    ["../config.example.yml", "etc/nexus/", "644"],
+    ["../config/auth.toml.example", "etc/nexus/", "644"],
+]
+conf-files = ["/etc/nexus/config.yml"]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "nexus-server", enable = false }
 

@@ -30,6 +30,15 @@ from nexus_sdk.models import (
     QueryStatisticsResponse,
     SlowQueriesResponse,
     PlanCacheStatisticsResponse,
+    # Database management models
+    DatabaseInfo,
+    ListDatabasesResponse,
+    CreateDatabaseRequest,
+    CreateDatabaseResponse,
+    DropDatabaseResponse,
+    SessionDatabaseResponse,
+    SwitchDatabaseRequest,
+    SwitchDatabaseResponse,
 )
 from nexus_sdk.query_builder import QueryBuilder
 from nexus_sdk.transaction import Transaction, TransactionStatus
@@ -68,5 +77,14 @@ __all__ = [
     "QueryBuilder",
     "Transaction",
     "TransactionStatus",
+    # Database management
+    "DatabaseInfo",
+    "ListDatabasesResponse",
+    "CreateDatabaseRequest",
+    "CreateDatabaseResponse",
+    "DropDatabaseResponse",
+    "SessionDatabaseResponse",
+    "SwitchDatabaseRequest",
+    "SwitchDatabaseResponse",
 ]
 

@@ -20,6 +20,7 @@ use nexus_core::{
     database::DatabaseManager,
     executor::Executor,
 };
+use parking_lot::RwLock as ParkingLotRwLock;
 use rmcp::model::CallToolRequestParam;
 use serde_json::json;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ impl TestServer {
         static SHARED_ENGINE: Mutex<Option<Arc<RwLock<nexus_core::Engine>>>> = Mutex::new(None);
         static SHARED_EXECUTOR: Mutex<Option<Arc<nexus_core::executor::Executor>>> =
             Mutex::new(None);
-        static SHARED_DATABASE_MANAGER: Mutex<Option<Arc<RwLock<DatabaseManager>>>> =
+        static SHARED_DATABASE_MANAGER: Mutex<Option<Arc<ParkingLotRwLock<DatabaseManager>>>> =
             Mutex::new(None);
 
         let mut engine_guard = SHARED_ENGINE.lock().unwrap();
@@ -58,7 +59,7 @@ impl TestServer {
             let executor = Arc::new(Executor::default());
 
             let database_manager = DatabaseManager::new(ctx.path().into()).unwrap();
-            let database_manager_arc = Arc::new(RwLock::new(database_manager));
+            let database_manager_arc = Arc::new(ParkingLotRwLock::new(database_manager));
 
             // Leak the context to keep temp dir alive for the duration of tests
             // This is acceptable for testing as the process will clean up on exit

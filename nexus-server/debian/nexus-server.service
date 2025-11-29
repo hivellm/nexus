@@ -1,0 +1,32 @@
+[Unit]
+Description=Nexus Graph Database Server
+Documentation=https://github.com/hivellm/nexus
+After=network.target
+
+[Service]
+Type=simple
+User=nexus
+Group=nexus
+WorkingDirectory=/var/lib/nexus
+ExecStart=/usr/bin/nexus-server --config /etc/nexus/config.yml
+Restart=on-failure
+RestartSec=5s
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nexus /var/log/nexus
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexus-server
+
+[Install]
+WantedBy=multi-user.target

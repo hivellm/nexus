@@ -615,6 +615,264 @@ paths:
               schema:
                 $ref: '#/components/schemas/StatsResponse'
 
+  /databases:
+    get:
+      summary: List Databases
+      description: Get a list of all databases in the server instance
+      operationId: listDatabases
+      tags:
+        - Databases
+      responses:
+        '200':
+          description: List of databases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListDatabasesResponse'
+    post:
+      summary: Create Database
+      description: Create a new database with the specified name
+      operationId: createDatabase
+      tags:
+        - Databases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDatabaseRequest'
+      responses:
+        '200':
+          description: Database created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDatabaseResponse'
+        '400':
+          description: Invalid database name or database already exists
+
+  /databases/{name}:
+    get:
+      summary: Get Database Info
+      description: Get information about a specific database
+      operationId: getDatabase
+      tags:
+        - Databases
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Database name
+      responses:
+        '200':
+          description: Database information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseInfo'
+        '404':
+          description: Database not found
+    delete:
+      summary: Drop Database
+      description: Permanently delete a database and all its data
+      operationId: dropDatabase
+      tags:
+        - Databases
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Database name
+      responses:
+        '200':
+          description: Database dropped successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DropDatabaseResponse'
+        '400':
+          description: Cannot drop default database or currently active database
+        '404':
+          description: Database not found
+
+  /session/database:
+    get:
+      summary: Get Current Session Database
+      description: Get the name of the currently active database for this session
+      operationId: getCurrentDatabase
+      tags:
+        - Databases
+      responses:
+        '200':
+          description: Current database name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  database:
+                    type: string
+                    description: Current database name
+                    example: neo4j
+    put:
+      summary: Switch Session Database
+      description: Switch the current session to a different database
+      operationId: switchDatabase
+      tags:
+        - Databases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchDatabaseRequest'
+      responses:
+        '200':
+          description: Database switched successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwitchDatabaseResponse'
+        '404':
+          description: Database not found
+
+  # Replication Endpoints
+  /replication/status:
+    get:
+      summary: Get Replication Status
+      description: Get the current replication status including role, connection state, and offset
+      operationId: getReplicationStatus
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: Replication status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicationStatusResponse'
+
+  /replication/master/stats:
+    get:
+      summary: Get Master Statistics
+      description: Get replication statistics for the master node
+      operationId: getMasterStats
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: Master statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MasterStatsResponse'
+        '404':
+          description: Master not running
+
+  /replication/replica/stats:
+    get:
+      summary: Get Replica Statistics
+      description: Get replication statistics for the replica node
+      operationId: getReplicaStats
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: Replica statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicaStatsResponse'
+        '404':
+          description: Replica not running
+
+  /replication/replicas:
+    get:
+      summary: List Connected Replicas
+      description: Get list of all replicas connected to this master
+      operationId: listReplicas
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: List of connected replicas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListReplicasResponse'
+        '404':
+          description: Master not running
+
+  /replication/promote:
+    post:
+      summary: Promote Replica to Master
+      description: Promote this replica node to become a master
+      operationId: promoteReplica
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: Replica promoted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicationResponse'
+        '404':
+          description: Replica not running
+        '500':
+          description: Promotion failed
+
+  /replication/snapshot:
+    get:
+      summary: Get Last Snapshot Info
+      description: Get information about the last created snapshot
+      operationId: getSnapshot
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: Snapshot information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotResponse'
+        '404':
+          description: No snapshot available
+    post:
+      summary: Create Snapshot
+      description: Create a new snapshot of the database for replication
+      operationId: createSnapshot
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: Snapshot created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotResponse'
+        '500':
+          description: Snapshot creation failed
+
+  /replication/stop:
+    post:
+      summary: Stop Replication
+      description: Stop the current replication process (master or replica)
+      operationId: stopReplication
+      tags:
+        - Replication
+      responses:
+        '200':
+          description: Replication stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicationResponse'
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -1023,6 +1281,109 @@ components:
           type: string
           description: Error message if operation failed
 
+    # Database Management Schemas
+    DatabaseInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Database name
+          example: neo4j
+        path:
+          type: string
+          description: Database storage path
+          example: data/neo4j
+        created_at:
+          type: integer
+          description: Creation timestamp (Unix epoch)
+          example: 1700000000
+        node_count:
+          type: integer
+          description: Number of nodes in the database
+          example: 1000
+        relationship_count:
+          type: integer
+          description: Number of relationships in the database
+          example: 5000
+        storage_size:
+          type: integer
+          description: Storage size in bytes
+          example: 1048576
+
+    ListDatabasesResponse:
+      type: object
+      properties:
+        databases:
+          type: array
+          description: List of databases
+          items:
+            $ref: '#/components/schemas/DatabaseInfo'
+        default_database:
+          type: string
+          description: Name of the default database
+          example: neo4j
+
+    CreateDatabaseRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Database name (alphanumeric, underscores, hyphens)
+          example: mydb
+          pattern: "^[a-zA-Z0-9_-]+$"
+
+    CreateDatabaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the operation was successful
+          example: true
+        name:
+          type: string
+          description: Name of the created database
+          example: mydb
+        message:
+          type: string
+          description: Status message
+          example: "Database 'mydb' created successfully"
+
+    DropDatabaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the operation was successful
+          example: true
+        message:
+          type: string
+          description: Status message
+          example: "Database 'mydb' dropped successfully"
+
+    SwitchDatabaseRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Database name to switch to
+          example: mydb
+
+    SwitchDatabaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the operation was successful
+          example: true
+        message:
+          type: string
+          description: Status message
+          example: "Switched to database 'mydb'"
+
     ErrorResponse:
       type: object
       properties:
@@ -1042,6 +1403,213 @@ components:
               description: Additional error details
               additionalProperties: true
 
+    # Replication Schemas
+    ReplicationStatusResponse:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [master, replica, standalone]
+          description: Current replication role
+          example: "master"
+        running:
+          type: boolean
+          description: Whether replication is currently running
+          example: true
+        mode:
+          type: string
+          enum: [async, sync]
+          description: Replication mode
+          example: "async"
+        connected:
+          type: boolean
+          description: Whether connected (replica to master, or master has replicas)
+          example: true
+        node_id:
+          type: string
+          description: Unique identifier for this node
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        wal_offset:
+          type: integer
+          format: int64
+          description: Current WAL offset
+          example: 12345
+        lag:
+          type: integer
+          format: int64
+          description: Replication lag in operations (replica only)
+          example: 5
+        replica_count:
+          type: integer
+          description: Number of connected replicas (master only)
+          example: 2
+
+    MasterStatsResponse:
+      type: object
+      properties:
+        entries_replicated:
+          type: integer
+          format: int64
+          description: Total WAL entries replicated
+          example: 100000
+        bytes_sent:
+          type: integer
+          format: int64
+          description: Total bytes sent to replicas
+          example: 52428800
+        connected_replicas:
+          type: integer
+          description: Number of currently connected replicas
+          example: 2
+        healthy_replicas:
+          type: integer
+          description: Number of healthy replicas
+          example: 2
+        log_size:
+          type: integer
+          description: Current replication log size
+          example: 50000
+        current_offset:
+          type: integer
+          format: int64
+          description: Current WAL offset
+          example: 100000
+        sync_acks:
+          type: integer
+          format: int64
+          description: Number of sync acknowledgments received
+          example: 95000
+        snapshot_transfers:
+          type: integer
+          format: int64
+          description: Number of snapshot transfers completed
+          example: 1
+
+    ReplicaStatsResponse:
+      type: object
+      properties:
+        entries_received:
+          type: integer
+          format: int64
+          description: Total WAL entries received
+          example: 99500
+        entries_applied:
+          type: integer
+          format: int64
+          description: Total WAL entries applied
+          example: 99500
+        bytes_received:
+          type: integer
+          format: int64
+          description: Total bytes received from master
+          example: 51380224
+        current_offset:
+          type: integer
+          format: int64
+          description: Current WAL offset
+          example: 99500
+        lag:
+          type: integer
+          format: int64
+          description: Replication lag in operations
+          example: 500
+        reconnects:
+          type: integer
+          description: Number of reconnection attempts
+          example: 0
+        connected:
+          type: boolean
+          description: Whether connected to master
+          example: true
+        master_id:
+          type: string
+          description: Connected master's ID
+          example: "550e8400-e29b-41d4-a716-446655440001"
+
+    ReplicaInfoResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Replica ID
+          example: "550e8400-e29b-41d4-a716-446655440002"
+        addr:
+          type: string
+          description: Replica address
+          example: "192.168.1.10:15475"
+        last_ack_offset:
+          type: integer
+          format: int64
+          description: Last acknowledged WAL offset
+          example: 99000
+        lag:
+          type: integer
+          format: int64
+          description: Replication lag
+          example: 1000
+        healthy:
+          type: boolean
+          description: Whether replica is healthy
+          example: true
+        connected_seconds:
+          type: integer
+          format: int64
+          description: Connection duration in seconds
+          example: 3600
+
+    ListReplicasResponse:
+      type: object
+      properties:
+        replicas:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReplicaInfoResponse'
+          description: List of connected replicas
+
+    SnapshotResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Snapshot ID
+          example: "550e8400-e29b-41d4-a716-446655440003"
+        created_at:
+          type: integer
+          format: int64
+          description: Creation timestamp (Unix milliseconds)
+          example: 1732900000000
+        wal_offset:
+          type: integer
+          format: int64
+          description: WAL offset at snapshot time
+          example: 100000
+        uncompressed_size:
+          type: integer
+          format: int64
+          description: Uncompressed size in bytes
+          example: 104857600
+        compressed_size:
+          type: integer
+          format: int64
+          description: Compressed size in bytes
+          example: 31457280
+        files_count:
+          type: integer
+          description: Number of files in snapshot
+          example: 5
+
+    ReplicationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the operation was successful
+          example: true
+        message:
+          type: string
+          description: Status message
+          example: "Replication stopped"
+
 tags:
   - name: System
     description: System health and statistics endpoints
@@ -1053,3 +1621,7 @@ tags:
     description: Node and relationship management
   - name: Schema
     description: Schema management (labels and relationship types)
+  - name: Databases
+    description: Multi-database management (create, drop, switch, list databases)
+  - name: Replication
+    description: Master-replica replication management (status, stats, snapshots, failover)

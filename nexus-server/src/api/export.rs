@@ -228,6 +228,7 @@ mod tests {
         database::DatabaseManager,
         executor::Executor,
     };
+    use parking_lot::RwLock as ParkingLotRwLock;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -252,7 +253,7 @@ mod tests {
         let engine_arc = Arc::new(RwLock::new(engine));
 
         let database_manager = DatabaseManager::new(ctx.path().into()).unwrap();
-        let database_manager_arc = Arc::new(RwLock::new(database_manager));
+        let database_manager_arc = Arc::new(ParkingLotRwLock::new(database_manager));
 
         let rbac = RoleBasedAccessControl::new();
         let rbac_arc = Arc::new(RwLock::new(rbac));

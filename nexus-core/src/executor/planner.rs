@@ -708,6 +708,45 @@ impl<'a> QueryPlanner<'a> {
                         or_replace: create_index_clause.or_replace,
                     });
                 }
+                Clause::ShowDatabases => {
+                    // Add ShowDatabases operator
+                    operators.push(Operator::ShowDatabases);
+                }
+                Clause::CreateDatabase(create_db_clause) => {
+                    // Add CreateDatabase operator
+                    operators.push(Operator::CreateDatabase {
+                        name: create_db_clause.name.clone(),
+                        if_not_exists: create_db_clause.if_not_exists,
+                    });
+                }
+                Clause::DropDatabase(drop_db_clause) => {
+                    // Add DropDatabase operator
+                    operators.push(Operator::DropDatabase {
+                        name: drop_db_clause.name.clone(),
+                        if_exists: drop_db_clause.if_exists,
+                    });
+                }
+                Clause::AlterDatabase(alter_db_clause) => {
+                    // Add AlterDatabase operator
+                    use super::parser::DatabaseAlteration;
+                    let (read_only, option) = match &alter_db_clause.alteration {
+                        DatabaseAlteration::SetAccess { read_only } => (Some(*read_only), None),
+                        DatabaseAlteration::SetOption { key, value } => {
+                            (None, Some((key.clone(), value.clone())))
+                        }
+                    };
+                    operators.push(Operator::AlterDatabase {
+                        name: alter_db_clause.name.clone(),
+                        read_only,
+                        option,
+                    });
+                }
+                Clause::UseDatabase(use_db_clause) => {
+                    // Add UseDatabase operator
+                    operators.push(Operator::UseDatabase {
+                        name: use_db_clause.name.clone(),
+                    });
+                }
                 _ => {
                     // Other clauses not implemented in MVP
                 }
@@ -2341,6 +2380,26 @@ impl<'a> QueryPlanner<'a> {
                 }
                 Operator::CreateIndex { .. } => {
                     // Index creation is cheap (metadata operation)
+                    total_cost += 1.0;
+                }
+                Operator::ShowDatabases => {
+                    // SHOW DATABASES is cheap (metadata operation)
+                    total_cost += 1.0;
+                }
+                Operator::CreateDatabase { .. } => {
+                    // CREATE DATABASE is moderately expensive
+                    total_cost += 50.0;
+                }
+                Operator::DropDatabase { .. } => {
+                    // DROP DATABASE is moderately expensive
+                    total_cost += 50.0;
+                }
+                Operator::AlterDatabase { .. } => {
+                    // ALTER DATABASE is cheap (metadata operation)
+                    total_cost += 10.0;
+                }
+                Operator::UseDatabase { .. } => {
+                    // USE DATABASE is cheap (session operation)
                     total_cost += 1.0;
                 }
             }

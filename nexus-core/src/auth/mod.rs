@@ -6,6 +6,7 @@
 pub mod api_key;
 pub mod audit;
 pub mod chatroom_permissions;
+pub mod database_permissions;
 pub mod jwt;
 pub mod middleware;
 pub mod password;
@@ -22,6 +23,7 @@ pub use chatroom_permissions::{
     ChatroomOperation, can_manage_chatroom, can_read_chatroom, can_send_chatroom,
     check_chatroom_permission,
 };
+pub use database_permissions::{DatabaseACL, DatabasePermission, check_database_access};
 pub use jwt::{JwtConfig, JwtManager, TokenPair};
 pub use middleware::{AuthContext, AuthError, AuthMiddleware};
 pub use password::{hash_password, verify_password};

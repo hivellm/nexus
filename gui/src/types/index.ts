@@ -146,3 +146,34 @@ export interface Notification {
   timestamp: Date;
   read: boolean;
 }
+
+// Database management types
+export interface DatabaseInfo {
+  name: string;
+  path: string;
+  createdAt: number;
+  nodeCount: number;
+  relationshipCount: number;
+  storageSize: number;
+}
+
+export interface ListDatabasesResponse {
+  databases: DatabaseInfo[];
+  defaultDatabase: string;
+}
+
+export interface CreateDatabaseResponse {
+  success: boolean;
+  name: string;
+  message: string;
+}
+
+export interface DropDatabaseResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface SwitchDatabaseResponse {
+  success: boolean;
+  message: string;
+}

@@ -1,0 +1,48 @@
+.TH NEXUS-KEY 1 "November 2025" "Nexus CLI 0.11.0" "User Commands"
+.SH NAME
+nexus-key \- API key management commands for Nexus
+.SH SYNOPSIS
+.B nexus key
+\fICOMMAND\fR [\fIARGS\fR]
+.SH DESCRIPTION
+API key management commands for Nexus graph database.
+.SH COMMANDS
+.TP
+.B list
+List all API keys in the system.
+.TP
+.B create \fINAME\fR
+Create a new API key with the specified name.
+.TP
+.B get \fIID\fR
+Get information about a specific API key.
+.TP
+.B revoke \fIID\fR
+Revoke an API key.
+.SH OPTIONS FOR CREATE
+.TP
+.BR \-\-permissions " " \fIPERMS\fR
+Comma-separated list of permissions to grant.
+.SH EXAMPLES
+.TP
+List all API keys:
+.B nexus key list
+.TP
+Create a new API key:
+.B nexus key create mykey --permissions read,write
+.TP
+Get key info:
+.B nexus key get abc123
+.TP
+Revoke a key:
+.B nexus key revoke abc123
+.SH SECURITY
+.IP \(bu 2
+API keys are shown only once when created - save them securely.
+.IP \(bu 2
+Use environment variables or config files instead of command-line arguments for keys.
+.IP \(bu 2
+Revoke unused keys promptly.
+.SH SEE ALSO
+.BR nexus (1),
+.BR nexus-user (1)

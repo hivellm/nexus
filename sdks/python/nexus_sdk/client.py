@@ -34,6 +34,15 @@ from nexus_sdk.models import (
     LabelResponse,
     RelTypeResponse,
     TransactionResponse,
+    # Database management models
+    DatabaseInfo,
+    ListDatabasesResponse,
+    CreateDatabaseRequest,
+    CreateDatabaseResponse,
+    DropDatabaseResponse,
+    SessionDatabaseResponse,
+    SwitchDatabaseRequest,
+    SwitchDatabaseResponse,
 )
 
 
@@ -787,6 +796,164 @@ class NexusClient:
 
         if status == 200:
             return response.json()
+        else:
+            try:
+                error_text = response.text
+            except Exception:
+                error_text = f"HTTP {status}"
+            raise ApiError(error_text, status)
+
+    # =========================================================================
+    # Database Management Methods
+    # =========================================================================
+
+    async def list_databases(self) -> ListDatabasesResponse:
+        """List all databases.
+
+        Returns:
+            ListDatabasesResponse containing list of databases and default database
+
+        Raises:
+            ApiError: If the API returns an error
+        """
+        url = urljoin(self.base_url, "/databases")
+        response = await self._execute_with_retry("GET", url)
+        status = response.status_code
+
+        if status == 200:
+            data = response.json()
+            return ListDatabasesResponse(**data)
+        else:
+            try:
+                error_text = response.text
+            except Exception:
+                error_text = f"HTTP {status}"
+            raise ApiError(error_text, status)
+
+    async def create_database(self, name: str) -> CreateDatabaseResponse:
+        """Create a new database.
+
+        Args:
+            name: Database name (alphanumeric with underscores and hyphens)
+
+        Returns:
+            CreateDatabaseResponse indicating success
+
+        Raises:
+            ApiError: If the API returns an error (e.g., database already exists)
+        """
+        url = urljoin(self.base_url, "/databases")
+        payload = CreateDatabaseRequest(name=name).model_dump()
+
+        response = await self._execute_with_retry("POST", url, json=payload)
+        status = response.status_code
+
+        if status == 200:
+            data = response.json()
+            return CreateDatabaseResponse(**data)
+        else:
+            try:
+                error_text = response.text
+            except Exception:
+                error_text = f"HTTP {status}"
+            raise ApiError(error_text, status)
+
+    async def get_database(self, name: str) -> DatabaseInfo:
+        """Get database information.
+
+        Args:
+            name: Database name
+
+        Returns:
+            DatabaseInfo containing database details
+
+        Raises:
+            ApiError: If the database is not found or API returns an error
+        """
+        url = urljoin(self.base_url, f"/databases/{name}")
+        response = await self._execute_with_retry("GET", url)
+        status = response.status_code
+
+        if status == 200:
+            data = response.json()
+            return DatabaseInfo(**data)
+        else:
+            try:
+                error_text = response.text
+            except Exception:
+                error_text = f"HTTP {status}"
+            raise ApiError(error_text, status)
+
+    async def drop_database(self, name: str) -> DropDatabaseResponse:
+        """Drop a database.
+
+        Args:
+            name: Database name
+
+        Returns:
+            DropDatabaseResponse indicating success
+
+        Raises:
+            ApiError: If the database cannot be dropped (e.g., default database)
+        """
+        url = urljoin(self.base_url, f"/databases/{name}")
+        response = await self._execute_with_retry("DELETE", url)
+        status = response.status_code
+
+        if status == 200:
+            data = response.json()
+            return DropDatabaseResponse(**data)
+        else:
+            try:
+                error_text = response.text
+            except Exception:
+                error_text = f"HTTP {status}"
+            raise ApiError(error_text, status)
+
+    async def get_current_database(self) -> str:
+        """Get the current session database.
+
+        Returns:
+            Name of the current database
+
+        Raises:
+            ApiError: If the API returns an error
+        """
+        url = urljoin(self.base_url, "/session/database")
+        response = await self._execute_with_retry("GET", url)
+        status = response.status_code
+
+        if status == 200:
+            data = response.json()
+            return data.get("database", "neo4j")
+        else:
+            try:
+                error_text = response.text
+            except Exception:
+                error_text = f"HTTP {status}"
+            raise ApiError(error_text, status)
+
+    async def switch_database(self, name: str) -> SwitchDatabaseResponse:
+        """Switch to a different database.
+
+        Args:
+            name: Database name to switch to
+
+        Returns:
+            SwitchDatabaseResponse indicating success
+
+        Raises:
+            ApiError: If the database does not exist
+        """
+        url = urljoin(self.base_url, "/session/database")
+        payload = SwitchDatabaseRequest(name=name).model_dump()
+
+        response = await self._execute_with_retry("PUT", url, json=payload)
+        status = response.status_code
+
+        if status == 200:
+            data = response.json()
+            return SwitchDatabaseResponse(**data)
         else:
             try:
                 error_text = response.text

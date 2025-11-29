@@ -1,6 +1,6 @@
 {
   "name": "@hivellm/nexus-sdk",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Official TypeScript/JavaScript SDK for Nexus Graph Database",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

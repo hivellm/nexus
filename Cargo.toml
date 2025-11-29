@@ -4,11 +4,13 @@ resolver = "2"
 members = [
     "nexus-core",
     "nexus-server",
-    "nexus-protocol", "sdks/rust",
+    "nexus-protocol",
+    "nexus-cli",
+    "sdks/rust",
 ]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 authors = ["HiveLLM Contributors <team@hivellm.org>"]
 license = "Apache-2.0"

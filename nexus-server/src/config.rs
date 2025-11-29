@@ -16,6 +16,36 @@ pub struct Config {
     pub root_user: RootUserConfig,
     /// Authentication configuration
     pub auth: AuthConfig,
+    /// Multi-database configuration
+    pub multi_database: MultiDatabaseConfig,
+}
+
+/// Multi-database configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct MultiDatabaseConfig {
+    /// Whether multi-database support is enabled
+    pub enabled: bool,
+    /// Default database name
+    pub default_database: String,
+    /// Directory for database storage
+    pub databases_dir: String,
+    /// Maximum number of databases allowed
+    pub max_databases: usize,
+    /// Auto-create default database on startup
+    pub auto_create_default: bool,
+}
+
+impl Default for MultiDatabaseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_database: "neo4j".to_string(),
+            databases_dir: "./data/databases".to_string(),
+            max_databases: 100,
+            auto_create_default: true,
+        }
+    }
 }
 
 /// Authentication configuration
@@ -72,6 +102,7 @@ impl Default for Config {
             data_dir: "./data".to_string(),
             root_user: RootUserConfig::default(),
             auth: AuthConfig::default(),
+            multi_database: MultiDatabaseConfig::default(),
         }
     }
 }
@@ -170,6 +201,7 @@ impl Config {
             data_dir,
             root_user,
             auth,
+            multi_database: MultiDatabaseConfig::default(),
         }
     }
 

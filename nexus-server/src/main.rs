@@ -22,9 +22,10 @@ use axum::{
     routing::{any, delete, get, post, put},
 };
 use clap::Parser;
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::thread;
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -117,7 +118,7 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
     let engine = nexus_core::Engine::with_data_dir(&data_dir)?;
     info!("Using persistent data directory: {}", data_dir);
-    let engine_arc = Arc::new(RwLock::new(engine));
+    let engine_arc = Arc::new(TokioRwLock::new(engine));
 
     // Initialize executor
     let executor = api::cypher::init_executor()?;
@@ -149,6 +150,11 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
     let database_manager = nexus_core::database::DatabaseManager::new(data_dir.clone().into())?;
     let database_manager_arc = Arc::new(RwLock::new(database_manager));
 
+    // Configure DatabaseManager in cypher API for multi-database commands
+    let db_manager_clone = database_manager_arc.clone();
+    api::cypher::init_database_manager(db_manager_clone)?;
+    info!("Multi-database support enabled with DatabaseManager");
+
     // Initialize RBAC for user management
     let mut rbac = nexus_core::auth::RoleBasedAccessControl::new();
 
@@ -167,7 +173,7 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         }
     }
 
-    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
     // Initialize AuthManager for API key management with LMDB persistence
     let auth_config = nexus_core::auth::AuthConfig::default();
@@ -449,6 +455,80 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         .route("/data/relationships", post(api::data::create_rel))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
+        // Database management endpoints
+        .route(
+            "/databases",
+            get({
+                let server = nexus_server.clone();
+                move || {
+                    let manager = server.database_manager.clone();
+                    async move {
+                        api::database::list_databases(axum::extract::State(api::database::DatabaseState { manager })).await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/databases",
+            post({
+                let server = nexus_server.clone();
+                move |request| {
+                    let manager = server.database_manager.clone();
+                    async move {
+                        api::database::create_database(axum::extract::State(api::database::DatabaseState { manager }), request).await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/databases/{name}",
+            get({
+                let server = nexus_server.clone();
+                move |path| {
+                    let manager = server.database_manager.clone();
+                    async move {
+                        api::database::get_database(axum::extract::State(api::database::DatabaseState { manager }), path).await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/databases/{name}",
+            delete({
+                let server = nexus_server.clone();
+                move |path| {
+                    let manager = server.database_manager.clone();
+                    async move {
+                        api::database::drop_database(axum::extract::State(api::database::DatabaseState { manager }), path).await
+                    }
+                }
+            }),
+        )
+        // Session database endpoints
+        .route(
+            "/session/database",
+            get({
+                let server = nexus_server.clone();
+                move || {
+                    let manager = server.database_manager.clone();
+                    async move {
+                        api::database::get_session_database(axum::extract::State(api::database::DatabaseState { manager })).await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/session/database",
+            put({
+                let server = nexus_server.clone();
+                move |request| {
+                    let manager = server.database_manager.clone();
+                    async move {
+                        api::database::switch_session_database(axum::extract::State(api::database::DatabaseState { manager }), request).await
+                    }
+                }
+            }),
+        )
         .route("/cache/stats", get(api::cypher::get_cache_stats))
         .route("/cache/clear", post(api::cypher::clear_cache))
         .route("/cache/clean", post(api::cypher::clean_cache))
@@ -560,6 +640,15 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         )
         // MCP StreamableHTTP endpoint
         .nest("/mcp", mcp_router)
+        // Replication endpoints
+        .route("/replication/status", get(api::replication::get_status))
+        .route("/replication/master/stats", get(api::replication::get_master_stats))
+        .route("/replication/replica/stats", get(api::replication::get_replica_stats))
+        .route("/replication/replicas", get(api::replication::list_replicas))
+        .route("/replication/promote", post(api::replication::promote_to_master))
+        .route("/replication/snapshot", post(api::replication::create_snapshot))
+        .route("/replication/snapshot", get(api::replication::get_last_snapshot))
+        .route("/replication/stop", post(api::replication::stop_replication))
         // Add state to router (must be after all routes)
         .with_state(nexus_server.clone());
 
@@ -672,7 +761,7 @@ mod tests {
     async fn test_nexus_server_creation() {
         let ctx = TestContext::new();
         let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
-        let engine_arc = Arc::new(RwLock::new(engine));
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
@@ -681,7 +770,7 @@ mod tests {
             nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
-        let rbac_arc = Arc::new(RwLock::new(rbac));
+        let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
         let auth_config = nexus_core::auth::AuthConfig::default();
         let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
@@ -722,7 +811,7 @@ mod tests {
     fn test_nexus_server_clone() {
         let ctx = TestContext::new();
         let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
-        let engine_arc = Arc::new(RwLock::new(engine));
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
@@ -731,7 +820,7 @@ mod tests {
             nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
-        let rbac_arc = Arc::new(RwLock::new(rbac));
+        let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
         let auth_config = nexus_core::auth::AuthConfig::default();
         let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
@@ -776,7 +865,7 @@ mod tests {
     async fn test_create_mcp_router() {
         let ctx = TestContext::new();
         let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
-        let engine_arc = Arc::new(RwLock::new(engine));
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
@@ -785,7 +874,7 @@ mod tests {
             nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
-        let rbac_arc = Arc::new(RwLock::new(rbac));
+        let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
         let auth_config = nexus_core::auth::AuthConfig::default();
         let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
@@ -911,7 +1000,7 @@ mod tests {
         // This test verifies that the router can be created without panicking
         let ctx = TestContext::new();
         let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
-        let engine_arc = Arc::new(RwLock::new(engine));
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
@@ -920,7 +1009,7 @@ mod tests {
             nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
-        let rbac_arc = Arc::new(RwLock::new(rbac));
+        let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
         let auth_config = nexus_core::auth::AuthConfig::default();
         let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
@@ -963,7 +1052,7 @@ mod tests {
     fn test_nexus_server_fields() {
         let ctx = TestContext::new();
         let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
-        let engine_arc = Arc::new(RwLock::new(engine));
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
 
         let executor = nexus_core::executor::Executor::default();
         let executor_arc = Arc::new(executor);
@@ -972,7 +1061,7 @@ mod tests {
             nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
         let database_manager_arc = Arc::new(RwLock::new(database_manager));
         let rbac = nexus_core::auth::RoleBasedAccessControl::new();
-        let rbac_arc = Arc::new(RwLock::new(rbac));
+        let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
         let auth_config = nexus_core::auth::AuthConfig::default();
         let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
