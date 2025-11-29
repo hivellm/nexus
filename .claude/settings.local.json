@@ -70,7 +70,8 @@
       "Bash(cargo clippy:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(cargo fmt:*)"
+      "Bash(cargo fmt:*)",
+      "Bash(RUST_LOG=nexus_core::replication::snapshot=debug cargo test:*)"
     ],
     "deny": [],
     "ask": []
