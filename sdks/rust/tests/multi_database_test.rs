@@ -4,6 +4,7 @@ use nexus_sdk::{NexusClient, NexusError, Value};
 use std::collections::HashMap;
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_list_databases() -> Result<(), NexusError> {
     let client = NexusClient::new("http://localhost:15474")?;
 
@@ -23,6 +24,7 @@ async fn test_list_databases() -> Result<(), NexusError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_create_and_drop_database() -> Result<(), NexusError> {
     let client = NexusClient::new("http://localhost:15474")?;
 
@@ -49,6 +51,7 @@ async fn test_create_and_drop_database() -> Result<(), NexusError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_switch_database() -> Result<(), NexusError> {
     let client = NexusClient::new("http://localhost:15474")?;
 
@@ -83,6 +86,7 @@ async fn test_switch_database() -> Result<(), NexusError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_get_database_info() -> Result<(), NexusError> {
     let client = NexusClient::new("http://localhost:15474")?;
 
@@ -108,6 +112,7 @@ async fn test_get_database_info() -> Result<(), NexusError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_data_isolation() -> Result<(), NexusError> {
     let client = NexusClient::new("http://localhost:15474")?;
 
@@ -188,6 +193,7 @@ async fn test_data_isolation() -> Result<(), NexusError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_client_with_database_parameter() -> Result<(), NexusError> {
     // Create a test database first
     let setup_client = NexusClient::new("http://localhost:15474")?;
@@ -214,6 +220,7 @@ async fn test_client_with_database_parameter() -> Result<(), NexusError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_cannot_drop_current_database() -> Result<(), NexusError> {
     let client = NexusClient::new("http://localhost:15474")?;
 
@@ -241,6 +248,7 @@ async fn test_cannot_drop_current_database() -> Result<(), NexusError> {
 }
 
 #[tokio::test]
+#[ignore] // Requires running server
 async fn test_cannot_drop_default_database() -> Result<(), NexusError> {
     let client = NexusClient::new("http://localhost:15474")?;
 
