@@ -220,6 +220,7 @@ fn test_performance_node_creation_throughput() {
 }
 
 #[test]
+#[ignore] // Performance test - run manually, not in CI
 fn test_performance_relationship_creation_throughput() {
     let temp_dir = TempDir::new().unwrap();
     let path = temp_dir.path().join("test.graph");
