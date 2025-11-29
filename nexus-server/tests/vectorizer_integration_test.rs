@@ -10,10 +10,11 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use nexus_core::testing::TestContext;
+use parking_lot::RwLock;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 use tower::ServiceExt;
 
 use nexus_core::{
@@ -460,15 +461,16 @@ async fn create_vectorizer_test_server()
 
     // Initialize core components using Engine
     let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
-    let engine_arc = Arc::new(RwLock::new(engine));
+    let engine_arc = Arc::new(TokioRwLock::new(engine));
 
     let executor = Executor::default();
     let executor_arc = Arc::new(executor);
 
+    // DatabaseManager uses parking_lot::RwLock, RBAC uses tokio::sync::RwLock
     let database_manager = nexus_core::database::DatabaseManager::new(ctx.path().into()).unwrap();
     let database_manager_arc = Arc::new(RwLock::new(database_manager));
     let rbac = nexus_core::auth::RoleBasedAccessControl::new();
-    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
     // Initialize API modules
     api::data::init_engine(engine_arc.clone()).unwrap();

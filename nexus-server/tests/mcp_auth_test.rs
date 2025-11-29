@@ -5,8 +5,9 @@
 use nexus_core::auth::{AuthConfig, AuthManager, Permission, middleware::AuthMiddleware};
 use nexus_core::testing::TestContext;
 use nexus_server::{NexusServer, config::RootUserConfig};
+use parking_lot::RwLock;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 
 /// Helper function to create a test server with authentication enabled
 async fn create_test_server_with_auth() -> (Arc<NexusServer>, Arc<AuthManager>, TestContext) {
@@ -22,19 +23,19 @@ async fn create_test_server_with_auth() -> (Arc<NexusServer>, Arc<AuthManager>, 
 
     // Initialize Engine
     let engine = Engine::with_data_dir(&data_dir).unwrap();
-    let engine_arc = Arc::new(RwLock::new(engine));
+    let engine_arc = Arc::new(TokioRwLock::new(engine));
 
     // Initialize executor
     let executor = Executor::default();
     let executor_arc = Arc::new(executor);
 
-    // Initialize DatabaseManager
+    // Initialize DatabaseManager (uses parking_lot::RwLock)
     let database_manager = DatabaseManager::new(data_dir.clone()).unwrap();
     let database_manager_arc = Arc::new(RwLock::new(database_manager));
 
-    // Initialize RBAC
+    // Initialize RBAC (uses tokio::sync::RwLock)
     let rbac = RoleBasedAccessControl::new();
-    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
     // Initialize AuthManager with authentication enabled
     let auth_config = AuthConfig {

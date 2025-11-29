@@ -1,27 +1,30 @@
 //! Tests for multi-database support
 
-use nexus_sdk::{NexusClient, NexusError};
+use nexus_sdk::{NexusClient, NexusError, Value};
+use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_list_databases() -> Result<(), NexusError> {
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     let databases = client.list_databases().await?;
 
     assert!(!databases.databases.is_empty());
     assert!(!databases.default_database.is_empty());
-    assert!(databases.databases.contains(&databases.default_database));
+    // Check that default database exists in the list
+    assert!(
+        databases
+            .databases
+            .iter()
+            .any(|db| db.name == databases.default_database)
+    );
 
     Ok(())
 }
 
 #[tokio::test]
 async fn test_create_and_drop_database() -> Result<(), NexusError> {
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     let db_name = "test_temp_db";
 
@@ -32,7 +35,7 @@ async fn test_create_and_drop_database() -> Result<(), NexusError> {
 
     // Verify it exists
     let mut databases = client.list_databases().await?;
-    assert!(databases.databases.contains(&db_name.to_string()));
+    assert!(databases.databases.iter().any(|db| db.name == db_name));
 
     // Drop database
     let drop_result = client.drop_database(db_name).await?;
@@ -40,16 +43,14 @@ async fn test_create_and_drop_database() -> Result<(), NexusError> {
 
     // Verify it's gone
     databases = client.list_databases().await?;
-    assert!(!databases.databases.contains(&db_name.to_string()));
+    assert!(!databases.databases.iter().any(|db| db.name == db_name));
 
     Ok(())
 }
 
 #[tokio::test]
 async fn test_switch_database() -> Result<(), NexusError> {
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     let db_name = "test_switch_db";
 
@@ -83,9 +84,7 @@ async fn test_switch_database() -> Result<(), NexusError> {
 
 #[tokio::test]
 async fn test_get_database_info() -> Result<(), NexusError> {
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     let db_name = "test_info_db";
 
@@ -96,9 +95,11 @@ async fn test_get_database_info() -> Result<(), NexusError> {
     let db_info = client.get_database(db_name).await?;
     assert_eq!(db_info.name, db_name);
     assert!(!db_info.path.is_empty());
-    assert!(db_info.node_count >= 0);
-    assert!(db_info.relationship_count >= 0);
-    assert!(db_info.storage_size >= 0);
+    // node_count, relationship_count, and storage_size are u64, so always >= 0
+    // Just verify they exist (the struct was successfully deserialized)
+    let _ = db_info.node_count;
+    let _ = db_info.relationship_count;
+    let _ = db_info.storage_size;
 
     // Clean up
     client.drop_database(db_name).await?;
@@ -108,9 +109,7 @@ async fn test_get_database_info() -> Result<(), NexusError> {
 
 #[tokio::test]
 async fn test_data_isolation() -> Result<(), NexusError> {
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     let db1_name = "test_isolation_db1";
     let db2_name = "test_isolation_db2";
@@ -121,11 +120,10 @@ async fn test_data_isolation() -> Result<(), NexusError> {
 
     // Switch to db1 and create a node
     client.switch_database(db1_name).await?;
+    let mut params = HashMap::new();
+    params.insert("name".to_string(), Value::String("DB1 Node".to_string()));
     let result = client
-        .execute_cypher(
-            "CREATE (n:TestNode {name: $name}) RETURN n",
-            Some(serde_json::json!({"name": "DB1 Node"})),
-        )
+        .execute_cypher("CREATE (n:TestNode {name: $name}) RETURN n", Some(params))
         .await?;
     assert_eq!(result.rows.len(), 1);
 
@@ -133,7 +131,10 @@ async fn test_data_isolation() -> Result<(), NexusError> {
     let count_result = client
         .execute_cypher("MATCH (n:TestNode) RETURN count(n) AS count", None)
         .await?;
-    let count = count_result.rows[0].get("count").unwrap().as_i64().unwrap();
+    // Row is an array: [count_value]
+    let count = count_result.rows[0].as_array().unwrap()[0]
+        .as_i64()
+        .unwrap();
     assert_eq!(count, 1);
 
     // Switch to db2
@@ -143,15 +144,16 @@ async fn test_data_isolation() -> Result<(), NexusError> {
     let count_result = client
         .execute_cypher("MATCH (n:TestNode) RETURN count(n) AS count", None)
         .await?;
-    let count = count_result.rows[0].get("count").unwrap().as_i64().unwrap();
+    let count = count_result.rows[0].as_array().unwrap()[0]
+        .as_i64()
+        .unwrap();
     assert_eq!(count, 0);
 
     // Create a different node in db2
+    let mut params = HashMap::new();
+    params.insert("name".to_string(), Value::String("DB2 Node".to_string()));
     let result = client
-        .execute_cypher(
-            "CREATE (n:TestNode {name: $name}) RETURN n",
-            Some(serde_json::json!({"name": "DB2 Node"})),
-        )
+        .execute_cypher("CREATE (n:TestNode {name: $name}) RETURN n", Some(params))
         .await?;
     assert_eq!(result.rows.len(), 1);
 
@@ -159,7 +161,9 @@ async fn test_data_isolation() -> Result<(), NexusError> {
     let count_result = client
         .execute_cypher("MATCH (n:TestNode) RETURN count(n) AS count", None)
         .await?;
-    let count = count_result.rows[0].get("count").unwrap().as_i64().unwrap();
+    let count = count_result.rows[0].as_array().unwrap()[0]
+        .as_i64()
+        .unwrap();
     assert_eq!(count, 1);
 
     // Switch back to db1
@@ -169,7 +173,9 @@ async fn test_data_isolation() -> Result<(), NexusError> {
     let count_result = client
         .execute_cypher("MATCH (n:TestNode) RETURN count(n) AS count", None)
         .await?;
-    let count = count_result.rows[0].get("count").unwrap().as_i64().unwrap();
+    let count = count_result.rows[0].as_array().unwrap()[0]
+        .as_i64()
+        .unwrap();
     assert_eq!(count, 1);
 
     // Clean up
@@ -184,18 +190,14 @@ async fn test_data_isolation() -> Result<(), NexusError> {
 #[tokio::test]
 async fn test_client_with_database_parameter() -> Result<(), NexusError> {
     // Create a test database first
-    let setup_client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let setup_client = NexusClient::new("http://localhost:15474")?;
 
     let db_name = "test_param_db";
     setup_client.create_database(db_name).await?;
 
-    // Create a client connected to the specific database
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .database(db_name)
-        .build()?;
+    // Create a client and switch to the specific database
+    let client = NexusClient::new("http://localhost:15474")?;
+    client.switch_database(db_name).await?;
 
     // Verify we're connected to the right database
     let current_db = client.get_current_database().await?;
@@ -213,9 +215,7 @@ async fn test_client_with_database_parameter() -> Result<(), NexusError> {
 
 #[tokio::test]
 async fn test_cannot_drop_current_database() -> Result<(), NexusError> {
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     let db_name = "test_no_drop_db";
 
@@ -226,7 +226,7 @@ async fn test_cannot_drop_current_database() -> Result<(), NexusError> {
     client.switch_database(db_name).await?;
 
     // Try to drop it while it's active - should fail
-    let drop_result = client.drop_database(db_name).await;
+    let drop_result: Result<_, NexusError> = client.drop_database(db_name).await;
     assert!(drop_result.is_err());
 
     // Switch to a different database
@@ -242,16 +242,14 @@ async fn test_cannot_drop_current_database() -> Result<(), NexusError> {
 
 #[tokio::test]
 async fn test_cannot_drop_default_database() -> Result<(), NexusError> {
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     // Get default database
     let databases = client.list_databases().await?;
     let default_db = &databases.default_database;
 
     // Try to drop it - should fail
-    let drop_result = client.drop_database(default_db).await;
+    let drop_result: Result<_, NexusError> = client.drop_database(default_db).await;
     assert!(drop_result.is_err());
 
     Ok(())

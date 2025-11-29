@@ -1,20 +1,24 @@
 //! Multi-database support example for Nexus Rust SDK
 
-use nexus_sdk::{NexusClient, NexusError};
+use nexus_sdk::{NexusClient, Value};
+use std::collections::HashMap;
 
 #[tokio::main]
-async fn main() -> Result<(), NexusError> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create client connecting to the default database
-    let client = NexusClient::builder()
-        .url("http://localhost:15474")
-        .build()?;
+    let client = NexusClient::new("http://localhost:15474")?;
 
     println!("=== Multi-Database Support Demo ===\n");
 
     // 1. List all databases
     println!("1. Listing all databases...");
     let databases = client.list_databases().await?;
-    println!("   Available databases: {:?}", databases.databases);
+    let db_names: Vec<&str> = databases
+        .databases
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
+    println!("   Available databases: {:?}", db_names);
     println!("   Default database: {}\n", databases.default_database);
 
     // 2. Create a new database
@@ -34,13 +38,13 @@ async fn main() -> Result<(), NexusError> {
 
     // 5. Create data in the new database
     println!("5. Creating data in 'testdb'...");
+    let mut params = HashMap::new();
+    params.insert("name".to_string(), Value::String("Laptop".to_string()));
+    params.insert("price".to_string(), Value::Float(999.99));
     let result = client
         .execute_cypher(
             "CREATE (n:Product {name: $name, price: $price}) RETURN n",
-            Some(serde_json::json!({
-                "name": "Laptop",
-                "price": 999.99
-            })),
+            Some(params),
         )
         .await?;
     println!("   Created {} node(s)\n", result.rows.len());
@@ -53,8 +57,11 @@ async fn main() -> Result<(), NexusError> {
             None,
         )
         .await?;
+    // Rows are arrays matching column order: [name, price]
     for row in &query_result.rows {
-        if let (Some(name), Some(price)) = (row.get("name"), row.get("price")) {
+        if let Some(arr) = row.as_array() {
+            let name = arr.first().and_then(|v| v.as_str()).unwrap_or("unknown");
+            let price = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
             println!("   Product: {}, Price: ${}\n", name, price);
         }
     }
@@ -69,10 +76,12 @@ async fn main() -> Result<(), NexusError> {
     let isolation_check = client
         .execute_cypher("MATCH (n:Product) RETURN count(n) AS count", None)
         .await?;
+    // Row is an array: [count_value]
     let product_count = isolation_check
         .rows
         .first()
-        .and_then(|row| row.get("count"))
+        .and_then(|row| row.as_array())
+        .and_then(|arr| arr.first())
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     println!("   Product nodes in default database: {}", product_count);
@@ -95,7 +104,10 @@ async fn main() -> Result<(), NexusError> {
     // 11. Verify database was dropped
     println!("11. Verifying 'testdb' was dropped...");
     let final_databases = client.list_databases().await?;
-    let db_exists = final_databases.databases.contains(&"testdb".to_string());
+    let db_exists = final_databases
+        .databases
+        .iter()
+        .any(|db| db.name == "testdb");
     println!("    'testdb' exists: {}", db_exists);
     println!("    Cleanup successful: {}\n", !db_exists);
 
