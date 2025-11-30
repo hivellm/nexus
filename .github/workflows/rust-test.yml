@@ -47,10 +47,10 @@ jobs:
         run: cargo clean
 
       - name: Build
-        run: cargo build --tests --workspace --exclude nexus-cli
+        run: cargo build --tests --workspace
 
       - name: Run tests
-        run: cargo nextest run --workspace --exclude nexus-cli --no-default-features
+        run: cargo nextest run --workspace --no-default-features
 
       - name: Clean after tests
         if: always()
