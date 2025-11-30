@@ -25,11 +25,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev lld
-          mkdir -p .cargo
-          echo '[target.x86_64-unknown-linux-gnu]' >> .cargo/config.toml
-          echo 'linker = "clang"' >> .cargo/config.toml
-          echo 'rustflags = ["-C", "link-arg=-fuse-ld=lld"]' >> .cargo/config.toml
+          sudo apt-get install -y build-essential pkg-config libssl-dev
 
       - name: Install minimal stable
         uses: dtolnay/rust-toolchain@stable
