@@ -5,11 +5,15 @@ on:
     branches: [master, main, develop]
     paths:
       - 'sdks/typescript/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-typescript-test.yml'
   pull_request:
     branches: ['**']
     paths:
       - 'sdks/typescript/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-typescript-test.yml'
 
 jobs:

@@ -2,25 +2,29 @@ name: Rust Lint
 
 on:
   push:
-    branches: [ master, main, develop ]
+    branches: [master, main, develop]
     paths:
-      - 'nexus-core/**'
-      - 'nexus-server/**'
-      - 'nexus-cli/**'
-      - 'nexus-protocol/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/rust-lint.yml'
+      - "nexus-core/**"
+      - "nexus-server/**"
+      - "nexus-cli/**"
+      - "nexus-protocol/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - ".github/workflows/rust-lint.yml"
   pull_request:
-    branches: [ '**' ]
+    branches: ["**"]
     paths:
-      - 'nexus-core/**'
-      - 'nexus-server/**'
-      - 'nexus-cli/**'
-      - 'nexus-protocol/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/rust-lint.yml'
+      - "nexus-core/**"
+      - "nexus-server/**"
+      - "nexus-cli/**"
+      - "nexus-protocol/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - ".github/workflows/rust-lint.yml"
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,37 +34,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Install minimal nightly (for fmt)
-      uses: dtolnay/rust-toolchain@nightly
-      with:
-        components: rustfmt
-    
-    - name: Install minimal stable
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt, clippy
-    
-    - uses: actions/checkout@v6
-    
-    - uses: Swatinem/rust-cache@v2
-      with:
-        key: clippy
-        cache-all-crates: false
-        save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' }}
-    
-    - name: Check code formatting
-      run: cargo +nightly fmt --all -- --check
-    
-    - name: Check cargo clippy warnings
-      run: cargo clippy --workspace -- -D warnings
-    
-    - name: Check cargo clippy warnings for all targets
-      run: cargo clippy --workspace --all-targets -- -D warnings
-    
-    - name: Check cargo clippy warnings for all targets and features
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Install minimal nightly (for fmt)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
 
-    - name: Clean after lint
-      if: always()
-      run: cargo clean
+      - name: Install minimal stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
+      - uses: actions/checkout@v6
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+          cache-all-crates: false
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' }}
+
+      - name: Check code formatting
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Check cargo clippy warnings
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Check cargo clippy warnings for all targets
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Check cargo clippy warnings for all targets and features
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Clean after lint
+        if: always()
+        run: cargo clean

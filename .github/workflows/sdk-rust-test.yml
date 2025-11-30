@@ -5,11 +5,15 @@ on:
     branches: [master, main, develop]
     paths:
       - 'sdks/rust/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-rust-test.yml'
   pull_request:
     branches: ['**']
     paths:
       - 'sdks/rust/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-rust-test.yml'
 
 env:

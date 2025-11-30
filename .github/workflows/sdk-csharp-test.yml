@@ -5,11 +5,15 @@ on:
     branches: [master, main, develop]
     paths:
       - 'sdks/csharp/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-csharp-test.yml'
   pull_request:
     branches: ['**']
     paths:
       - 'sdks/csharp/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-csharp-test.yml'
 
 jobs:

@@ -5,11 +5,15 @@ on:
     branches: [master, main, develop]
     paths:
       - 'sdks/go/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-go-test.yml'
   pull_request:
     branches: ['**']
     paths:
       - 'sdks/go/**'
+      - 'nexus-server/**'
+      - 'nexus-protocol/**'
       - '.github/workflows/sdk-go-test.yml'
 
 jobs:
