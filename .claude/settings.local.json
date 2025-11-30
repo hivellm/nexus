@@ -72,7 +72,9 @@
       "Bash(git commit:*)",
       "Bash(cargo fmt:*)",
       "Bash(RUST_LOG=nexus_core::replication::snapshot=debug cargo test:*)",
-      "Bash(codespell:*)"
+      "Bash(codespell:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": [],
     "ask": []
