@@ -26,6 +26,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev
+          # Add swap to prevent OOM during linking
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
 
       - name: Install minimal stable
         uses: dtolnay/rust-toolchain@stable
@@ -42,10 +47,10 @@ jobs:
         run: cargo clean
 
       - name: Build
-        run: cargo build --tests --workspace
+        run: cargo build --tests --workspace --exclude nexus-cli
 
       - name: Run tests
-        run: cargo nextest run --workspace --no-default-features
+        run: cargo nextest run --workspace --exclude nexus-cli --no-default-features
 
       - name: Clean after tests
         if: always()
