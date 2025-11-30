@@ -7,7 +7,9 @@ members = [
     "nexus-protocol",
     "nexus-cli",
 ]
-# Note: sdks/rust is a separate project, not part of the main workspace
+exclude = [
+    "sdks/rust",
+]
 
 [workspace.package]
 version = "0.12.0"
