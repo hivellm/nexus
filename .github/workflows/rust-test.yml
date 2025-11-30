@@ -3,8 +3,24 @@ name: Rust Tests
 on:
   push:
     branches: [master, main, develop]
+    paths:
+      - 'nexus-core/**'
+      - 'nexus-server/**'
+      - 'nexus-cli/**'
+      - 'nexus-protocol/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust-test.yml'
   pull_request:
     branches: ["**"]
+    paths:
+      - 'nexus-core/**'
+      - 'nexus-server/**'
+      - 'nexus-cli/**'
+      - 'nexus-protocol/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust-test.yml'
 
 env:
   CARGO_TERM_COLOR: always

@@ -3,8 +3,24 @@ name: Rust Lint
 on:
   push:
     branches: [ master, main, develop ]
+    paths:
+      - 'nexus-core/**'
+      - 'nexus-server/**'
+      - 'nexus-cli/**'
+      - 'nexus-protocol/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust-lint.yml'
   pull_request:
     branches: [ '**' ]
+    paths:
+      - 'nexus-core/**'
+      - 'nexus-server/**'
+      - 'nexus-cli/**'
+      - 'nexus-protocol/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust-lint.yml'
 
 env:
   CARGO_TERM_COLOR: always

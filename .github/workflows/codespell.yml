@@ -3,8 +3,34 @@ name: Codespell
 on:
   push:
     branches: [ master, main, develop ]
+    paths-ignore:
+      - '*.lock'
+      - '*.json'
+      - '*.map'
+      - '*.min.js'
+      - 'target/**'
+      - 'node_modules/**'
+      - 'dist/**'
+      - 'gui/dist/**'
+      - 'vendor/**'
+      - 'obj/**'
+      - '*.AssemblyInfo.cs'
+      - '.git/**'
   pull_request:
     branches: [ master, main, develop ]
+    paths-ignore:
+      - '*.lock'
+      - '*.json'
+      - '*.map'
+      - '*.min.js'
+      - 'target/**'
+      - 'node_modules/**'
+      - 'dist/**'
+      - 'gui/dist/**'
+      - 'vendor/**'
+      - 'obj/**'
+      - '*.AssemblyInfo.cs'
+      - '.git/**'
 
 permissions:
   contents: read
