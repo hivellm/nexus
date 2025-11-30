@@ -1,0 +1,64 @@
+name: C# SDK Tests
+
+on:
+  push:
+    branches: [master, main, develop]
+    paths:
+      - 'sdks/csharp/**'
+      - '.github/workflows/sdk-csharp-test.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'sdks/csharp/**'
+      - '.github/workflows/sdk-csharp-test.yml'
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      working-directory: ./sdks/csharp
+      run: dotnet restore
+
+    - name: Build SDK
+      working-directory: ./sdks/csharp
+      run: dotnet build --no-restore
+
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      working-directory: ./sdks/csharp
+      run: dotnet restore
+
+    - name: Build SDK in Release mode
+      working-directory: ./sdks/csharp
+      run: dotnet build --configuration Release --no-restore
+
+    - name: Check build artifacts
+      working-directory: ./sdks/csharp
+      run: |
+        if [ ! -d "bin/Release" ]; then
+          echo "Build failed: Release directory not found"
+          exit 1
+        fi
+        echo "Build artifacts verified successfully"

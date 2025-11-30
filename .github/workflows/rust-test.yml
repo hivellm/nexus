@@ -8,8 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Reduce memory usage during compilation
-  CARGO_BUILD_JOBS: 1
 
 jobs:
   rust-tests:
@@ -19,47 +17,37 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev lld
-          # Add swap to prevent OOM during linking
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          # Use rust-lld linker (comes with Rust, uses less memory)
-          mkdir -p .cargo
-          echo '[target.x86_64-unknown-linux-gnu]' >> .cargo/config.toml
-          echo 'rustflags = ["-C", "link-arg=-fuse-ld=lld"]' >> .cargo/config.toml
-
       - name: Install minimal stable
         uses: dtolnay/rust-toolchain@stable
-
+      - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
-        with:
-          cache-all-crates: false
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' }}
-
+      - name: Install mold (optional, speeds up linking)
+        uses: rui314/setup-mold@v1
+        continue-on-error: true
+      - name: Enable mold on Linux
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            if [ -f "/usr/local/bin/mold" ]; then
+              mkdir -p .cargo
+              echo "[target.x86_64-unknown-linux-gnu]" >> .cargo/config.toml
+              echo "linker = \"clang\"" >> .cargo/config.toml
+              echo "rustflags = [\"-C\", \"link-arg=-fuse-ld=/usr/local/bin/mold\"]" >> .cargo/config.toml
+            else
+              echo "mold not available, using default linker"
+            fi
+          fi
+        shell: bash
       - name: Install nextest
         uses: taiki-e/install-action@nextest
-
-      - name: Clean before build
-        run: cargo clean
-
       - name: Build
         run: cargo build --tests --workspace
-
-      - name: Run tests
-        run: cargo nextest run --workspace --no-default-features
-
-      - name: Clean after tests
-        if: always()
-        run: cargo clean
-
+      - name: Run unit and integration tests
+        timeout-minutes: 30
+        run: cargo nextest run --workspace --all-targets --test-threads 4
+        env:
+          NEXTEST_TIMEOUT: 300s
+      - name: Run doc tests
+        run: cargo test --workspace --doc
       - name: Upload test report
         uses: actions/upload-artifact@v4
         if: always()
@@ -67,3 +55,67 @@ jobs:
           name: junit-${{ matrix.os }}.xml
           path: target/nextest/default/junit.xml
           if-no-files-found: ignore
+
+  # Monitor test stability over time
+  test-stability:
+    runs-on: ubuntu-latest
+    needs: rust-tests
+    if: always()
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download test reports
+        uses: actions/download-artifact@v5
+        continue-on-error: true
+        with:
+          pattern: junit-*.xml
+          merge-multiple: true
+      - name: Track test stability
+        run: |
+          mkdir -p .test-history
+          TIMESTAMP=$(date +%s)
+
+          # Count test results
+          if [ -f junit-ubuntu-latest.xml ]; then
+            TOTAL=$(grep -o 'tests="[0-9]*"' junit-ubuntu-latest.xml | head -1 | grep -o '[0-9]*' || echo "0")
+            FAILURES=$(grep -o 'failures="[0-9]*"' junit-ubuntu-latest.xml | head -1 | grep -o '[0-9]*' || echo "0")
+            ERRORS=$(grep -o 'errors="[0-9]*"' junit-ubuntu-latest.xml | head -1 | grep -o '[0-9]*' || echo "0")
+
+            echo "$TIMESTAMP,$TOTAL,$FAILURES,$ERRORS" >> .test-history/stability.csv
+
+            # Keep last 100 runs only
+            tail -n 100 .test-history/stability.csv > .test-history/stability.csv.tmp
+            mv .test-history/stability.csv.tmp .test-history/stability.csv
+
+            # Calculate pass rate
+            PASSED=$((TOTAL - FAILURES - ERRORS))
+            if [ $TOTAL -gt 0 ]; then
+              PASS_RATE=$((PASSED * 100 / TOTAL))
+            else
+              PASS_RATE=0
+            fi
+
+            echo "### Test Stability Report 📊" >> $GITHUB_STEP_SUMMARY
+            echo "- Total Tests: $TOTAL" >> $GITHUB_STEP_SUMMARY
+            echo "- Passed: $PASSED" >> $GITHUB_STEP_SUMMARY
+            echo "- Failed: $FAILURES" >> $GITHUB_STEP_SUMMARY
+            echo "- Errors: $ERRORS" >> $GITHUB_STEP_SUMMARY
+            echo "- Pass Rate: ${PASS_RATE}%" >> $GITHUB_STEP_SUMMARY
+
+            # Warning if pass rate < 95%
+            if [ $PASS_RATE -lt 95 ]; then
+              echo "::warning::Test pass rate below 95%: ${PASS_RATE}%"
+            fi
+          else
+            echo "::warning::No test report found for stability tracking"
+          fi
+      - name: Commit test history
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .test-history/
+          git diff --staged --quiet || git commit -m "chore: update test stability history [skip ci]"
+          git push
+        continue-on-error: true

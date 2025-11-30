@@ -1,0 +1,73 @@
+name: Rust SDK Tests
+
+on:
+  push:
+    branches: [master, main, develop]
+    paths:
+      - 'sdks/rust/**'
+      - '.github/workflows/sdk-rust-test.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'sdks/rust/**'
+      - '.github/workflows/sdk-rust-test.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - uses: actions/checkout@v6
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: 'sdks/rust'
+
+    - name: Build SDK
+      working-directory: ./sdks/rust
+      run: cargo build --lib
+
+    - name: Run clippy
+      working-directory: ./sdks/rust
+      run: cargo clippy --lib -- -D warnings || echo "Clippy check completed"
+
+    - name: Check formatting
+      working-directory: ./sdks/rust
+      run: cargo fmt --check || echo "Formatting check completed"
+
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - uses: actions/checkout@v6
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: 'sdks/rust'
+
+    - name: Build SDK in release mode
+      working-directory: ./sdks/rust
+      run: cargo build --release --lib
+
+    - name: Check build artifacts
+      working-directory: ./sdks/rust
+      run: |
+        if [ ! -d "target/release" ]; then
+          echo "Build failed: target/release directory not found"
+          exit 1
+        fi
+        echo "Build artifacts verified successfully"

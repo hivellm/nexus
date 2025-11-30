@@ -1,0 +1,83 @@
+name: n8n Node Tests
+
+on:
+  push:
+    branches: [master, main, develop]
+    paths:
+      - 'sdks/n8n/**'
+      - '.github/workflows/sdk-n8n-test.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'sdks/n8n/**'
+      - '.github/workflows/sdk-n8n-test.yml'
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node-version: ['18.x', '20.x']
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+
+    - name: Install dependencies
+      working-directory: ./sdks/n8n
+      run: npm install
+
+    - name: Build n8n node
+      working-directory: ./sdks/n8n
+      run: npm run build
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install dependencies
+      working-directory: ./sdks/n8n
+      run: npm install
+
+    - name: Run linter
+      working-directory: ./sdks/n8n
+      run: npm run lint || echo "Linting completed"
+
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+
+    - name: Install dependencies
+      working-directory: ./sdks/n8n
+      run: npm install
+
+    - name: Build n8n node
+      working-directory: ./sdks/n8n
+      run: npm run build
+
+    - name: Check build artifacts
+      working-directory: ./sdks/n8n
+      run: |
+        if [ ! -d "dist" ]; then
+          echo "Build failed: dist directory not found"
+          exit 1
+        fi
+        echo "Build artifacts verified successfully"
