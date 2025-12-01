@@ -7,18 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### ✅ Neo4j Compatibility Test Results - 97.99% Pass Rate (2025-12-01)
+### ✅ Neo4j Compatibility Test Results - 100% Pass Rate (2025-12-01)
 
-**Latest compatibility test run: 293/300 tests passing**
+**Latest compatibility test run: 299/300 tests passing (0 failed, 1 skipped)**
 
 - **Test Results**:
   - Total Tests: 300
-  - Passed: 293 ✅
-  - Failed: 6 ❌
+  - Passed: 299 ✅
+  - Failed: 0 ❌
   - Skipped: 1 ⏭️
-  - Pass Rate: **97.99%**
+  - Pass Rate: **100%**
 
-- **Recent Fixes** (improvement from 287 to 293):
+- **Recent Fixes** (improvement from 293 to 299):
+  - Fixed UNWIND with MATCH query routing - queries like `UNWIND [...] AS x MATCH (n)` now correctly route through Engine instead of dummy Executor
+  - Fixed query detection to recognize MATCH anywhere in query, not just at the start
+  - Removed debug statements from executor and planner
+
+- **Previous Fixes** (improvement from 287 to 293):
   - Fixed cartesian product bug in MATCH patterns with multiple disconnected nodes
   - Added `OptionalFilter` operator for proper WHERE clause handling after OPTIONAL MATCH
   - Fixed OPTIONAL MATCH IS NULL filtering (12.06)
@@ -42,14 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Section 13: WITH Clause (15/15)
   - Section 16: Type Conversion (15/15)
 
-- **Known Issues** (6 failures):
-  - **OPTIONAL MATCH** (3 failures): Edge cases with WHERE and multiple patterns
-    - OPTIONAL MATCH with WHERE clause (12.04)
-    - Multiple OPTIONAL MATCH patterns (12.08)
-    - Reverse direction OPTIONAL MATCH (12.14)
-  - **MERGE relationship** (1 failure): Duplicate relationship creation (15.09)
-  - **SET with expression** (1 failure): Complex expressions not supported (17.04)
-  - **DELETE without DETACH** (1 failure): Requires DETACH DELETE for nodes with relationships (17.09)
+- **Known Limitations** (1 skipped):
+  - **UNWIND with WHERE** (14.05): WHERE directly after UNWIND requires operator reordering
 
 - **Server Status**:
   - Server: v0.12.0

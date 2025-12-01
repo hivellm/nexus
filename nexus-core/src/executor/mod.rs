@@ -1145,23 +1145,82 @@ impl Executor {
                     }
                     context.variables.remove(variable);
 
+                    // Track if we handle cross-product with existing rows
+                    let mut handled_cross_product = false;
+
                     // CRITICAL FIX: Apply Cartesian product if there are existing variables
                     // If we have existing rows (e.g. from a previous MATCH, WITH, or UNWIND),
                     // we must cross-product the new nodes with the existing rows.
                     // Example: MATCH (a), (b) -> a has N rows, b has M rows -> Result N*M rows
                     if !context.variables.is_empty() {
                         self.apply_cartesian_product(&mut context, variable, nodes)?;
+                    } else if !context.result_set.rows.is_empty() {
+                        // CRITICAL FIX for UNWIND...MATCH: Handle case where there are existing
+                        // rows from UNWIND but no variables yet. We need to cross-product the
+                        // existing rows with the new nodes.
+                        // Example: UNWIND ['a','b'] AS x MATCH (p:Person) -> 2 x N rows
+                        handled_cross_product = true;
+                        let existing_rows = std::mem::take(&mut context.result_set.rows);
+                        let existing_columns = context.result_set.columns.clone();
+
+                        // Add the new variable column
+                        context.result_set.columns.push(variable.to_string());
+
+                        // Create cross product: existing_rows × nodes
+                        for existing_row in &existing_rows {
+                            for node in &nodes {
+                                let mut new_values = existing_row.values.clone();
+                                new_values.push(node.clone());
+                                context.result_set.rows.push(Row { values: new_values });
+                            }
+                        }
+
+                        // Also set in variables for subsequent operations
+                        // We need to expand nodes to match the cross product count
+                        let mut expanded_nodes =
+                            Vec::with_capacity(existing_rows.len() * nodes.len());
+                        for _ in &existing_rows {
+                            expanded_nodes.extend(nodes.clone());
+                        }
+                        context.set_variable(variable, Value::Array(expanded_nodes));
+
+                        // Expand existing column values in variables too
+                        for (col_idx, col_name) in existing_columns.iter().enumerate() {
+                            let mut expanded_values =
+                                Vec::with_capacity(existing_rows.len() * nodes.len());
+                            for existing_row in &existing_rows {
+                                for _ in &nodes {
+                                    if col_idx < existing_row.values.len() {
+                                        expanded_values.push(existing_row.values[col_idx].clone());
+                                    } else {
+                                        expanded_values.push(Value::Null);
+                                    }
+                                }
+                            }
+                            context.set_variable(col_name, Value::Array(expanded_values));
+                        }
+
+                        tracing::debug!(
+                            "NodeByLabel: cross-product with existing rows: {} x {} = {} rows",
+                            existing_rows.len(),
+                            nodes.len(),
+                            context.result_set.rows.len()
+                        );
                     } else {
                         context.set_variable(variable, Value::Array(nodes));
                     }
-                    let rows = self.materialize_rows_from_variables(&context);
-                    tracing::debug!(
-                        "NodeByLabel: materialized {} rows from variables for '{}' (is_first={})",
-                        rows.len(),
-                        variable,
-                        is_first_node_by_label
-                    );
-                    self.update_result_set_from_rows(&mut context, &rows);
+
+                    // Only materialize and update if we didn't already handle cross-product above
+                    if !handled_cross_product {
+                        let rows = self.materialize_rows_from_variables(&context);
+                        tracing::debug!(
+                            "NodeByLabel: materialized {} rows from variables for '{}' (is_first={})",
+                            rows.len(),
+                            variable,
+                            is_first_node_by_label
+                        );
+                        self.update_result_set_from_rows(&mut context, &rows);
+                    }
                     tracing::debug!(
                         "NodeByLabel: result_set now has {} rows, {} columns",
                         context.result_set.rows.len(),

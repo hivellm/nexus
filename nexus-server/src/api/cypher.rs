@@ -685,7 +685,13 @@ pub async fn execute_cypher(
     let _is_set_query = query_upper.starts_with("SET");
     let _is_delete_query = query_upper.starts_with("DELETE");
     let _is_remove_query = query_upper.starts_with("REMOVE");
-    let is_match_query = query_upper.starts_with("MATCH");
+    // MATCH queries can start with MATCH or have MATCH after UNWIND/WITH/OPTIONAL clauses
+    // We need to detect MATCH anywhere in the query to route it through the Engine
+    let is_match_query = query_upper.starts_with("MATCH")
+        || query_upper.contains(" MATCH ")
+        || query_upper.contains(" MATCH(")
+        || query_upper.starts_with("OPTIONAL MATCH")
+        || query_upper.contains(" OPTIONAL MATCH");
 
     if is_create_query || is_merge_query {
         // Use Engine for CREATE operations

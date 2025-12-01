@@ -597,6 +597,27 @@ impl<'a> QueryPlanner<'a> {
         let mut match_hints = Vec::new(); // Collect hints from MATCH clauses
         let mut order_by_clause: Option<(Vec<String>, Vec<bool>)> = None; // Collect ORDER BY to add after projection
 
+        // Track if UNWIND appears before MATCH in the query
+        // This is needed for queries like: UNWIND [...] AS x MATCH (p:Person {name: x})
+        // where UNWIND must run before MATCH to bind the variable
+        let mut unwind_before_match = false;
+        {
+            let mut seen_match = false;
+            for clause in &query.clauses {
+                match clause {
+                    Clause::Unwind(_) => {
+                        if !seen_match {
+                            unwind_before_match = true;
+                        }
+                    }
+                    Clause::Match(_) => {
+                        seen_match = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         for clause in &query.clauses {
             match clause {
                 Clause::Match(match_clause) => {
@@ -848,6 +869,7 @@ impl<'a> QueryPlanner<'a> {
                 limit_count,
                 return_distinct,
                 &unwind_operators,
+                unwind_before_match,
                 &match_hints,
                 &order_by_clause,
                 &mut operators,
@@ -1322,10 +1344,21 @@ impl<'a> QueryPlanner<'a> {
         limit_count: Option<usize>,
         distinct: bool,
         unwind_operators: &[Operator],
+        unwind_before_match: bool,
         hints: &[QueryHint],
         order_by_clause: &Option<(Vec<String>, Vec<bool>)>,
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
+        // CRITICAL: Insert UNWIND operators FIRST when they precede MATCH in the query
+        // This handles queries like: UNWIND [...] AS x MATCH (p:Person {name: x})
+        // UNWIND must run before NodeByLabel so the variable is bound for property filtering
+        // Note: This differs from MATCH ... UNWIND ... where UNWIND expands rows from MATCH
+        if unwind_before_match && !unwind_operators.is_empty() {
+            for op in unwind_operators {
+                operators.push(op.clone());
+            }
+        }
+
         // Process ALL patterns, not just the first one
         // Multiple patterns need Cartesian product (Join)
         let mut all_target_nodes = std::collections::HashSet::new();
@@ -2105,8 +2138,11 @@ impl<'a> QueryPlanner<'a> {
                 }
 
                 // Insert UNWIND operators before aggregation
-                for op in unwind_operators {
-                    operators.push(op.clone());
+                // Only if UNWIND comes AFTER MATCH (not already inserted at start)
+                if !unwind_before_match {
+                    for op in unwind_operators {
+                        operators.push(op.clone());
+                    }
                 }
 
                 let aggregations_clone = aggregations.clone();
@@ -2156,8 +2192,11 @@ impl<'a> QueryPlanner<'a> {
                 }
             } else {
                 // Insert UNWIND operators before final projection
-                for op in unwind_operators {
-                    operators.push(op.clone());
+                // Only if UNWIND comes AFTER MATCH (not already inserted at start)
+                if !unwind_before_match {
+                    for op in unwind_operators {
+                        operators.push(op.clone());
+                    }
                 }
 
                 // Regular projection
@@ -3200,6 +3239,28 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
+        // Check if UNWIND comes before any scan in the original operator order
+        // This happens in queries like: UNWIND [...] AS x MATCH (n:Label {prop: x})
+        // In this case, UNWIND must run first to create the variable bindings
+        let mut unwind_before_scan = false;
+        let mut seen_unwind = false;
+        for operator in &operators {
+            match operator {
+                Operator::Unwind { .. } => {
+                    seen_unwind = true;
+                }
+                Operator::NodeByLabel { .. }
+                | Operator::AllNodesScan { .. }
+                | Operator::IndexScan { .. } => {
+                    if seen_unwind {
+                        unwind_before_scan = true;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Separate operators into different categories
         let mut scans = Vec::new();
         let mut filters = Vec::new();
@@ -3255,17 +3316,30 @@ impl<'a> QueryPlanner<'a> {
             optimized_joins.push(join);
         }
 
-        // Combine in optimal order: scans -> expansions -> unwinds -> filters -> joins -> others
-        // Expansions must come before filters because filters may depend on relationship variables
-        // created by expansions (e.g., WHERE r.role = 'Developer')
-        // UNWIND must come before filters because UNWIND creates rows that filters operate on
+        // Combine in optimal order based on whether UNWIND precedes scans
         let mut result = Vec::new();
-        result.extend(optimized_scans);
-        result.extend(expansions);
-        result.extend(unwinds);
-        result.extend(filters);
-        result.extend(optimized_joins);
-        result.extend(others);
+        if unwind_before_scan {
+            // UNWIND before scan pattern (e.g., UNWIND [...] AS x MATCH (n {prop: x}))
+            // Order: unwinds -> scans -> expansions -> filters -> joins -> others
+            // UNWIND must run first to create variable bindings for MATCH
+            result.extend(unwinds);
+            result.extend(optimized_scans);
+            result.extend(expansions);
+            result.extend(filters);
+            result.extend(optimized_joins);
+            result.extend(others);
+        } else {
+            // Normal order: scans -> expansions -> unwinds -> filters -> joins -> others
+            // Expansions must come before filters because filters may depend on relationship variables
+            // created by expansions (e.g., WHERE r.role = 'Developer')
+            // UNWIND must come before filters because UNWIND creates rows that filters operate on
+            result.extend(optimized_scans);
+            result.extend(expansions);
+            result.extend(unwinds);
+            result.extend(filters);
+            result.extend(optimized_joins);
+            result.extend(others);
+        }
 
         Ok(result)
     }
