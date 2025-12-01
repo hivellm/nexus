@@ -829,6 +829,204 @@ impl Engine {
         }
     }
 
+    /// Evaluate expression for SET clause with node context
+    fn evaluate_set_expression(
+        &self,
+        expr: &executor::parser::Expression,
+        target_var: &str,
+        node_props: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        match expr {
+            executor::parser::Expression::Literal(lit) => match lit {
+                executor::parser::Literal::String(s) => Ok(serde_json::Value::String(s.clone())),
+                executor::parser::Literal::Integer(i) => Ok(serde_json::Value::Number((*i).into())),
+                executor::parser::Literal::Float(f) => serde_json::Number::from_f64(*f)
+                    .map(serde_json::Value::Number)
+                    .ok_or_else(|| Error::CypherExecution(format!("Invalid float: {}", f))),
+                executor::parser::Literal::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
+                executor::parser::Literal::Null => Ok(serde_json::Value::Null),
+                executor::parser::Literal::Point(p) => Ok(p.to_json_value()),
+            },
+            executor::parser::Expression::PropertyAccess { variable, property } => {
+                if variable == target_var {
+                    Ok(node_props
+                        .get(property)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null))
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            executor::parser::Expression::BinaryOp { left, op, right } => {
+                let left_val = self.evaluate_set_expression(left, target_var, node_props)?;
+                let right_val = self.evaluate_set_expression(right, target_var, node_props)?;
+                match op {
+                    executor::parser::BinaryOperator::Add => {
+                        self.json_add_values(&left_val, &right_val)
+                    }
+                    executor::parser::BinaryOperator::Subtract => {
+                        self.json_subtract_values(&left_val, &right_val)
+                    }
+                    executor::parser::BinaryOperator::Multiply => {
+                        self.json_multiply_values(&left_val, &right_val)
+                    }
+                    executor::parser::BinaryOperator::Divide => {
+                        self.json_divide_values(&left_val, &right_val)
+                    }
+                    executor::parser::BinaryOperator::Modulo => {
+                        self.json_modulo_values(&left_val, &right_val)
+                    }
+                    _ => Err(Error::CypherExecution(format!(
+                        "Unsupported binary operator in SET: {:?}",
+                        op
+                    ))),
+                }
+            }
+            executor::parser::Expression::UnaryOp { op, operand } => {
+                let val = self.evaluate_set_expression(operand, target_var, node_props)?;
+                match op {
+                    executor::parser::UnaryOperator::Minus => {
+                        if let Some(n) = val.as_i64() {
+                            Ok(serde_json::Value::Number((-n).into()))
+                        } else if let Some(n) = val.as_f64() {
+                            serde_json::Number::from_f64(-n)
+                                .map(serde_json::Value::Number)
+                                .ok_or_else(|| Error::CypherExecution("Invalid float".to_string()))
+                        } else {
+                            Ok(serde_json::Value::Null)
+                        }
+                    }
+                    executor::parser::UnaryOperator::Not => val
+                        .as_bool()
+                        .map(|b| serde_json::Value::Bool(!b))
+                        .ok_or_else(|| Error::CypherExecution("Invalid bool".to_string())),
+                    _ => Ok(serde_json::Value::Null),
+                }
+            }
+            _ => Err(Error::CypherExecution(
+                "Unsupported expression type in SET clause".to_string(),
+            )),
+        }
+    }
+
+    fn json_add_values(
+        &self,
+        left: &serde_json::Value,
+        right: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        match (left, right) {
+            (serde_json::Value::Number(l), serde_json::Value::Number(r)) => {
+                if let (Some(li), Some(ri)) = (l.as_i64(), r.as_i64()) {
+                    Ok(serde_json::Value::Number((li + ri).into()))
+                } else if let (Some(lf), Some(rf)) = (l.as_f64(), r.as_f64()) {
+                    serde_json::Number::from_f64(lf + rf)
+                        .map(serde_json::Value::Number)
+                        .ok_or_else(|| Error::CypherExecution("Invalid float".to_string()))
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            (serde_json::Value::String(l), serde_json::Value::String(r)) => {
+                Ok(serde_json::Value::String(format!("{}{}", l, r)))
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    }
+
+    fn json_subtract_values(
+        &self,
+        left: &serde_json::Value,
+        right: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        match (left, right) {
+            (serde_json::Value::Number(l), serde_json::Value::Number(r)) => {
+                if let (Some(li), Some(ri)) = (l.as_i64(), r.as_i64()) {
+                    Ok(serde_json::Value::Number((li - ri).into()))
+                } else if let (Some(lf), Some(rf)) = (l.as_f64(), r.as_f64()) {
+                    serde_json::Number::from_f64(lf - rf)
+                        .map(serde_json::Value::Number)
+                        .ok_or_else(|| Error::CypherExecution("Invalid float".to_string()))
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    }
+
+    fn json_multiply_values(
+        &self,
+        left: &serde_json::Value,
+        right: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        match (left, right) {
+            (serde_json::Value::Number(l), serde_json::Value::Number(r)) => {
+                if let (Some(li), Some(ri)) = (l.as_i64(), r.as_i64()) {
+                    Ok(serde_json::Value::Number((li * ri).into()))
+                } else if let (Some(lf), Some(rf)) = (l.as_f64(), r.as_f64()) {
+                    serde_json::Number::from_f64(lf * rf)
+                        .map(serde_json::Value::Number)
+                        .ok_or_else(|| Error::CypherExecution("Invalid float".to_string()))
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    }
+
+    fn json_divide_values(
+        &self,
+        left: &serde_json::Value,
+        right: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        match (left, right) {
+            (serde_json::Value::Number(l), serde_json::Value::Number(r)) => {
+                if let (Some(lf), Some(rf)) = (l.as_f64(), r.as_f64()) {
+                    if rf == 0.0 {
+                        Ok(serde_json::Value::Null)
+                    } else {
+                        serde_json::Number::from_f64(lf / rf)
+                            .map(serde_json::Value::Number)
+                            .ok_or_else(|| Error::CypherExecution("Invalid float".to_string()))
+                    }
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    }
+
+    fn json_modulo_values(
+        &self,
+        left: &serde_json::Value,
+        right: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        match (left, right) {
+            (serde_json::Value::Number(l), serde_json::Value::Number(r)) => {
+                if let (Some(li), Some(ri)) = (l.as_i64(), r.as_i64()) {
+                    if ri == 0 {
+                        Ok(serde_json::Value::Null)
+                    } else {
+                        Ok(serde_json::Value::Number((li % ri).into()))
+                    }
+                } else if let (Some(lf), Some(rf)) = (l.as_f64(), r.as_f64()) {
+                    if rf == 0.0 {
+                        Ok(serde_json::Value::Null)
+                    } else {
+                        serde_json::Number::from_f64(lf % rf)
+                            .map(serde_json::Value::Number)
+                            .ok_or_else(|| Error::CypherExecution("Invalid float".to_string()))
+                    }
+                } else {
+                    Ok(serde_json::Value::Null)
+                }
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    }
+
     /// Refresh the executor to ensure it sees the latest storage state
     /// This is necessary because the executor uses a cloned RecordStore
     /// which has its own PropertyStore instance
@@ -1183,17 +1381,27 @@ impl Engine {
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
         let mut context: HashMap<String, Vec<u64>> = HashMap::new();
+        // Track relationship bindings: variable -> (rel_id, rel_type)
+        let mut rel_context: HashMap<String, (u64, String)> = HashMap::new();
         let mut result: Option<executor::ResultSet> = None;
 
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::Match(match_clause) => {
-                    let (variable, node_ids) = self.process_match_clause(match_clause)?;
-                    context.insert(variable, node_ids);
+                    // Process all node patterns in the match clause
+                    self.process_match_clause_multi(match_clause, &mut context)?;
                 }
                 executor::parser::Clause::Merge(merge_clause) => {
-                    let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
-                    context.insert(variable, node_ids);
+                    // Check if this is a relationship MERGE with bound variables
+                    if let Some((rel_var, rel_id, rel_type)) =
+                        self.process_merge_relationship(&merge_clause, &context)?
+                    {
+                        rel_context.insert(rel_var, (rel_id, rel_type));
+                    } else {
+                        // Fall back to node MERGE
+                        let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
+                        context.insert(variable, node_ids);
+                    }
                 }
                 executor::parser::Clause::Set(set_clause) => {
                     self.apply_set_clause(&context, set_clause)?;
@@ -1205,7 +1413,11 @@ impl Engine {
                     self.execute_foreach_clause(&context, foreach_clause)?;
                 }
                 executor::parser::Clause::Return(return_clause) => {
-                    result = Some(self.build_return_result(&context, return_clause)?);
+                    result = Some(self.build_return_result_with_rels(
+                        &context,
+                        &rel_context,
+                        return_clause,
+                    )?);
                 }
                 executor::parser::Clause::Where(_)
                 | executor::parser::Clause::With(_)
@@ -1325,12 +1537,282 @@ impl Engine {
         Ok((variable, node_ids))
     }
 
+    /// Process all node patterns in a MATCH clause (for multi-node patterns like (a), (b))
+    fn process_match_clause_multi(
+        &mut self,
+        match_clause: &executor::parser::MatchClause,
+        context: &mut HashMap<String, Vec<u64>>,
+    ) -> Result<()> {
+        if match_clause.optional {
+            return Err(Error::CypherExecution(
+                "OPTIONAL MATCH not supported in write queries".to_string(),
+            ));
+        }
+
+        if match_clause.where_clause.is_some() {
+            return Err(Error::CypherExecution(
+                "MATCH with WHERE is not supported in write queries".to_string(),
+            ));
+        }
+
+        // Process all node patterns in the pattern
+        for element in &match_clause.pattern.elements {
+            if let executor::parser::PatternElement::Node(node_pattern) = element {
+                if let Some(variable) = &node_pattern.variable {
+                    let mut node_ids = self.find_nodes_by_node_pattern(node_pattern)?;
+                    node_ids.sort_unstable();
+                    node_ids.dedup();
+                    context.insert(variable.clone(), node_ids);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process MERGE with relationship pattern when nodes are already bound
+    /// Returns Some((rel_variable, rel_id, rel_type)) if this is a relationship MERGE
+    fn process_merge_relationship(
+        &mut self,
+        merge_clause: &executor::parser::MergeClause,
+        context: &HashMap<String, Vec<u64>>,
+    ) -> Result<Option<(String, u64, String)>> {
+        // Check if pattern has: Node, Relationship, Node structure
+        let elements = &merge_clause.pattern.elements;
+        if elements.len() != 3 {
+            return Ok(None);
+        }
+
+        // Extract source node, relationship, and target node
+        let src_node = match &elements[0] {
+            executor::parser::PatternElement::Node(n) => n,
+            _ => return Ok(None),
+        };
+        let rel_pattern = match &elements[1] {
+            executor::parser::PatternElement::Relationship(r) => r,
+            _ => return Ok(None),
+        };
+        let dst_node = match &elements[2] {
+            executor::parser::PatternElement::Node(n) => n,
+            _ => return Ok(None),
+        };
+
+        // Get source and destination variable names
+        let src_var = match &src_node.variable {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let dst_var = match &dst_node.variable {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        // Get relationship variable and type
+        let rel_var = match &rel_pattern.variable {
+            Some(v) => v.clone(),
+            None => return Ok(None),
+        };
+        let rel_type = match rel_pattern.types.first() {
+            Some(t) => t.clone(),
+            None => return Ok(None),
+        };
+
+        // Check that source and destination nodes are already bound
+        let src_ids = match context.get(src_var) {
+            Some(ids) if !ids.is_empty() => ids,
+            _ => return Ok(None),
+        };
+        let dst_ids = match context.get(dst_var) {
+            Some(ids) if !ids.is_empty() => ids,
+            _ => return Ok(None),
+        };
+
+        // For simplicity, use first node of each
+        let src_id = src_ids[0];
+        let dst_id = dst_ids[0];
+
+        // Check if relationship already exists
+        let existing_rel = self.find_relationship_between(src_id, dst_id, &rel_type)?;
+
+        let rel_id = if let Some(rid) = existing_rel {
+            // Relationship exists - run ON MATCH if present
+            if let Some(on_match) = &merge_clause.on_match {
+                // ON MATCH would apply to relationship properties
+                // For now, we don't support SET on relationships in this context
+                let _ = on_match;
+            }
+            rid
+        } else {
+            // Create the relationship
+            let props = Value::Object(Map::new());
+            let new_rel_id = self.create_relationship(src_id, dst_id, rel_type.clone(), props)?;
+
+            // Run ON CREATE if present
+            if let Some(on_create) = &merge_clause.on_create {
+                // ON CREATE would apply to relationship properties
+                // For now, we don't support SET on relationships in this context
+                let _ = on_create;
+            }
+            new_rel_id
+        };
+
+        Ok(Some((rel_var, rel_id, rel_type)))
+    }
+
+    /// Find a relationship of a specific type between two nodes
+    fn find_relationship_between(
+        &self,
+        src_id: u64,
+        dst_id: u64,
+        rel_type: &str,
+    ) -> Result<Option<u64>> {
+        // Get the type ID
+        let type_id = match self.catalog.get_type_id(rel_type)? {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        // Read source node to get its relationship chain
+        let src_node = self.storage.read_node(src_id)?;
+        let mut rel_ptr = src_node.first_rel_ptr;
+
+        while rel_ptr != 0 {
+            let rel_record = self.storage.read_rel(rel_ptr)?;
+
+            // Check if this is an outgoing relationship to dst_id with the right type
+            if rel_record.src_id == src_id
+                && rel_record.dst_id == dst_id
+                && rel_record.type_id == type_id
+            {
+                return Ok(Some(rel_ptr));
+            }
+
+            // Move to next relationship in chain
+            if rel_record.src_id == src_id {
+                rel_ptr = rel_record.next_src_ptr;
+            } else if rel_record.dst_id == src_id {
+                rel_ptr = rel_record.next_dst_ptr;
+            } else {
+                break;
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Build return result with support for relationship variables
+    fn build_return_result_with_rels(
+        &mut self,
+        context: &HashMap<String, Vec<u64>>,
+        rel_context: &HashMap<String, (u64, String)>,
+        return_clause: &executor::parser::ReturnClause,
+    ) -> Result<executor::ResultSet> {
+        if return_clause.items.is_empty() {
+            return Ok(executor::ResultSet {
+                columns: vec![],
+                rows: vec![],
+            });
+        }
+
+        // Check if any return item references a relationship variable
+        let has_rel_refs = return_clause
+            .items
+            .iter()
+            .any(|item| self.expression_references_rel(&item.expression, rel_context));
+
+        if !has_rel_refs || rel_context.is_empty() {
+            // No relationship references, use regular handling
+            return self.build_return_result(context, return_clause);
+        }
+
+        // Build result with relationship variable support
+        let mut columns = Vec::new();
+        let mut row_values = Vec::new();
+
+        for item in &return_clause.items {
+            let col_name = item
+                .alias
+                .clone()
+                .unwrap_or_else(|| self.expression_to_string(&item.expression));
+            columns.push(col_name);
+
+            let value =
+                self.evaluate_return_expression_with_rels(&item.expression, context, rel_context)?;
+            row_values.push(value);
+        }
+
+        Ok(executor::ResultSet {
+            columns,
+            rows: vec![executor::Row { values: row_values }],
+        })
+    }
+
+    /// Check if an expression references a relationship variable
+    fn expression_references_rel(
+        &self,
+        expr: &executor::parser::Expression,
+        rel_context: &HashMap<String, (u64, String)>,
+    ) -> bool {
+        match expr {
+            executor::parser::Expression::Variable(v) => rel_context.contains_key(v),
+            executor::parser::Expression::FunctionCall { args, .. } => args
+                .iter()
+                .any(|arg| self.expression_references_rel(arg, rel_context)),
+            executor::parser::Expression::PropertyAccess { variable, .. } => {
+                rel_context.contains_key(variable)
+            }
+            _ => false,
+        }
+    }
+
+    /// Evaluate a return expression with relationship variable support
+    fn evaluate_return_expression_with_rels(
+        &self,
+        expr: &executor::parser::Expression,
+        _context: &HashMap<String, Vec<u64>>,
+        rel_context: &HashMap<String, (u64, String)>,
+    ) -> Result<Value> {
+        match expr {
+            executor::parser::Expression::FunctionCall { name, args } => {
+                let func_name = name.to_lowercase();
+                if func_name == "type" && args.len() == 1 {
+                    // type(r) - return relationship type
+                    if let executor::parser::Expression::Variable(var) = &args[0] {
+                        if let Some((_rel_id, rel_type)) = rel_context.get(var) {
+                            return Ok(Value::String(rel_type.clone()));
+                        }
+                    }
+                }
+                // For other functions, return null for now
+                Ok(Value::Null)
+            }
+            executor::parser::Expression::Variable(var) => {
+                if let Some((rel_id, rel_type)) = rel_context.get(var) {
+                    // Return relationship as object
+                    let mut obj = Map::new();
+                    obj.insert("_id".to_string(), Value::Number((*rel_id).into()));
+                    obj.insert("_type".to_string(), Value::String(rel_type.clone()));
+                    Ok(Value::Object(obj))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            _ => Ok(Value::Null),
+        }
+    }
+
     fn apply_set_clause(
         &mut self,
         context: &HashMap<String, Vec<u64>>,
         set_clause: &executor::parser::SetClause,
     ) -> Result<()> {
+        tracing::info!(
+            "[apply_set_clause] START: context={:?}, items={}",
+            context,
+            set_clause.items.len()
+        );
         if set_clause.items.is_empty() {
+            tracing::info!("[apply_set_clause] No items, returning early");
             return Ok(());
         }
 
@@ -1350,12 +1832,24 @@ impl Engine {
                         ))
                     })?;
 
-                    let json_value = self.expression_to_json_value(value)?;
-                    for node_id in node_ids {
-                        let state = self.ensure_node_state(*node_id, &mut state_map)?;
-                        state
-                            .properties
-                            .insert(property.clone(), json_value.clone());
+                    // Evaluate expression per-node to support expressions like n.value * 2
+                    tracing::info!(
+                        "[apply_set_clause] Property SET: target={}, property={}, node_ids={:?}",
+                        target,
+                        property,
+                        node_ids
+                    );
+                    for node_id in node_ids.clone() {
+                        let state = self.ensure_node_state(node_id, &mut state_map)?;
+                        let json_value =
+                            self.evaluate_set_expression(value, target, &state.properties)?;
+                        tracing::info!(
+                            "[apply_set_clause] node_id={}, property={}, new_value={:?}",
+                            node_id,
+                            property,
+                            json_value
+                        );
+                        state.properties.insert(property.clone(), json_value);
                     }
                 }
                 executor::parser::SetItem::Label { target, label } => {
@@ -1374,9 +1868,19 @@ impl Engine {
             }
         }
 
+        tracing::info!(
+            "[apply_set_clause] About to persist {} nodes",
+            state_map.len()
+        );
         for (node_id, state) in state_map.into_iter() {
+            tracing::info!(
+                "[apply_set_clause] Persisting node_id={}, properties={:?}",
+                node_id,
+                state.properties
+            );
             self.persist_node_state(node_id, state)?;
         }
+        tracing::info!("[apply_set_clause] DONE");
 
         Ok(())
     }
@@ -3042,9 +3546,24 @@ impl Engine {
                         executor::parser::Expression::PropertyAccess { property, .. } => {
                             // Get the property value from the node
                             let props = self.storage.load_node_properties(node_id)?;
+                            tracing::info!(
+                                "[build_return_result] node_id={}, loaded props={:?}",
+                                node_id,
+                                props
+                            );
                             if let Some(Value::Object(map)) = props {
-                                map.get(property).cloned().unwrap_or(Value::Null)
+                                let result = map.get(property).cloned().unwrap_or(Value::Null);
+                                tracing::info!(
+                                    "[build_return_result] property={}, result={:?}",
+                                    property,
+                                    result
+                                );
+                                result
                             } else {
+                                tracing::info!(
+                                    "[build_return_result] property={}, no props found",
+                                    property
+                                );
                                 Value::Null
                             }
                         }
@@ -3178,9 +3697,15 @@ impl Engine {
     }
 
     fn persist_node_state(&mut self, node_id: u64, state: NodeWriteState) -> Result<()> {
+        tracing::info!("[persist_node_state] node_id={}", node_id);
         let NodeWriteState { properties, labels } = state;
+        tracing::info!(
+            "[persist_node_state] Calling update_node_properties with properties={:?}",
+            properties
+        );
         self.storage
-            .update_node_properties(node_id, Value::Object(properties))?;
+            .update_node_properties(node_id, Value::Object(properties.clone()))?;
+        tracing::info!("[persist_node_state] update_node_properties returned OK");
 
         let mut label_ids = Vec::new();
         for label in labels {
