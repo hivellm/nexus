@@ -1332,7 +1332,8 @@ impl RecordStore {
         node_id: u64,
         properties: serde_json::Value,
     ) -> Result<()> {
-        let new_prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+        let new_prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty()
+        {
             let prop_ptr = self.property_store.write().unwrap().store_properties(
                 node_id,
                 property_store::EntityType::Node,

@@ -1409,22 +1409,8 @@ impl<'a> QueryPlanner<'a> {
                     // Skip if this node is a pure target without labels (will be populated by Expand)
                     // EXCEPTION: Always create NodeByLabel for the first node, even in cyclic patterns
                     if !is_first_node && all_target_nodes.contains(variable) {
-                        eprintln!(
-                            "PLANNER: Skipping NodeByLabel for '{}' (is_first_node={}, in_targets={})",
-                            variable,
-                            is_first_node,
-                            all_target_nodes.contains(variable)
-                        );
                         continue;
                     }
-
-                    eprintln!(
-                        "PLANNER: Creating NodeByLabel for '{}' (is_first_node={}, in_targets={}, has_labels={})",
-                        variable,
-                        is_first_node,
-                        all_target_nodes.contains(variable),
-                        !node.labels.is_empty()
-                    );
 
                     // Check for hints for this variable
                     let use_index_hint = hints.iter().find(|h| {
@@ -1582,10 +1568,6 @@ impl<'a> QueryPlanner<'a> {
                             && pattern_has_bound_var
                             && !previously_bound_vars.contains(variable)
                         {
-                            eprintln!(
-                                "PLANNER: Skipping NodeByLabel for '{}' in OPTIONAL MATCH (pattern has bound var)",
-                                variable
-                            );
                             continue;
                         }
 
@@ -2397,30 +2379,25 @@ impl<'a> QueryPlanner<'a> {
 
                         // CRITICAL FIX: For OPTIONAL MATCH, if target is already bound but source is not,
                         // we need to reverse the traversal direction and swap source/target
-                        let (final_source_var, final_target_var, final_direction) = if is_optional
-                            && !previously_bound_vars.is_empty()
-                        {
-                            let source_bound = previously_bound_vars.contains(&source_var);
-                            let target_bound = previously_bound_vars.contains(&target_var);
+                        let (final_source_var, final_target_var, final_direction) =
+                            if is_optional && !previously_bound_vars.is_empty() {
+                                let source_bound = previously_bound_vars.contains(&source_var);
+                                let target_bound = previously_bound_vars.contains(&target_var);
 
-                            if target_bound && !source_bound {
-                                // Target is bound, source is not - reverse the traversal
-                                eprintln!(
-                                    "PLANNER: Reversing traversal for OPTIONAL MATCH: {} <- {} (was {} -> {})",
-                                    source_var, target_var, source_var, target_var
-                                );
-                                let reversed_direction = match direction {
-                                    Direction::Outgoing => Direction::Incoming,
-                                    Direction::Incoming => Direction::Outgoing,
-                                    Direction::Both => Direction::Both,
-                                };
-                                (target_var.clone(), source_var.clone(), reversed_direction)
+                                if target_bound && !source_bound {
+                                    // Target is bound, source is not - reverse the traversal
+                                    let reversed_direction = match direction {
+                                        Direction::Outgoing => Direction::Incoming,
+                                        Direction::Incoming => Direction::Outgoing,
+                                        Direction::Both => Direction::Both,
+                                    };
+                                    (target_var.clone(), source_var.clone(), reversed_direction)
+                                } else {
+                                    (source_var.clone(), target_var.clone(), direction)
+                                }
                             } else {
                                 (source_var.clone(), target_var.clone(), direction)
-                            }
-                        } else {
-                            (source_var.clone(), target_var.clone(), direction)
-                        };
+                            };
 
                         // Get type_ids from relationship types (support multiple types like :TYPE1|TYPE2)
                         // CRITICAL FIX: Use get_or_create_type to ensure type exists even if not yet in catalog

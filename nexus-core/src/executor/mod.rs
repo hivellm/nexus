@@ -3058,10 +3058,6 @@ impl Executor {
         optional: bool,
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<()> {
-        eprintln!(
-            "execute_expand called: optional={}, source_var='{}', target_var='{}', rel_var='{}'",
-            optional, source_var, target_var, rel_var
-        );
         // TRACE: Log input source and check for relationships
         let rows_source = if !context.result_set.rows.is_empty() {
             "result_set.rows"
@@ -3248,10 +3244,6 @@ impl Executor {
                     if optional {
                         // OPTIONAL MATCH semantics: preserve the row with NULL for target and rel
                         // This handles chained OPTIONAL MATCHes where the previous optional produced NULL
-                        eprintln!(
-                            "OPTIONAL MATCH: source_var '{}' is NULL, preserving row with NULL target/rel",
-                            source_var
-                        );
                         let mut new_row = row.clone();
                         if !target_var.is_empty() {
                             new_row.insert(target_var.to_string(), Value::Null);
@@ -3394,10 +3386,6 @@ impl Executor {
                     if relationships.is_empty() {
                         // LEFT OUTER JOIN semantics: preserve row with NULL values when optional=true
                         if optional {
-                            eprintln!(
-                                "OPTIONAL MATCH: Preserving row for node_id {} with NULL (no relationships)",
-                                source_id
-                            );
                             // Create a row with NULL for target and relationship variables
                             let mut new_row = row.clone();
                             if !target_var.is_empty() {
@@ -3406,9 +3394,7 @@ impl Executor {
                             if !rel_var.is_empty() {
                                 new_row.insert(rel_var.to_string(), Value::Null);
                             }
-                            let row_len = new_row.len();
                             expanded_rows.push(new_row);
-                            eprintln!("OPTIONAL MATCH: Added row with {} variables", row_len);
                         } else {
                             tracing::debug!(
                                 "Expand: source node_id {} has no relationships matching criteria, skipping",
@@ -13788,18 +13774,9 @@ impl Executor {
 
                                 // If no matching relationships found, pattern doesn't exist
                                 if relationships.is_empty() {
-                                    eprintln!(
-                                        "EXISTS: No relationships found for node {} with types {:?} and direction {:?}",
-                                        node_id, rel.types, direction
-                                    );
                                     return Ok(false);
                                 }
 
-                                eprintln!(
-                                    "EXISTS: Found {} relationships for node {}",
-                                    relationships.len(),
-                                    node_id
-                                );
                                 // At least one relationship exists
                                 return Ok(true);
                             }
