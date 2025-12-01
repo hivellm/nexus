@@ -582,12 +582,18 @@ impl<'a> QueryPlanner<'a> {
 
         // Extract patterns and constraints
         let mut patterns = Vec::new();
-        let mut where_clauses = Vec::new();
+        // WHERE clauses with optional variable context: (expression, optional_vars)
+        // optional_vars is non-empty if this WHERE follows an OPTIONAL MATCH
+        let mut where_clauses: Vec<(Expression, Vec<String>)> = Vec::new();
+        // Track variables from the most recent OPTIONAL MATCH
+        let mut last_optional_vars: Vec<String> = Vec::new();
         let mut return_items = Vec::new();
         let mut limit_count = None;
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
         let mut create_patterns = Vec::new(); // Collect CREATE to insert after MATCH
+        let mut with_operators: Vec<(Vec<ReturnItem>, bool, Option<Expression>)> = Vec::new(); // Collect WITH clauses with optional WHERE
+        let mut with_has_aggregation = false; // Track if WITH clause has aggregation
         let mut match_hints = Vec::new(); // Collect hints from MATCH clauses
         let mut order_by_clause: Option<(Vec<String>, Vec<bool>)> = None; // Collect ORDER BY to add after projection
 
@@ -596,8 +602,48 @@ impl<'a> QueryPlanner<'a> {
                 Clause::Match(match_clause) => {
                     // Store pattern with optional flag for LEFT OUTER JOIN semantics
                     patterns.push((match_clause.pattern.clone(), match_clause.optional));
+
+                    // Extract variables from this MATCH for optional context
+                    if match_clause.optional {
+                        // Extract target and relationship variables from OPTIONAL MATCH pattern
+                        // IMPORTANT: Skip the first node as it's typically the "anchor" that's already bound
+                        // Only include variables from subsequent nodes and relationships
+                        last_optional_vars.clear();
+                        let mut is_first_node = true;
+                        for element in &match_clause.pattern.elements {
+                            match element {
+                                PatternElement::Node(node) => {
+                                    if is_first_node {
+                                        // Skip the first node - it's the anchor from previous MATCH
+                                        is_first_node = false;
+                                    } else if let Some(var) = &node.variable {
+                                        last_optional_vars.push(var.clone());
+                                    }
+                                }
+                                PatternElement::Relationship(rel) => {
+                                    if let Some(var) = &rel.variable {
+                                        last_optional_vars.push(var.clone());
+                                    }
+                                }
+                            }
+                        }
+                        tracing::debug!(
+                            "PLANNER: OPTIONAL MATCH detected, tracking NEW vars (excluding anchor): {:?}",
+                            last_optional_vars
+                        );
+                    } else {
+                        // Regular MATCH clears optional context
+                        last_optional_vars.clear();
+                    }
+
                     if let Some(where_clause) = &match_clause.where_clause {
-                        where_clauses.push(where_clause.expression.clone());
+                        // WHERE inside MATCH clause inherits the optional context from this MATCH
+                        let opt_vars = if match_clause.optional {
+                            last_optional_vars.clone()
+                        } else {
+                            Vec::new()
+                        };
+                        where_clauses.push((where_clause.expression.clone(), opt_vars));
                     }
                     // Collect hints from first MATCH clause
                     if match_hints.is_empty() {
@@ -627,16 +673,40 @@ impl<'a> QueryPlanner<'a> {
                     // Store pattern for executor to handle
                 }
                 Clause::Where(where_clause) => {
-                    where_clauses.push(where_clause.expression.clone());
+                    // Standalone WHERE inherits optional context from last OPTIONAL MATCH
+                    where_clauses
+                        .push((where_clause.expression.clone(), last_optional_vars.clone()));
                 }
                 Clause::With(with_clause) => {
-                    // WITH is similar to RETURN but for intermediate results
-                    // Store the WITH items as new projection columns
-                    return_items = with_clause.items.clone();
-                    // Apply WHERE filtering if present in WITH clause
-                    if let Some(where_clause) = &with_clause.where_clause {
-                        where_clauses.push(where_clause.expression.clone());
+                    // WITH clause - collect for later processing
+                    // WITH creates intermediate scope with aliased variables
+
+                    // Store the WHERE clause expression (if present) to be applied AFTER the WITH projection
+                    let where_expr = with_clause
+                        .where_clause
+                        .as_ref()
+                        .map(|wc| wc.expression.clone());
+                    with_operators.push((
+                        with_clause.items.clone(),
+                        with_clause.distinct,
+                        where_expr,
+                    ));
+
+                    // Check if WITH clause has aggregation
+                    for item in &with_clause.items {
+                        if self.contains_aggregation(&item.expression) {
+                            with_has_aggregation = true;
+                            break;
+                        }
                     }
+
+                    // NOTE: We do NOT add WITH's WHERE clause to global where_clauses
+                    // because it must be applied AFTER the WITH projection, not before
+
+                    // Set return_items - these will be used for aggregation planning
+                    // If RETURN comes later WITHOUT aggregation and WITH has aggregation,
+                    // we keep WITH's items for aggregation processing
+                    return_items = with_clause.items.clone();
                     return_distinct = with_clause.distinct;
                 }
                 Clause::Unwind(unwind_clause) => {
@@ -649,8 +719,24 @@ impl<'a> QueryPlanner<'a> {
                     });
                 }
                 Clause::Return(return_clause) => {
-                    return_items = return_clause.items.clone();
-                    return_distinct = return_clause.distinct;
+                    // If WITH had aggregation, check if RETURN is just referencing the aliases
+                    // In that case, keep WITH's items for aggregation planning
+                    let return_has_agg = return_clause
+                        .items
+                        .iter()
+                        .any(|item| self.contains_aggregation(&item.expression));
+
+                    if with_has_aggregation && !return_has_agg {
+                        // WITH had aggregation, RETURN is just referencing aliases
+                        // Don't overwrite - let aggregation planning use WITH items
+                        // But we need to update the aliases to match RETURN
+                        tracing::debug!(
+                            "WITH has aggregation, RETURN references aliases - keeping WITH items"
+                        );
+                    } else {
+                        return_items = return_clause.items.clone();
+                        return_distinct = return_clause.distinct;
+                    }
                 }
                 Clause::Limit(limit_clause) => {
                     if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
@@ -768,12 +854,103 @@ impl<'a> QueryPlanner<'a> {
             )?;
         }
 
-        // Add CREATE operators AFTER MATCH operators
-        // This ensures CREATE runs after all nodes are matched
-        for create_pattern in create_patterns {
-            operators.push(Operator::Create {
-                pattern: create_pattern,
-            });
+        // Add WITH operators AFTER MATCH/Filter but BEFORE Project
+        // This ensures WITH intermediate projections run and create aliased variables
+        // Skip WITH operators that contain aggregation - they are handled by Aggregate operator
+        for (with_items, with_distinct, where_expr) in with_operators.iter() {
+            // Check if WITH has aggregation - if so, skip (Aggregate operator handles it)
+            let has_agg = with_items
+                .iter()
+                .any(|item| self.contains_aggregation(&item.expression));
+            if has_agg {
+                tracing::debug!(
+                    "Skipping WITH operator generation - has aggregation (handled by Aggregate)"
+                );
+                continue;
+            }
+
+            // Convert ReturnItems to ProjectionItems
+            let projection_items: Vec<ProjectionItem> = with_items
+                .iter()
+                .map(|item| {
+                    let alias = item.alias.clone().unwrap_or_else(|| {
+                        self.expression_to_string(&item.expression)
+                            .unwrap_or_else(|_| "expr".to_string())
+                    });
+                    ProjectionItem {
+                        alias,
+                        expression: item.expression.clone(),
+                    }
+                })
+                .collect();
+
+            // Find the position of the first Project operator
+            let project_pos = operators
+                .iter()
+                .position(|op| matches!(op, Operator::Project { .. }));
+
+            // Insert WITH operator before Project (or at end if no Project)
+            let insert_pos = project_pos.unwrap_or(operators.len());
+            operators.insert(
+                insert_pos,
+                Operator::With {
+                    items: projection_items,
+                    distinct: *with_distinct,
+                },
+            );
+
+            // If WITH has a WHERE clause, insert a Filter operator AFTER the WITH operator
+            // This ensures the WHERE clause filters the projected WITH variables, not the original variables
+            if let Some(where_expression) = where_expr {
+                let filter_str = self.expression_to_string(where_expression)?;
+                tracing::debug!(
+                    "WITH WHERE: Inserting Filter at position {} (after WITH at {})",
+                    insert_pos + 1,
+                    insert_pos
+                );
+                operators.insert(
+                    insert_pos + 1, // Insert right after the WITH operator we just inserted
+                    Operator::Filter {
+                        predicate: filter_str,
+                    },
+                );
+                // DEBUG: Show operator order after insertion
+                for (idx, op) in operators.iter().enumerate() {
+                    let op_name = match op {
+                        Operator::NodeByLabel { variable, .. } => {
+                            format!("NodeByLabel({})", variable)
+                        }
+                        Operator::Filter { predicate } => {
+                            format!("Filter({})", predicate.chars().take(30).collect::<String>())
+                        }
+                        Operator::With { items, .. } => format!("With({} items)", items.len()),
+                        Operator::Project { items } => format!("Project({} items)", items.len()),
+                        _ => format!("{:?}", std::mem::discriminant(op)),
+                    };
+                    tracing::debug!("  Operator #{}: {}", idx, op_name);
+                }
+            }
+        }
+
+        // Add CREATE operators AFTER MATCH/Filter but BEFORE Project
+        // This ensures CREATE runs after all nodes are matched but before
+        // the RETURN projection destroys the node objects with _nexus_id
+        if !create_patterns.is_empty() {
+            // Find the position of the first Project operator
+            let project_pos = operators
+                .iter()
+                .position(|op| matches!(op, Operator::Project { .. }));
+
+            // Insert CREATE operators before Project (or at end if no Project)
+            let insert_pos = project_pos.unwrap_or(operators.len());
+            for (i, create_pattern) in create_patterns.into_iter().enumerate() {
+                operators.insert(
+                    insert_pos + i,
+                    Operator::Create {
+                        pattern: create_pattern,
+                    },
+                );
+            }
         }
 
         if patterns.is_empty() && (!return_items.is_empty() || !unwind_operators.is_empty()) {
@@ -783,9 +960,16 @@ impl<'a> QueryPlanner<'a> {
 
             // Add filter operators for WHERE clauses (when there are no patterns)
             // This handles cases like: RETURN 42 WHERE false, RETURN 5 WHERE 5 > 10, etc.
-            for where_clause in &where_clauses {
+            for (where_clause, optional_vars) in &where_clauses {
                 let predicate = self.expression_to_string(where_clause)?;
-                operators.push(Operator::Filter { predicate });
+                if optional_vars.is_empty() {
+                    operators.push(Operator::Filter { predicate });
+                } else {
+                    operators.push(Operator::OptionalFilter {
+                        predicate,
+                        optional_vars: optional_vars.clone(),
+                    });
+                }
             }
 
             if !return_items.is_empty() {
@@ -1052,6 +1236,22 @@ impl<'a> QueryPlanner<'a> {
                     operators.push(Operator::Project {
                         items: projection_items,
                     });
+
+                    // Add DISTINCT operator if specified
+                    if return_distinct {
+                        let distinct_columns: Vec<String> = return_items
+                            .iter()
+                            .map(|item| {
+                                item.alias.clone().unwrap_or_else(|| {
+                                    self.expression_to_string(&item.expression)
+                                        .unwrap_or_default()
+                                })
+                            })
+                            .collect();
+                        operators.push(Operator::Distinct {
+                            columns: distinct_columns,
+                        });
+                    }
                 }
             }
 
@@ -1094,7 +1294,7 @@ impl<'a> QueryPlanner<'a> {
     fn plan_execution_strategy(
         &self,
         patterns: &[(Pattern, bool)], // (Pattern, is_optional)
-        where_clauses: &[Expression],
+        where_clauses: &[(Expression, Vec<String>)], // (expression, optional_vars)
         return_items: &[ReturnItem],
         limit_count: Option<usize>,
         distinct: bool,
@@ -1350,10 +1550,27 @@ impl<'a> QueryPlanner<'a> {
         }
 
         // Add filter operators for WHERE clauses
-        for where_clause in where_clauses {
-            operators.push(Operator::Filter {
-                predicate: self.expression_to_string(where_clause)?,
-            });
+        tracing::debug!(
+            "PLANNER: Adding {} WHERE clauses as Filter/OptionalFilter operators",
+            where_clauses.len()
+        );
+        for (idx, (where_clause, optional_vars)) in where_clauses.iter().enumerate() {
+            let predicate = self.expression_to_string(where_clause)?;
+            if optional_vars.is_empty() {
+                tracing::debug!("  WHERE clause #{}: {} (regular Filter)", idx, predicate);
+                operators.push(Operator::Filter { predicate });
+            } else {
+                tracing::debug!(
+                    "  WHERE clause #{}: {} (OptionalFilter, vars={:?})",
+                    idx,
+                    predicate,
+                    optional_vars
+                );
+                operators.push(Operator::OptionalFilter {
+                    predicate,
+                    optional_vars: optional_vars.clone(),
+                });
+            }
         }
 
         // Capture order_by_clause reference before entering nested blocks to ensure it's accessible
@@ -2463,6 +2680,10 @@ impl<'a> QueryPlanner<'a> {
                     // Filter operations are relatively cheap
                     total_cost += 10.0;
                 }
+                Operator::OptionalFilter { .. } => {
+                    // OptionalFilter is similar cost to Filter
+                    total_cost += 10.0;
+                }
                 Operator::Expand { .. } => {
                     // Relationship traversal is expensive
                     total_cost += 100.0;
@@ -2554,6 +2775,10 @@ impl<'a> QueryPlanner<'a> {
                 Operator::UseDatabase { .. } => {
                     // USE DATABASE is cheap (session operation)
                     total_cost += 1.0;
+                }
+                Operator::With { items, .. } => {
+                    // WITH clause is cheap (projection)
+                    total_cost += items.len() as f64;
                 }
             }
         }
@@ -2870,6 +3095,19 @@ impl<'a> QueryPlanner<'a> {
     pub fn optimize_operator_order(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
         if operators.len() <= 1 {
             return Ok(operators);
+        }
+
+        // Check if there's a WITH operator followed immediately by a Filter
+        // If so, keep them together (WITH WHERE pattern) and skip optimization
+        for i in 0..operators.len() - 1 {
+            if matches!(&operators[i], Operator::With { .. }) {
+                if matches!(&operators[i + 1], Operator::Filter { .. }) {
+                    tracing::debug!(
+                        "Skipping operator optimization - WITH followed by Filter (WITH WHERE pattern)"
+                    );
+                    return Ok(operators);
+                }
+            }
         }
 
         // Separate operators into different categories

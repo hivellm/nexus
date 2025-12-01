@@ -137,6 +137,15 @@ pub enum Operator {
         /// Predicate expression
         predicate: String,
     },
+    /// Optional filter - preserves rows with NULL optional variables
+    /// Used for WHERE clauses after OPTIONAL MATCH
+    /// If predicate fails but optional_vars are involved, sets them to NULL instead of removing row
+    OptionalFilter {
+        /// Predicate expression
+        predicate: String,
+        /// Variables from OPTIONAL MATCH that should be set to NULL if predicate fails
+        optional_vars: Vec<String>,
+    },
     /// Expand relationships
     Expand {
         /// Type IDs (empty = all types, multiple types are OR'd together)
@@ -156,6 +165,14 @@ pub enum Operator {
     Project {
         /// Projection expressions with aliases
         items: Vec<ProjectionItem>,
+    },
+    /// WITH clause - project intermediate results and update context variables
+    /// Unlike Project, this updates context.variables for subsequent clauses
+    With {
+        /// Projection expressions with aliases
+        items: Vec<ProjectionItem>,
+        /// DISTINCT flag
+        distinct: bool,
     },
     /// Limit results
     Limit {
@@ -1018,6 +1035,9 @@ impl Executor {
                                 items.iter().map(|item| item.alias.clone()).collect();
                             results = self.execute_project(&mut context, items)?;
                         }
+                        Operator::With { items, distinct } => {
+                            self.execute_with(&mut context, items, *distinct)?;
+                        }
                         Operator::Limit { count } => {
                             self.execute_limit(&mut context, *count)?;
                         }
@@ -1078,6 +1098,30 @@ impl Executor {
         let mut aggregate_executed = false;
 
         for (op_idx, operator) in operators.iter().enumerate() {
+            // DEBUG: Print each operator as it executes
+            let op_name = match operator {
+                Operator::NodeByLabel { variable, .. } => format!("NodeByLabel({})", variable),
+                Operator::Filter { predicate } => {
+                    format!("Filter({})", predicate.chars().take(40).collect::<String>())
+                }
+                Operator::OptionalFilter {
+                    predicate,
+                    optional_vars,
+                } => {
+                    format!(
+                        "OptionalFilter({}, vars={:?})",
+                        predicate.chars().take(30).collect::<String>(),
+                        optional_vars
+                    )
+                }
+                Operator::Create { .. } => "Create".to_string(),
+                Operator::Project { items } => format!("Project({} items)", items.len()),
+                Operator::With { items, distinct } => {
+                    format!("With({} items, distinct={})", items.len(), distinct)
+                }
+                _ => format!("{:?}", std::mem::discriminant(operator)),
+            };
+            tracing::debug!("EXECUTING OPERATOR #{}: {}", op_idx, op_name);
             // Check if there's still an Aggregate operator ahead in the pipeline
             let has_aggregate_ahead = operators[op_idx + 1..]
                 .iter()
@@ -1100,7 +1144,16 @@ impl Executor {
                         context.result_set.rows.clear();
                     }
                     context.variables.remove(variable);
-                    context.set_variable(variable, Value::Array(nodes));
+
+                    // CRITICAL FIX: Apply Cartesian product if there are existing variables
+                    // If we have existing rows (e.g. from a previous MATCH, WITH, or UNWIND),
+                    // we must cross-product the new nodes with the existing rows.
+                    // Example: MATCH (a), (b) -> a has N rows, b has M rows -> Result N*M rows
+                    if !context.variables.is_empty() {
+                        self.apply_cartesian_product(&mut context, variable, nodes)?;
+                    } else {
+                        context.set_variable(variable, Value::Array(nodes));
+                    }
                     let rows = self.materialize_rows_from_variables(&context);
                     tracing::debug!(
                         "NodeByLabel: materialized {} rows from variables for '{}' (is_first={})",
@@ -1117,12 +1170,25 @@ impl Executor {
                 }
                 Operator::AllNodesScan { variable } => {
                     let nodes = self.execute_all_nodes_scan()?;
-                    context.set_variable(variable, Value::Array(nodes));
+                    context.variables.remove(variable);
+
+                    // CRITICAL FIX: Apply Cartesian product if there are existing variables
+                    if !context.variables.is_empty() {
+                        self.apply_cartesian_product(&mut context, variable, nodes)?;
+                    } else {
+                        context.set_variable(variable, Value::Array(nodes));
+                    }
                     let rows = self.materialize_rows_from_variables(&context);
                     self.update_result_set_from_rows(&mut context, &rows);
                 }
                 Operator::Filter { predicate } => {
                     self.execute_filter(&mut context, predicate)?;
+                }
+                Operator::OptionalFilter {
+                    predicate,
+                    optional_vars,
+                } => {
+                    self.execute_optional_filter(&mut context, predicate, optional_vars)?;
                 }
                 Operator::Expand {
                     type_ids,
@@ -1162,6 +1228,9 @@ impl Executor {
                         );
                         results = self.execute_project(&mut context, items)?;
                     }
+                }
+                Operator::With { items, distinct } => {
+                    self.execute_with(&mut context, items, *distinct)?;
                 }
                 Operator::Limit { count } => {
                     self.execute_limit(&mut context, *count)?;
@@ -2552,6 +2621,8 @@ impl Executor {
             Vec::new()
         };
 
+        // DEBUG: Print state at start of Filter
+
         // CRITICAL FIX: If result_set.rows already exists, use them directly to avoid rematerialization
         // Rematerializing from variables when rows already exist can cause duplicates if variables
         // contain unfiltered arrays. Only materialize from variables if no rows exist yet.
@@ -2748,6 +2819,8 @@ impl Executor {
             }
         } else if had_existing_rows {
             // Had rows from result_set (e.g., from UNWIND or previous operators) - preserve columns and update rows
+            // DEBUG
+            if !filtered_rows.is_empty() {}
             // CRITICAL FIX: Clear result_set.rows BEFORE updating to ensure we don't mix old and new rows
             // This prevents duplicates when Filter processes rows that were already materialized
             context.result_set.rows.clear();
@@ -2772,9 +2845,107 @@ impl Executor {
             // then result_set, ensuring variables match filtered rows
             // CRITICAL: update_result_set_from_rows already replaces result_set.rows completely,
             // so no need to clear beforehand
+            if !filtered_rows.is_empty() {}
             self.update_variables_from_rows(context, &filtered_rows);
             self.update_result_set_from_rows(context, &filtered_rows);
         }
+        Ok(())
+    }
+
+    /// Execute OptionalFilter operator - special filter for WHERE after OPTIONAL MATCH
+    /// Unlike regular Filter, if predicate fails but optional_vars are involved,
+    /// the row is preserved with optional_vars set to NULL instead of being removed
+    fn execute_optional_filter(
+        &self,
+        context: &mut ExecutionContext,
+        predicate: &str,
+        optional_vars: &[String],
+    ) -> Result<()> {
+        tracing::debug!(
+            "execute_optional_filter: predicate='{}', optional_vars={:?}",
+            predicate,
+            optional_vars
+        );
+
+        // Parse the predicate
+        let mut parser = parser::CypherParser::new(predicate.to_string());
+        let expr = parser.parse_expression()?;
+
+        // Get rows from variables or result_set
+        let had_existing_rows = !context.result_set.rows.is_empty();
+        let existing_columns = if had_existing_rows {
+            context.result_set.columns.clone()
+        } else {
+            Vec::new()
+        };
+
+        let rows = if had_existing_rows {
+            context
+                .result_set
+                .rows
+                .iter()
+                .map(|row| self.row_to_map(row, &existing_columns))
+                .collect()
+        } else if !context.variables.is_empty() {
+            self.materialize_rows_from_variables(context)
+        } else {
+            Vec::new()
+        };
+
+        let mut result_rows: Vec<HashMap<String, Value>> = Vec::new();
+
+        for row in &rows {
+            // Check if all optional vars are already NULL in this row
+            let all_optional_null = optional_vars
+                .iter()
+                .all(|var| matches!(row.get(var), None | Some(Value::Null)));
+
+            if all_optional_null {
+                // All optional vars are NULL - keep row as-is (no filtering needed)
+                result_rows.push(row.clone());
+            } else {
+                // At least one optional var has a value - evaluate predicate
+                let predicate_result = self.evaluate_predicate_on_row(row, context, &expr)?;
+
+                if predicate_result {
+                    // Predicate passed - keep row as-is
+                    result_rows.push(row.clone());
+                } else {
+                    // Predicate failed - set optional vars to NULL but keep the row
+                    let mut modified_row = row.clone();
+                    for var in optional_vars {
+                        modified_row.insert(var.clone(), Value::Null);
+                    }
+                    result_rows.push(modified_row);
+                }
+            }
+        }
+
+        tracing::debug!(
+            "OptionalFilter: {} input rows -> {} output rows",
+            rows.len(),
+            result_rows.len()
+        );
+
+        // Update context with result rows
+        if had_existing_rows {
+            context.result_set.rows.clear();
+            self.update_variables_from_rows(context, &result_rows);
+            context.result_set.columns = existing_columns.clone();
+            context.result_set.rows = result_rows
+                .iter()
+                .map(|row_map| Row {
+                    values: existing_columns
+                        .iter()
+                        .map(|column| row_map.get(column).cloned().unwrap_or(Value::Null))
+                        .collect(),
+                })
+                .collect();
+        } else {
+            self.update_variables_from_rows(context, &result_rows);
+            self.update_result_set_from_rows(context, &result_rows);
+        }
+
         Ok(())
     }
 
@@ -3678,6 +3849,103 @@ impl Executor {
         self.update_variables_from_rows(context, &row_maps);
 
         Ok(projected_rows)
+    }
+
+    /// Execute WITH clause operator
+    ///
+    /// WITH is like Project but it:
+    /// 1. Evaluates expressions and creates new variables with aliased names
+    /// 2. Replaces the current scope (old variables are removed)
+    /// 3. Does NOT finalize result_set (that's what RETURN/Project does)
+    fn execute_with(
+        &self,
+        context: &mut ExecutionContext,
+        items: &[ProjectionItem],
+        distinct: bool,
+    ) -> Result<()> {
+        tracing::debug!("execute_with: {} items, distinct={}", items.len(), distinct);
+
+        // Materialize current rows from variables
+        let rows = if !context.result_set.rows.is_empty() {
+            let existing_columns = context.result_set.columns.clone();
+            context
+                .result_set
+                .rows
+                .iter()
+                .map(|row| self.row_to_map(row, &existing_columns))
+                .collect::<Vec<_>>()
+        } else {
+            self.materialize_rows_from_variables(context)
+        };
+
+        tracing::debug!("execute_with: processing {} input rows", rows.len());
+
+        if rows.is_empty() {
+            // No rows - nothing to project
+            context.variables.clear();
+            context.result_set.columns = items.iter().map(|item| item.alias.clone()).collect();
+            context.result_set.rows.clear();
+            return Ok(());
+        }
+
+        // Evaluate WITH items for each row and create new variables
+        let mut new_rows: Vec<HashMap<String, Value>> = Vec::new();
+
+        for row in &rows {
+            let mut new_row = HashMap::new();
+
+            // Use evaluate_projection_expression like execute_project does
+            // This properly handles PropertyAccess (e.g., n.name) by looking up
+            // the entity from the row HashMap first
+            for item in items {
+                let value = self.evaluate_projection_expression(row, context, &item.expression)?;
+                new_row.insert(item.alias.clone(), value);
+            }
+
+            new_rows.push(new_row);
+        }
+
+        // Handle DISTINCT
+        if distinct {
+            let mut seen = std::collections::HashSet::new();
+            new_rows.retain(|row| {
+                let key = format!("{:?}", row);
+                seen.insert(key)
+            });
+        }
+
+        tracing::debug!("execute_with: produced {} output rows", new_rows.len());
+
+        // Clear old variables and set new ones
+        context.variables.clear();
+
+        // Convert rows to context variables (each variable is an array of values from all rows)
+        let columns: Vec<String> = items.iter().map(|item| item.alias.clone()).collect();
+
+        for col in &columns {
+            let values: Vec<Value> = new_rows
+                .iter()
+                .map(|row| row.get(col).cloned().unwrap_or(Value::Null))
+                .collect();
+            context.set_variable(col, Value::Array(values));
+        }
+
+        // Update result_set for subsequent operators
+        context.result_set.columns = columns;
+        context.result_set.rows = new_rows
+            .iter()
+            .map(|row_map| {
+                let values: Vec<Value> = context
+                    .result_set
+                    .columns
+                    .iter()
+                    .map(|col| row_map.get(col).cloned().unwrap_or(Value::Null))
+                    .collect();
+                Row { values }
+            })
+            .collect();
+
+        Ok(())
     }
 
     /// Execute Limit operator
@@ -5573,6 +5841,9 @@ impl Executor {
             return Ok(());
         }
 
+        // DEBUG: Print row contents to see if they contain _nexus_id
+        for (idx, row) in current_rows.iter().enumerate() {}
+
         // PERFORMANCE OPTIMIZATION: Reuse shared transaction manager instead of creating new
         // This saves ~1-2ms per operation by avoiding TransactionManager::new() overhead
         let mut tx_mgr = self.transaction_manager().lock();
@@ -5601,6 +5872,8 @@ impl Executor {
                     }
                 }
             }
+
+            // DEBUG: Print node_ids after extraction
 
             // CRITICAL FIX: If no node IDs were resolved from the row and the pattern requires
             // existing nodes from MATCH, skip this row (Filter removed all valid rows)
@@ -5824,7 +6097,13 @@ impl Executor {
             let mut row_values = Vec::new();
             for col in &columns {
                 if let Some(value) = context.variables.get(col) {
-                    row_values.push(value.clone());
+                    // CRITICAL FIX: Unwrap arrays to get the actual node object
+                    // Variables from MATCH are arrays, but we need single objects
+                    let unwrapped = match value {
+                        JsonValue::Array(arr) if arr.len() == 1 => arr[0].clone(),
+                        _ => value.clone(),
+                    };
+                    row_values.push(unwrapped);
                 } else {
                     row_values.push(JsonValue::Null);
                 }
@@ -5929,6 +6208,12 @@ impl Executor {
             Operator::Filter { predicate } => {
                 self.execute_filter(context, predicate)?;
             }
+            Operator::OptionalFilter {
+                predicate,
+                optional_vars,
+            } => {
+                self.execute_optional_filter(context, predicate, optional_vars)?;
+            }
             Operator::Expand {
                 type_ids,
                 direction,
@@ -5944,6 +6229,9 @@ impl Executor {
             }
             Operator::Project { items } => {
                 self.execute_project(context, items)?;
+            }
+            Operator::With { items, distinct } => {
+                self.execute_with(context, items, *distinct)?;
             }
             Operator::Limit { count } => {
                 self.execute_limit(context, *count)?;
@@ -10038,9 +10326,33 @@ impl Executor {
                     is_dup
                 }
             } else if let Some(first_id) = all_entity_ids.first() {
-                // Non-relationship row - use only entity ID
-                let entity_key = format!("node_{}", first_id);
-                !seen_row_keys.insert(entity_key)
+                // Non-relationship row - but check if this is from OPTIONAL MATCH (has NULL values)
+                // CRITICAL FIX: For OPTIONAL MATCH NULL rows, include NULL variable names in key
+                // to prevent incorrect deduplication of different source nodes
+                let has_null_values = row_map.values().any(|v| matches!(v, Value::Null));
+
+                if has_null_values {
+                    // OPTIONAL MATCH NULL row - include all variable names and their values/NULL status
+                    let mut var_entries: Vec<String> = Vec::new();
+                    for (key, value) in row_map {
+                        if let Value::Object(obj) = value {
+                            if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
+                                if let Some(entity_id) = nid.as_u64() {
+                                    var_entries.push(format!("{}_{}", key, entity_id));
+                                }
+                            }
+                        } else if matches!(value, Value::Null) {
+                            var_entries.push(format!("{}_null", key));
+                        }
+                    }
+                    var_entries.sort();
+                    let row_key = var_entries.join("_");
+                    !seen_row_keys.insert(row_key)
+                } else {
+                    // Regular non-relationship row - use only entity ID
+                    let entity_key = format!("node_{}", first_id);
+                    !seen_row_keys.insert(entity_key)
+                }
             } else {
                 // No entity IDs found - use full row content as fallback
                 let row_key = serde_json::to_string(row_map).unwrap_or_default();
@@ -10176,6 +10488,11 @@ impl Executor {
         match expr {
             parser::Expression::Variable(name) => {
                 let result = row.get(name).cloned().unwrap_or(Value::Null);
+                tracing::debug!(
+                    "evaluate_projection_expression: Variable '{}' -> {:?}",
+                    name,
+                    result
+                );
                 Ok(result)
             }
             parser::Expression::PropertyAccess { variable, property } => {

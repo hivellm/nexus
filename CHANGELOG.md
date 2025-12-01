@@ -7,16 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### ✅ Neo4j Compatibility Test Results - 95.99% Pass Rate (2025-12-01)
+### ✅ Neo4j Compatibility Test Results - 97.66% Pass Rate (2025-12-01)
 
-**Latest compatibility test run: 287/300 tests passing**
+**Latest compatibility test run: 292/300 tests passing**
 
 - **Test Results**:
   - Total Tests: 300
-  - Passed: 287 ✅
-  - Failed: 12 ❌
+  - Passed: 292 ✅
+  - Failed: 7 ❌
   - Skipped: 1 ⏭️
-  - Pass Rate: **95.99%**
+  - Pass Rate: **97.66%**
+
+- **Recent Fixes** (improvement from 287 to 292):
+  - Fixed cartesian product bug in MATCH patterns with multiple disconnected nodes
+  - Added `OptionalFilter` operator for proper WHERE clause handling after OPTIONAL MATCH
+  - Fixed OPTIONAL MATCH IS NULL filtering (12.06)
+  - Fixed OPTIONAL MATCH IS NOT NULL filtering (12.07)
 
 - **Sections with 100% Success** (235 tests):
   - Section 1: Basic CREATE and RETURN (20/20)
@@ -33,14 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Section 13: WITH Clause (15/15)
   - Section 16: Type Conversion (15/15)
 
-- **Known Issues** (12 failures):
-  - **OPTIONAL MATCH** (8 failures): Row count mismatches in left outer join scenarios
-    - Basic OPTIONAL MATCH (12.01)
+- **Known Issues** (7 failures):
+  - **OPTIONAL MATCH** (3 failures): Edge cases with WHERE and multiple patterns
     - OPTIONAL MATCH with WHERE clause (12.04)
-    - IS NULL/IS NOT NULL filtering (12.06, 12.07)
     - Multiple OPTIONAL MATCH patterns (12.08)
-    - Relationship type handling (12.10)
-    - Coalesce and CASE expressions (12.11, 12.12)
+    - Reverse direction OPTIONAL MATCH (12.14)
   - **UNWIND with collect** (1 failure): Empty result set issue (14.13)
   - **MERGE relationship** (1 failure): Duplicate relationship creation (15.09)
   - **SET with expression** (1 failure): Complex expressions not supported (17.04)
