@@ -3205,6 +3205,7 @@ impl<'a> QueryPlanner<'a> {
         let mut filters = Vec::new();
         let mut expansions = Vec::new();
         let mut joins = Vec::new();
+        let mut unwinds = Vec::new();
         let mut others = Vec::new();
 
         for operator in operators {
@@ -3222,6 +3223,10 @@ impl<'a> QueryPlanner<'a> {
                 }
                 Operator::Join { .. } => {
                     joins.push(operator);
+                }
+                Operator::Unwind { .. } => {
+                    // UNWIND must come before Filter because Filter operates on rows created by UNWIND
+                    unwinds.push(operator);
                 }
                 _ => {
                     others.push(operator);
@@ -3250,12 +3255,14 @@ impl<'a> QueryPlanner<'a> {
             optimized_joins.push(join);
         }
 
-        // Combine in optimal order: scans -> expansions -> filters -> joins -> others
+        // Combine in optimal order: scans -> expansions -> unwinds -> filters -> joins -> others
         // Expansions must come before filters because filters may depend on relationship variables
         // created by expansions (e.g., WHERE r.role = 'Developer')
+        // UNWIND must come before filters because UNWIND creates rows that filters operate on
         let mut result = Vec::new();
         result.extend(optimized_scans);
         result.extend(expansions);
+        result.extend(unwinds);
         result.extend(filters);
         result.extend(optimized_joins);
         result.extend(others);

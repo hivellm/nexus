@@ -122,7 +122,6 @@ fn test_unwind_with_variable_reference() {
 }
 
 #[test]
-#[ignore = "WHERE after UNWIND needs operator reordering - known limitation"]
 fn test_unwind_with_where_filtering() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
