@@ -1326,22 +1326,49 @@ impl RecordStore {
     }
 
     /// Update properties for a node
+    /// CRITICAL FIX: Also updates node record's prop_ptr to ensure consistency
     pub fn update_node_properties(
         &mut self,
         node_id: u64,
         properties: serde_json::Value,
     ) -> Result<()> {
-        if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-            self.property_store.write().unwrap().store_properties(
+        let new_prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
+            let prop_ptr = self.property_store.write().unwrap().store_properties(
                 node_id,
                 property_store::EntityType::Node,
                 properties,
             )?;
+            tracing::debug!(
+                "update_node_properties: node_id={}, stored properties, new_prop_ptr={}",
+                node_id,
+                prop_ptr
+            );
+            prop_ptr
         } else {
             self.property_store
                 .write()
                 .unwrap()
                 .delete_properties(node_id, property_store::EntityType::Node)?;
+            tracing::debug!(
+                "update_node_properties: node_id={}, deleted properties, new_prop_ptr=0",
+                node_id
+            );
+            0
+        };
+
+        // CRITICAL FIX: Update the node record's prop_ptr to match the new offset
+        // This ensures load_node_properties reads from the correct location
+        if let Ok(mut node_record) = self.read_node(node_id) {
+            if node_record.prop_ptr != new_prop_ptr {
+                tracing::debug!(
+                    "update_node_properties: node_id={}, updating prop_ptr from {} to {}",
+                    node_id,
+                    node_record.prop_ptr,
+                    new_prop_ptr
+                );
+                node_record.prop_ptr = new_prop_ptr;
+                self.write_node(node_id, &node_record)?;
+            }
         }
         Ok(())
     }
