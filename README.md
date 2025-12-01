@@ -24,7 +24,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 **Production Ready!** 🚀
 
 - ✅ **~55% openCypher Compatibility** - Core clauses (MATCH, CREATE, MERGE, SET, DELETE, REMOVE, WHERE, RETURN, ORDER BY, LIMIT, SKIP, UNION, WITH, UNWIND, FOREACH) and ~60 functions
-- ✅ **100% Compatibility Tests** - 300/300 Neo4j compatibility tests + 2949+ unit tests passing
+- ✅ **95.99% Compatibility Tests** - 287/300 Neo4j compatibility tests passing + 2949+ unit tests (see [CHANGELOG.md](CHANGELOG.md) for details)
 - ✅ **19 GDS Procedures** - PageRank (standard, weighted, parallel), betweenness, eigenvector, Dijkstra, A*, Yen's k-paths, Louvain, label propagation, triangle count, clustering coefficients
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
