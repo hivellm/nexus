@@ -1,8 +1,8 @@
 # Nexus - Claude Code Development Guide
 
-> **Last Updated**: 2025-11-28
+> **Last Updated**: 2025-12-01
 > **Version**: 0.12.0
-> **Status**: ✅ Production Ready - 195/195 Neo4j Compatibility Tests Passing
+> **Status**: ✅ Production Ready - 300/300 Neo4j Compatibility Tests Passing
 
 ---
 
@@ -42,7 +42,7 @@ cargo test --package nexus-core --test test_name
 cargo +nightly fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run Neo4j compatibility tests (195 tests)
+# Run Neo4j compatibility tests (300 tests)
 powershell -ExecutionPolicy Bypass -File scripts/test-neo4j-nexus-compatibility-200.ps1
 ```
 
@@ -64,11 +64,11 @@ powershell -ExecutionPolicy Bypass -File scripts/test-neo4j-nexus-compatibility-
 ### Key Characteristics
 
 - **Neo4j-Inspired Architecture**: Fixed-size record stores, O(1) traversal via linked lists
-- **~55% openCypher Compatibility**: Core clauses + ~60 functions (195/195 compatibility tests passing)
+- **~55% openCypher Compatibility**: Core clauses + ~60 functions (300/300 compatibility tests passing)
 - **Native Vector Search**: First-class HNSW KNN indexes per label
 - **ACID Transactions**: Simplified MVCC via epochs, single-writer model
 - **Multi-Database Support**: Isolated databases within single server instance
-- **Production Ready**: 1478+ tests passing, 70%+ coverage
+- **Production Ready**: 2949+ tests passing, 70%+ coverage
 
 ### Target Use Cases
 
@@ -131,7 +131,7 @@ cargo test --package nexus-core --test integration_test
 # Run test with name filter
 cargo test --package nexus-core test_create_node
 
-# Run Neo4j compatibility tests (195 tests)
+# Run Neo4j compatibility tests (300 tests)
 powershell -ExecutionPolicy Bypass -File scripts/test-neo4j-nexus-compatibility-200.ps1
 
 # Check test coverage (95%+ required)
@@ -451,7 +451,7 @@ cd sdks/typescript && npx tsx test-sdk-comprehensive.ts
 
 ### Neo4j Compatibility Testing
 
-**CRITICAL**: We maintain 100% Neo4j compatibility (195/195 tests passing).
+**CRITICAL**: We maintain 100% Neo4j compatibility (300/300 tests passing).
 
 ```bash
 # Run full compatibility suite
@@ -669,7 +669,7 @@ curl -X DELETE http://localhost:15474/databases/mydb
 {"rows": [["Alice", 30]]}  // Array format
 ```
 
-**Why**: We maintain 100% Neo4j compatibility (195/195 tests passing). Changing server format would break all SDKs and compatibility tests.
+**Why**: We maintain 100% Neo4j compatibility (300/300 tests passing). Changing server format would break all SDKs and compatibility tests.
 
 **Solution**: If SDKs need different formats, add helper methods in SDKs (like `RowsAsMap()`), never change server.
 

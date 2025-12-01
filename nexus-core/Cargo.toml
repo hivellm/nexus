@@ -104,6 +104,14 @@ harness = false
 name = "vectorizer_extraction_benchmark"
 harness = false
 
+[[bench]]
+name = "optional_match_benchmark"
+harness = false
+
+[[bench]]
+name = "exists_subquery_benchmark"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../examples/hierarchical_call_graph_example.rs"

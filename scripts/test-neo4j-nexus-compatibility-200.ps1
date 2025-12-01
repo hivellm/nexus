@@ -1,6 +1,6 @@
-# Neo4j vs Nexus Compatibility Test Suite - 200+ Tests
+# Neo4j vs Nexus Compatibility Test Suite - 300 Tests
 # Compares query results between Neo4j and Nexus to ensure 100% compatibility
-# 
+#
 # Usage: ./test-neo4j-nexus-compatibility-200.ps1
 # Requirements: Neo4j running on localhost:7474, Nexus running on localhost:15474
 
@@ -19,7 +19,7 @@ $global:SkippedTests = 0
 $global:TestResults = @()
 
 Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
-Write-Host "|  Neo4j vs Nexus Compatibility Test Suite - 200+ Tests      |" -ForegroundColor Cyan
+Write-Host "|  Neo4j vs Nexus Compatibility Test Suite - 300 Tests       |" -ForegroundColor Cyan
 Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Neo4j:  $Neo4jUri" -ForegroundColor Yellow
@@ -610,7 +610,227 @@ Run-Test -Name "10.08 UNION empty results" -Query "MATCH (n:NonExistent) RETURN 
 Run-Test -Name "10.09 UNION with different types" -Query "RETURN 1 AS val UNION RETURN 'text' AS val"
 Run-Test -Name "10.10 UNION with NULL" -Query "RETURN null AS val UNION RETURN 'value' AS val"
 
-#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 11: GRAPH ALGORITHMS & PATTERNS (15 tests)
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 11: Graph Algorithms & Patterns"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 11: Graph Algorithms & Patterns (15 tests) |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+# Create test graph for algorithms
+# Triangle structure: 1->2, 2->3, 3->1 (triangle)
+# Plus: 4->5, 5->6 (path, no triangle)
+Invoke-Neo4jQuery "CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5}), (n6:Node {id: 6})" | Out-Null
+Invoke-Neo4jQuery "MATCH (n1:Node {id: 1}), (n2:Node {id: 2}) CREATE (n1)-[:CONNECTS]->(n2)" | Out-Null
+Invoke-Neo4jQuery "MATCH (n2:Node {id: 2}), (n3:Node {id: 3}) CREATE (n2)-[:CONNECTS]->(n3)" | Out-Null
+Invoke-Neo4jQuery "MATCH (n3:Node {id: 3}), (n1:Node {id: 1}) CREATE (n3)-[:CONNECTS]->(n1)" | Out-Null
+Invoke-Neo4jQuery "MATCH (n4:Node {id: 4}), (n5:Node {id: 5}) CREATE (n4)-[:CONNECTS]->(n5)" | Out-Null
+Invoke-Neo4jQuery "MATCH (n5:Node {id: 5}), (n6:Node {id: 6}) CREATE (n5)-[:CONNECTS]->(n6)" | Out-Null
+
+Invoke-NexusQuery "CREATE (n1:Node {id: 1}), (n2:Node {id: 2}), (n3:Node {id: 3}), (n4:Node {id: 4}), (n5:Node {id: 5}), (n6:Node {id: 6})" | Out-Null
+Invoke-NexusQuery "MATCH (n1:Node {id: 1}), (n2:Node {id: 2}) CREATE (n1)-[:CONNECTS]->(n2)" | Out-Null
+Invoke-NexusQuery "MATCH (n2:Node {id: 2}), (n3:Node {id: 3}) CREATE (n2)-[:CONNECTS]->(n3)" | Out-Null
+Invoke-NexusQuery "MATCH (n3:Node {id: 3}), (n1:Node {id: 1}) CREATE (n3)-[:CONNECTS]->(n1)" | Out-Null
+Invoke-NexusQuery "MATCH (n4:Node {id: 4}), (n5:Node {id: 5}) CREATE (n4)-[:CONNECTS]->(n5)" | Out-Null
+Invoke-NexusQuery "MATCH (n5:Node {id: 5}), (n6:Node {id: 6}) CREATE (n5)-[:CONNECTS]->(n6)" | Out-Null
+
+# 11.1-11.3: Triangle detection tests
+Run-Test -Name "11.01 Detect triangle pattern" -Query "MATCH (a:Node)-[:CONNECTS]->(b:Node)-[:CONNECTS]->(c:Node)-[:CONNECTS]->(a) WHERE a.id < b.id AND b.id < c.id RETURN count(*) AS triangles"
+Run-Test -Name "11.02 Count nodes in triangle" -Query "MATCH (a:Node)-[:CONNECTS]->(b:Node)-[:CONNECTS]->(c:Node)-[:CONNECTS]->(a) RETURN DISTINCT a.id AS node ORDER BY node"
+Run-Test -Name "11.03 Triangle edges" -Query "MATCH (a:Node)-[r1:CONNECTS]->(b:Node)-[r2:CONNECTS]->(c:Node)-[r3:CONNECTS]->(a) WHERE a.id = 1 RETURN count(r1) + count(r2) + count(r3) AS edges"
+
+# 11.4-11.6: Degree centrality tests (out-degree)
+Run-Test -Name "11.04 Node out-degree" -Query "MATCH (n:Node {id: 1})-[:CONNECTS]->() RETURN count(*) AS degree"
+Run-Test -Name "11.05 Node in-degree" -Query "MATCH ()-[:CONNECTS]->(n:Node {id: 1}) RETURN count(*) AS degree"
+Run-Test -Name "11.06 Total degree per node" -Query "MATCH (n:Node) OPTIONAL MATCH (n)-[:CONNECTS]->() RETURN n.id, count(*) AS out_degree ORDER BY n.id"
+
+# 11.7-11.9: Path finding tests (shortest path concepts)
+Run-Test -Name "11.07 Simple path length 1" -Query "MATCH p=(a:Node {id: 1})-[:CONNECTS]->(b:Node {id: 2}) RETURN length(p) AS path_length"
+Run-Test -Name "11.08 Path length 2" -Query "MATCH p=(a:Node {id: 1})-[:CONNECTS*2]->(c) RETURN length(p) AS path_length LIMIT 1"
+Run-Test -Name "11.09 Variable length path" -Query "MATCH p=(a:Node {id: 4})-[:CONNECTS*1..3]->(z) RETURN length(p) AS path_length ORDER BY path_length"
+
+# 11.10-11.12: Clustering and connectivity tests
+Run-Test -Name "11.10 Common neighbors" -Query "MATCH (a:Node {id: 1})-[:CONNECTS]->(common)<-[:CONNECTS]-(b:Node {id: 3}) RETURN count(DISTINCT common) AS common_neighbors"
+Run-Test -Name "11.11 Node connectivity" -Query "MATCH (n:Node {id: 1})-[:CONNECTS*1..2]-(connected) RETURN count(DISTINCT connected) AS connected_nodes"
+Run-Test -Name "11.12 Reachable nodes" -Query "MATCH (start:Node {id: 1})-[:CONNECTS*]->(reachable) RETURN count(DISTINCT reachable) AS reachable"
+
+# 11.13-11.15: Graph structure tests
+Run-Test -Name "11.13 Count all relationships" -Query "MATCH ()-[r:CONNECTS]->() RETURN count(r) AS total_rels"
+Run-Test -Name "11.14 Nodes with no outgoing edges" -Query "MATCH (n:Node) WHERE NOT (n)-[:CONNECTS]->() RETURN count(n) AS isolated"
+Run-Test -Name "11.15 Bidirectional connections" -Query "MATCH (a:Node)-[:CONNECTS]->(b:Node), (b)-[:CONNECTS]->(a) RETURN count(DISTINCT a) AS bidirectional"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 12: OPTIONAL MATCH (15 tests)
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 12: OPTIONAL MATCH"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 12: OPTIONAL MATCH (15 tests)              |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+# Create test data for OPTIONAL MATCH
+Invoke-Neo4jQuery "CREATE (a:Author {name: 'Alice'}), (b:Author {name: 'Bob'}), (c:Author {name: 'Charlie'})" | Out-Null
+Invoke-Neo4jQuery "CREATE (book1:Book {title: 'Graph Databases'}), (book2:Book {title: 'Neo4j Guide'})" | Out-Null
+Invoke-Neo4jQuery "MATCH (a:Author {name: 'Alice'}), (b:Book {title: 'Graph Databases'}) CREATE (a)-[:WROTE]->(b)" | Out-Null
+Invoke-Neo4jQuery "MATCH (a:Author {name: 'Alice'}), (b:Book {title: 'Neo4j Guide'}) CREATE (a)-[:WROTE]->(b)" | Out-Null
+Invoke-Neo4jQuery "MATCH (a:Author {name: 'Bob'}), (b:Book {title: 'Graph Databases'}) CREATE (a)-[:WROTE]->(b)" | Out-Null
+
+Invoke-NexusQuery "CREATE (a:Author {name: 'Alice'}), (b:Author {name: 'Bob'}), (c:Author {name: 'Charlie'})" | Out-Null
+Invoke-NexusQuery "CREATE (book1:Book {title: 'Graph Databases'}), (book2:Book {title: 'Neo4j Guide'})" | Out-Null
+Invoke-NexusQuery "MATCH (a:Author {name: 'Alice'}), (b:Book {title: 'Graph Databases'}) CREATE (a)-[:WROTE]->(b)" | Out-Null
+Invoke-NexusQuery "MATCH (a:Author {name: 'Alice'}), (b:Book {title: 'Neo4j Guide'}) CREATE (a)-[:WROTE]->(b)" | Out-Null
+Invoke-NexusQuery "MATCH (a:Author {name: 'Bob'}), (b:Book {title: 'Graph Databases'}) CREATE (a)-[:WROTE]->(b)" | Out-Null
+
+Run-Test -Name "12.01 OPTIONAL MATCH basic" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN a.name AS author, b.title AS book ORDER BY author, book"
+Run-Test -Name "12.02 OPTIONAL MATCH no match" -Query "MATCH (a:Author {name: 'Charlie'}) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN a.name AS author, b.title AS book"
+Run-Test -Name "12.03 OPTIONAL MATCH count" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN a.name AS author, count(b) AS book_count ORDER BY author"
+Run-Test -Name "12.04 OPTIONAL MATCH with WHERE" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) WHERE b.title CONTAINS 'Graph' RETURN a.name AS author, b.title AS book ORDER BY author"
+Run-Test -Name "12.05 OPTIONAL MATCH collect" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN a.name AS author, collect(b.title) AS books ORDER BY author"
+Run-Test -Name "12.06 OPTIONAL MATCH IS NULL" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) WHERE b IS NULL RETURN a.name AS author"
+Run-Test -Name "12.07 OPTIONAL MATCH IS NOT NULL" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) WHERE b IS NOT NULL RETURN DISTINCT a.name AS author ORDER BY author"
+Run-Test -Name "12.08 Multiple OPTIONAL MATCH" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) OPTIONAL MATCH (b)<-[:WROTE]-(c:Author) RETURN a.name AS author, count(DISTINCT c) AS coauthors ORDER BY author"
+Run-Test -Name "12.09 OPTIONAL MATCH with aggregation" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN count(a) AS authors, count(b) AS books"
+Run-Test -Name "12.10 OPTIONAL MATCH relationship type" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[r]->(b) RETURN a.name AS author, type(r) AS rel_type ORDER BY author"
+Run-Test -Name "12.11 OPTIONAL MATCH coalesce" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN a.name AS author, coalesce(b.title, 'No books') AS book ORDER BY author, book"
+Run-Test -Name "12.12 OPTIONAL MATCH case" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN a.name AS author, CASE WHEN b IS NULL THEN 'No' ELSE 'Yes' END AS has_books ORDER BY author"
+Run-Test -Name "12.13 OPTIONAL MATCH with LIMIT" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN a.name AS author, b.title AS book LIMIT 3"
+Run-Test -Name "12.14 OPTIONAL MATCH reverse direction" -Query "MATCH (b:Book) OPTIONAL MATCH (a:Author)-[:WROTE]->(b) RETURN b.title AS book, count(a) AS author_count ORDER BY book"
+Run-Test -Name "12.15 OPTIONAL MATCH distinct" -Query "MATCH (a:Author) OPTIONAL MATCH (a)-[:WROTE]->(b:Book) RETURN DISTINCT a.name AS author ORDER BY author"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 13: WITH CLAUSE (15 tests)
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 13: WITH Clause"
+Setup-TestData -DataType "basic"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 13: WITH Clause (15 tests)                 |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+Run-Test -Name "13.01 WITH basic" -Query "MATCH (n:Person) WITH n.name AS name RETURN name ORDER BY name"
+Run-Test -Name "13.02 WITH aggregation" -Query "MATCH (n:Person) WITH count(n) AS total RETURN total"
+Run-Test -Name "13.03 WITH multiple fields" -Query "MATCH (n:Person) WITH n.name AS name, n.age AS age RETURN name, age ORDER BY name"
+Run-Test -Name "13.04 WITH and WHERE" -Query "MATCH (n:Person) WITH n.name AS name, n.age AS age WHERE age > 25 RETURN name ORDER BY name"
+Run-Test -Name "13.05 WITH LIMIT" -Query "MATCH (n:Person) WITH n ORDER BY n.name LIMIT 2 RETURN n.name AS name"
+Run-Test -Name "13.06 WITH ORDER BY" -Query "MATCH (n:Person) WITH n.name AS name ORDER BY name DESC RETURN name"
+Run-Test -Name "13.07 WITH DISTINCT" -Query "MATCH (n:Person) WITH DISTINCT n.city AS city RETURN city ORDER BY city"
+Run-Test -Name "13.08 Chained WITH" -Query "MATCH (n:Person) WITH n.age AS age WITH avg(age) AS avg_age RETURN avg_age"
+Run-Test -Name "13.09 WITH collect" -Query "MATCH (n:Person) WITH collect(n.name) AS names RETURN names"
+Run-Test -Name "13.10 WITH sum" -Query "MATCH (n:Person) WITH sum(n.age) AS total_age RETURN total_age"
+Run-Test -Name "13.11 WITH expression" -Query "MATCH (n:Person) WITH n.age * 2 AS double_age RETURN double_age ORDER BY double_age"
+Run-Test -Name "13.12 WITH and MATCH" -Query "MATCH (n:Person) WITH n.name AS name MATCH (m:Person) WHERE m.name = name RETURN count(m) AS cnt"
+Run-Test -Name "13.13 WITH null handling" -Query "MATCH (n:Person) WITH n.city AS city WHERE city IS NOT NULL RETURN city ORDER BY city"
+Run-Test -Name "13.14 WITH case expression" -Query "MATCH (n:Person) WITH CASE WHEN n.age > 28 THEN 'old' ELSE 'young' END AS category RETURN category ORDER BY category"
+Run-Test -Name "13.15 WITH multiple aggregations" -Query "MATCH (n:Person) WITH min(n.age) AS min_age, max(n.age) AS max_age RETURN min_age, max_age"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 14: UNWIND (15 tests)
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 14: UNWIND"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 14: UNWIND (15 tests)                      |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+Run-Test -Name "14.01 UNWIND basic array" -Query "UNWIND [1, 2, 3] AS x RETURN x"
+Run-Test -Name "14.02 UNWIND strings" -Query "UNWIND ['a', 'b', 'c'] AS letter RETURN letter"
+Run-Test -Name "14.03 UNWIND with count" -Query "UNWIND [1, 2, 3, 4, 5] AS x RETURN count(x) AS cnt"
+Run-Test -Name "14.04 UNWIND with sum" -Query "UNWIND [1, 2, 3, 4, 5] AS x RETURN sum(x) AS total"
+Run-Test -Name "14.05 UNWIND with WHERE" -Query "UNWIND [1, 2, 3, 4, 5] AS x WHERE x > 2 RETURN x"
+Run-Test -Name "14.06 UNWIND with expression" -Query "UNWIND [1, 2, 3] AS x RETURN x * 2 AS doubled"
+Run-Test -Name "14.07 UNWIND empty array" -Query "UNWIND [] AS x RETURN x"
+Run-Test -Name "14.08 UNWIND with DISTINCT" -Query "UNWIND [1, 1, 2, 2, 3] AS x RETURN DISTINCT x"
+Run-Test -Name "14.09 UNWIND range" -Query "UNWIND range(1, 5) AS x RETURN x"
+Run-Test -Name "14.10 UNWIND with ORDER BY" -Query "UNWIND [3, 1, 4, 1, 5] AS x RETURN x ORDER BY x"
+Run-Test -Name "14.11 UNWIND with LIMIT" -Query "UNWIND [1, 2, 3, 4, 5] AS x RETURN x LIMIT 3"
+Run-Test -Name "14.12 UNWIND nested" -Query "UNWIND [[1, 2], [3, 4]] AS arr UNWIND arr AS x RETURN x"
+Run-Test -Name "14.13 UNWIND with collect" -Query "UNWIND [1, 2, 3] AS x RETURN collect(x * 2) AS doubled"
+Run-Test -Name "14.14 UNWIND null in array" -Query "UNWIND [1, null, 3] AS x RETURN x"
+# Setup data for UNWIND with MATCH
+Setup-TestData -DataType "basic"
+Run-Test -Name "14.15 UNWIND with MATCH" -Query "UNWIND ['Alice', 'Bob'] AS name MATCH (p:Person {name: name}) RETURN p.name AS found ORDER BY found"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 15: MERGE Operations (15 tests)
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 15: MERGE Operations"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 15: MERGE Operations (15 tests)            |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+Run-Test -Name "15.01 MERGE create new node" -Query "MERGE (n:Product {name: 'Widget'}) RETURN n.name AS name"
+Run-Test -Name "15.02 MERGE existing node" -Query "MERGE (n:Product {name: 'Widget'}) RETURN n.name AS name"
+Run-Test -Name "15.03 MERGE with ON CREATE" -Query "MERGE (n:Product {name: 'Gadget'}) ON CREATE SET n.created = true RETURN n.name AS name, n.created AS created"
+Run-Test -Name "15.04 MERGE with ON MATCH" -Query "MERGE (n:Product {name: 'Widget'}) ON MATCH SET n.accessed = true RETURN n.name AS name, n.accessed AS accessed"
+Run-Test -Name "15.05 MERGE count after" -Query "MERGE (n:Product {name: 'NewItem'}) RETURN count(*) AS cnt"
+Run-Test -Name "15.06 MERGE with multiple properties" -Query "MERGE (n:Product {name: 'MultiProp', category: 'tech'}) RETURN n.name AS name, n.category AS cat"
+Run-Test -Name "15.07 MERGE ON CREATE and ON MATCH" -Query "MERGE (n:Product {name: 'Widget'}) ON CREATE SET n.new = true ON MATCH SET n.old = true RETURN n.name AS name"
+Run-Test -Name "15.08 Multiple MERGE" -Query "MERGE (a:Product {name: 'A'}) MERGE (b:Product {name: 'B'}) RETURN a.name AS a, b.name AS b"
+Run-Test -Name "15.09 MERGE relationship" -Query "MATCH (a:Product {name: 'A'}), (b:Product {name: 'B'}) MERGE (a)-[r:RELATED]->(b) RETURN type(r) AS rel_type"
+Run-Test -Name "15.10 MERGE relationship existing" -Query "MATCH (a:Product {name: 'A'}), (b:Product {name: 'B'}) MERGE (a)-[r:RELATED]->(b) RETURN count(r) AS cnt"
+Run-Test -Name "15.11 MERGE with RETURN properties" -Query "MERGE (n:Product {name: 'Test'}) ON CREATE SET n.val = 1 RETURN n.name AS name, n.val AS val"
+Run-Test -Name "15.12 MERGE verify single node" -Query "MERGE (n:Product {name: 'Unique'}) WITH n MERGE (n2:Product {name: 'Unique'}) RETURN count(DISTINCT n) AS cnt"
+Run-Test -Name "15.13 MERGE all products count" -Query "MATCH (n:Product) RETURN count(n) AS total"
+Run-Test -Name "15.14 MERGE with labels" -Query "MERGE (n:Product:Featured {name: 'Special'}) RETURN labels(n) AS lbls"
+Run-Test -Name "15.15 MERGE cleanup verify" -Query "MATCH (n:Product) RETURN count(n) AS total_products"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 16: Type Conversion Functions (15 tests)
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 16: Type Conversion"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 16: Type Conversion Functions (15 tests)   |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+Run-Test -Name "16.01 toInteger from string" -Query "RETURN toInteger('42') AS result"
+Run-Test -Name "16.02 toInteger from float" -Query "RETURN toInteger(3.7) AS result"
+Run-Test -Name "16.03 toFloat from string" -Query "RETURN toFloat('3.14') AS result"
+Run-Test -Name "16.04 toFloat from integer" -Query "RETURN toFloat(42) AS result"
+Run-Test -Name "16.05 toString from integer" -Query "RETURN toString(42) AS result"
+Run-Test -Name "16.06 toString from float" -Query "RETURN toString(3.14) AS result"
+Run-Test -Name "16.07 toString from boolean" -Query "RETURN toString(true) AS result"
+Run-Test -Name "16.08 toBoolean from string true" -Query "RETURN toBoolean('true') AS result"
+Run-Test -Name "16.09 toBoolean from string false" -Query "RETURN toBoolean('false') AS result"
+Run-Test -Name "16.10 toInteger null" -Query "RETURN toInteger(null) AS result"
+Run-Test -Name "16.11 toFloat null" -Query "RETURN toFloat(null) AS result"
+Run-Test -Name "16.12 toString null" -Query "RETURN toString(null) AS result"
+Run-Test -Name "16.13 Type coercion in expression" -Query "RETURN toInteger('10') + 5 AS result"
+Run-Test -Name "16.14 toIntegerOrNull invalid" -Query "RETURN toIntegerOrNull('not a number') AS result"
+Run-Test -Name "16.15 toFloatOrNull invalid" -Query "RETURN toFloatOrNull('not a float') AS result"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 17: DELETE and SET Operations (15 tests)
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 17: DELETE and SET"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 17: DELETE and SET Operations (15 tests)   |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+# Create test data for DELETE/SET
+Invoke-Neo4jQuery "CREATE (a:Item {name: 'A', value: 1}), (b:Item {name: 'B', value: 2}), (c:Item {name: 'C', value: 3})" | Out-Null
+Invoke-Neo4jQuery "MATCH (a:Item {name: 'A'}), (b:Item {name: 'B'}) CREATE (a)-[:LINKS]->(b)" | Out-Null
+
+Invoke-NexusQuery "CREATE (a:Item {name: 'A', value: 1}), (b:Item {name: 'B', value: 2}), (c:Item {name: 'C', value: 3})" | Out-Null
+Invoke-NexusQuery "MATCH (a:Item {name: 'A'}), (b:Item {name: 'B'}) CREATE (a)-[:LINKS]->(b)" | Out-Null
+
+Run-Test -Name "17.01 SET single property" -Query "MATCH (n:Item {name: 'A'}) SET n.updated = true RETURN n.updated AS updated"
+Run-Test -Name "17.02 SET multiple properties" -Query "MATCH (n:Item {name: 'A'}) SET n.x = 1, n.y = 2 RETURN n.x AS x, n.y AS y"
+Run-Test -Name "17.03 SET update existing" -Query "MATCH (n:Item {name: 'A'}) SET n.value = 100 RETURN n.value AS value"
+Run-Test -Name "17.04 SET with expression" -Query "MATCH (n:Item {name: 'B'}) SET n.value = n.value * 2 RETURN n.value AS value"
+Run-Test -Name "17.05 SET to null (remove)" -Query "MATCH (n:Item {name: 'C'}) SET n.value = null RETURN n.value AS value"
+Run-Test -Name "17.06 Verify SET changes" -Query "MATCH (n:Item) RETURN n.name AS name, n.value AS value ORDER BY name"
+Run-Test -Name "17.07 DELETE relationship" -Query "MATCH (a:Item)-[r:LINKS]->(b:Item) DELETE r RETURN count(*) AS deleted"
+Run-Test -Name "17.08 Verify relationship deleted" -Query "MATCH (a:Item)-[r:LINKS]->(b:Item) RETURN count(r) AS cnt"
+Run-Test -Name "17.09 DELETE single node" -Query "MATCH (n:Item {name: 'C'}) DELETE n RETURN count(*) AS deleted"
+Run-Test -Name "17.10 Verify node deleted" -Query "MATCH (n:Item) RETURN count(n) AS cnt"
+Run-Test -Name "17.11 DETACH DELETE node" -Query "MATCH (n:Item {name: 'A'}) DETACH DELETE n RETURN count(*) AS deleted"
+Run-Test -Name "17.12 Verify DETACH DELETE" -Query "MATCH (n:Item) RETURN count(n) AS cnt"
+Run-Test -Name "17.13 DELETE all remaining" -Query "MATCH (n:Item) DETACH DELETE n RETURN count(*) AS deleted"
+Run-Test -Name "17.14 Verify empty" -Query "MATCH (n:Item) RETURN count(n) AS cnt"
+# Recreate for final test
+Invoke-Neo4jQuery "CREATE (n:Item {name: 'Final'})" | Out-Null
+Invoke-NexusQuery "CREATE (n:Item {name: 'Final'})" | Out-Null
+Run-Test -Name "17.15 REMOVE property" -Query "MATCH (n:Item {name: 'Final'}) REMOVE n.name RETURN n.name AS name"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 # FINAL REPORT
 #= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Write-Host "`n+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan

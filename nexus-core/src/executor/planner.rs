@@ -1,6 +1,6 @@
 use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement, QueryHint,
-    RelationshipDirection, ReturnItem, SortDirection, UnaryOperator,
+    RelationshipDirection, RelationshipQuantifier, ReturnItem, SortDirection, UnaryOperator,
 };
 use super::{Aggregation, Direction, JoinType, Operator, ProjectionItem};
 use crate::cache::relationship_index::RelationshipTraversalStats;
@@ -594,9 +594,8 @@ impl<'a> QueryPlanner<'a> {
         for clause in &query.clauses {
             match clause {
                 Clause::Match(match_clause) => {
-                    // For OPTIONAL MATCH, we need to handle NULL values for unmatched patterns
-                    // Store pattern with optional flag for later handling in executor
-                    patterns.push(match_clause.pattern.clone());
+                    // Store pattern with optional flag for LEFT OUTER JOIN semantics
+                    patterns.push((match_clause.pattern.clone(), match_clause.optional));
                     if let Some(where_clause) = &match_clause.where_clause {
                         where_clauses.push(where_clause.expression.clone());
                     }
@@ -605,7 +604,7 @@ impl<'a> QueryPlanner<'a> {
                         match_hints = match_clause.hints.clone();
                     }
                     // OPTIONAL MATCH is handled by executor as LEFT OUTER JOIN semantics
-                    // For now, we just collect the patterns - executor will handle NULL values
+                    // The optional flag is passed to plan_execution_strategy for proper handling
                     // Query hints are stored in match_clause.hints and will be used during planning
                 }
                 Clause::Create(create_clause) => {
@@ -623,7 +622,7 @@ impl<'a> QueryPlanner<'a> {
                     }
                 }
                 Clause::Merge(merge_clause) => {
-                    patterns.push(merge_clause.pattern.clone());
+                    patterns.push((merge_clause.pattern.clone(), false)); // MERGE is never optional
                     // MERGE is handled as match-or-create
                     // Store pattern for executor to handle
                 }
@@ -1094,7 +1093,7 @@ impl<'a> QueryPlanner<'a> {
     #[allow(clippy::too_many_arguments)]
     fn plan_execution_strategy(
         &self,
-        patterns: &[Pattern],
+        patterns: &[(Pattern, bool)], // (Pattern, is_optional)
         where_clauses: &[Expression],
         return_items: &[ReturnItem],
         limit_count: Option<usize>,
@@ -1112,7 +1111,7 @@ impl<'a> QueryPlanner<'a> {
         // CRITICAL FIX: Include ALL nodes that are targets of relationships (Expand),
         // not just nodes without labels. Nodes that are targets of Expand will be populated
         // by the Expand operator and don't need a separate NodeByLabel.
-        for pattern in patterns {
+        for (pattern, _is_optional) in patterns {
             for (idx, element) in pattern.elements.iter().enumerate() {
                 if let PatternElement::Relationship(_) = element {
                     if idx + 1 < pattern.elements.len() {
@@ -1129,17 +1128,47 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Process the first pattern
-        let start_pattern = self.select_start_pattern(patterns)?;
+        // Process the first pattern (extract pattern from tuple)
+        let patterns_only: Vec<Pattern> = patterns.iter().map(|(p, _)| p.clone()).collect();
+        let start_pattern = self.select_start_pattern(&patterns_only)?;
 
         // Add NodeByLabel operators for nodes in first pattern
-        for element in &start_pattern.elements {
+        // CRITICAL FIX: For cyclic patterns (e.g., (a)->(b)->(c)->(a)),
+        // the first node 'a' is BOTH a source AND a target. We need to identify
+        // the first node and ALWAYS create NodeByLabel for it, even if it's a target.
+        let first_node_var: Option<String> = start_pattern.elements.iter().find_map(|el| {
+            if let PatternElement::Node(node) = el {
+                node.variable.clone()
+            } else {
+                None
+            }
+        });
+
+        for (idx, element) in start_pattern.elements.iter().enumerate() {
             if let PatternElement::Node(node) = element {
                 if let Some(variable) = &node.variable {
+                    // CRITICAL: Check if this is the first node in the pattern
+                    let is_first_node = Some(variable.clone()) == first_node_var;
+
                     // Skip if this node is a pure target without labels (will be populated by Expand)
-                    if all_target_nodes.contains(variable) {
+                    // EXCEPTION: Always create NodeByLabel for the first node, even in cyclic patterns
+                    if !is_first_node && all_target_nodes.contains(variable) {
+                        eprintln!(
+                            "PLANNER: Skipping NodeByLabel for '{}' (is_first_node={}, in_targets={})",
+                            variable,
+                            is_first_node,
+                            all_target_nodes.contains(variable)
+                        );
                         continue;
                     }
+
+                    eprintln!(
+                        "PLANNER: Creating NodeByLabel for '{}' (is_first_node={}, in_targets={}, has_labels={})",
+                        variable,
+                        is_first_node,
+                        all_target_nodes.contains(variable),
+                        !node.labels.is_empty()
+                    );
 
                     // Check for hints for this variable
                     let use_index_hint = hints.iter().find(|h| {
@@ -1241,14 +1270,23 @@ impl<'a> QueryPlanner<'a> {
         }
 
         // Add relationship traversal operators for first pattern
-        self.add_relationship_operators(std::slice::from_ref(start_pattern), operators)?;
+        let first_is_optional = patterns.first().map(|(_, opt)| *opt).unwrap_or(false);
+        self.add_relationship_operators(
+            std::slice::from_ref(start_pattern),
+            first_is_optional,
+            operators,
+        )?;
 
         // Process additional patterns (for comma-separated MATCH patterns like (p1:...), (p2:...))
         // Each additional pattern needs its own NodeByLabel + Filter operators
-        for (pattern_idx, pattern) in patterns.iter().enumerate() {
+        for (pattern_idx, (pattern, is_optional)) in patterns.iter().enumerate() {
             if pattern_idx == 0 {
                 continue; // Skip first pattern, already processed
             }
+
+            // For OPTIONAL MATCH patterns (index > 0), we need LEFT OUTER JOIN semantics
+            // This will be handled by wrapping the pattern operators in a way that preserves NULL values
+            let _is_optional_pattern = *is_optional;
 
             // Add NodeByLabel operators for nodes in this additional pattern
             for element in &pattern.elements {
@@ -1304,7 +1342,11 @@ impl<'a> QueryPlanner<'a> {
             }
 
             // Add relationship operators for this pattern if any
-            self.add_relationship_operators(std::slice::from_ref(pattern), operators)?;
+            self.add_relationship_operators(
+                std::slice::from_ref(pattern),
+                *is_optional,
+                operators,
+            )?;
         }
 
         // Add filter operators for WHERE clauses
@@ -1983,6 +2025,7 @@ impl<'a> QueryPlanner<'a> {
     fn add_relationship_operators(
         &self,
         patterns: &[Pattern],
+        is_optional: bool,
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         let mut tmp_var_counter = 0;
@@ -2074,6 +2117,7 @@ impl<'a> QueryPlanner<'a> {
                                 target_var,
                                 rel_var: rel.variable.clone().unwrap_or_default(),
                                 direction,
+                                optional: is_optional,
                             });
                         }
                     }
@@ -2171,8 +2215,117 @@ impl<'a> QueryPlanner<'a> {
                 };
                 Ok(format!("{} {}", op_str, operand_str))
             }
+            Expression::Exists {
+                pattern,
+                where_clause,
+            } => {
+                let pattern_str = self.pattern_to_string(pattern)?;
+                if let Some(where_expr) = where_clause {
+                    let where_str = self.expression_to_string(where_expr)?;
+                    Ok(format!("EXISTS {{ {} WHERE {} }}", pattern_str, where_str))
+                } else {
+                    Ok(format!("EXISTS {{ {} }}", pattern_str))
+                }
+            }
             _ => Ok("?".to_string()),
         }
+    }
+
+    /// Convert a Pattern to its Cypher string representation
+    fn pattern_to_string(&self, pattern: &Pattern) -> Result<String> {
+        let mut result = String::new();
+        for element in pattern.elements.iter() {
+            match element {
+                PatternElement::Node(node) => {
+                    result.push('(');
+                    if let Some(ref var) = node.variable {
+                        result.push_str(var);
+                    }
+                    for label in &node.labels {
+                        result.push(':');
+                        result.push_str(label);
+                    }
+                    if let Some(ref props) = node.properties {
+                        if !props.properties.is_empty() {
+                            result.push_str(" {");
+                            let prop_strs: Vec<String> = props
+                                .properties
+                                .iter()
+                                .map(|(k, v)| {
+                                    format!(
+                                        "{}: {}",
+                                        k,
+                                        self.expression_to_string(v)
+                                            .unwrap_or_else(|_| "?".to_string())
+                                    )
+                                })
+                                .collect();
+                            result.push_str(&prop_strs.join(", "));
+                            result.push('}');
+                        }
+                    }
+                    result.push(')');
+                }
+                PatternElement::Relationship(rel) => {
+                    // Build relationship pattern
+                    match rel.direction {
+                        RelationshipDirection::Outgoing => {
+                            result.push_str("-[");
+                        }
+                        RelationshipDirection::Incoming => {
+                            result.push_str("<-[");
+                        }
+                        RelationshipDirection::Both => {
+                            result.push_str("-[");
+                        }
+                    }
+                    if let Some(ref var) = rel.variable {
+                        result.push_str(var);
+                    }
+                    for (j, rel_type) in rel.types.iter().enumerate() {
+                        if j == 0 {
+                            result.push(':');
+                        } else {
+                            result.push('|');
+                        }
+                        result.push_str(rel_type);
+                    }
+                    // Handle variable length patterns
+                    if let Some(ref quant) = rel.quantifier {
+                        match quant {
+                            RelationshipQuantifier::Exact(n) => {
+                                result.push_str(&format!("*{}", n));
+                            }
+                            RelationshipQuantifier::Range(min, max) => {
+                                result.push_str(&format!("*{}..{}", min, max));
+                            }
+                            RelationshipQuantifier::ZeroOrMore => {
+                                result.push_str("*");
+                            }
+                            RelationshipQuantifier::OneOrMore => {
+                                result.push_str("*1..");
+                            }
+                            RelationshipQuantifier::ZeroOrOne => {
+                                result.push_str("*0..1");
+                            }
+                        }
+                    }
+                    result.push(']');
+                    match rel.direction {
+                        RelationshipDirection::Outgoing => {
+                            result.push_str("->");
+                        }
+                        RelationshipDirection::Incoming => {
+                            result.push('-');
+                        }
+                        RelationshipDirection::Both => {
+                            result.push('-');
+                        }
+                    }
+                }
+            }
+        }
+        Ok(result)
     }
 
     /// Check if an expression contains an aggregation function (recursively)
@@ -3322,6 +3475,7 @@ mod tests {
                 target_var: "m".to_string(),
                 rel_var: "r".to_string(),
                 direction: Direction::Outgoing,
+                optional: false,
             },
             Operator::Project {
                 items: vec![ProjectionItem {

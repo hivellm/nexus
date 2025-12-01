@@ -630,7 +630,7 @@ EXPLAIN MATCH (n:Person) RETURN n
 PROFILE MATCH (n:Person) RETURN n
 ```
 
-### Query Hints
+### Query Hints ✅ IMPLEMENTED
 
 ```cypher
 -- Force index usage
@@ -650,6 +650,43 @@ MATCH (a)-[r]->(b)
 USING JOIN ON r
 RETURN a, b
 ```
+
+## Query Management ✅ IMPLEMENTED
+
+### SHOW QUERIES
+
+List all currently executing queries across all connections.
+
+```cypher
+-- Show all running queries
+SHOW QUERIES
+
+-- Returns:
+-- | queryId | query | database | user | startTime | elapsedMs | status |
+-- |---------|-------|----------|------|-----------|-----------|--------|
+-- | abc123  | MATCH | neo4j    | admin| 2025-01-15| 1234      | running|
+```
+
+### TERMINATE QUERY
+
+Terminate a running query by its ID.
+
+```cypher
+-- Terminate a specific query
+TERMINATE QUERY 'abc123'
+
+-- Use with SHOW QUERIES to find long-running queries
+SHOW QUERIES
+-- Then terminate if needed
+TERMINATE QUERY 'query-id-from-show-queries'
+```
+
+**Query Management Summary:**
+
+| Command | Description |
+|---------|-------------|
+| `SHOW QUERIES` | List all running queries with metadata |
+| `TERMINATE QUERY 'id'` | Cancel a running query by its ID |
 
 ## Data Import/Export ✅ IMPLEMENTED
 
@@ -716,6 +753,46 @@ RETURN split('a,b,c', ',') AS parts
 RETURN length('hello') AS len
 ```
 
+### Regex Functions ✅ IMPLEMENTED
+
+```cypher
+-- Test if pattern matches string
+RETURN regexMatch('hello123world', '[0-9]+') AS hasNumbers        -- true
+RETURN regexMatch('test@example.com', '^[^@]+@[^@]+$') AS isEmail  -- true
+
+-- Replace first/all matches
+RETURN regexReplace('a1b2c3', '[0-9]', 'X') AS first      -- 'aXb2c3'
+RETURN regexReplaceAll('a1b2c3', '[0-9]', 'X') AS all     -- 'aXbXcX'
+
+-- Normalize whitespace
+RETURN regexReplaceAll('hello   world', '\\s+', ' ') AS normalized -- 'hello world'
+
+-- Extract matches
+RETURN regexExtract('hello123world456', '[0-9]+') AS first        -- '123'
+RETURN regexExtractAll('a1b2c3', '[0-9]') AS all                   -- ['1', '2', '3']
+
+-- Extract capture groups
+RETURN regexExtractGroups('John Smith', '([A-Z][a-z]+) ([A-Z][a-z]+)') AS groups  -- ['John', 'Smith']
+RETURN regexExtractGroups('2024-01-15', '([0-9]+)-([0-9]+)-([0-9]+)') AS date     -- ['2024', '01', '15']
+
+-- Split by regex pattern
+RETURN regexSplit('a1b2c3d', '[0-9]') AS parts            -- ['a', 'b', 'c', 'd']
+RETURN regexSplit('hello   world  foo', '\\s+') AS words  -- ['hello', 'world', 'foo']
+RETURN regexSplit('a,b;c,d;e', '[,;]') AS items           -- ['a', 'b', 'c', 'd', 'e']
+```
+
+**Available Regex Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `regexMatch(string, pattern)` | Returns `true` if pattern matches anywhere in string |
+| `regexReplace(string, pattern, replacement)` | Replace first occurrence |
+| `regexReplaceAll(string, pattern, replacement)` | Replace all occurrences |
+| `regexExtract(string, pattern)` | Extract first match (or `null`) |
+| `regexExtractAll(string, pattern)` | Extract all matches as array |
+| `regexExtractGroups(string, pattern)` | Extract capture groups from first match |
+| `regexSplit(string, pattern)` | Split string by regex pattern |
+
 ### Math Functions
 
 ```cypher
@@ -731,7 +808,53 @@ RETURN pow(2, 3) AS power
 RETURN sin(0) AS sine
 RETURN cos(0) AS cosine
 RETURN tan(0) AS tangent
+
+-- Inverse trigonometric ✅ IMPLEMENTED
+RETURN asin(0.5) AS arc_sine        -- Returns radians
+RETURN acos(0.5) AS arc_cosine      -- Returns radians
+RETURN atan(1) AS arc_tangent       -- Returns radians
+RETURN atan2(1, 1) AS arc_tangent2  -- atan2(y, x) - returns radians
+
+-- Exponential and logarithmic ✅ IMPLEMENTED
+RETURN exp(1) AS e_to_power         -- e^x
+RETURN log(10) AS natural_log       -- ln(x)
+RETURN log10(100) AS log_base_10    -- log₁₀(x)
+
+-- Angle conversion ✅ IMPLEMENTED
+RETURN radians(180) AS rad          -- Degrees to radians (returns π)
+RETURN degrees(3.14159) AS deg      -- Radians to degrees (returns ~180)
+
+-- Mathematical constants ✅ IMPLEMENTED
+RETURN pi() AS pi_value             -- Returns 3.141592653589793
+RETURN e() AS euler_number          -- Returns 2.718281828459045
 ```
+
+**Math Function Summary:**
+
+| Function | Description |
+|----------|-------------|
+| `abs(x)` | Absolute value |
+| `ceil(x)` | Round up to nearest integer |
+| `floor(x)` | Round down to nearest integer |
+| `round(x)` | Round to nearest integer |
+| `sqrt(x)` | Square root |
+| `pow(x, y)` | x raised to power y |
+| `sin(x)` | Sine (x in radians) |
+| `cos(x)` | Cosine (x in radians) |
+| `tan(x)` | Tangent (x in radians) |
+| `asin(x)` | Arc sine (returns radians) |
+| `acos(x)` | Arc cosine (returns radians) |
+| `atan(x)` | Arc tangent (returns radians) |
+| `atan2(y, x)` | Arc tangent of y/x (returns radians) |
+| `exp(x)` | e raised to power x |
+| `log(x)` | Natural logarithm (ln) |
+| `log10(x)` | Base-10 logarithm |
+| `radians(x)` | Convert degrees to radians |
+| `degrees(x)` | Convert radians to degrees |
+| `pi()` | Returns π (3.14159...) |
+| `e()` | Returns Euler's number (2.71828...) |
+| `sign(x)` | Returns -1, 0, or 1 |
+| `rand()` | Random number between 0 and 1 |
 
 ### Type Conversion
 
@@ -747,12 +870,95 @@ RETURN toDate('2024-01-01') AS date_val
 ### Temporal Functions
 
 ```cypher
--- Date/time functions
+-- Current date/time functions
 RETURN date() AS today
 RETURN datetime() AS now
 RETURN time() AS current_time
 RETURN timestamp() AS unix_timestamp
+RETURN localtime() AS local_time           -- ✅ IMPLEMENTED
+RETURN localdatetime() AS local_datetime   -- ✅ IMPLEMENTED
+
+-- Duration creation
 RETURN duration({days: 7}) AS week
+RETURN duration({years: 1, months: 6}) AS period
+RETURN duration({hours: 2, minutes: 30}) AS time_duration
+
+-- Temporal component extraction ✅ IMPLEMENTED
+RETURN year(datetime('2025-01-15T10:30:00')) AS yr           -- 2025
+RETURN month(datetime('2025-01-15T10:30:00')) AS mo          -- 1
+RETURN day(datetime('2025-01-15T10:30:00')) AS dy            -- 15
+RETURN hour(datetime('2025-01-15T10:30:00')) AS hr           -- 10
+RETURN minute(datetime('2025-01-15T10:30:00')) AS min        -- 30
+RETURN second(datetime('2025-01-15T10:30:00')) AS sec        -- 0
+RETURN quarter(datetime('2025-04-15')) AS q                  -- 2
+RETURN week(datetime('2025-01-15')) AS wk                    -- Week of year
+RETURN dayOfWeek(datetime('2025-01-15')) AS dow              -- Day of week (1=Mon, 7=Sun)
+RETURN dayOfYear(datetime('2025-01-15')) AS doy              -- Day of year (1-366)
+RETURN millisecond(datetime('2025-01-15T10:30:00.123')) AS ms
+RETURN microsecond(datetime('2025-01-15T10:30:00.123456')) AS us
+RETURN nanosecond(datetime('2025-01-15T10:30:00.123456789')) AS ns
+
+-- Create datetime from components
+RETURN datetime({year: 2025, month: 1, day: 15}) AS dt
+RETURN datetime({year: 2025, month: 1, day: 15, hour: 10, minute: 30, second: 0}) AS full_dt
+RETURN date({year: 2025, month: 6, day: 15}) AS d
+RETURN localtime({hour: 10, minute: 30, second: 0}) AS lt
+RETURN localdatetime({year: 2025, month: 1, day: 15, hour: 10}) AS ldt
+```
+
+**Temporal Component Functions Summary:**
+
+| Function | Description |
+|----------|-------------|
+| `year(temporal)` | Extract year component |
+| `month(temporal)` | Extract month (1-12) |
+| `day(temporal)` | Extract day of month (1-31) |
+| `hour(temporal)` | Extract hour (0-23) |
+| `minute(temporal)` | Extract minute (0-59) |
+| `second(temporal)` | Extract second (0-59) |
+| `quarter(temporal)` | Extract quarter (1-4) |
+| `week(temporal)` | Extract ISO week of year (1-53) |
+| `dayOfWeek(temporal)` | Day of week (1=Monday to 7=Sunday) |
+| `dayOfYear(temporal)` | Day of year (1-366) |
+| `millisecond(temporal)` | Extract milliseconds (0-999) |
+| `microsecond(temporal)` | Extract microseconds (0-999999) |
+| `nanosecond(temporal)` | Extract nanoseconds (0-999999999) |
+
+### Temporal Arithmetic ✅ IMPLEMENTED
+
+```cypher
+-- Datetime + Duration
+RETURN datetime('2025-01-15T10:30:00') + duration({days: 5}) AS future
+RETURN datetime('2025-01-15T10:30:00') + duration({months: 2}) AS later
+RETURN datetime('2025-01-15T10:30:00') + duration({years: 1}) AS next_year
+
+-- Datetime - Duration
+RETURN datetime('2025-01-15T10:30:00') - duration({days: 5}) AS past
+RETURN datetime('2025-03-15T10:30:00') - duration({months: 2}) AS earlier
+
+-- Date + Duration
+RETURN date('2025-01-15') + duration({days: 10}) AS later_date
+
+-- Datetime - Datetime (returns duration)
+RETURN datetime('2025-01-20T10:30:00') - datetime('2025-01-15T10:30:00') AS diff
+
+-- Duration + Duration
+RETURN duration({days: 3}) + duration({days: 2}) AS combined
+
+-- Duration - Duration
+RETURN duration({days: 5}) - duration({days: 2}) AS difference
+```
+
+### Duration Functions ✅ IMPLEMENTED
+
+```cypher
+-- Duration between datetimes
+RETURN duration.between(datetime('2025-01-15'), datetime('2025-01-20')) AS diff
+
+-- Get duration in specific units
+RETURN duration.inMonths(datetime('2025-01-01'), datetime('2025-04-01')) AS months
+RETURN duration.inDays(datetime('2025-01-01'), datetime('2025-01-15')) AS days
+RETURN duration.inSeconds(datetime('2025-01-01T00:00:00'), datetime('2025-01-01T01:00:00')) AS seconds
 ```
 
 ### List Functions
@@ -804,37 +1010,74 @@ RETURN stDevP(n.age) AS std_dev_pop
 ### Point Data Type
 
 ```cypher
--- Create point
+-- Create 2D Cartesian point
 RETURN point({x: 1, y: 2}) AS p
 
--- 3D point
+-- Create 3D Cartesian point
 RETURN point({x: 1, y: 2, z: 3}) AS p3d
 
--- WGS84 point
+-- Create WGS84 geographic point (longitude, latitude)
 RETURN point({x: -122.4194, y: 37.7749, crs: 'wgs-84'}) AS location
+
+-- Alternative: Use latitude/longitude directly
+RETURN point({longitude: -122.4194, latitude: 37.7749}) AS location
 ```
+
+### Point Property Accessors ✅ IMPLEMENTED
+
+```cypher
+-- Access point components
+WITH point({x: -122.4194, y: 37.7749, z: 100, crs: 'wgs-84'}) AS p
+RETURN p.x AS x,                    -- X coordinate (longitude for WGS84)
+       p.y AS y,                    -- Y coordinate (latitude for WGS84)
+       p.z AS z,                    -- Z coordinate (if 3D point)
+       p.latitude AS lat,           -- Alias for y (WGS84)
+       p.longitude AS lon,          -- Alias for x (WGS84)
+       p.crs AS coordinate_system   -- 'cartesian' or 'wgs-84'
+```
+
+**Point Property Summary:**
+
+| Property | Description |
+|----------|-------------|
+| `point.x` | X coordinate (or longitude for WGS84) |
+| `point.y` | Y coordinate (or latitude for WGS84) |
+| `point.z` | Z coordinate (optional, for 3D points) |
+| `point.latitude` | Alias for y (WGS84 points) |
+| `point.longitude` | Alias for x (WGS84 points) |
+| `point.crs` | Coordinate reference system |
 
 ### Distance Functions
 
 ```cypher
--- Calculate distance
+-- Calculate distance between two points
+WITH point({x: 0, y: 0}) AS p1, point({x: 3, y: 4}) AS p2
+RETURN distance(p1, p2) AS dist  -- Returns 5.0 (Euclidean distance)
+
+-- Calculate distance to stored locations
 MATCH (l:Location)
-RETURN distance(l.coords, point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})) AS dist
+RETURN l.name, distance(l.coords, point({x: -122.4194, y: 37.7749, crs: 'wgs-84'})) AS dist
 ORDER BY dist LIMIT 5
 ```
 
 ### Geospatial Procedures
 
 ```cypher
--- Within bounding box
-CALL spatial.withinBBox('Location', 'coords', point({x: -122.5, y: 37.7}), point({x: -122.3, y: 37.8}))
+-- Find nodes within a bounding box
+CALL spatial.withinBBox('Location', 'coords',
+  point({x: -122.5, y: 37.7}),  -- min corner
+  point({x: -122.3, y: 37.8})   -- max corner
+)
 YIELD node
-RETURN node
+RETURN node.name, node.coords
 
--- Within distance
-CALL spatial.withinDistance('Location', 'coords', point({x: -122.4194, y: 37.7749, crs: 'wgs-84'}), 1000.0)
+-- Find nodes within distance (radius search)
+CALL spatial.withinDistance('Location', 'coords',
+  point({x: -122.4194, y: 37.7749, crs: 'wgs-84'}),
+  1000.0  -- distance in meters for WGS84
+)
 YIELD node
-RETURN node
+RETURN node.name, node.coords
 ```
 
 ## Graph Algorithms ✅ IMPLEMENTED
@@ -869,6 +1112,192 @@ CALL algorithms.labelPropagation('Person', 'KNOWS')
 YIELD node, community
 RETURN community, collect(node.name) AS members
 ```
+
+## GDS Procedure Wrappers ✅ IMPLEMENTED
+
+Nexus provides Neo4j GDS-compatible procedure wrappers for graph algorithms.
+
+### Centrality Algorithms
+
+```cypher
+-- PageRank centrality (standard)
+CALL gds.centrality.pagerank('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+ORDER BY score DESC
+
+-- PageRank with custom parameters
+CALL gds.centrality.pagerank('Person', 'KNOWS', {
+  dampingFactor: 0.85,      -- Probability of following a link (default: 0.85)
+  maxIterations: 100,       -- Maximum iterations (default: 100)
+  tolerance: 0.0001         -- Convergence tolerance (default: 0.0001)
+})
+YIELD node, score
+RETURN node.name, score
+
+-- Weighted PageRank (uses edge weights for contribution) ✅ NEW
+CALL gds.centrality.pagerank.weighted('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+
+-- Betweenness centrality
+CALL gds.centrality.betweenness('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+
+-- Closeness centrality
+CALL gds.centrality.closeness('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+
+-- Degree centrality
+CALL gds.centrality.degree('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+
+-- Eigenvector centrality
+CALL gds.centrality.eigenvector('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+```
+
+**PageRank Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `dampingFactor` | Float | 0.85 | Probability of following a link vs teleporting |
+| `maxIterations` | Integer | 100 | Maximum number of iterations |
+| `tolerance` | Float | 0.0001 | Convergence threshold |
+
+**PageRank Variants:**
+
+| Procedure | Description |
+|-----------|-------------|
+| `gds.centrality.pagerank` | Standard PageRank with equal edge weights |
+| `gds.centrality.pagerank.weighted` | PageRank using edge weights for contribution distribution |
+
+**Performance Notes:**
+- For graphs with >1000 nodes, parallel processing is automatically enabled
+- Weighted PageRank distributes rank proportionally to edge weights
+- Higher edge weights mean more PageRank flows through that connection
+
+### Pathfinding Algorithms
+
+```cypher
+-- Dijkstra shortest path
+CALL gds.shortestPath.dijkstra('Person', 'KNOWS', $sourceId, $targetId)
+YIELD path, cost
+RETURN path, cost
+
+-- A* shortest path (with heuristic)
+CALL gds.shortestPath.astar('Person', 'KNOWS', $sourceId, $targetId)
+YIELD path, cost
+RETURN path, cost
+
+-- Yen's K shortest paths
+CALL gds.shortestPath.yens('Person', 'KNOWS', $sourceId, $targetId, 5)
+YIELD path, cost
+RETURN path, cost
+```
+
+### Community Detection
+
+```cypher
+-- Louvain community detection (modularity optimization)
+CALL gds.community.louvain('Person', 'KNOWS')
+YIELD node, community
+RETURN community, collect(node.name) AS members
+ORDER BY size(collect(node.name)) DESC
+
+-- Label propagation (fast, semi-supervised)
+CALL gds.community.labelPropagation('Person', 'KNOWS')
+YIELD node, community
+RETURN community, collect(node.name) AS members
+
+-- Weakly connected components
+CALL gds.components.weaklyConnected('Person', 'KNOWS')
+YIELD node, componentId
+RETURN componentId, count(*) AS size
+
+-- Strongly connected components (for directed graphs)
+CALL gds.components.stronglyConnected('Person', 'KNOWS')
+YIELD node, componentId
+RETURN componentId, count(*) AS size
+```
+
+**Community Detection Algorithms:**
+
+| Algorithm | Best For | Complexity | Description |
+|-----------|----------|------------|-------------|
+| Louvain | Large graphs | O(n log n) | Modularity-based, hierarchical |
+| Label Propagation | Very large graphs | O(m) | Fast, near-linear time |
+| WCC | Any graph | O(n + m) | Finds connected subgraphs |
+| SCC | Directed graphs | O(n + m) | Finds strongly connected subgraphs |
+
+**Notes:**
+- Louvain produces high-quality communities but may be slower
+- Label Propagation is faster but results can vary between runs
+- WCC/SCC are deterministic and fast
+
+### Graph Structure Analysis
+
+```cypher
+-- Triangle counting (per node)
+CALL gds.triangleCount('Person', 'KNOWS')
+YIELD node, triangles
+RETURN node.name, triangles
+ORDER BY triangles DESC
+
+-- Local clustering coefficient (how clustered neighbors are)
+CALL gds.localClusteringCoefficient('Person', 'KNOWS')
+YIELD node, coefficient
+RETURN node.name, coefficient
+ORDER BY coefficient DESC
+
+-- Global clustering coefficient (overall graph clustering)
+CALL gds.globalClusteringCoefficient('Person', 'KNOWS')
+YIELD coefficient
+RETURN coefficient
+```
+
+**Graph Structure Metrics:**
+
+| Metric | Returns | Description |
+|--------|---------|-------------|
+| Triangle Count | Per-node count | Number of triangles each node participates in |
+| Local Clustering | Per-node coefficient [0,1] | Probability that neighbors are connected |
+| Global Clustering | Single coefficient [0,1] | Overall graph transitivity |
+
+**Use Cases:**
+- Triangle count: Identify highly interconnected nodes
+- Local clustering: Find tightly-knit groups
+- Global clustering: Measure overall network cohesion
+
+### GDS Procedure Summary
+
+| Procedure | Category | Description |
+|-----------|----------|-------------|
+| `gds.centrality.pagerank` | Centrality | Standard PageRank algorithm |
+| `gds.centrality.pagerank.weighted` | Centrality | Weighted PageRank (edge weights) |
+| `gds.centrality.betweenness` | Centrality | Betweenness centrality |
+| `gds.centrality.closeness` | Centrality | Closeness centrality |
+| `gds.centrality.degree` | Centrality | Degree centrality |
+| `gds.centrality.eigenvector` | Centrality | Eigenvector centrality |
+| `gds.shortestPath.dijkstra` | Pathfinding | Dijkstra's algorithm |
+| `gds.shortestPath.astar` | Pathfinding | A* with heuristic |
+| `gds.shortestPath.bellmanFord` | Pathfinding | Bellman-Ford (negative weights) |
+| `gds.shortestPath.yens` | Pathfinding | K shortest paths |
+| `gds.community.louvain` | Community | Louvain modularity optimization |
+| `gds.community.labelPropagation` | Community | Fast label propagation |
+| `gds.components.weaklyConnected` | Community | Weakly connected components |
+| `gds.components.stronglyConnected` | Community | Strongly connected components |
+| `gds.triangleCount` | Structure | Triangle counting per node |
+| `gds.localClusteringCoefficient` | Structure | Per-node clustering coefficient |
+| `gds.globalClusteringCoefficient` | Structure | Graph-wide clustering coefficient |
+| `gds.similarity.jaccard` | Similarity | Jaccard similarity score |
+| `gds.similarity.cosine` | Similarity | Cosine similarity score |
+
+**Total: 19 GDS procedures implemented**
 
 ## Unsupported Features (Out of Scope)
 

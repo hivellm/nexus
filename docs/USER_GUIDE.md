@@ -23,10 +23,37 @@ Nexus is a high-performance graph database with native support for vector simila
 
 - **Graph Database**: Store and query complex relationships
 - **Vector Search**: Native KNN support for similarity queries
-- **Cypher Support**: Industry-standard query language
+- **Cypher Support**: Industry-standard query language (~55% openCypher compatibility)
 - **REST API**: Easy integration with any application
 - **High Performance**: Optimized for both graph traversal and vector operations
 - **ACID Transactions**: Data consistency and reliability
+- **Neo4j Compatibility**: 300/300 compatibility tests passing (100%)
+
+### Neo4j Compatibility
+
+Nexus maintains excellent Neo4j compatibility, tested against 300 automated tests covering:
+
+| Test Section | Tests | Coverage |
+|-------------|-------|----------|
+| Basic CREATE/RETURN | 20 | Literals, expressions, operators |
+| MATCH Queries | 25 | WHERE, ORDER BY, LIMIT, DISTINCT |
+| Aggregation Functions | 25 | COUNT, SUM, AVG, MIN, MAX, COLLECT |
+| String Functions | 20 | toLower, toUpper, trim, substring, split |
+| List/Array Operations | 20 | Indexing, slicing, range, head/tail |
+| Mathematical Operations | 20 | Arithmetic, abs, ceil, floor, sqrt |
+| Relationships | 30 | Pattern matching, paths, types |
+| NULL Handling | 15 | IS NULL, coalesce, NULL propagation |
+| CASE Expressions | 10 | Simple and complex conditions |
+| UNION Queries | 10 | UNION, UNION ALL |
+| Graph Patterns | 15 | Triangles, centrality, connectivity |
+| OPTIONAL MATCH | 15 | Left outer joins, NULL handling |
+| WITH Clause | 15 | Projection, aggregation, chaining |
+| UNWIND | 15 | Array processing, nesting |
+| MERGE Operations | 15 | ON CREATE, ON MATCH, upserts |
+| Type Conversion | 15 | toInteger, toFloat, toString |
+| DELETE/SET | 15 | Property updates, node deletion |
+
+**Total: 300 tests | 100% pass rate**
 
 ## Quick Start
 
@@ -424,15 +451,184 @@ RETURN AVG(n.age) as avg_age, MAX(n.age) as max_age
 
 ```cypher
 // Find mutual connections
-MATCH (a:Person)-[:KNOWS]->(b:Person), 
-      (b:Person)-[:KNOWS]->(a:Person) 
+MATCH (a:Person)-[:KNOWS]->(b:Person),
+      (b:Person)-[:KNOWS]->(a:Person)
 RETURN a.name, b.name
 
 // Find shortest path
-MATCH (a:Person {name: "Alice"}), 
-      (b:Person {name: "Bob"}), 
-      p = shortestPath((a)-[:KNOWS*]-(b)) 
+MATCH (a:Person {name: "Alice"}),
+      (b:Person {name: "Bob"}),
+      p = shortestPath((a)-[:KNOWS*]-(b))
 RETURN p
+```
+
+### OPTIONAL MATCH
+
+OPTIONAL MATCH works like MATCH but returns null for unmatched patterns (left outer join semantics):
+
+```cypher
+// Find all people and their optional friends
+MATCH (n:Person)
+OPTIONAL MATCH (n)-[:KNOWS]->(friend:Person)
+RETURN n.name, friend.name
+
+// Count relationships (including nulls for unconnected nodes)
+MATCH (n:Person)
+OPTIONAL MATCH (n)-[r:KNOWS]->()
+RETURN n.name, count(r) AS friends
+
+// Multiple optional patterns
+MATCH (p:Person)
+OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company)
+OPTIONAL MATCH (p)-[:LIVES_IN]->(city:City)
+RETURN p.name, c.name AS company, city.name AS location
+```
+
+### EXISTS Subqueries
+
+Check for pattern existence without returning matched nodes:
+
+```cypher
+// Find people who know someone in NYC
+MATCH (n:Person)
+WHERE EXISTS {
+  MATCH (n)-[:KNOWS]->(:Person {city: 'NYC'})
+}
+RETURN n.name
+
+// Find products with reviews
+MATCH (p:Product)
+WHERE EXISTS {
+  MATCH (p)<-[:REVIEWED]-(:Person)
+}
+RETURN p.name
+```
+
+### CASE Expressions
+
+Conditional logic in queries:
+
+```cypher
+// Simple CASE
+MATCH (n:Person)
+RETURN n.name,
+  CASE n.status
+    WHEN 'active' THEN 'Online'
+    WHEN 'inactive' THEN 'Offline'
+    ELSE 'Unknown'
+  END AS status_text
+
+// Generic CASE with conditions
+MATCH (n:Person)
+RETURN n.name,
+  CASE
+    WHEN n.age < 18 THEN 'Minor'
+    WHEN n.age < 65 THEN 'Adult'
+    ELSE 'Senior'
+  END AS age_group
+
+// CASE in aggregations
+MATCH (n:Person)
+RETURN
+  count(CASE WHEN n.age < 30 THEN 1 END) AS young,
+  count(CASE WHEN n.age >= 30 THEN 1 END) AS older
+```
+
+### List and Pattern Comprehensions
+
+```cypher
+// List comprehension - transform list
+RETURN [x IN range(1,10) WHERE x % 2 = 0 | x * 2] AS doubled_evens
+
+// Pattern comprehension - collect from pattern
+MATCH (p:Person)
+RETURN p.name, [(p)-[:KNOWS]->(f) | f.name] AS friend_names
+
+// Map projection
+MATCH (p:Person)
+RETURN p {.name, .age, friends: [(p)-[:KNOWS]->(f) | f.name]}
+```
+
+## Temporal Functions and Arithmetic
+
+Nexus provides comprehensive temporal support for date/time operations.
+
+### Date and Time Functions
+
+```cypher
+// Current date/time
+RETURN date() AS today
+RETURN datetime() AS now
+RETURN time() AS current_time
+RETURN timestamp() AS unix_timestamp
+RETURN localtime() AS local_time
+RETURN localdatetime() AS local_datetime
+
+// Parse from string
+RETURN date('2025-01-15') AS parsed_date
+RETURN datetime('2025-01-15T10:30:00') AS parsed_datetime
+
+// Extract components
+RETURN year(date()) AS year
+RETURN month(date()) AS month
+RETURN day(date()) AS day
+RETURN hour(time()) AS hour
+RETURN minute(time()) AS minute
+RETURN second(time()) AS second
+RETURN dayOfWeek(date()) AS dow
+RETURN dayOfYear(date()) AS doy
+RETURN quarter(date()) AS quarter
+RETURN week(date()) AS week
+```
+
+### Duration Functions
+
+```cypher
+// Create durations
+RETURN duration({days: 5}) AS five_days
+RETURN duration({hours: 2, minutes: 30}) AS two_and_half_hours
+RETURN duration({weeks: 1}) AS one_week
+RETURN duration({months: 3}) AS three_months
+RETURN duration({years: 1}) AS one_year
+
+// Complex duration
+RETURN duration({days: 1, hours: 2, minutes: 30, seconds: 45}) AS complex
+```
+
+### Temporal Arithmetic
+
+```cypher
+// Add duration to datetime
+RETURN datetime('2025-01-15T10:30:00') + duration({days: 5}) AS future_date
+RETURN datetime('2025-01-15T10:30:00') + duration({months: 2}) AS two_months_later
+RETURN datetime('2025-01-15T10:30:00') + duration({years: 1}) AS next_year
+
+// Subtract duration from datetime
+RETURN datetime('2025-01-15T10:30:00') - duration({days: 5}) AS past_date
+RETURN datetime('2025-03-15T10:30:00') - duration({months: 2}) AS two_months_earlier
+
+// Add date to duration
+RETURN date('2025-01-15') + duration({days: 10}) AS ten_days_later
+
+// Duration arithmetic
+RETURN duration({days: 3}) + duration({days: 2}) AS five_days
+RETURN duration({days: 5}) - duration({days: 2}) AS three_days
+
+// Complex chained operations
+RETURN datetime('2025-01-15T10:00:00') + duration({days: 10}) - duration({days: 3}) AS result
+```
+
+### Duration Between Dates
+
+```cypher
+// Calculate duration between datetimes
+RETURN datetime('2025-01-20T10:30:00') - datetime('2025-01-15T10:30:00') AS diff
+
+// Duration utility functions
+RETURN duration.between(datetime('2025-01-15'), datetime('2025-01-20')) AS diff
+RETURN duration.inMonths(datetime('2025-01-01'), datetime('2025-04-01')) AS months
+RETURN duration.inDays(datetime('2025-01-01'), datetime('2025-01-15')) AS days
+RETURN duration.inSeconds(datetime('2025-01-01T00:00:00'), datetime('2025-01-01T01:00:00')) AS seconds
 ```
 
 ## User-Defined Functions (UDFs) and Procedures
@@ -590,12 +786,75 @@ RETURN sum AS result
 
 #### Built-in Procedures
 
-Nexus includes built-in graph algorithm procedures:
+Nexus includes 20 built-in Neo4j GDS-compatible graph algorithm procedures.
 
-- **Shortest Path**: `gds.shortestPath.dijkstra`, `gds.shortestPath.astar`, `gds.shortestPath.bellmanFord`
-- **Centrality**: `gds.centrality.pagerank`, `gds.centrality.betweenness`, `gds.centrality.closeness`, `gds.centrality.degree`
-- **Community Detection**: `gds.community.louvain`, `gds.community.labelPropagation`, `gds.community.stronglyConnectedComponents`, `gds.community.weaklyConnectedComponents`
-- **Similarity**: `gds.similarity.jaccard`, `gds.similarity.cosine`
+**Centrality Algorithms:**
+- `gds.pageRank` - PageRank centrality
+- `gds.centrality.betweenness` - Betweenness centrality
+- `gds.centrality.closeness` - Closeness centrality
+- `gds.centrality.degree` - Degree centrality
+- `gds.centrality.eigenvector` - Eigenvector centrality
+
+**Pathfinding Algorithms:**
+- `gds.shortestPath.dijkstra` - Dijkstra's shortest path
+- `gds.shortestPath.astar` - A* with heuristic
+- `gds.shortestPath.yens` - K shortest paths (Yen's algorithm)
+
+**Community Detection:**
+- `gds.louvain` - Louvain modularity optimization
+- `gds.labelPropagation` - Label propagation algorithm
+- `gds.wcc` - Weakly connected components
+- `gds.scc` - Strongly connected components
+
+**Graph Structure Analysis:**
+- `gds.triangleCount` - Triangle counting
+- `gds.localClusteringCoefficient` - Per-node clustering coefficient
+- `gds.globalClusteringCoefficient` - Graph-wide clustering coefficient
+
+**Examples:**
+
+```cypher
+// PageRank centrality
+CALL gds.pageRank('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+ORDER BY score DESC LIMIT 10
+
+// Betweenness centrality
+CALL gds.centrality.betweenness('Person', 'KNOWS')
+YIELD node, score
+RETURN node.name, score
+
+// Dijkstra shortest path
+CALL gds.shortestPath.dijkstra('Person', 'KNOWS', 1, 10)
+YIELD path, cost
+RETURN path, cost
+
+// K shortest paths (Yen's algorithm)
+CALL gds.shortestPath.yens('Person', 'KNOWS', 1, 10, 5)
+YIELD path, cost
+RETURN path, cost
+
+// Louvain community detection
+CALL gds.louvain('Person', 'KNOWS')
+YIELD node, community
+RETURN community, collect(node.name) AS members
+
+// Weakly connected components
+CALL gds.wcc('Person', 'KNOWS')
+YIELD node, componentId
+RETURN componentId, count(*) AS size
+
+// Triangle counting
+CALL gds.triangleCount('Person', 'KNOWS')
+YIELD node, triangles
+RETURN node.name, triangles
+
+// Clustering coefficient
+CALL gds.localClusteringCoefficient('Person', 'KNOWS')
+YIELD node, coefficient
+RETURN node.name, coefficient
+```
 
 #### Procedure Persistence
 

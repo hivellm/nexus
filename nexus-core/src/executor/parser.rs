@@ -107,6 +107,12 @@ pub enum Clause {
     LoadCsv(LoadCsvClause),
     /// SHOW FUNCTIONS command
     ShowFunctions,
+    /// SHOW CONSTRAINTS command
+    ShowConstraints,
+    /// SHOW QUERIES command
+    ShowQueries,
+    /// TERMINATE QUERY command
+    TerminateQuery(TerminateQueryClause),
     /// CREATE FUNCTION command
     CreateFunction(CreateFunctionClause),
     /// DROP FUNCTION command
@@ -644,6 +650,14 @@ pub struct DropFunctionClause {
     pub if_exists: bool,
 }
 
+/// TERMINATE QUERY clause
+/// Syntax: TERMINATE QUERY 'query-id'
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminateQueryClause {
+    /// Query ID to terminate
+    pub query_id: String,
+}
+
 /// UDF parameter (re-exported from udf module for parser)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UdfParameter {
@@ -1143,6 +1157,12 @@ impl CypherParser {
                 } else if self.peek_keyword("FUNCTIONS") {
                     self.parse_keyword()?; // consume "FUNCTIONS"
                     Ok(Clause::ShowFunctions)
+                } else if self.peek_keyword("CONSTRAINTS") {
+                    self.parse_keyword()?; // consume "CONSTRAINTS"
+                    Ok(Clause::ShowConstraints)
+                } else if self.peek_keyword("QUERIES") {
+                    self.parse_keyword()?; // consume "QUERIES"
+                    Ok(Clause::ShowQueries)
                 } else if self.peek_keyword("API") {
                     self.parse_keyword()?; // consume "API"
                     self.expect_keyword("KEYS")?;
@@ -1150,9 +1170,32 @@ impl CypherParser {
                     Ok(Clause::ShowApiKeys(show_api_keys_clause))
                 } else {
                     Err(self.error(
-                        "SHOW must be followed by DATABASES, USERS, USER, FUNCTIONS, or API KEYS",
+                        "SHOW must be followed by DATABASES, USERS, USER, FUNCTIONS, CONSTRAINTS, QUERIES, or API KEYS",
                     ))
                 }
+            }
+            "TERMINATE" => {
+                self.skip_whitespace();
+
+                // TERMINATE QUERY 'query-id'
+                self.expect_keyword("QUERY")?;
+                self.skip_whitespace();
+
+                // Parse query ID (string literal)
+                let query_id_expr =
+                    if self.peek_char() == Some('\'') || self.peek_char() == Some('"') {
+                        self.parse_string_literal()?
+                    } else {
+                        return Err(self.error("Expected string literal for query ID"));
+                    };
+
+                // Extract string value from expression
+                let query_id = match query_id_expr {
+                    Expression::Literal(Literal::String(s)) => s,
+                    _ => return Err(self.error("Expected string literal for query ID")),
+                };
+
+                Ok(Clause::TerminateQuery(TerminateQueryClause { query_id }))
             }
             "USE" => {
                 self.skip_whitespace();
@@ -3428,8 +3471,31 @@ impl CypherParser {
         if self.peek_keyword("NOT") {
             self.parse_keyword()?;
             self.skip_whitespace();
-            // Check if next is a parenthesized expression
+
+            // Check if next is a parenthesized expression or a pattern
             let operand = if self.peek_char() == Some('(') {
+                // Save position to potentially backtrack
+                let saved_pos = self.pos;
+                let saved_line = self.line;
+                let saved_column = self.column;
+
+                // Try to parse as a pattern (NOT (n)-[:REL]->() is shorthand for NOT EXISTS { pattern })
+                if let Ok(pattern) = self.try_parse_not_pattern() {
+                    // This is NOT pattern, convert to NOT EXISTS
+                    return Ok(Expression::UnaryOp {
+                        op: UnaryOperator::Not,
+                        operand: Box::new(Expression::Exists {
+                            pattern,
+                            where_clause: None,
+                        }),
+                    });
+                }
+
+                // Not a pattern, restore and parse as regular parenthesized expression
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+
                 self.expect_char('(')?;
                 self.skip_whitespace();
                 let expr = self.parse_or_expression()?;
@@ -3446,6 +3512,60 @@ impl CypherParser {
         }
 
         self.parse_comparison_expression()
+    }
+
+    /// Try to parse a pattern for NOT (pattern) syntax
+    /// Returns Ok(Pattern) if successful, Err if not a pattern
+    fn try_parse_not_pattern(&mut self) -> Result<Pattern> {
+        // We need to parse something like: (n)-[:REL]->()
+        // The key indicator that this is a pattern is the relationship after the first node
+
+        let mut elements = Vec::new();
+
+        // Parse first node
+        let node = self.parse_node_pattern()?;
+        elements.push(PatternElement::Node(node));
+
+        self.skip_whitespace();
+
+        // Check if followed by a relationship pattern (-, <, >)
+        // This is what distinguishes a pattern from a regular expression
+        if self.peek_char() != Some('-') && self.peek_char() != Some('<') {
+            return Err(self.error("Not a pattern - no relationship found"));
+        }
+
+        // Parse the rest of the pattern (relationships and nodes)
+        while self.pos < self.input.len() {
+            self.skip_whitespace();
+
+            // Check if we've reached the end of the pattern
+            if self.peek_char() == Some(')') {
+                // Check if this could be the end (nothing follows or only RETURN/ORDER/etc.)
+                break;
+            }
+
+            // Check if we have a relationship pattern
+            if self.peek_char() == Some('-') || self.peek_char() == Some('<') {
+                // Parse relationship
+                let rel = self.parse_relationship_pattern()?;
+                elements.push(PatternElement::Relationship(rel));
+
+                self.skip_whitespace();
+
+                // Parse the next node if there is one
+                if self.peek_char() == Some('(') {
+                    let node = self.parse_node_pattern()?;
+                    elements.push(PatternElement::Node(node));
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(Pattern {
+            elements,
+            path_variable: None,
+        })
     }
 
     /// Parse comparison expressions (=, <>, <, <=, >, >=, IS NULL, IS NOT NULL, STARTS WITH, ENDS WITH, CONTAINS, =~)
@@ -3896,8 +4016,64 @@ impl CypherParser {
 
                 // Parse arguments
                 while self.peek_char() != Some(')') {
+                    // Special handling for filter() - filter(x IN list WHERE predicate)
+                    let arg = if identifier.to_lowercase() == "filter" && args.is_empty() {
+                        // Try to parse filter syntax: variable IN list WHERE predicate
+                        let saved_pos = self.pos;
+                        let saved_line = self.line;
+                        let saved_column = self.column;
+
+                        // Try parsing filter syntax
+                        let result = (|| -> Result<Expression> {
+                            // Parse variable name
+                            let variable = self.parse_identifier()?;
+                            self.skip_whitespace();
+
+                            // Expect IN keyword
+                            if !self.peek_keyword("IN") {
+                                return Err(Error::CypherSyntax(format!(
+                                    "Expected IN keyword in filter() at line {}, column {}",
+                                    self.line, self.column
+                                )));
+                            }
+                            self.expect_keyword("IN")?;
+                            self.skip_whitespace();
+
+                            // Parse list expression
+                            let list_expression = Box::new(self.parse_expression()?);
+                            self.skip_whitespace();
+
+                            // Parse optional WHERE clause
+                            let where_clause = if self.peek_keyword("WHERE") {
+                                self.expect_keyword("WHERE")?;
+                                self.skip_whitespace();
+                                Some(Box::new(self.parse_expression()?))
+                            } else {
+                                None
+                            };
+
+                            // Convert to ListComprehension (filter has no transformation, just filtering)
+                            Ok(Expression::ListComprehension {
+                                variable,
+                                list_expression,
+                                where_clause,
+                                transform_expression: None,
+                            })
+                        })();
+
+                        match result {
+                            Ok(expr) => expr,
+                            Err(_) => {
+                                // Failed to parse as filter syntax - restore position and parse as normal expression
+                                self.pos = saved_pos;
+                                self.line = saved_line;
+                                self.column = saved_column;
+                                self.parse_expression()?
+                            }
+                        }
+                    }
                     // Special handling for shortestPath() and allShortestPaths() - they accept patterns directly
-                    let arg = if (identifier.to_lowercase() == "shortestpath"
+                    else if (identifier.to_lowercase() == "shortestpath"
                         || identifier.to_lowercase() == "allshortestpaths")
                         && self.peek_char() == Some('(')
                     {
@@ -3939,6 +4115,16 @@ impl CypherParser {
             }
 
             self.expect_char(')')?;
+
+            // Special handling: if this is filter() and we successfully converted it to ListComprehension,
+            // return the ListComprehension directly instead of wrapping it in a FunctionCall
+            if identifier.to_lowercase() == "filter"
+                && args.len() == 1
+                && matches!(args[0], Expression::ListComprehension { .. })
+            {
+                return Ok(args.into_iter().next().unwrap());
+            }
+
             Ok(Expression::FunctionCall {
                 name: identifier,
                 args,
@@ -4897,6 +5083,7 @@ impl CypherParser {
             || self.peek_keyword("LOAD")  // For LOAD CSV
             || self.peek_keyword("FOREACH") // For FOREACH clause
             || self.peek_keyword("ALTER") // For ALTER DATABASE
+            || self.peek_keyword("TERMINATE") // For TERMINATE QUERY
     }
 
     /// Check if character is identifier start

@@ -612,6 +612,72 @@ pub async fn execute_cypher(
         return execute_user_commands(server, &ast, start_time).await;
     }
 
+    // Check for query management commands (SHOW QUERIES, TERMINATE QUERY)
+    let has_query_mgmt_cmd = ast.clauses.iter().any(|c| {
+        matches!(
+            c,
+            nexus_core::executor::parser::Clause::ShowQueries
+                | nexus_core::executor::parser::Clause::TerminateQuery(_)
+        )
+    });
+
+    if has_query_mgmt_cmd {
+        return execute_query_management_commands(server.clone(), &ast, start_time).await;
+    }
+
+    // Check for SHOW CONSTRAINTS or SHOW FUNCTIONS commands
+    let has_show_constraints_or_functions = ast.clauses.iter().any(|c| {
+        matches!(
+            c,
+            nexus_core::executor::parser::Clause::ShowConstraints
+                | nexus_core::executor::parser::Clause::ShowFunctions
+                | nexus_core::executor::parser::Clause::CreateConstraint(_)
+                | nexus_core::executor::parser::Clause::DropConstraint(_)
+                | nexus_core::executor::parser::Clause::CreateFunction(_)
+                | nexus_core::executor::parser::Clause::DropFunction(_)
+        )
+    });
+
+    if has_show_constraints_or_functions {
+        // Use Engine for these commands
+        if let Some(engine) = ENGINE.get() {
+            let mut engine = engine.write().await;
+            match engine.execute_cypher(&request.query) {
+                Ok(result) => {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    let rows: Vec<serde_json::Value> = result
+                        .rows
+                        .into_iter()
+                        .map(|row| serde_json::Value::Array(row.values))
+                        .collect();
+                    return Json(CypherResponse {
+                        columns: result.columns,
+                        rows,
+                        execution_time_ms: execution_time,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some(format!("Execution error: {}", e)),
+                    });
+                }
+            }
+        } else {
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            return Json(CypherResponse {
+                columns: vec![],
+                rows: vec![],
+                execution_time_ms: execution_time,
+                error: Some("Engine not initialized".to_string()),
+            });
+        }
+    }
+
     // Check if this is a CREATE, MERGE, SET, DELETE, REMOVE, or MATCH query
     let query_upper = request.query.trim().to_uppercase();
     let is_create_query = query_upper.starts_with("CREATE");
@@ -2179,6 +2245,110 @@ pub(crate) async fn execute_user_commands(
                         rows: vec![],
                         execution_time_ms: execution_time,
                         error: Some(format!("User or role '{}' not found", revoke.target)),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let execution_time = start_time.elapsed().as_millis() as u64;
+    Json(CypherResponse {
+        columns,
+        rows,
+        execution_time_ms: execution_time,
+        error: None,
+    })
+}
+
+/// Execute query management commands (SHOW QUERIES, TERMINATE QUERY)
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn execute_query_management_commands(
+    _server: Arc<NexusServer>,
+    ast: &nexus_core::executor::parser::CypherQuery,
+    start_time: std::time::Instant,
+) -> Json<CypherResponse> {
+    let mut columns = Vec::new();
+    let mut rows = Vec::new();
+
+    for clause in &ast.clauses {
+        match clause {
+            nexus_core::executor::parser::Clause::ShowQueries => {
+                columns = vec![
+                    "queryId".to_string(),
+                    "query".to_string(),
+                    "connectionId".to_string(),
+                    "startedAt".to_string(),
+                    "elapsedTimeMs".to_string(),
+                    "status".to_string(),
+                ];
+
+                // Get queries from connection tracker
+                if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
+                    let tracker = dbms_procedures.get_connection_tracker();
+                    let queries = tracker.get_running_queries();
+
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+
+                    for query_info in queries {
+                        let elapsed_ms = (now - query_info.started_at) * 1000;
+                        let status = if query_info.is_running {
+                            "running"
+                        } else if query_info.cancelled {
+                            "cancelled"
+                        } else {
+                            "completed"
+                        };
+
+                        rows.push(serde_json::json!([
+                            query_info.query_id,
+                            query_info.query,
+                            query_info.connection_id,
+                            query_info.started_at,
+                            elapsed_ms,
+                            status
+                        ]));
+                    }
+                }
+            }
+            nexus_core::executor::parser::Clause::TerminateQuery(terminate_clause) => {
+                columns = vec!["queryId".to_string(), "message".to_string()];
+
+                // Terminate the query
+                if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
+                    let tracker = dbms_procedures.get_connection_tracker();
+                    let cancelled = tracker.cancel_query(&terminate_clause.query_id);
+
+                    if cancelled {
+                        rows.push(serde_json::json!([
+                            terminate_clause.query_id.clone(),
+                            format!(
+                                "Query '{}' terminated successfully",
+                                terminate_clause.query_id
+                            )
+                        ]));
+                    } else {
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        return Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms: execution_time,
+                            error: Some(format!(
+                                "Query '{}' not found or already completed",
+                                terminate_clause.query_id
+                            )),
+                        });
+                    }
+                } else {
+                    let execution_time = start_time.elapsed().as_millis() as u64;
+                    return Json(CypherResponse {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time_ms: execution_time,
+                        error: Some("Query tracking not enabled".to_string()),
                     });
                 }
             }

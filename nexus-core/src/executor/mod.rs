@@ -72,7 +72,7 @@ use crate::storage::{
 };
 use crate::udf::UdfRegistry;
 use crate::{Error, Result};
-use chrono::{Datelike, TimeZone};
+use chrono::{Datelike, TimeZone, Timelike};
 use parking_lot::RwLock;
 use planner::QueryPlanner;
 use rayon::prelude::*;
@@ -149,6 +149,8 @@ pub enum Operator {
         target_var: String,
         /// Relationship variable
         rel_var: String,
+        /// Optional (LEFT OUTER JOIN semantics - preserve rows with NULL if no match)
+        optional: bool,
     },
     /// Project columns
     Project {
@@ -1128,6 +1130,7 @@ impl Executor {
                     source_var,
                     target_var,
                     rel_var,
+                    optional,
                 } => {
                     // Advanced JOIN algorithms framework ready - using traditional expand for now
                     self.execute_expand(
@@ -1137,6 +1140,7 @@ impl Executor {
                         source_var,
                         target_var,
                         rel_var,
+                        *optional,
                         None, // Cache not available at this level
                     )?;
                 }
@@ -1831,6 +1835,9 @@ impl Executor {
                         serde_json::Value::Null
                     };
 
+                    // Check constraints before creating node
+                    self.check_constraints(&label_ids_for_update, &properties)?;
+
                     // Create the node
                     let node_id = self
                         .store_mut()
@@ -2138,6 +2145,74 @@ impl Executor {
                 "Complex expressions not supported in CREATE properties".to_string(),
             )),
         }
+    }
+
+    /// Check constraints before creating a node
+    fn check_constraints(&self, label_ids: &[u32], properties: &serde_json::Value) -> Result<()> {
+        let constraint_manager = self.catalog().constraint_manager().read();
+
+        // Check constraints for each label
+        for &label_id in label_ids {
+            let constraints = constraint_manager.get_constraints_for_label(label_id)?;
+
+            for constraint in constraints {
+                // Get property name
+                let property_name = self
+                    .catalog()
+                    .get_key_name(constraint.property_key_id)?
+                    .ok_or_else(|| Error::Internal("Property key not found".to_string()))?;
+
+                let property_value = properties.as_object().and_then(|m| m.get(&property_name));
+
+                match constraint.constraint_type {
+                    crate::catalog::constraints::ConstraintType::Exists => {
+                        // Property must exist (not null)
+                        if property_value.is_none()
+                            || property_value == Some(&serde_json::Value::Null)
+                        {
+                            let label_name = self
+                                .catalog()
+                                .get_label_name(label_id)?
+                                .unwrap_or_else(|| format!("ID{}", label_id));
+                            return Err(Error::ConstraintViolation(format!(
+                                "EXISTS constraint violated: property '{}' must exist on nodes with label '{}'",
+                                property_name, label_name
+                            )));
+                        }
+                    }
+                    crate::catalog::constraints::ConstraintType::Unique => {
+                        // Property value must be unique across all nodes with this label
+                        if let Some(value) = property_value {
+                            let label_name = self
+                                .catalog()
+                                .get_label_name(label_id)?
+                                .unwrap_or_else(|| format!("ID{}", label_id));
+
+                            // Get all nodes with this label
+                            let bitmap = self.label_index().get_nodes_with_labels(&[label_id])?;
+
+                            for node_id in bitmap.iter() {
+                                let node_id_u64 = node_id as u64;
+
+                                let node_props = self.store().load_node_properties(node_id_u64)?;
+                                if let Some(serde_json::Value::Object(props_map)) = node_props {
+                                    if let Some(existing_value) = props_map.get(&property_name) {
+                                        if existing_value == value {
+                                            return Err(Error::ConstraintViolation(format!(
+                                                "UNIQUE constraint violated: property '{}' value already exists on another node with label '{}'",
+                                                property_name, label_name
+                                            )));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Convert expression to string representation
@@ -2713,8 +2788,13 @@ impl Executor {
         source_var: &str,
         target_var: &str,
         rel_var: &str,
+        optional: bool,
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<()> {
+        eprintln!(
+            "execute_expand called: optional={}, source_var='{}', target_var='{}', rel_var='{}'",
+            optional, source_var, target_var, rel_var
+        );
         // TRACE: Log input source and check for relationships
         let rows_source = if !context.result_set.rows.is_empty() {
             "result_set.rows"
@@ -3028,10 +3108,29 @@ impl Executor {
                     );
 
                     if relationships.is_empty() {
-                        tracing::debug!(
-                            "Expand: source node_id {} has no relationships matching criteria, skipping",
-                            source_id
-                        );
+                        // LEFT OUTER JOIN semantics: preserve row with NULL values when optional=true
+                        if optional {
+                            eprintln!(
+                                "OPTIONAL MATCH: Preserving row for node_id {} with NULL (no relationships)",
+                                source_id
+                            );
+                            // Create a row with NULL for target and relationship variables
+                            let mut new_row = row.clone();
+                            if !target_var.is_empty() {
+                                new_row.insert(target_var.to_string(), Value::Null);
+                            }
+                            if !rel_var.is_empty() {
+                                new_row.insert(rel_var.to_string(), Value::Null);
+                            }
+                            let row_len = new_row.len();
+                            expanded_rows.push(new_row);
+                            eprintln!("OPTIONAL MATCH: Added row with {} variables", row_len);
+                        } else {
+                            tracing::debug!(
+                                "Expand: source node_id {} has no relationships matching criteria, skipping",
+                                source_id
+                            );
+                        }
                         continue;
                     }
 
@@ -3505,37 +3604,50 @@ impl Executor {
             );
             rows.clone()
         } else {
-            // No relationships and no varying primitives - safe to deduplicate by node ID
-            let mut seen_node_ids = HashSet::new();
+            // No relationships and no varying primitives - deduplicate by ROW COMBINATION
+            // CRITICAL FIX: For multi-variable patterns like (a)->(b)->(c)->(a) (triangle),
+            // we need to track the COMBINATION of all node IDs in a row, not individual IDs.
+            // Each unique combination (a=1,b=2,c=3), (a=2,b=3,c=1), (a=3,b=1,c=2) is different!
+            let mut seen_row_combinations = HashSet::new();
             let mut deduplicated_rows = Vec::new();
 
             for row_map in &rows {
-                let mut is_duplicate = false;
+                // Build a unique key for this row based on ALL node IDs with their variable names
+                // Example: for row {a: node1, b: node2, c: node3} → key = "a:1_b:2_c:3"
+                let mut var_ids: Vec<(String, u64)> = Vec::new();
 
-                // Extract node ID from row to detect duplicates
-                for var_name in row_map.keys() {
-                    if let Some(Value::Object(obj)) = row_map.get(var_name) {
+                for (var_name, value) in row_map.iter() {
+                    if let Value::Object(obj) = value {
                         if let Some(Value::Number(id)) = obj.get("_nexus_id") {
                             if let Some(node_id) = id.as_u64() {
-                                // Check if we've seen this node ID before
-                                if !seen_node_ids.insert(node_id) {
-                                    // This node ID was already seen - this row is a duplicate
-                                    is_duplicate = true;
-                                    break;
-                                }
+                                var_ids.push((var_name.clone(), node_id));
                             }
                         }
                     }
                 }
 
-                // Only process row if it's not a duplicate
+                // Sort by variable name for consistent key generation
+                var_ids.sort_by(|a, b| a.0.cmp(&b.0));
+
+                // Build row combination key
+                let row_key: String = var_ids
+                    .iter()
+                    .map(|(var, id)| format!("{}:{}", var, id))
+                    .collect::<Vec<_>>()
+                    .join("_");
+
+                // Check if this exact combination was seen before
+                let is_duplicate = !seen_row_combinations.insert(row_key.clone());
+
                 if !is_duplicate {
                     deduplicated_rows.push(row_map.clone());
+                } else {
+                    tracing::debug!("Project: deduplicating row with key '{}'", row_key);
                 }
             }
 
             tracing::debug!(
-                "Project: deduplicated {} rows to {} unique rows (no relationships, no varying primitives)",
+                "Project: deduplicated {} rows to {} unique rows (by row combination)",
                 rows.len(),
                 deduplicated_rows.len()
             );
@@ -5823,9 +5935,10 @@ impl Executor {
                 source_var,
                 target_var,
                 rel_var,
+                optional,
             } => {
                 self.execute_expand(
-                    context, type_ids, *direction, source_var, target_var, rel_var,
+                    context, type_ids, *direction, source_var, target_var, rel_var, *optional,
                     None, // Cache not available at this level
                 )?;
             }
@@ -7978,9 +8091,13 @@ impl Executor {
         let mut expanded_rows = Vec::new();
 
         // Phase 8.2: Try to use AdvancedTraversalEngine if optimizations are enabled
-        let use_optimized_traversal = self.enable_relationship_optimizations
+        // DISABLED: The optimized traversal has issues with fixed-length paths (*2, {2}, *1..3)
+        // The VariableLengthPathVisitor doesn't track paths correctly in all cases.
+        // Use the fallback BFS which works correctly for all quantifier types.
+        let use_optimized_traversal = false; // Temporarily disabled - use BFS fallback
+        let _original_condition = self.enable_relationship_optimizations
             && self.shared.traversal_engine.is_some()
-            && max_length < 100; // Use optimized traversal for reasonable depth limits
+            && max_length < 100;
 
         // Process each source row
         for row in rows {
@@ -10040,7 +10157,14 @@ impl Executor {
             parser::Expression::Exists { .. } => false, // EXISTS needs graph context
             parser::Expression::PatternComprehension { .. } => false, // Pattern needs graph context
             parser::Expression::MapProjection { .. } => false, // Map projection needs variables
-            parser::Expression::ListComprehension { .. } => false, // List comprehension needs graph context
+            parser::Expression::ListComprehension {
+                list_expression, ..
+            } => {
+                // List comprehension can be evaluated if the list expression can be evaluated.
+                // The where_clause and transform_expression may reference the comprehension variable,
+                // which is fine - it will be bound during comprehension execution.
+                self.can_evaluate_without_variables(list_expression)
+            }
         }
     }
     fn evaluate_projection_expression(
@@ -10104,9 +10228,45 @@ impl Executor {
                     }
                 }
 
+                // Handle point accessor aliases (Neo4j compatibility)
+                // point.latitude should return y, point.longitude should return x
+                let actual_property = match property.as_str() {
+                    "latitude" => {
+                        // Check if this is a point object (has x, y, crs)
+                        if let Some(Value::Object(ref obj)) = entity_opt {
+                            if obj.contains_key("x")
+                                && obj.contains_key("y")
+                                && obj.contains_key("crs")
+                            {
+                                "y"
+                            } else {
+                                property
+                            }
+                        } else {
+                            property
+                        }
+                    }
+                    "longitude" => {
+                        // Check if this is a point object (has x, y, crs)
+                        if let Some(Value::Object(ref obj)) = entity_opt {
+                            if obj.contains_key("x")
+                                && obj.contains_key("y")
+                                && obj.contains_key("crs")
+                            {
+                                "x"
+                            } else {
+                                property
+                            }
+                        } else {
+                            property
+                        }
+                    }
+                    _ => property,
+                };
+
                 Ok(entity_opt
                     .as_ref()
-                    .map(|e| Self::extract_property(e, property))
+                    .map(|e| Self::extract_property(e, actual_property))
                     .unwrap_or(Value::Null))
             }
             parser::Expression::ArrayIndex { base, index } => {
@@ -10505,6 +10665,191 @@ impl Executor {
                                     .map(|part| Value::String(part.to_string()))
                                     .collect();
                                 return Ok(Value::Array(parts));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Regex functions
+                    "regexmatch" => {
+                        // regexMatch(string, pattern) - returns true if pattern matches string
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let pattern_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::String(pattern)) =
+                                (string_val, pattern_val)
+                            {
+                                match regex::Regex::new(&pattern) {
+                                    Ok(re) => return Ok(Value::Bool(re.is_match(&s))),
+                                    Err(_) => return Ok(Value::Bool(false)),
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "regexreplace" => {
+                        // regexReplace(string, pattern, replacement) - replaces first match
+                        if args.len() >= 3 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let pattern_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+                            let replacement_val =
+                                self.evaluate_projection_expression(row, context, &args[2])?;
+
+                            if let (
+                                Value::String(s),
+                                Value::String(pattern),
+                                Value::String(replacement),
+                            ) = (string_val, pattern_val, replacement_val)
+                            {
+                                match regex::Regex::new(&pattern) {
+                                    Ok(re) => {
+                                        // Replace only the first match
+                                        let result = re.replace(&s, replacement.as_str());
+                                        return Ok(Value::String(result.into_owned()));
+                                    }
+                                    Err(_) => return Ok(Value::String(s)),
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "regexreplaceall" => {
+                        // regexReplaceAll(string, pattern, replacement) - replaces all matches
+                        if args.len() >= 3 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let pattern_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+                            let replacement_val =
+                                self.evaluate_projection_expression(row, context, &args[2])?;
+
+                            if let (
+                                Value::String(s),
+                                Value::String(pattern),
+                                Value::String(replacement),
+                            ) = (string_val, pattern_val, replacement_val)
+                            {
+                                match regex::Regex::new(&pattern) {
+                                    Ok(re) => {
+                                        // Replace all matches
+                                        let result = re.replace_all(&s, replacement.as_str());
+                                        return Ok(Value::String(result.into_owned()));
+                                    }
+                                    Err(_) => return Ok(Value::String(s)),
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "regexextract" => {
+                        // regexExtract(string, pattern) - extracts first match
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let pattern_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::String(pattern)) =
+                                (string_val, pattern_val)
+                            {
+                                match regex::Regex::new(&pattern) {
+                                    Ok(re) => {
+                                        if let Some(m) = re.find(&s) {
+                                            return Ok(Value::String(m.as_str().to_string()));
+                                        }
+                                        return Ok(Value::Null);
+                                    }
+                                    Err(_) => return Ok(Value::Null),
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "regexextractall" => {
+                        // regexExtractAll(string, pattern) - extracts all matches as array
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let pattern_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::String(pattern)) =
+                                (string_val, pattern_val)
+                            {
+                                match regex::Regex::new(&pattern) {
+                                    Ok(re) => {
+                                        let matches: Vec<Value> = re
+                                            .find_iter(&s)
+                                            .map(|m| Value::String(m.as_str().to_string()))
+                                            .collect();
+                                        return Ok(Value::Array(matches));
+                                    }
+                                    Err(_) => return Ok(Value::Array(vec![])),
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "regexextractgroups" => {
+                        // regexExtractGroups(string, pattern) - extracts capture groups from first match
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let pattern_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::String(pattern)) =
+                                (string_val, pattern_val)
+                            {
+                                match regex::Regex::new(&pattern) {
+                                    Ok(re) => {
+                                        if let Some(caps) = re.captures(&s) {
+                                            let groups: Vec<Value> = caps
+                                                .iter()
+                                                .skip(1) // Skip the full match (group 0)
+                                                .map(|m| {
+                                                    m.map(|m| Value::String(m.as_str().to_string()))
+                                                        .unwrap_or(Value::Null)
+                                                })
+                                                .collect();
+                                            return Ok(Value::Array(groups));
+                                        }
+                                        return Ok(Value::Null);
+                                    }
+                                    Err(_) => return Ok(Value::Null),
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "regexsplit" => {
+                        // regexSplit(string, pattern) - splits string by regex pattern
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let pattern_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::String(pattern)) =
+                                (string_val, pattern_val)
+                            {
+                                match regex::Regex::new(&pattern) {
+                                    Ok(re) => {
+                                        let parts: Vec<Value> = re
+                                            .split(&s)
+                                            .map(|part| Value::String(part.to_string()))
+                                            .collect();
+                                        return Ok(Value::Array(parts));
+                                    }
+                                    Err(_) => {
+                                        // Fallback to returning original string in array
+                                        return Ok(Value::Array(vec![Value::String(s)]));
+                                    }
+                                }
                             }
                         }
                         Ok(Value::Null)
@@ -11059,6 +11404,120 @@ impl Executor {
                                 }
 
                                 return Ok(Value::Object(duration_map));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "duration.between" => {
+                        // duration.between(datetime1, datetime2) - computes the duration between two datetimes
+                        if args.len() >= 2 {
+                            let dt1 =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let dt2 =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if Self::is_datetime_string(&dt1) && Self::is_datetime_string(&dt2) {
+                                return self.datetime_difference(&dt1, &dt2);
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "duration.inMonths" => {
+                        // duration.inMonths(datetime1, datetime2) - duration in months
+                        if args.len() >= 2 {
+                            let dt1 =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let dt2 =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
+                                // Try parsing as dates
+                                let d1 = chrono::NaiveDate::parse_from_str(s1, "%Y-%m-%d").or_else(
+                                    |_| {
+                                        chrono::DateTime::parse_from_rfc3339(s1)
+                                            .map(|dt| dt.date_naive())
+                                    },
+                                );
+                                let d2 = chrono::NaiveDate::parse_from_str(s2, "%Y-%m-%d").or_else(
+                                    |_| {
+                                        chrono::DateTime::parse_from_rfc3339(s2)
+                                            .map(|dt| dt.date_naive())
+                                    },
+                                );
+
+                                if let (Ok(date1), Ok(date2)) = (d1, d2) {
+                                    let months = (date1.year() - date2.year()) * 12
+                                        + (date1.month() as i32 - date2.month() as i32);
+
+                                    let mut result_map = Map::new();
+                                    result_map
+                                        .insert("months".to_string(), Value::Number(months.into()));
+                                    return Ok(Value::Object(result_map));
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "duration.inDays" => {
+                        // duration.inDays(datetime1, datetime2) - duration in days
+                        if args.len() >= 2 {
+                            let dt1 =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let dt2 =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
+                                // Try parsing as dates
+                                let d1 = chrono::NaiveDate::parse_from_str(s1, "%Y-%m-%d").or_else(
+                                    |_| {
+                                        chrono::DateTime::parse_from_rfc3339(s1)
+                                            .map(|dt| dt.date_naive())
+                                    },
+                                );
+                                let d2 = chrono::NaiveDate::parse_from_str(s2, "%Y-%m-%d").or_else(
+                                    |_| {
+                                        chrono::DateTime::parse_from_rfc3339(s2)
+                                            .map(|dt| dt.date_naive())
+                                    },
+                                );
+
+                                if let (Ok(date1), Ok(date2)) = (d1, d2) {
+                                    let days = date1.signed_duration_since(date2).num_days();
+
+                                    let mut result_map = Map::new();
+                                    result_map
+                                        .insert("days".to_string(), Value::Number(days.into()));
+                                    return Ok(Value::Object(result_map));
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "duration.inSeconds" => {
+                        // duration.inSeconds(datetime1, datetime2) - duration in seconds
+                        if args.len() >= 2 {
+                            let dt1 =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let dt2 =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
+                                // Try parsing as datetimes
+                                let d1 = chrono::DateTime::parse_from_rfc3339(s1)
+                                    .map(|dt| dt.with_timezone(&chrono::Utc));
+                                let d2 = chrono::DateTime::parse_from_rfc3339(s2)
+                                    .map(|dt| dt.with_timezone(&chrono::Utc));
+
+                                if let (Ok(dt1), Ok(dt2)) = (d1, d2) {
+                                    let seconds = dt1.signed_duration_since(dt2).num_seconds();
+
+                                    let mut result_map = Map::new();
+                                    result_map.insert(
+                                        "seconds".to_string(),
+                                        Value::Number(seconds.into()),
+                                    );
+                                    return Ok(Value::Object(result_map));
+                                }
                             }
                         }
                         Ok(Value::Null)
@@ -11697,6 +12156,727 @@ impl Executor {
                         // All arguments were null
                         Ok(Value::Null)
                     }
+                    // Temporal component extraction functions
+                    "year" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date/datetime
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        return Ok(Value::Number((date.year() as i64).into()));
+                                    }
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number((dt.year() as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "month" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date/datetime
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        return Ok(Value::Number((date.month() as i64).into()));
+                                    }
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number((dt.month() as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "day" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date/datetime
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        return Ok(Value::Number((date.day() as i64).into()));
+                                    }
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number((dt.day() as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "hour" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse datetime or time
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number((dt.hour() as i64).into()));
+                                    }
+                                    if let Ok(time) =
+                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+                                    {
+                                        return Ok(Value::Number((time.hour() as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "minute" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse datetime or time
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number((dt.minute() as i64).into()));
+                                    }
+                                    if let Ok(time) =
+                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+                                    {
+                                        return Ok(Value::Number((time.minute() as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "second" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse datetime or time
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number((dt.second() as i64).into()));
+                                    }
+                                    if let Ok(time) =
+                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+                                    {
+                                        return Ok(Value::Number((time.second() as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "quarter" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date/datetime
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        let quarter = (date.month() - 1) / 3 + 1;
+                                        return Ok(Value::Number((quarter as i64).into()));
+                                    }
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        let quarter = (dt.month() - 1) / 3 + 1;
+                                        return Ok(Value::Number((quarter as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "week" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date/datetime
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        return Ok(Value::Number(
+                                            (date.iso_week().week() as i64).into(),
+                                        ));
+                                    }
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number(
+                                            (dt.iso_week().week() as i64).into(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "dayofweek" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date/datetime
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        // Neo4j returns 1-7 (Monday to Sunday)
+                                        return Ok(Value::Number(
+                                            (date.weekday().num_days_from_monday() as i64 + 1)
+                                                .into(),
+                                        ));
+                                    }
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number(
+                                            (dt.weekday().num_days_from_monday() as i64 + 1).into(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "dayofyear" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse date/datetime
+                                    if let Ok(date) =
+                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                                    {
+                                        return Ok(Value::Number((date.ordinal() as i64).into()));
+                                    }
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number((dt.ordinal() as i64).into()));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "millisecond" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse datetime
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number(
+                                            ((dt.timestamp_subsec_millis() % 1000) as i64).into(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "microsecond" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse datetime
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number(
+                                            ((dt.timestamp_subsec_micros() % 1000000) as i64)
+                                                .into(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "nanosecond" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse datetime
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::Number(
+                                            ((dt.timestamp_subsec_nanos() % 1000000000) as i64)
+                                                .into(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Advanced string functions
+                    "left" => {
+                        // left(string, length) - returns leftmost n characters
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let length_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::Number(len_num)) =
+                                (string_val, length_val)
+                            {
+                                let length = len_num.as_i64().unwrap_or(0).max(0) as usize;
+                                let chars: Vec<char> = s.chars().collect();
+                                let end = length.min(chars.len());
+                                return Ok(Value::String(chars[..end].iter().collect()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "right" => {
+                        // right(string, length) - returns rightmost n characters
+                        if args.len() >= 2 {
+                            let string_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let length_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+
+                            if let (Value::String(s), Value::Number(len_num)) =
+                                (string_val, length_val)
+                            {
+                                let length = len_num.as_i64().unwrap_or(0).max(0) as usize;
+                                let chars: Vec<char> = s.chars().collect();
+                                let start = chars.len().saturating_sub(length);
+                                return Ok(Value::String(chars[start..].iter().collect()));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    // List functions
+                    // filter() is now handled by the parser - it gets converted to ListComprehension
+                    // during parsing, so it will never reach here as a FunctionCall
+                    "flatten" => {
+                        // flatten(list) - flattens a list of lists by one level
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Array(arr) = value {
+                                let mut result = Vec::new();
+                                for item in arr {
+                                    if let Value::Array(inner) = item {
+                                        result.extend(inner);
+                                    } else {
+                                        result.push(item);
+                                    }
+                                }
+                                return Ok(Value::Array(result));
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "zip" => {
+                        // zip(list1, list2, ...) - zips multiple lists together
+                        if args.len() >= 2 {
+                            let mut lists: Vec<Vec<Value>> = Vec::new();
+                            let mut min_len = usize::MAX;
+
+                            for arg in args {
+                                let value =
+                                    self.evaluate_projection_expression(row, context, arg)?;
+                                if let Value::Array(arr) = value {
+                                    min_len = min_len.min(arr.len());
+                                    lists.push(arr);
+                                } else {
+                                    return Ok(Value::Null);
+                                }
+                            }
+
+                            let mut result = Vec::new();
+                            for i in 0..min_len {
+                                let mut tuple = Vec::new();
+                                for list in &lists {
+                                    tuple.push(list[i].clone());
+                                }
+                                result.push(Value::Array(tuple));
+                            }
+                            return Ok(Value::Array(result));
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Mathematical functions
+                    "asin" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.asin())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "acos" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.acos())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "atan" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.atan())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "atan2" => {
+                        // atan2(y, x) - returns arctangent of y/x
+                        if args.len() >= 2 {
+                            let y_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let x_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+                            if y_val.is_null() || x_val.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let y = self.value_to_number(&y_val)?;
+                            let x = self.value_to_number(&x_val)?;
+                            return serde_json::Number::from_f64(y.atan2(x))
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "exp" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.exp())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "log" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            // Natural logarithm (ln)
+                            return serde_json::Number::from_f64(num.ln())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "log10" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            return serde_json::Number::from_f64(num.log10())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "radians" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            // Convert degrees to radians
+                            return serde_json::Number::from_f64(num.to_radians())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "degrees" => {
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if value.is_null() {
+                                return Ok(Value::Null);
+                            }
+                            let num = self.value_to_number(&value)?;
+                            // Convert radians to degrees
+                            return serde_json::Number::from_f64(num.to_degrees())
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                });
+                        }
+                        Ok(Value::Null)
+                    }
+                    "pi" => {
+                        // pi() - returns the mathematical constant π
+                        Ok(Value::Number(
+                            serde_json::Number::from_f64(std::f64::consts::PI).unwrap(),
+                        ))
+                    }
+                    "e" => {
+                        // e() - returns the mathematical constant e
+                        Ok(Value::Number(
+                            serde_json::Number::from_f64(std::f64::consts::E).unwrap(),
+                        ))
+                    }
+                    // Advanced temporal functions
+                    "localtime" => {
+                        // localtime() - returns current local time without timezone
+                        if args.is_empty() {
+                            let now = chrono::Local::now();
+                            return Ok(Value::String(now.format("%H:%M:%S").to_string()));
+                        } else if let Some(arg) = args.first() {
+                            // Parse time from string or map
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse time format
+                                    if let Ok(time) =
+                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+                                    {
+                                        return Ok(Value::String(
+                                            time.format("%H:%M:%S").to_string(),
+                                        ));
+                                    }
+                                    // Try HH:MM format
+                                    if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M")
+                                    {
+                                        return Ok(Value::String(
+                                            time.format("%H:%M:%S").to_string(),
+                                        ));
+                                    }
+                                }
+                                Value::Object(map) => {
+                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
+                                        as u32;
+                                    let minute =
+                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+                                    let second =
+                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+
+                                    if let Some(time) =
+                                        chrono::NaiveTime::from_hms_opt(hour, minute, second)
+                                    {
+                                        return Ok(Value::String(
+                                            time.format("%H:%M:%S").to_string(),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "localdatetime" => {
+                        // localdatetime() - returns current local datetime without timezone
+                        if args.is_empty() {
+                            let now = chrono::Local::now();
+                            return Ok(Value::String(now.format("%Y-%m-%dT%H:%M:%S").to_string()));
+                        } else if let Some(arg) = args.first() {
+                            // Parse datetime from string or map
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            match value {
+                                Value::String(s) => {
+                                    // Try to parse datetime format
+                                    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(
+                                        &s,
+                                        "%Y-%m-%dT%H:%M:%S",
+                                    ) {
+                                        return Ok(Value::String(
+                                            dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                                        ));
+                                    }
+                                    // Try with timezone and convert to naive
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                                        return Ok(Value::String(
+                                            dt.naive_local()
+                                                .format("%Y-%m-%dT%H:%M:%S")
+                                                .to_string(),
+                                        ));
+                                    }
+                                }
+                                Value::Object(map) => {
+                                    let year = map
+                                        .get("year")
+                                        .and_then(|v| v.as_i64())
+                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
+                                        as i32;
+                                    let month =
+                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
+                                            as u32;
+                                    let day =
+                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
+                                        as u32;
+                                    let minute =
+                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+                                    let second =
+                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as u32;
+
+                                    if let Some(date) =
+                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
+                                    {
+                                        if let Some(time) =
+                                            chrono::NaiveTime::from_hms_opt(hour, minute, second)
+                                        {
+                                            let dt = chrono::NaiveDateTime::new(date, time);
+                                            return Ok(Value::String(
+                                                dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    // Duration component extraction functions
+                    "years" => {
+                        // years(duration) - extract years component from duration
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                if let Some(years) = map.get("years") {
+                                    return Ok(years.clone());
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "months" => {
+                        // months(duration) - extract months component from duration
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                if let Some(months) = map.get("months") {
+                                    return Ok(months.clone());
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "weeks" => {
+                        // weeks(duration) - extract weeks component from duration
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                if let Some(weeks) = map.get("weeks") {
+                                    return Ok(weeks.clone());
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "days" => {
+                        // days(duration) - extract days component from duration
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                if let Some(days) = map.get("days") {
+                                    return Ok(days.clone());
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "hours" => {
+                        // hours(duration) - extract hours component from duration
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                if let Some(hours) = map.get("hours") {
+                                    return Ok(hours.clone());
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "minutes" => {
+                        // minutes(duration) - extract minutes component from duration
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                if let Some(minutes) = map.get("minutes") {
+                                    return Ok(minutes.clone());
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "seconds" => {
+                        // seconds(duration) - extract seconds component from duration
+                        if let Some(arg) = args.first() {
+                            let value = self.evaluate_projection_expression(row, context, arg)?;
+                            if let Value::Object(map) = value {
+                                if let Some(seconds) = map.get("seconds") {
+                                    return Ok(seconds.clone());
+                                }
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
                     _ => Ok(Value::Null),
                 }
             }
@@ -12121,16 +13301,12 @@ impl Executor {
         pattern: &parser::Pattern,
     ) -> Result<bool> {
         // For EXISTS, we need to check if the pattern matches in the current context
-        // This is a simplified implementation that checks if nodes and relationships exist
+        // This checks if nodes and relationships actually exist
 
         // If pattern is empty, return false
         if pattern.elements.is_empty() {
             return Ok(false);
         }
-
-        // For now, implement a basic check:
-        // - If pattern has a single node, check if it exists in context
-        // - If pattern has relationships, check if they exist
 
         // Get the first node from the pattern
         if let Some(parser::PatternElement::Node(first_node)) = pattern.elements.first() {
@@ -12138,14 +13314,68 @@ impl Executor {
             if let Some(var_name) = &first_node.variable {
                 // Check if variable exists in current row
                 if let Some(Value::Object(obj)) = row.get(var_name) {
-                    // If it's a valid node object, the pattern exists
-                    if obj.contains_key("_nexus_id") {
-                        // Node exists, check relationships if any
-                        if pattern.elements.len() > 1 {
-                            // Pattern has relationships - for now, return true if node exists
-                            // Full relationship checking would require more complex logic
+                    // If it's a valid node object, check relationships if pattern has them
+                    if let Some(Value::Number(node_id_val)) = obj.get("_nexus_id") {
+                        let node_id = node_id_val
+                            .as_u64()
+                            .ok_or_else(|| Error::InvalidId("Invalid node ID".to_string()))?;
+
+                        // If pattern has only one element (just a node), it exists
+                        if pattern.elements.len() == 1 {
                             return Ok(true);
                         }
+
+                        // Pattern has relationships - actually check if they exist
+                        // Look for relationship element in pattern
+                        for (i, element) in pattern.elements.iter().enumerate() {
+                            if let parser::PatternElement::Relationship(rel) = element {
+                                // Get relationship types to match
+                                let type_ids: Vec<u32> = if rel.types.is_empty() {
+                                    // No types specified = match all types
+                                    vec![]
+                                } else {
+                                    rel.types
+                                        .iter()
+                                        .filter_map(|t| {
+                                            self.catalog().get_type_id(t).ok().flatten()
+                                        })
+                                        .collect()
+                                };
+
+                                // Determine direction
+                                let direction = match rel.direction {
+                                    parser::RelationshipDirection::Outgoing => Direction::Outgoing,
+                                    parser::RelationshipDirection::Incoming => Direction::Incoming,
+                                    parser::RelationshipDirection::Both => Direction::Both,
+                                };
+
+                                // Fetch relationships for this node
+                                // find_relationships already filters by type_ids and direction
+                                let relationships = self.find_relationships(
+                                    node_id, &type_ids, direction,
+                                    None, // No cache for EXISTS checks
+                                )?;
+
+                                // If no matching relationships found, pattern doesn't exist
+                                if relationships.is_empty() {
+                                    eprintln!(
+                                        "EXISTS: No relationships found for node {} with types {:?} and direction {:?}",
+                                        node_id, rel.types, direction
+                                    );
+                                    return Ok(false);
+                                }
+
+                                eprintln!(
+                                    "EXISTS: Found {} relationships for node {}",
+                                    relationships.len(),
+                                    node_id
+                                );
+                                // At least one relationship exists
+                                return Ok(true);
+                            }
+                        }
+
+                        // No relationship element found in pattern
                         return Ok(true);
                     }
                 }
@@ -12216,6 +13446,16 @@ impl Executor {
             return Ok(Value::Array(result));
         }
 
+        // Check for datetime + duration arithmetic
+        if let Some(result) = self.try_datetime_add(left, right)? {
+            return Ok(result);
+        }
+
+        // Check for duration + duration arithmetic
+        if let Some(result) = self.try_duration_add(left, right)? {
+            return Ok(result);
+        }
+
         // Otherwise, treat as numeric addition
         let l = self.value_to_number(left)?;
         let r = self.value_to_number(right)?;
@@ -12232,6 +13472,22 @@ impl Executor {
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
         }
+
+        // Check for datetime - duration arithmetic
+        if let Some(result) = self.try_datetime_subtract(left, right)? {
+            return Ok(result);
+        }
+
+        // Check for datetime - datetime (returns duration)
+        if let Some(result) = self.try_datetime_diff(left, right)? {
+            return Ok(result);
+        }
+
+        // Check for duration - duration arithmetic
+        if let Some(result) = self.try_duration_subtract(left, right)? {
+            return Ok(result);
+        }
+
         let l = self.value_to_number(left)?;
         let r = self.value_to_number(right)?;
         serde_json::Number::from_f64(l - r)
@@ -12321,6 +13577,392 @@ impl Executor {
                 expected: "number".to_string(),
                 actual: "non-finite modulo result".to_string(),
             })
+    }
+
+    /// Check if value is a duration object (has years, months, days, hours, minutes, or seconds keys)
+    fn is_duration_object(value: &Value) -> bool {
+        if let Value::Object(map) = value {
+            map.contains_key("years")
+                || map.contains_key("months")
+                || map.contains_key("days")
+                || map.contains_key("hours")
+                || map.contains_key("minutes")
+                || map.contains_key("seconds")
+        } else {
+            false
+        }
+    }
+
+    /// Check if value is a datetime string (RFC3339 format)
+    fn is_datetime_string(value: &Value) -> bool {
+        if let Value::String(s) = value {
+            chrono::DateTime::parse_from_rfc3339(s).is_ok()
+                || chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").is_ok()
+                || chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Extract duration components as (years, months, days, hours, minutes, seconds)
+    fn extract_duration_components(value: &Value) -> (i64, i64, i64, i64, i64, i64) {
+        if let Value::Object(map) = value {
+            let years = map.get("years").and_then(|v| v.as_i64()).unwrap_or(0);
+            let months = map.get("months").and_then(|v| v.as_i64()).unwrap_or(0);
+            let days = map.get("days").and_then(|v| v.as_i64()).unwrap_or(0);
+            let hours = map.get("hours").and_then(|v| v.as_i64()).unwrap_or(0);
+            let minutes = map.get("minutes").and_then(|v| v.as_i64()).unwrap_or(0);
+            let seconds = map.get("seconds").and_then(|v| v.as_i64()).unwrap_or(0);
+            (years, months, days, hours, minutes, seconds)
+        } else {
+            (0, 0, 0, 0, 0, 0)
+        }
+    }
+
+    /// Try to add datetime + duration
+    fn try_datetime_add(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+        // datetime + duration
+        if Self::is_datetime_string(left) && Self::is_duration_object(right) {
+            return self.datetime_add_duration(left, right).map(Some);
+        }
+        // duration + datetime (commutative)
+        if Self::is_duration_object(left) && Self::is_datetime_string(right) {
+            return self.datetime_add_duration(right, left).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Try to add duration + duration
+    fn try_duration_add(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+        if Self::is_duration_object(left) && Self::is_duration_object(right) {
+            let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
+            let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
+
+            let mut result_map = Map::new();
+            let years = y1 + y2;
+            let months = mo1 + mo2;
+            let days = d1 + d2;
+            let hours = h1 + h2;
+            let minutes = mi1 + mi2;
+            let seconds = s1 + s2;
+
+            if years != 0 {
+                result_map.insert("years".to_string(), Value::Number(years.into()));
+            }
+            if months != 0 {
+                result_map.insert("months".to_string(), Value::Number(months.into()));
+            }
+            if days != 0 {
+                result_map.insert("days".to_string(), Value::Number(days.into()));
+            }
+            if hours != 0 {
+                result_map.insert("hours".to_string(), Value::Number(hours.into()));
+            }
+            if minutes != 0 {
+                result_map.insert("minutes".to_string(), Value::Number(minutes.into()));
+            }
+            if seconds != 0 {
+                result_map.insert("seconds".to_string(), Value::Number(seconds.into()));
+            }
+
+            return Ok(Some(Value::Object(result_map)));
+        }
+        Ok(None)
+    }
+
+    /// Try to subtract datetime - duration
+    fn try_datetime_subtract(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+        if Self::is_datetime_string(left) && Self::is_duration_object(right) {
+            return self.datetime_subtract_duration(left, right).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Try to compute datetime - datetime (returns duration)
+    fn try_datetime_diff(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+        if Self::is_datetime_string(left) && Self::is_datetime_string(right) {
+            return self.datetime_difference(left, right).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Try to subtract duration - duration
+    fn try_duration_subtract(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+        if Self::is_duration_object(left) && Self::is_duration_object(right) {
+            let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
+            let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
+
+            let mut result_map = Map::new();
+            let years = y1 - y2;
+            let months = mo1 - mo2;
+            let days = d1 - d2;
+            let hours = h1 - h2;
+            let minutes = mi1 - mi2;
+            let seconds = s1 - s2;
+
+            if years != 0 {
+                result_map.insert("years".to_string(), Value::Number(years.into()));
+            }
+            if months != 0 {
+                result_map.insert("months".to_string(), Value::Number(months.into()));
+            }
+            if days != 0 {
+                result_map.insert("days".to_string(), Value::Number(days.into()));
+            }
+            if hours != 0 {
+                result_map.insert("hours".to_string(), Value::Number(hours.into()));
+            }
+            if minutes != 0 {
+                result_map.insert("minutes".to_string(), Value::Number(minutes.into()));
+            }
+            if seconds != 0 {
+                result_map.insert("seconds".to_string(), Value::Number(seconds.into()));
+            }
+
+            return Ok(Some(Value::Object(result_map)));
+        }
+        Ok(None)
+    }
+
+    /// Add duration to datetime
+    fn datetime_add_duration(&self, datetime: &Value, duration: &Value) -> Result<Value> {
+        let (years, months, days, hours, minutes, seconds) =
+            Self::extract_duration_components(duration);
+
+        if let Value::String(dt_str) = datetime {
+            // Try RFC3339 format first
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(dt_str) {
+                let mut result = dt.with_timezone(&chrono::Utc);
+
+                // Add years and months using checked arithmetic
+                if years != 0 || months != 0 {
+                    let total_months = years * 12 + months;
+                    let new_month = result.month() as i64 + total_months;
+                    let year_offset = (new_month - 1).div_euclid(12);
+                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
+                    let final_year = result.year() as i64 + year_offset;
+
+                    if let Some(new_dt) = result
+                        .with_year(final_year as i32)
+                        .and_then(|d| d.with_month(final_month))
+                    {
+                        result = new_dt;
+                    }
+                }
+
+                // Add days, hours, minutes, seconds
+                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
+                result = result + chrono::Duration::seconds(duration_secs);
+
+                return Ok(Value::String(result.to_rfc3339()));
+            }
+
+            // Try NaiveDateTime format
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S") {
+                let mut result = dt;
+
+                // Add years and months
+                if years != 0 || months != 0 {
+                    let total_months = years * 12 + months;
+                    let new_month = result.month() as i64 + total_months;
+                    let year_offset = (new_month - 1).div_euclid(12);
+                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
+                    let final_year = result.year() as i64 + year_offset;
+
+                    if let Some(new_dt) = result
+                        .with_year(final_year as i32)
+                        .and_then(|d| d.with_month(final_month))
+                    {
+                        result = new_dt;
+                    }
+                }
+
+                // Add days, hours, minutes, seconds
+                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
+                result = result + chrono::Duration::seconds(duration_secs);
+
+                return Ok(Value::String(
+                    result.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                ));
+            }
+
+            // Try NaiveDate format
+            if let Ok(dt) = chrono::NaiveDate::parse_from_str(dt_str, "%Y-%m-%d") {
+                let mut result = dt;
+
+                // Add years and months
+                if years != 0 || months != 0 {
+                    let total_months = years * 12 + months;
+                    let new_month = result.month() as i64 + total_months;
+                    let year_offset = (new_month - 1).div_euclid(12);
+                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
+                    let final_year = result.year() as i64 + year_offset;
+
+                    if let Some(new_dt) = result
+                        .with_year(final_year as i32)
+                        .and_then(|d| d.with_month(final_month))
+                    {
+                        result = new_dt;
+                    }
+                }
+
+                // Add days
+                result = result + chrono::Duration::days(days);
+
+                return Ok(Value::String(result.format("%Y-%m-%d").to_string()));
+            }
+        }
+
+        Ok(Value::Null)
+    }
+
+    /// Subtract duration from datetime
+    fn datetime_subtract_duration(&self, datetime: &Value, duration: &Value) -> Result<Value> {
+        let (years, months, days, hours, minutes, seconds) =
+            Self::extract_duration_components(duration);
+
+        if let Value::String(dt_str) = datetime {
+            // Try RFC3339 format first
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(dt_str) {
+                let mut result = dt.with_timezone(&chrono::Utc);
+
+                // Subtract years and months
+                if years != 0 || months != 0 {
+                    let total_months = years * 12 + months;
+                    let new_month = result.month() as i64 - total_months;
+                    let year_offset = (new_month - 1).div_euclid(12);
+                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
+                    let final_year = result.year() as i64 + year_offset;
+
+                    if let Some(new_dt) = result
+                        .with_year(final_year as i32)
+                        .and_then(|d| d.with_month(final_month))
+                    {
+                        result = new_dt;
+                    }
+                }
+
+                // Subtract days, hours, minutes, seconds
+                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
+                result = result - chrono::Duration::seconds(duration_secs);
+
+                return Ok(Value::String(result.to_rfc3339()));
+            }
+
+            // Try NaiveDateTime format
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%dT%H:%M:%S") {
+                let mut result = dt;
+
+                // Subtract years and months
+                if years != 0 || months != 0 {
+                    let total_months = years * 12 + months;
+                    let new_month = result.month() as i64 - total_months;
+                    let year_offset = (new_month - 1).div_euclid(12);
+                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
+                    let final_year = result.year() as i64 + year_offset;
+
+                    if let Some(new_dt) = result
+                        .with_year(final_year as i32)
+                        .and_then(|d| d.with_month(final_month))
+                    {
+                        result = new_dt;
+                    }
+                }
+
+                // Subtract days, hours, minutes, seconds
+                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
+                result = result - chrono::Duration::seconds(duration_secs);
+
+                return Ok(Value::String(
+                    result.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                ));
+            }
+
+            // Try NaiveDate format
+            if let Ok(dt) = chrono::NaiveDate::parse_from_str(dt_str, "%Y-%m-%d") {
+                let mut result = dt;
+
+                // Subtract years and months
+                if years != 0 || months != 0 {
+                    let total_months = years * 12 + months;
+                    let new_month = result.month() as i64 - total_months;
+                    let year_offset = (new_month - 1).div_euclid(12);
+                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
+                    let final_year = result.year() as i64 + year_offset;
+
+                    if let Some(new_dt) = result
+                        .with_year(final_year as i32)
+                        .and_then(|d| d.with_month(final_month))
+                    {
+                        result = new_dt;
+                    }
+                }
+
+                // Subtract days
+                result = result - chrono::Duration::days(days);
+
+                return Ok(Value::String(result.format("%Y-%m-%d").to_string()));
+            }
+        }
+
+        Ok(Value::Null)
+    }
+
+    /// Compute difference between two datetimes (returns duration)
+    fn datetime_difference(&self, left: &Value, right: &Value) -> Result<Value> {
+        if let (Value::String(left_str), Value::String(right_str)) = (left, right) {
+            // Try RFC3339 format
+            let left_dt = chrono::DateTime::parse_from_rfc3339(left_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            let right_dt = chrono::DateTime::parse_from_rfc3339(right_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+
+            if let (Ok(l), Ok(r)) = (left_dt, right_dt) {
+                let diff = l.signed_duration_since(r);
+                let total_seconds = diff.num_seconds();
+
+                let days = total_seconds / 86400;
+                let remaining = total_seconds % 86400;
+                let hours = remaining / 3600;
+                let remaining = remaining % 3600;
+                let minutes = remaining / 60;
+                let seconds = remaining % 60;
+
+                let mut result_map = Map::new();
+                if days != 0 {
+                    result_map.insert("days".to_string(), Value::Number(days.into()));
+                }
+                if hours != 0 {
+                    result_map.insert("hours".to_string(), Value::Number(hours.into()));
+                }
+                if minutes != 0 {
+                    result_map.insert("minutes".to_string(), Value::Number(minutes.into()));
+                }
+                if seconds != 0 {
+                    result_map.insert("seconds".to_string(), Value::Number(seconds.into()));
+                }
+
+                return Ok(Value::Object(result_map));
+            }
+
+            // Try NaiveDate format
+            let left_date = chrono::NaiveDate::parse_from_str(left_str, "%Y-%m-%d");
+            let right_date = chrono::NaiveDate::parse_from_str(right_str, "%Y-%m-%d");
+
+            if let (Ok(l), Ok(r)) = (left_date, right_date) {
+                let diff = l.signed_duration_since(r);
+                let days = diff.num_days();
+
+                let mut result_map = Map::new();
+                if days != 0 {
+                    result_map.insert("days".to_string(), Value::Number(days.into()));
+                }
+
+                return Ok(Value::Object(result_map));
+            }
+        }
+
+        Ok(Value::Null)
     }
 
     fn update_variables_from_rows(

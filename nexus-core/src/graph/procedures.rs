@@ -373,6 +373,78 @@ impl GraphProcedure for PageRankProcedure {
     }
 }
 
+/// Weighted PageRank procedure - uses edge weights for contribution distribution
+pub struct WeightedPageRankProcedure;
+
+impl GraphProcedure for WeightedPageRankProcedure {
+    fn name(&self) -> &str {
+        "gds.centrality.pagerank.weighted"
+    }
+
+    fn signature(&self) -> Vec<ProcedureParameter> {
+        vec![
+            ProcedureParameter {
+                name: "dampingFactor".to_string(),
+                param_type: ParameterType::Float,
+                required: false,
+                default: Some(Value::Number(
+                    serde_json::Number::from_f64(0.85)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                )),
+            },
+            ProcedureParameter {
+                name: "maxIterations".to_string(),
+                param_type: ParameterType::Integer,
+                required: false,
+                default: Some(Value::Number(100.into())),
+            },
+            ProcedureParameter {
+                name: "tolerance".to_string(),
+                param_type: ParameterType::Float,
+                required: false,
+                default: Some(Value::Number(
+                    serde_json::Number::from_f64(0.0001)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                )),
+            },
+        ]
+    }
+
+    fn execute(&self, graph: &Graph, args: &HashMap<String, Value>) -> Result<ProcedureResult> {
+        let damping_factor = args
+            .get("dampingFactor")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.85);
+        let max_iterations = args
+            .get("maxIterations")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(100);
+        let tolerance = args
+            .get("tolerance")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0001);
+
+        let ranks = graph.weighted_pagerank(damping_factor, max_iterations, tolerance);
+
+        let mut rows = Vec::new();
+        for (node, rank) in &ranks {
+            rows.push(vec![
+                Value::Number((*node).into()),
+                Value::Number(
+                    serde_json::Number::from_f64(*rank)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                ),
+            ]);
+        }
+
+        Ok(ProcedureResult {
+            columns: vec!["node".to_string(), "score".to_string()],
+            rows,
+        })
+    }
+}
+
 /// Betweenness Centrality procedure
 pub struct BetweennessCentralityProcedure;
 
@@ -710,6 +782,220 @@ impl GraphProcedure for CosineSimilarityProcedure {
     }
 }
 
+/// Eigenvector Centrality procedure
+pub struct EigenvectorCentralityProcedure;
+
+impl GraphProcedure for EigenvectorCentralityProcedure {
+    fn name(&self) -> &str {
+        "gds.centrality.eigenvector"
+    }
+
+    fn signature(&self) -> Vec<ProcedureParameter> {
+        vec![
+            ProcedureParameter {
+                name: "maxIterations".to_string(),
+                param_type: ParameterType::Integer,
+                required: false,
+                default: Some(Value::Number(100.into())),
+            },
+            ProcedureParameter {
+                name: "tolerance".to_string(),
+                param_type: ParameterType::Float,
+                required: false,
+                default: Some(Value::Number(
+                    serde_json::Number::from_f64(1e-6)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                )),
+            },
+        ]
+    }
+
+    fn execute(&self, graph: &Graph, args: &HashMap<String, Value>) -> Result<ProcedureResult> {
+        let max_iterations = args
+            .get("maxIterations")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(100);
+        let tolerance = args
+            .get("tolerance")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1e-6);
+
+        let centrality = graph.eigenvector_centrality_with_params(max_iterations, tolerance);
+
+        let mut rows = Vec::new();
+        for (node, score) in &centrality {
+            rows.push(vec![
+                Value::Number((*node).into()),
+                Value::Number(
+                    serde_json::Number::from_f64(*score)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                ),
+            ]);
+        }
+
+        Ok(ProcedureResult {
+            columns: vec!["node".to_string(), "score".to_string()],
+            rows,
+        })
+    }
+}
+
+/// K Shortest Paths procedure (Yen's algorithm)
+pub struct KShortestPathsProcedure;
+
+impl GraphProcedure for KShortestPathsProcedure {
+    fn name(&self) -> &str {
+        "gds.shortestPath.yens"
+    }
+
+    fn signature(&self) -> Vec<ProcedureParameter> {
+        vec![
+            ProcedureParameter {
+                name: "sourceNode".to_string(),
+                param_type: ParameterType::Integer,
+                required: true,
+                default: None,
+            },
+            ProcedureParameter {
+                name: "targetNode".to_string(),
+                param_type: ParameterType::Integer,
+                required: true,
+                default: None,
+            },
+            ProcedureParameter {
+                name: "k".to_string(),
+                param_type: ParameterType::Integer,
+                required: false,
+                default: Some(Value::Number(3.into())),
+            },
+        ]
+    }
+
+    fn execute(&self, graph: &Graph, args: &HashMap<String, Value>) -> Result<ProcedureResult> {
+        let source = args
+            .get("sourceNode")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| Error::InvalidInput("sourceNode parameter required".to_string()))?;
+
+        let target = args
+            .get("targetNode")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| Error::InvalidInput("targetNode parameter required".to_string()))?;
+
+        let k = args
+            .get("k")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(3);
+
+        let paths = graph.k_shortest_paths(source, target, k)?;
+
+        let mut rows = Vec::new();
+        for (index, path_result) in paths.iter().enumerate() {
+            rows.push(vec![
+                Value::Number((index + 1).into()),
+                Value::Array(
+                    path_result
+                        .path
+                        .iter()
+                        .map(|&n| Value::Number(n.into()))
+                        .collect(),
+                ),
+                Value::Number(
+                    serde_json::Number::from_f64(path_result.length)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                ),
+            ]);
+        }
+
+        Ok(ProcedureResult {
+            columns: vec!["index".to_string(), "path".to_string(), "cost".to_string()],
+            rows,
+        })
+    }
+}
+
+/// Triangle Count procedure
+pub struct TriangleCountProcedure;
+
+impl GraphProcedure for TriangleCountProcedure {
+    fn name(&self) -> &str {
+        "gds.triangleCount"
+    }
+
+    fn signature(&self) -> Vec<ProcedureParameter> {
+        vec![]
+    }
+
+    fn execute(&self, graph: &Graph, _args: &HashMap<String, Value>) -> Result<ProcedureResult> {
+        let count = graph.triangle_count();
+
+        Ok(ProcedureResult {
+            columns: vec!["triangleCount".to_string()],
+            rows: vec![vec![Value::Number((count as u64).into())]],
+        })
+    }
+}
+
+/// Local Clustering Coefficient procedure
+pub struct LocalClusteringCoefficientProcedure;
+
+impl GraphProcedure for LocalClusteringCoefficientProcedure {
+    fn name(&self) -> &str {
+        "gds.localClusteringCoefficient"
+    }
+
+    fn signature(&self) -> Vec<ProcedureParameter> {
+        vec![]
+    }
+
+    fn execute(&self, graph: &Graph, _args: &HashMap<String, Value>) -> Result<ProcedureResult> {
+        let coefficients = graph.clustering_coefficient();
+
+        let mut rows = Vec::new();
+        for (node, coefficient) in &coefficients {
+            rows.push(vec![
+                Value::Number((*node).into()),
+                Value::Number(
+                    serde_json::Number::from_f64(*coefficient)
+                        .unwrap_or_else(|| serde_json::Number::from(0)),
+                ),
+            ]);
+        }
+
+        Ok(ProcedureResult {
+            columns: vec!["node".to_string(), "coefficient".to_string()],
+            rows,
+        })
+    }
+}
+
+/// Global Clustering Coefficient procedure
+pub struct GlobalClusteringCoefficientProcedure;
+
+impl GraphProcedure for GlobalClusteringCoefficientProcedure {
+    fn name(&self) -> &str {
+        "gds.globalClusteringCoefficient"
+    }
+
+    fn signature(&self) -> Vec<ProcedureParameter> {
+        vec![]
+    }
+
+    fn execute(&self, graph: &Graph, _args: &HashMap<String, Value>) -> Result<ProcedureResult> {
+        let coefficient = graph.global_clustering_coefficient();
+
+        Ok(ProcedureResult {
+            columns: vec!["coefficient".to_string()],
+            rows: vec![vec![Value::Number(
+                serde_json::Number::from_f64(coefficient)
+                    .unwrap_or_else(|| serde_json::Number::from(0)),
+            )]],
+        })
+    }
+}
+
 /// Custom procedure function type
 pub type CustomProcedureFn =
     Box<dyn Fn(&Graph, &HashMap<String, Value>) -> Result<ProcedureResult> + Send + Sync>;
@@ -772,6 +1058,7 @@ impl ProcedureRegistry {
         registry.register_builtin(Arc::new(AStarProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(BellmanFordProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(PageRankProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(Arc::new(WeightedPageRankProcedure) as Arc<dyn GraphProcedure>);
         registry
             .register_builtin(Arc::new(BetweennessCentralityProcedure) as Arc<dyn GraphProcedure>);
         registry
@@ -787,6 +1074,16 @@ impl ProcedureRegistry {
         );
         registry.register_builtin(Arc::new(JaccardSimilarityProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(CosineSimilarityProcedure) as Arc<dyn GraphProcedure>);
+        registry
+            .register_builtin(Arc::new(EigenvectorCentralityProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(Arc::new(KShortestPathsProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(Arc::new(TriangleCountProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(
+            Arc::new(LocalClusteringCoefficientProcedure) as Arc<dyn GraphProcedure>
+        );
+        registry.register_builtin(
+            Arc::new(GlobalClusteringCoefficientProcedure) as Arc<dyn GraphProcedure>
+        );
 
         // Register geospatial procedures
         registry
@@ -812,6 +1109,7 @@ impl ProcedureRegistry {
         registry.register_builtin(Arc::new(AStarProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(BellmanFordProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(PageRankProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(Arc::new(WeightedPageRankProcedure) as Arc<dyn GraphProcedure>);
         registry
             .register_builtin(Arc::new(BetweennessCentralityProcedure) as Arc<dyn GraphProcedure>);
         registry
@@ -827,6 +1125,16 @@ impl ProcedureRegistry {
         );
         registry.register_builtin(Arc::new(JaccardSimilarityProcedure) as Arc<dyn GraphProcedure>);
         registry.register_builtin(Arc::new(CosineSimilarityProcedure) as Arc<dyn GraphProcedure>);
+        registry
+            .register_builtin(Arc::new(EigenvectorCentralityProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(Arc::new(KShortestPathsProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(Arc::new(TriangleCountProcedure) as Arc<dyn GraphProcedure>);
+        registry.register_builtin(
+            Arc::new(LocalClusteringCoefficientProcedure) as Arc<dyn GraphProcedure>
+        );
+        registry.register_builtin(
+            Arc::new(GlobalClusteringCoefficientProcedure) as Arc<dyn GraphProcedure>
+        );
 
         // Register geospatial procedures
         registry
@@ -980,7 +1288,7 @@ mod tests {
 
         registry.register_custom(procedure).unwrap();
         assert!(registry.contains("custom.test"));
-        assert_eq!(registry.list().len(), 16); // 15 built-in + 1 custom
+        assert_eq!(registry.list().len(), 22); // 21 built-in + 1 custom
 
         // Test execution
         let proc = registry.get("custom.test").unwrap();

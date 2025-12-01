@@ -6,7 +6,7 @@
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Status](https://img.shields.io/badge/status-v0.12.0%20%7C%20All%20Tests%20Passing-success.svg)
-![Tests](https://img.shields.io/badge/tests-1478%2B%20passing-success.svg)
+![Tests](https://img.shields.io/badge/tests-2949%2B%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -24,12 +24,13 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 **Production Ready!** 🚀
 
 - ✅ **~55% openCypher Compatibility** - Core clauses (MATCH, CREATE, MERGE, SET, DELETE, REMOVE, WHERE, RETURN, ORDER BY, LIMIT, SKIP, UNION, WITH, UNWIND, FOREACH) and ~60 functions
-- ✅ **100% Compatibility Tests** - 195/195 Neo4j compatibility tests + 1268+ unit tests passing
+- ✅ **100% Compatibility Tests** - 300/300 Neo4j compatibility tests + 2949+ unit tests passing
+- ✅ **19 GDS Procedures** - PageRank (standard, weighted, parallel), betweenness, eigenvector, Dijkstra, A*, Yen's k-paths, Louvain, label propagation, triangle count, clustering coefficients
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
 - ✅ **Official SDKs** - Rust, Python, and TypeScript
-- ✅ **1478+ Tests Passing** - 100% success rate, 70%+ coverage
-- ⚠️ **Known Limitations**: Advanced procedures (CALL), Constraints (UNIQUE, EXISTS), Advanced indexes (FULL-TEXT, POINT), Complete geospatial support
+- ✅ **2949+ Tests Passing** - 100% success rate, 70%+ coverage
+- ⚠️ **Known Limitations**: Constraints (UNIQUE, EXISTS), Advanced indexes (FULL-TEXT, POINT)
 
 See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complete details.
 
@@ -356,14 +357,27 @@ See [Performance Analysis](docs/PERFORMANCE.md) for comprehensive benchmarks.
 
 ## 📖 **Documentation**
 
+### **📚 User Documentation** (New!)
+- 🚀 [**Complete User Guide**](docs/users/README.md) - Comprehensive user documentation organized by topic
+  - [Getting Started](docs/users/getting-started/) - Installation, Docker, Quick Start
+  - [Cypher Query Language](docs/users/cypher/) - Complete Cypher reference
+  - [API Reference](docs/users/api/) - REST API, Authentication, Integration
+  - [Vector Search](docs/users/vector-search/) - Native vector similarity search
+  - [SDKs](docs/users/sdks/) - Python, TypeScript, Rust, Go, C# SDKs
+  - [Configuration](docs/users/configuration/) - Server, Logging, Performance, Cluster
+  - [Operations](docs/users/operations/) - Service Management, Monitoring, Backup
+  - [Use Cases](docs/users/use-cases/) - Knowledge Graphs, RAG, Recommendations
+  - [Advanced Guides](docs/users/guides/) - Graph Algorithms, Multi-Database, Replication
+  - [Reference](docs/users/reference/) - Functions, Data Types, Errors
+
 ### **Architecture & Design**
 - 📐 [**Architecture Guide**](docs/ARCHITECTURE.md) - Complete system design
 - 🗺️ [**Development Roadmap**](docs/ROADMAP.md) - Implementation phases (MVP, V1, V2)
 - 🔗 [**Component DAG**](docs/DAG.md) - Module dependencies and build order
 
 ### **Compatibility & Testing**
-- ✅ [**Neo4j Compatibility Report**](docs/NEO4J_COMPATIBILITY_REPORT.md) - Comprehensive compatibility analysis (195/195 tests passing)
-- 📊 [**User Guide**](docs/USER_GUIDE.md) - Complete usage guide with examples
+- ✅ [**Neo4j Compatibility Report**](docs/NEO4J_COMPATIBILITY_REPORT.md) - Comprehensive compatibility analysis (210/210 tests passing)
+- 📊 [**User Guide**](docs/USER_GUIDE.md) - Legacy usage guide (see [new docs](docs/users/) for updated version)
 - 🔐 [**Authentication Guide**](docs/AUTHENTICATION.md) - Security and authentication setup
 
 ### **Detailed Specifications**
@@ -723,7 +737,7 @@ cat rulebook/tasks/[task-name]/tasks.md
 **Current Active Tasks:**
 - ✅ **Complete Neo4j Cypher** - All 14 phases complete (100%)
 - ✅ **Authentication System** - API keys, RBAC, rate limiting (100% complete)
-- 🔧 **Neo4j Compatibility Fixes** - 9/23 critical issues fixed (39.1% progress)
+- ✅ **Neo4j Compatibility Fixes** - 210/210 tests passing (100% complete)
 
 See `rulebook/RULEBOOK.md` for complete workflow.
 

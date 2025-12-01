@@ -212,4 +212,15 @@ impl ConstraintManager {
             .map(|c| c.constraint_type == constraint_type)
             .unwrap_or(false))
     }
+
+    /// Get a specific constraint
+    pub fn get_constraint(
+        &self,
+        label_id: u32,
+        property_key_id: u32,
+    ) -> Result<Option<Constraint>> {
+        let rtxn = self.env.read_txn()?;
+        let key = (label_id, property_key_id);
+        Ok(self.constraints_db.get(&rtxn, &key)?)
+    }
 }

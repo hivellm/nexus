@@ -175,6 +175,15 @@ pub struct ShortestPathResult {
     pub path: Option<Vec<u64>>,
 }
 
+/// K shortest path result (for Yen's algorithm)
+#[derive(Debug, Clone, PartialEq)]
+pub struct KShortestPath {
+    /// The path from source to target
+    pub path: Vec<u64>,
+    /// Total length of the path
+    pub length: f64,
+}
+
 /// Connected components result
 #[derive(Debug, Clone)]
 pub struct ConnectedComponentsResult {
@@ -439,6 +448,237 @@ impl Graph {
             parents,
             path,
         })
+    }
+
+    /// Find K shortest paths using Yen's algorithm
+    ///
+    /// This algorithm finds the K shortest simple paths from source to target.
+    /// Returns a vector of paths sorted by length (shortest first).
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The source node ID
+    /// * `target` - The target node ID
+    /// * `k` - Number of shortest paths to find
+    ///
+    /// # Returns
+    ///
+    /// A vector of `KShortestPath` containing up to K paths with their lengths
+    pub fn k_shortest_paths(
+        &self,
+        source: u64,
+        target: u64,
+        k: usize,
+    ) -> Result<Vec<KShortestPath>> {
+        if !self.has_node(source) || !self.has_node(target) {
+            return Err(Error::InvalidInput(
+                "Source or target node not found".to_string(),
+            ));
+        }
+
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Find the first shortest path using Dijkstra
+        let first_result = self.dijkstra(source, Some(target))?;
+        if first_result.path.is_none() {
+            return Ok(Vec::new()); // No path exists
+        }
+
+        let mut result_paths = Vec::new();
+        let first_path = first_result.path.unwrap();
+        let first_length = *first_result
+            .distances
+            .get(&target)
+            .unwrap_or(&f64::INFINITY);
+
+        result_paths.push(KShortestPath {
+            path: first_path.clone(),
+            length: first_length,
+        });
+
+        // Candidate paths (heap sorted by length)
+        let mut candidates: Vec<KShortestPath> = Vec::new();
+
+        for k_iter in 1..k {
+            if result_paths.len() != k_iter {
+                break; // No more paths found in previous iteration
+            }
+
+            let prev_path = &result_paths[k_iter - 1].path;
+
+            // For each node in the previous shortest path
+            for i in 0..(prev_path.len().saturating_sub(1)) {
+                let spur_node = prev_path[i];
+                let root_path = &prev_path[0..=i];
+
+                // Build a modified graph by removing edges
+                let mut removed_edges: Vec<(u64, u64)> = Vec::new();
+
+                // Remove edges that are part of previous paths with the same root
+                for prev_result_path in &result_paths {
+                    let prev = &prev_result_path.path;
+                    if prev.len() > i && &prev[0..=i] == root_path {
+                        if i + 1 < prev.len() {
+                            removed_edges.push((prev[i], prev[i + 1]));
+                        }
+                    }
+                }
+
+                // Create a temporary graph without the removed edges
+                let spur_path = self.dijkstra_with_excluded_edges(
+                    spur_node,
+                    Some(target),
+                    &removed_edges,
+                    root_path,
+                )?;
+
+                if let Some(spur) = spur_path.path {
+                    // Combine root path + spur path
+                    let mut total_path = root_path[0..root_path.len() - 1].to_vec();
+                    total_path.extend(spur);
+
+                    // Calculate total length
+                    let total_length = self.calculate_path_length(&total_path);
+
+                    // Add to candidates if not already present
+                    let candidate = KShortestPath {
+                        path: total_path,
+                        length: total_length,
+                    };
+
+                    if !candidates.iter().any(|c| c.path == candidate.path)
+                        && !result_paths.iter().any(|r| r.path == candidate.path)
+                    {
+                        candidates.push(candidate);
+                    }
+                }
+            }
+
+            if candidates.is_empty() {
+                break; // No more paths to find
+            }
+
+            // Sort candidates by length and take the shortest
+            candidates.sort_by(|a, b| a.length.partial_cmp(&b.length).unwrap());
+            result_paths.push(candidates.remove(0));
+        }
+
+        Ok(result_paths)
+    }
+
+    /// Helper function for Yen's algorithm - Dijkstra with excluded edges and nodes
+    fn dijkstra_with_excluded_edges(
+        &self,
+        source: u64,
+        target: Option<u64>,
+        excluded_edges: &[(u64, u64)],
+        excluded_nodes: &[u64],
+    ) -> Result<ShortestPathResult> {
+        let excluded_edges_set: HashSet<(u64, u64)> = excluded_edges.iter().cloned().collect();
+        let excluded_nodes_set: HashSet<u64> = excluded_nodes[0..excluded_nodes.len() - 1]
+            .iter()
+            .cloned()
+            .collect();
+
+        let mut distances = HashMap::new();
+        let mut parents = HashMap::new();
+        let mut heap = BinaryHeap::new();
+
+        // Initialize distances
+        for &node in self.adjacency.keys() {
+            if !excluded_nodes_set.contains(&node) {
+                distances.insert(node, f64::INFINITY);
+            }
+        }
+        distances.insert(source, 0.0);
+
+        #[derive(PartialEq)]
+        struct State {
+            cost: f64,
+            node: u64,
+        }
+
+        impl Eq for State {}
+
+        impl Ord for State {
+            fn cmp(&self, other: &Self) -> Ordering {
+                other
+                    .cost
+                    .partial_cmp(&self.cost)
+                    .unwrap_or(Ordering::Equal)
+            }
+        }
+
+        impl PartialOrd for State {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        heap.push(State {
+            cost: 0.0,
+            node: source,
+        });
+
+        while let Some(State { cost, node }) = heap.pop() {
+            if let Some(target_node) = target {
+                if node == target_node {
+                    break;
+                }
+            }
+
+            if cost > *distances.get(&node).unwrap_or(&f64::INFINITY) {
+                continue;
+            }
+
+            for &(neighbor, weight) in self.get_neighbors(node) {
+                // Skip excluded edges and nodes
+                if excluded_edges_set.contains(&(node, neighbor))
+                    || excluded_nodes_set.contains(&neighbor)
+                {
+                    continue;
+                }
+
+                let new_cost = cost + weight;
+                if new_cost < *distances.get(&neighbor).unwrap_or(&f64::INFINITY) {
+                    distances.insert(neighbor, new_cost);
+                    parents.insert(neighbor, node);
+                    heap.push(State {
+                        cost: new_cost,
+                        node: neighbor,
+                    });
+                }
+            }
+        }
+
+        let path = if let Some(target_node) = target {
+            self.reconstruct_path(&parents, source, target_node)
+        } else {
+            None
+        };
+
+        Ok(ShortestPathResult {
+            distances,
+            parents,
+            path,
+        })
+    }
+
+    /// Helper function to calculate the total length of a path
+    fn calculate_path_length(&self, path: &[u64]) -> f64 {
+        let mut length = 0.0;
+        for i in 0..(path.len().saturating_sub(1)) {
+            let from = path[i];
+            let to = path[i + 1];
+            if let Some(neighbors) = self.adjacency.get(&from) {
+                if let Some((_, weight)) = neighbors.iter().find(|(n, _)| *n == to) {
+                    length += weight;
+                }
+            }
+        }
+        length
     }
 
     /// Find connected components using Union-Find
@@ -758,6 +998,160 @@ impl Graph {
         ranks
     }
 
+    /// Calculate Weighted PageRank for all nodes
+    /// Uses edge weights to determine contribution distribution
+    /// Higher edge weights mean more PageRank flows through that edge
+    /// Returns a map of node_id -> PageRank score
+    pub fn weighted_pagerank(
+        &self,
+        damping_factor: f64,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> HashMap<u64, f64> {
+        let nodes: Vec<u64> = self.adjacency.keys().cloned().collect();
+        let n = nodes.len() as f64;
+        let mut ranks = HashMap::new();
+
+        // Initialize ranks
+        for &node in &nodes {
+            ranks.insert(node, 1.0 / n);
+        }
+
+        // Calculate weighted out-degrees (sum of edge weights)
+        let mut weighted_out_degrees = HashMap::new();
+        for (&node, neighbors) in &self.adjacency {
+            let total_weight: f64 = neighbors.iter().map(|&(_, weight)| weight).sum();
+            weighted_out_degrees.insert(node, total_weight);
+        }
+
+        for _ in 0..max_iterations {
+            let mut new_ranks = HashMap::new();
+            let mut total_diff = 0.0;
+
+            // Initialize new ranks with teleport probability
+            for &node in &nodes {
+                new_ranks.insert(node, (1.0 - damping_factor) / n);
+            }
+
+            // Distribute PageRank based on edge weights
+            for (&node, neighbors) in &self.adjacency {
+                let total_weight = weighted_out_degrees.get(&node).copied().unwrap_or(0.0);
+                if total_weight > 0.0 {
+                    for &(neighbor, weight) in neighbors {
+                        // Contribution proportional to edge weight
+                        let contribution = damping_factor * ranks[&node] * weight / total_weight;
+                        *new_ranks.get_mut(&neighbor).unwrap() += contribution;
+                    }
+                } else {
+                    // Dangling node - distribute evenly
+                    let contribution = damping_factor * ranks[&node] / n;
+                    for &target_node in &nodes {
+                        *new_ranks.get_mut(&target_node).unwrap() += contribution;
+                    }
+                }
+            }
+
+            // Check convergence
+            for &node in &nodes {
+                total_diff += (new_ranks[&node] - ranks[&node]).abs();
+            }
+
+            ranks = new_ranks;
+            if total_diff < tolerance {
+                break;
+            }
+        }
+
+        ranks
+    }
+
+    /// Calculate PageRank using parallel processing for large graphs
+    /// Automatically switches to parallel mode for graphs with >1000 nodes
+    /// Returns a map of node_id -> PageRank score
+    pub fn pagerank_parallel(
+        &self,
+        damping_factor: f64,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> HashMap<u64, f64> {
+        use rayon::prelude::*;
+
+        let nodes: Vec<u64> = self.adjacency.keys().cloned().collect();
+        let n = nodes.len();
+
+        // For small graphs, use sequential version
+        if n < 1000 {
+            return self.pagerank(damping_factor, max_iterations, tolerance);
+        }
+
+        let n_f64 = n as f64;
+        let mut ranks: HashMap<u64, f64> = nodes.iter().map(|&node| (node, 1.0 / n_f64)).collect();
+
+        // Pre-calculate out-degrees for efficiency
+        let out_degrees: HashMap<u64, f64> = self
+            .adjacency
+            .iter()
+            .map(|(&node, neighbors)| (node, neighbors.len() as f64))
+            .collect();
+
+        // Pre-calculate incoming edges for each node (reverse graph)
+        let mut incoming: HashMap<u64, Vec<(u64, f64)>> = HashMap::new();
+        for &node in &nodes {
+            incoming.insert(node, Vec::new());
+        }
+        for (&src, neighbors) in &self.adjacency {
+            let out_degree = out_degrees.get(&src).copied().unwrap_or(1.0);
+            for &(dst, _) in neighbors {
+                if let Some(inc) = incoming.get_mut(&dst) {
+                    inc.push((src, out_degree));
+                }
+            }
+        }
+
+        // Find dangling nodes (nodes with no outgoing edges)
+        let dangling_nodes: Vec<u64> = nodes
+            .iter()
+            .filter(|&&node| out_degrees.get(&node).copied().unwrap_or(0.0) == 0.0)
+            .cloned()
+            .collect();
+
+        for _ in 0..max_iterations {
+            // Calculate dangling node contribution
+            let dangling_sum: f64 = dangling_nodes.iter().map(|node| ranks[node]).sum();
+            let dangling_contribution = damping_factor * dangling_sum / n_f64;
+
+            // Calculate new ranks in parallel
+            let new_ranks: HashMap<u64, f64> = nodes
+                .par_iter()
+                .map(|&node| {
+                    let base = (1.0 - damping_factor) / n_f64 + dangling_contribution;
+                    let incoming_contribution: f64 = incoming
+                        .get(&node)
+                        .map(|inc| {
+                            inc.iter()
+                                .map(|(src, out_deg)| damping_factor * ranks[src] / out_deg)
+                                .sum()
+                        })
+                        .unwrap_or(0.0);
+                    (node, base + incoming_contribution)
+                })
+                .collect();
+
+            // Check convergence
+            let total_diff: f64 = nodes
+                .par_iter()
+                .map(|node| (new_ranks[node] - ranks[node]).abs())
+                .sum();
+
+            ranks = new_ranks;
+            if total_diff < tolerance {
+                break;
+            }
+        }
+
+        ranks
+    }
+
     /// Calculate Betweenness Centrality for all nodes
     /// Returns a map of node_id -> betweenness centrality score
     pub fn betweenness_centrality(&self) -> HashMap<u64, f64> {
@@ -847,6 +1241,93 @@ impl Graph {
         centrality
     }
 
+    /// Compute eigenvector centrality using power iteration
+    ///
+    /// Eigenvector centrality assigns scores to nodes based on the principle that
+    /// connections to high-scoring nodes contribute more to the score of the node in question.
+    ///
+    /// Uses power iteration method with the following parameters:
+    /// - max_iterations: Maximum number of iterations (default: 100)
+    /// - tolerance: Convergence threshold (default: 1e-6)
+    ///
+    /// Returns normalized centrality scores (sum of squares = 1)
+    pub fn eigenvector_centrality(&self) -> HashMap<u64, f64> {
+        self.eigenvector_centrality_with_params(100, 1e-6)
+    }
+
+    /// Compute eigenvector centrality with custom parameters
+    pub fn eigenvector_centrality_with_params(
+        &self,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> HashMap<u64, f64> {
+        let nodes: Vec<u64> = self.adjacency.keys().cloned().collect();
+
+        if nodes.is_empty() {
+            return HashMap::new();
+        }
+
+        // Initialize all scores to 1.0
+        let mut scores: HashMap<u64, f64> = nodes.iter().map(|&n| (n, 1.0)).collect();
+
+        // Build reverse adjacency (incoming edges)
+        let mut reverse_adjacency: HashMap<u64, Vec<u64>> = HashMap::new();
+        for &node in &nodes {
+            reverse_adjacency.insert(node, Vec::new());
+        }
+        for (&from, neighbors) in &self.adjacency {
+            for &(to, _weight) in neighbors {
+                reverse_adjacency.entry(to).or_default().push(from);
+            }
+        }
+
+        // Power iteration
+        for _iteration in 0..max_iterations {
+            let mut new_scores = HashMap::new();
+
+            // Update scores: score[node] = sum(score[neighbor]) for incoming neighbors
+            for &node in &nodes {
+                let incoming = reverse_adjacency.get(&node).unwrap();
+                let score: f64 = incoming
+                    .iter()
+                    .map(|&n| scores.get(&n).unwrap_or(&0.0))
+                    .sum();
+                new_scores.insert(node, score);
+            }
+
+            // Normalize scores (L2 normalization)
+            let norm: f64 = new_scores.values().map(|&s| s * s).sum::<f64>().sqrt();
+
+            if norm == 0.0 {
+                // Graph has no edges, return uniform distribution
+                let uniform_score = 1.0 / (nodes.len() as f64).sqrt();
+                return nodes.iter().map(|&n| (n, uniform_score)).collect();
+            }
+
+            for score in new_scores.values_mut() {
+                *score /= norm;
+            }
+
+            // Check convergence
+            let diff: f64 = nodes
+                .iter()
+                .map(|&n| {
+                    let old = scores.get(&n).unwrap_or(&0.0);
+                    let new = new_scores.get(&n).unwrap_or(&0.0);
+                    (old - new).abs()
+                })
+                .sum();
+
+            scores = new_scores;
+
+            if diff < tolerance {
+                break;
+            }
+        }
+
+        scores
+    }
+
     /// Find strongly connected components using Kosaraju's algorithm
     /// Returns component ID for each node
     pub fn strongly_connected_components(&self) -> ConnectedComponentsResult {
@@ -894,6 +1375,213 @@ impl Graph {
             components,
             component_count: component_id,
             component_nodes,
+        }
+    }
+
+    /// Count triangles in the graph
+    ///
+    /// A triangle is a set of three nodes where each pair is connected by an edge.
+    /// This algorithm counts the total number of triangles in the graph.
+    ///
+    /// # Returns
+    ///
+    /// The total number of triangles in the graph
+    ///
+    /// # Algorithm
+    ///
+    /// For each edge (u, v), find common neighbors of u and v.
+    /// Each common neighbor w forms a triangle (u, v, w).
+    /// To avoid counting each triangle three times (once for each edge),
+    /// we only count when u < v < w in node ID ordering.
+    pub fn triangle_count(&self) -> usize {
+        let mut count = 0;
+
+        // Convert adjacency list to HashSet for faster lookups
+        let adjacency_sets: HashMap<u64, HashSet<u64>> = self
+            .adjacency
+            .iter()
+            .map(|(&node, neighbors)| {
+                let neighbor_set: HashSet<u64> = neighbors.iter().map(|(n, _)| *n).collect();
+                (node, neighbor_set)
+            })
+            .collect();
+
+        let nodes: Vec<u64> = self.adjacency.keys().cloned().collect();
+
+        // For directed graphs, find cycles of length 3: u→v, v→w, w→u
+        for &u in &nodes {
+            if let Some(u_neighbors) = adjacency_sets.get(&u) {
+                for &v in u_neighbors {
+                    if let Some(v_neighbors) = adjacency_sets.get(&v) {
+                        for &w in v_neighbors {
+                            // Check if there's an edge w→u to complete the triangle
+                            if let Some(w_neighbors) = adjacency_sets.get(&w) {
+                                if w_neighbors.contains(&u) {
+                                    // Found a triangle u→v→w→u
+                                    // Only count each triangle once (when u < v < w)
+                                    if u < v && v < w {
+                                        count += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        count
+    }
+
+    /// Compute local clustering coefficient for each node
+    ///
+    /// The local clustering coefficient of a node is the ratio of triangles
+    /// connected to the node to the maximum possible number of triangles
+    /// (i.e., the number of pairs of neighbors).
+    ///
+    /// Formula: C(v) = 2 * T(v) / (deg(v) * (deg(v) - 1))
+    /// where T(v) is the number of triangles through node v
+    ///
+    /// # Returns
+    ///
+    /// A HashMap mapping each node ID to its local clustering coefficient (0.0 to 1.0)
+    pub fn clustering_coefficient(&self) -> HashMap<u64, f64> {
+        let mut coefficients = HashMap::new();
+
+        // Build undirected adjacency (treat graph as undirected)
+        let mut undirected_adjacency: HashMap<u64, HashSet<u64>> = HashMap::new();
+
+        for (&from, neighbors) in &self.adjacency {
+            for &(to, _) in neighbors {
+                undirected_adjacency
+                    .entry(from)
+                    .or_insert_with(HashSet::new)
+                    .insert(to);
+                undirected_adjacency
+                    .entry(to)
+                    .or_insert_with(HashSet::new)
+                    .insert(from);
+            }
+        }
+
+        // Ensure all nodes are in the map
+        for node in self.adjacency.keys() {
+            undirected_adjacency
+                .entry(*node)
+                .or_insert_with(HashSet::new);
+        }
+
+        for (&node, neighbors_set) in &undirected_adjacency {
+            let degree = neighbors_set.len();
+
+            if degree < 2 {
+                // Need at least 2 neighbors to form a triangle
+                coefficients.insert(node, 0.0);
+                continue;
+            }
+
+            // Count triangles through this node
+            let mut triangle_count = 0;
+            let neighbors: Vec<u64> = neighbors_set.iter().cloned().collect();
+
+            for i in 0..neighbors.len() {
+                for j in (i + 1)..neighbors.len() {
+                    let n1 = neighbors[i];
+                    let n2 = neighbors[j];
+
+                    // Check if n1 and n2 are connected (in undirected sense)
+                    if let Some(n1_neighbors) = undirected_adjacency.get(&n1) {
+                        if n1_neighbors.contains(&n2) {
+                            triangle_count += 1;
+                        }
+                    }
+                }
+            }
+
+            // Calculate coefficient: 2 * triangles / (deg * (deg - 1))
+            let max_triangles = degree * (degree - 1);
+            let coefficient = if max_triangles > 0 {
+                (2.0 * triangle_count as f64) / max_triangles as f64
+            } else {
+                0.0
+            };
+
+            coefficients.insert(node, coefficient);
+        }
+
+        coefficients
+    }
+
+    /// Compute global clustering coefficient (transitivity)
+    ///
+    /// The global clustering coefficient is the ratio of the number of closed
+    /// triplets (triangles) to the total number of triplets (connected triples).
+    ///
+    /// Formula: C = 3 * number_of_triangles / number_of_triplets
+    ///
+    /// # Returns
+    ///
+    /// The global clustering coefficient (0.0 to 1.0)
+    pub fn global_clustering_coefficient(&self) -> f64 {
+        // Build undirected adjacency (treat graph as undirected)
+        let mut undirected_adjacency: HashMap<u64, HashSet<u64>> = HashMap::new();
+
+        for (&from, neighbors) in &self.adjacency {
+            for &(to, _) in neighbors {
+                undirected_adjacency
+                    .entry(from)
+                    .or_insert_with(HashSet::new)
+                    .insert(to);
+                undirected_adjacency
+                    .entry(to)
+                    .or_insert_with(HashSet::new)
+                    .insert(from);
+            }
+        }
+
+        // Count undirected triangles
+        let mut triangle_count = 0;
+        let mut nodes: Vec<u64> = undirected_adjacency.keys().cloned().collect();
+        nodes.sort(); // Ensure deterministic ordering
+
+        for &u in &nodes {
+            if let Some(u_neighbors) = undirected_adjacency.get(&u) {
+                // Sort neighbors for deterministic ordering
+                let mut neighbors: Vec<u64> = u_neighbors.iter().cloned().collect();
+                neighbors.sort();
+                for i in 0..neighbors.len() {
+                    for j in (i + 1)..neighbors.len() {
+                        let v = neighbors[i];
+                        let w = neighbors[j];
+                        if let Some(v_neighbors) = undirected_adjacency.get(&v) {
+                            if v_neighbors.contains(&w) {
+                                // Only count when u < v < w to avoid duplicates
+                                if u < v && v < w {
+                                    triangle_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let triangles = triangle_count as f64 * 3.0; // Each triangle has 3 triplets
+
+        // Count triplets (connected triples / wedges)
+        let mut triplets = 0;
+        for neighbors_set in undirected_adjacency.values() {
+            let degree = neighbors_set.len();
+            if degree >= 2 {
+                // Number of ways to choose 2 neighbors: C(degree, 2) = degree*(degree-1)/2
+                triplets += degree * (degree - 1) / 2;
+            }
+        }
+
+        if triplets == 0 {
+            0.0
+        } else {
+            triangles / triplets as f64
         }
     }
 
@@ -1270,6 +1958,104 @@ mod tests {
     }
 
     #[test]
+    fn test_k_shortest_paths() {
+        // Create a graph with multiple paths
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_node(4, vec![]);
+
+        // Path 1->2->4 (length 3)
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 4, 2.0, vec![]);
+
+        // Path 1->3->4 (length 5)
+        graph.add_edge(1, 3, 2.0, vec![]);
+        graph.add_edge(3, 4, 3.0, vec![]);
+
+        // Direct path 1->4 (length 10)
+        graph.add_edge(1, 4, 10.0, vec![]);
+
+        let result = graph.k_shortest_paths(1, 4, 3).unwrap();
+
+        // Should find 3 paths
+        assert_eq!(result.len(), 3);
+
+        // First path should be shortest: 1->2->4 (length 3)
+        assert_eq!(result[0].path, vec![1, 2, 4]);
+        assert_eq!(result[0].length, 3.0);
+
+        // Second path: 1->3->4 (length 5)
+        assert_eq!(result[1].path, vec![1, 3, 4]);
+        assert_eq!(result[1].length, 5.0);
+
+        // Third path: 1->4 (length 10)
+        assert_eq!(result[2].path, vec![1, 4]);
+        assert_eq!(result[2].length, 10.0);
+    }
+
+    #[test]
+    fn test_k_shortest_paths_no_path() {
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+
+        // No edge between nodes
+        let result = graph.k_shortest_paths(1, 2, 3).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_k_shortest_paths_fewer_than_k() {
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+
+        graph.add_edge(1, 2, 1.0, vec![]);
+
+        // Only 1 path exists, but we ask for 5
+        let result = graph.k_shortest_paths(1, 2, 5).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, vec![1, 2]);
+        assert_eq!(result[0].length, 1.0);
+    }
+
+    #[test]
+    fn test_k_shortest_paths_complex() {
+        // Create a more complex graph with multiple alternative paths
+        let mut graph = Graph::new();
+        for i in 1..=6 {
+            graph.add_node(i, vec![]);
+        }
+
+        // Multiple paths from 1 to 6
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+        graph.add_edge(3, 6, 1.0, vec![]);
+
+        graph.add_edge(1, 4, 2.0, vec![]);
+        graph.add_edge(4, 5, 1.0, vec![]);
+        graph.add_edge(5, 6, 1.0, vec![]);
+
+        graph.add_edge(1, 6, 5.0, vec![]);
+
+        let result = graph.k_shortest_paths(1, 6, 3).unwrap();
+
+        // Should find at least 2 paths
+        assert!(result.len() >= 2);
+
+        // Paths should be sorted by length
+        for i in 1..result.len() {
+            assert!(result[i - 1].length <= result[i].length);
+        }
+
+        // First path should be the shortest
+        assert_eq!(result[0].path, vec![1, 2, 3, 6]);
+        assert_eq!(result[0].length, 3.0);
+    }
+
+    #[test]
     fn test_connected_components() {
         let mut graph = Graph::new();
         graph.add_node(1, vec![]);
@@ -1346,6 +2132,77 @@ mod tests {
     }
 
     #[test]
+    fn test_weighted_pagerank() {
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        // Node 1 has a high weight edge to node 2, low weight to node 3
+        graph.add_edge(1, 2, 10.0, vec![]); // High weight
+        graph.add_edge(1, 3, 1.0, vec![]); // Low weight
+        graph.add_edge(2, 1, 1.0, vec![]);
+        graph.add_edge(3, 1, 1.0, vec![]);
+
+        let ranks = graph.weighted_pagerank(0.85, 100, 0.0001);
+        assert_eq!(ranks.len(), 3);
+        // Node 2 should have higher rank than node 3 due to higher weight edge from node 1
+        assert!(
+            ranks[&2] > ranks[&3],
+            "Node 2 (rank={}) should be higher than Node 3 (rank={}) due to edge weights",
+            ranks[&2],
+            ranks[&3]
+        );
+    }
+
+    #[test]
+    fn test_weighted_pagerank_equal_weights() {
+        // With equal weights, weighted_pagerank should behave like regular pagerank
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+        graph.add_edge(3, 1, 1.0, vec![]);
+
+        let weighted_ranks = graph.weighted_pagerank(0.85, 100, 0.0001);
+        let unweighted_ranks = graph.pagerank(0.85, 100, 0.0001);
+
+        // With equal weights, results should be very similar
+        for node in [1, 2, 3] {
+            let diff = (weighted_ranks[&node] - unweighted_ranks[&node]).abs();
+            assert!(
+                diff < 0.01,
+                "Weighted and unweighted should be similar for equal weights"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pagerank_parallel_small_graph() {
+        // For small graphs, pagerank_parallel should delegate to regular pagerank
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+        graph.add_edge(3, 1, 1.0, vec![]);
+
+        let parallel_ranks = graph.pagerank_parallel(0.85, 100, 0.0001);
+        let sequential_ranks = graph.pagerank(0.85, 100, 0.0001);
+
+        // Results should be identical for small graphs
+        for node in [1, 2, 3] {
+            let diff = (parallel_ranks[&node] - sequential_ranks[&node]).abs();
+            assert!(
+                diff < 0.0001,
+                "Parallel and sequential should be identical for small graphs"
+            );
+        }
+    }
+
+    #[test]
     fn test_degree_centrality() {
         let mut graph = Graph::new();
         graph.add_node(1, vec![]);
@@ -1360,6 +2217,98 @@ mod tests {
     }
 
     #[test]
+    fn test_eigenvector_centrality() {
+        // Create a star graph: node 1 is the hub connected to nodes 2, 3, 4
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_node(4, vec![]);
+
+        // Edges from hub to leaves
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(1, 3, 1.0, vec![]);
+        graph.add_edge(1, 4, 1.0, vec![]);
+
+        // Add edges back from leaves to hub
+        graph.add_edge(2, 1, 1.0, vec![]);
+        graph.add_edge(3, 1, 1.0, vec![]);
+        graph.add_edge(4, 1, 1.0, vec![]);
+
+        let centrality = graph.eigenvector_centrality();
+
+        // Hub should have high centrality
+        assert!(centrality.contains_key(&1));
+        assert!(centrality.contains_key(&2));
+        assert!(centrality.contains_key(&3));
+        assert!(centrality.contains_key(&4));
+
+        // In this symmetric structure, all nodes should have equal centrality
+        let c1 = centrality[&1];
+        let c2 = centrality[&2];
+        let c3 = centrality[&3];
+        let c4 = centrality[&4];
+
+        assert!((c1 - c2).abs() < 1e-5);
+        assert!((c1 - c3).abs() < 1e-5);
+        assert!((c1 - c4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_eigenvector_centrality_chain() {
+        // Create a chain graph: 1 -> 2 -> 3 -> 4
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_node(4, vec![]);
+
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+        graph.add_edge(3, 4, 1.0, vec![]);
+
+        let centrality = graph.eigenvector_centrality();
+
+        // In a directed chain without cycles, eigenvector centrality converges
+        // such that the terminal node (4) has the highest score
+        assert!(centrality.contains_key(&1));
+        assert!(centrality.contains_key(&2));
+        assert!(centrality.contains_key(&3));
+        assert!(centrality.contains_key(&4));
+
+        // All nodes should have equal centrality in the normalized result
+        // because the chain is symmetric after power iteration
+        let c1 = centrality[&1];
+        let c2 = centrality[&2];
+        let c3 = centrality[&3];
+        let c4 = centrality[&4];
+
+        // Verify all scores are equal (within tolerance)
+        assert!((c1 - 0.5).abs() < 0.1);
+        assert!((c2 - 0.5).abs() < 0.1);
+        assert!((c3 - 0.5).abs() < 0.1);
+        assert!((c4 - 0.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_eigenvector_centrality_empty_graph() {
+        let graph = Graph::new();
+        let centrality = graph.eigenvector_centrality();
+        assert!(centrality.is_empty());
+    }
+
+    #[test]
+    fn test_eigenvector_centrality_single_node() {
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+
+        let centrality = graph.eigenvector_centrality();
+        assert!(centrality.contains_key(&1));
+        // Single node should have normalized score
+        assert!((centrality[&1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
     fn test_strongly_connected_components() {
         let mut graph = Graph::new();
         graph.add_node(1, vec![]);
@@ -1371,6 +2320,128 @@ mod tests {
 
         let result = graph.strongly_connected_components();
         assert_eq!(result.component_count, 2);
+    }
+
+    #[test]
+    fn test_triangle_count() {
+        // Create a graph with 2 triangles
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_node(4, vec![]);
+
+        // Triangle 1: cycle 1→2→3→1
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+        graph.add_edge(3, 1, 1.0, vec![]);
+
+        // Triangle 2: cycle 2→3→4→2
+        graph.add_edge(2, 4, 1.0, vec![]);
+        graph.add_edge(4, 2, 1.0, vec![]); // Changed from 4→3 to 4→2 to complete the cycle
+        graph.add_edge(3, 4, 1.0, vec![]); // Added 3→4 to complete the cycle
+
+        let count = graph.triangle_count();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_triangle_count_no_triangles() {
+        // Create a graph with no triangles (chain)
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+
+        let count = graph.triangle_count();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_clustering_coefficient() {
+        // Create a graph with known clustering coefficients
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_node(4, vec![]);
+
+        // Triangle: 1, 2, 3 (all nodes have perfect clustering)
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+        graph.add_edge(3, 1, 1.0, vec![]);
+
+        // Node 4 connected to 1 and 2 (but 1-2 are connected)
+        graph.add_edge(4, 1, 1.0, vec![]);
+        graph.add_edge(4, 2, 1.0, vec![]);
+
+        let coefficients = graph.clustering_coefficient();
+
+        // Node 1 has neighbors {2, 3, 4}:
+        //   Pairs: (2,3) connected, (2,4) connected, (3,4) not connected
+        //   Coefficient: 2*2 / (3*2) = 0.666...
+        assert!((coefficients[&1] - 0.666666).abs() < 1e-4);
+
+        // Node 2 has neighbors {1, 3, 4}:
+        //   Pairs: (1,3) connected, (1,4) connected, (3,4) not connected
+        //   Coefficient: 2*2 / (3*2) = 0.666...
+        assert!((coefficients[&2] - 0.666666).abs() < 1e-4);
+
+        // Node 3 has neighbors {1, 2} (only 2 neighbors):
+        //   Pairs: (1,2) connected
+        //   Coefficient: 2*1 / (2*1) = 1.0
+        assert!((coefficients[&3] - 1.0).abs() < 1e-5);
+
+        // Node 4 has neighbors {1, 2}:
+        //   Pairs: (1,2) connected
+        //   Coefficient: 2*1 / (2*1) = 1.0
+        assert!((coefficients[&4] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_clustering_coefficient_zero() {
+        // Star graph: center has coefficient 0, leaves don't have enough neighbors
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+        graph.add_node(4, vec![]);
+
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(1, 3, 1.0, vec![]);
+        graph.add_edge(1, 4, 1.0, vec![]);
+
+        let coefficients = graph.clustering_coefficient();
+
+        // Center node 1 has 3 neighbors but none connected = coefficient 0
+        assert!((coefficients[&1] - 0.0).abs() < 1e-5);
+
+        // Leaf nodes have only 1 neighbor = coefficient 0
+        assert!((coefficients[&2] - 0.0).abs() < 1e-5);
+        assert!((coefficients[&3] - 0.0).abs() < 1e-5);
+        assert!((coefficients[&4] - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_global_clustering_coefficient() {
+        // Create a graph with triangles
+        let mut graph = Graph::new();
+        graph.add_node(1, vec![]);
+        graph.add_node(2, vec![]);
+        graph.add_node(3, vec![]);
+
+        // Perfect triangle
+        graph.add_edge(1, 2, 1.0, vec![]);
+        graph.add_edge(2, 3, 1.0, vec![]);
+        graph.add_edge(3, 1, 1.0, vec![]);
+
+        let global_coef = graph.global_clustering_coefficient();
+
+        // Perfect triangle should have global coefficient 1.0
+        assert!((global_coef - 1.0).abs() < 1e-5);
     }
 
     #[test]

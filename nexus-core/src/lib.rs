@@ -986,6 +986,10 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::ShowFunctions));
+        let has_show_constraints = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::ShowConstraints));
         let has_create_function = ast
             .clauses
             .iter()
@@ -995,7 +999,7 @@ impl Engine {
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::DropFunction(_)));
 
-        if has_show_functions || has_create_function || has_drop_function {
+        if has_show_functions || has_show_constraints || has_create_function || has_drop_function {
             return self.execute_function_commands(&ast);
         }
 
@@ -2140,6 +2144,73 @@ impl Engine {
                         });
                     }
                 }
+                executor::parser::Clause::ShowConstraints => {
+                    // Get all constraints from catalog
+                    let constraint_mgr = self.catalog.constraint_manager();
+                    let constraints = constraint_mgr.read().get_all_constraints()?;
+
+                    // Sort by label_id and property_key_id for consistent output
+                    let mut sorted_constraints: Vec<_> = constraints.into_iter().collect();
+                    sorted_constraints.sort_by(|a, b| {
+                        a.0.cmp(&b.0) // Sort by (label_id, property_key_id) tuple
+                    });
+
+                    for ((label_id, prop_key_id), constraint) in sorted_constraints {
+                        // Get label name
+                        let label_name = self
+                            .catalog
+                            .get_label_name(label_id)?
+                            .unwrap_or_else(|| format!("Label_{}", label_id));
+
+                        // Get property key name
+                        let prop_name = self
+                            .catalog
+                            .get_key_name(prop_key_id)?
+                            .unwrap_or_else(|| format!("Property_{}", prop_key_id));
+
+                        // Determine constraint type string
+                        let constraint_type = match constraint.constraint_type {
+                            catalog::constraints::ConstraintType::Unique => "UNIQUE",
+                            catalog::constraints::ConstraintType::Exists => "EXISTS",
+                        };
+
+                        // Create description in Neo4j format
+                        let description = match constraint.constraint_type {
+                            catalog::constraints::ConstraintType::Unique => {
+                                format!(
+                                    "CONSTRAINT ON (n:{}) ASSERT n.{} IS UNIQUE",
+                                    label_name, prop_name
+                                )
+                            }
+                            catalog::constraints::ConstraintType::Exists => {
+                                format!(
+                                    "CONSTRAINT ON (n:{}) ASSERT exists(n.{})",
+                                    label_name, prop_name
+                                )
+                            }
+                        };
+
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(label_name),
+                                serde_json::Value::String(prop_name),
+                                serde_json::Value::String(constraint_type.to_string()),
+                                serde_json::Value::String(description),
+                            ],
+                        });
+                    }
+
+                    // Return result with appropriate columns
+                    return Ok(executor::ResultSet {
+                        columns: vec![
+                            "label".to_string(),
+                            "property".to_string(),
+                            "type".to_string(),
+                            "description".to_string(),
+                        ],
+                        rows: result_rows,
+                    });
+                }
                 executor::parser::Clause::CreateFunction(create_function) => {
                     // Check if function already exists
                     let function_exists =
@@ -2469,11 +2540,6 @@ impl Engine {
                         }
                     }
                     catalog::constraints::ConstraintType::Unique => {
-                        // PERFORMANCE OPTIMIZATION: Skip expensive unique constraint checking for now
-                        // TODO: Implement efficient unique constraint checking with indexes
-                        // For now, allow duplicates to improve CREATE performance
-                        // This is a trade-off: faster writes, potential constraint violations
-                        /*
                         // Property value must be unique across all nodes with this label
                         if let Some(value) = property_value {
                             // Check if any other node with this label has the same property value
@@ -2497,7 +2563,7 @@ impl Engine {
                                 }
 
                                 let node_props = self.storage.load_node_properties(node_id_u64)?;
-                                if let Some(Value::Object(props_map)) = node_props {
+                                if let Some(serde_json::Value::Object(props_map)) = node_props {
                                     if let Some(existing_value) = props_map.get(&property_name) {
                                         if existing_value == value {
                                             return Err(Error::ConstraintViolation(format!(
@@ -2509,7 +2575,6 @@ impl Engine {
                                 }
                             }
                         }
-                        */
                     }
                 }
             }
