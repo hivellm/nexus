@@ -2961,41 +2961,194 @@ impl Engine {
         context: &HashMap<String, Vec<u64>>,
         return_clause: &executor::parser::ReturnClause,
     ) -> Result<executor::ResultSet> {
-        if return_clause.items.len() != 1 {
-            return Err(Error::CypherExecution(
-                "Only single RETURN items are supported in write queries".to_string(),
-            ));
+        if return_clause.items.is_empty() {
+            return Ok(executor::ResultSet {
+                columns: vec![],
+                rows: vec![],
+            });
         }
 
-        let item = &return_clause.items[0];
-        let variable = match &item.expression {
-            executor::parser::Expression::Variable(var) => var.clone(),
-            _ => {
+        // Check if we have any complex expressions (function calls, aggregations)
+        // If so, delegate to the full executor by converting to a query
+        let has_complex_expressions = return_clause.items.iter().any(|item| {
+            !matches!(
+                &item.expression,
+                executor::parser::Expression::Variable(_)
+                    | executor::parser::Expression::PropertyAccess { .. }
+            )
+        });
+
+        if has_complex_expressions {
+            // For complex expressions, we need to use the full executor
+            // Build a complete query with the context data materialized
+            return self.build_return_result_with_executor(context, return_clause);
+        }
+
+        // Simple case: only variables and property access
+        // Determine which variable(s) we need nodes from
+        let mut var_for_iteration: Option<String> = None;
+        let mut columns = Vec::new();
+
+        for item in &return_clause.items {
+            let (var, col_name) = match &item.expression {
+                executor::parser::Expression::Variable(var) => {
+                    let col = item.alias.clone().unwrap_or_else(|| var.clone());
+                    (var.clone(), col)
+                }
+                executor::parser::Expression::PropertyAccess { variable, property } => {
+                    let col = item
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| format!("{}.{}", variable, property));
+                    (variable.clone(), col)
+                }
+                _ => unreachable!("Complex expressions should be handled above"),
+            };
+
+            if var_for_iteration.is_none() {
+                var_for_iteration = Some(var.clone());
+            } else if var_for_iteration.as_ref() != Some(&var) {
                 return Err(Error::CypherExecution(
-                    "Only variable projections are supported in RETURN for write queries"
+                    "Multiple different variables in RETURN not supported for write queries"
                         .to_string(),
                 ));
             }
+            columns.push(col_name);
+        }
+
+        let var_name = match var_for_iteration {
+            Some(v) => v,
+            None => {
+                return Ok(executor::ResultSet {
+                    columns,
+                    rows: vec![],
+                });
+            }
         };
 
-        let node_ids = context.get(&variable).cloned().unwrap_or_default();
+        let node_ids = context.get(&var_name).cloned().unwrap_or_default();
         let mut seen = HashSet::new();
         let mut rows = Vec::new();
 
         for node_id in node_ids {
             if seen.insert(node_id) {
-                let value = self.node_to_result_value(node_id)?;
-                rows.push(executor::Row {
-                    values: vec![value],
-                });
+                let mut row_values = Vec::new();
+
+                for item in &return_clause.items {
+                    let value = match &item.expression {
+                        executor::parser::Expression::Variable(_) => {
+                            self.node_to_result_value(node_id)?
+                        }
+                        executor::parser::Expression::PropertyAccess { property, .. } => {
+                            // Get the property value from the node
+                            let props = self.storage.load_node_properties(node_id)?;
+                            if let Some(Value::Object(map)) = props {
+                                map.get(property).cloned().unwrap_or(Value::Null)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        _ => Value::Null,
+                    };
+                    row_values.push(value);
+                }
+
+                rows.push(executor::Row { values: row_values });
             }
         }
 
-        let column = item.alias.clone().unwrap_or(variable);
-        Ok(executor::ResultSet {
-            columns: vec![column],
-            rows,
-        })
+        Ok(executor::ResultSet { columns, rows })
+    }
+
+    fn build_return_result_with_executor(
+        &mut self,
+        context: &HashMap<String, Vec<u64>>,
+        return_clause: &executor::parser::ReturnClause,
+    ) -> Result<executor::ResultSet> {
+        // For complex expressions, convert the context into a MATCH query
+        // and let the full executor handle it
+
+        // Find the variable name from context
+        let var_name = context.keys().next().ok_or_else(|| {
+            Error::CypherExecution("No context variable for complex RETURN".to_string())
+        })?;
+
+        let node_ids = context.get(var_name).cloned().unwrap_or_default();
+
+        if node_ids.is_empty() {
+            // Build empty result with correct columns
+            let columns = return_clause
+                .items
+                .iter()
+                .map(|item| item.alias.clone().unwrap_or_else(|| "?column?".to_string()))
+                .collect();
+            return Ok(executor::ResultSet {
+                columns,
+                rows: vec![],
+            });
+        }
+
+        // Build a query like: MATCH (var) WHERE id(var) IN [ids] RETURN ...
+        let ids_str = node_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let return_str = return_clause
+            .items
+            .iter()
+            .map(|item| {
+                let expr_str = self.expression_to_string(&item.expression);
+                if let Some(alias) = &item.alias {
+                    format!("{} AS {}", expr_str, alias)
+                } else {
+                    expr_str
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let query_str = format!(
+            "MATCH ({}) WHERE id({}) IN [{}] RETURN {}",
+            var_name, var_name, ids_str, return_str
+        );
+
+        // Execute through the full executor
+        let query_obj = executor::Query {
+            cypher: query_str,
+            params: std::collections::HashMap::new(),
+        };
+
+        self.executor.execute(&query_obj)
+    }
+
+    fn expression_to_string(&self, expr: &executor::parser::Expression) -> String {
+        match expr {
+            executor::parser::Expression::Variable(v) => v.clone(),
+            executor::parser::Expression::PropertyAccess { variable, property } => {
+                format!("{}.{}", variable, property)
+            }
+            executor::parser::Expression::FunctionCall { name, args } => {
+                let args_str = args
+                    .iter()
+                    .map(|arg| self.expression_to_string(arg))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}({})", name, args_str)
+            }
+            executor::parser::Expression::Literal(lit) => match lit {
+                executor::parser::Literal::Integer(n) => n.to_string(),
+                executor::parser::Literal::Float(f) => f.to_string(),
+                executor::parser::Literal::String(s) => format!("'{}'", s),
+                executor::parser::Literal::Boolean(b) => b.to_string(),
+                executor::parser::Literal::Null => "null".to_string(),
+                _ => "?".to_string(),
+            },
+            // For other complex expressions, just return a placeholder
+            // The full executor will handle them properly
+            _ => "?".to_string(),
+        }
     }
 
     fn ensure_node_state<'a>(

@@ -7,22 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### ✅ Neo4j Compatibility Test Results - 97.66% Pass Rate (2025-12-01)
+### ✅ Neo4j Compatibility Test Results - 97.99% Pass Rate (2025-12-01)
 
-**Latest compatibility test run: 292/300 tests passing**
+**Latest compatibility test run: 293/300 tests passing**
 
 - **Test Results**:
   - Total Tests: 300
-  - Passed: 292 ✅
-  - Failed: 7 ❌
+  - Passed: 293 ✅
+  - Failed: 6 ❌
   - Skipped: 1 ⏭️
-  - Pass Rate: **97.66%**
+  - Pass Rate: **97.99%**
 
-- **Recent Fixes** (improvement from 287 to 292):
+- **Recent Fixes** (improvement from 287 to 293):
   - Fixed cartesian product bug in MATCH patterns with multiple disconnected nodes
   - Added `OptionalFilter` operator for proper WHERE clause handling after OPTIONAL MATCH
   - Fixed OPTIONAL MATCH IS NULL filtering (12.06)
   - Fixed OPTIONAL MATCH IS NOT NULL filtering (12.07)
+  - Fixed WITH clause operator ordering (WITH now executes after UNWIND)
+  - Fixed `collect(expression)` by ensuring Project executes for aggregation arguments
+  - Fixed UNWIND with collect expression (14.13)
 
 - **Sections with 100% Success** (235 tests):
   - Section 1: Basic CREATE and RETURN (20/20)
@@ -39,12 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Section 13: WITH Clause (15/15)
   - Section 16: Type Conversion (15/15)
 
-- **Known Issues** (7 failures):
+- **Known Issues** (6 failures):
   - **OPTIONAL MATCH** (3 failures): Edge cases with WHERE and multiple patterns
     - OPTIONAL MATCH with WHERE clause (12.04)
     - Multiple OPTIONAL MATCH patterns (12.08)
     - Reverse direction OPTIONAL MATCH (12.14)
-  - **UNWIND with collect** (1 failure): Empty result set issue (14.13)
   - **MERGE relationship** (1 failure): Duplicate relationship creation (15.09)
   - **SET with expression** (1 failure): Complex expressions not supported (17.04)
   - **DELETE without DETACH** (1 failure): Requires DETACH DELETE for nodes with relationships (17.09)

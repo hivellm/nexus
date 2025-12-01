@@ -854,7 +854,14 @@ impl<'a> QueryPlanner<'a> {
             )?;
         }
 
-        // Add WITH operators AFTER MATCH/Filter but BEFORE Project
+        // Add UNWIND operators BEFORE WITH when there are no patterns AND there are WITH operators
+        // This ensures UNWIND generates rows before WITH transforms them
+        // Only add here if WITH operators exist (otherwise UNWIND is added later in the no-patterns block)
+        if patterns.is_empty() && !unwind_operators.is_empty() && !with_operators.is_empty() {
+            operators.extend(unwind_operators.clone());
+        }
+
+        // Add WITH operators AFTER MATCH/Filter/UNWIND but BEFORE Project
         // This ensures WITH intermediate projections run and create aliased variables
         // Skip WITH operators that contain aggregation - they are handled by Aggregate operator
         for (with_items, with_distinct, where_expr) in with_operators.iter() {
@@ -884,13 +891,24 @@ impl<'a> QueryPlanner<'a> {
                 })
                 .collect();
 
-            // Find the position of the first Project operator
+            // Find the position to insert WITH:
+            // - Before Project if it exists
+            // - After UNWIND if Project doesn't exist (WITH needs UNWIND data)
+            // - At end if neither exists
             let project_pos = operators
                 .iter()
                 .position(|op| matches!(op, Operator::Project { .. }));
 
-            // Insert WITH operator before Project (or at end if no Project)
-            let insert_pos = project_pos.unwrap_or(operators.len());
+            let insert_pos = if let Some(pos) = project_pos {
+                pos
+            } else {
+                // No Project found - insert after UNWIND operators (if any)
+                // Find the last UNWIND operator position
+                let last_unwind_pos = operators
+                    .iter()
+                    .rposition(|op| matches!(op, Operator::Unwind { .. }));
+                last_unwind_pos.map(|p| p + 1).unwrap_or(operators.len())
+            };
             operators.insert(
                 insert_pos,
                 Operator::With {
@@ -956,7 +974,10 @@ impl<'a> QueryPlanner<'a> {
         if patterns.is_empty() && (!return_items.is_empty() || !unwind_operators.is_empty()) {
             // No patterns but have RETURN or UNWIND - check for aggregations first
             // This handles cases like: RETURN count(*), RETURN sum(1), etc.
-            operators.extend(unwind_operators);
+            // Only add UNWIND here if not already added (when WITH operators exist, UNWIND was added earlier)
+            if with_operators.is_empty() {
+                operators.extend(unwind_operators);
+            }
 
             // Add filter operators for WHERE clauses (when there are no patterns)
             // This handles cases like: RETURN 42 WHERE false, RETURN 5 WHERE 5 > 10, etc.
@@ -1155,7 +1176,10 @@ impl<'a> QueryPlanner<'a> {
                                             Expression::PropertyAccess { variable, property } => {
                                                 format!("{}.{}", variable, property)
                                             }
-                                            Expression::Literal(_) => {
+                                            // For any other expression (including BinaryOp like x * 2),
+                                            // create a projection item first so the expression is evaluated
+                                            // before collect aggregates the results
+                                            _ => {
                                                 let alias =
                                                     format!("__collect_arg_{}", aggregations.len());
                                                 projection_items.push(ProjectionItem {
@@ -1164,7 +1188,6 @@ impl<'a> QueryPlanner<'a> {
                                                 });
                                                 alias
                                             }
-                                            _ => continue,
                                         };
                                         aggregations.push(Aggregation::Collect {
                                             column,
@@ -1769,14 +1792,16 @@ impl<'a> QueryPlanner<'a> {
                                 };
 
                                 if let Some(arg) = actual_arg {
-                                    // Handle literals by projecting them first
+                                    // Handle expressions by projecting them first
                                     let column = match arg {
                                         Expression::Variable(var) => var.clone(),
                                         Expression::PropertyAccess { variable, property } => {
                                             format!("{}.{}", variable, property)
                                         }
-                                        Expression::Literal(_) => {
-                                            // For literals, create a projection item first
+                                        // For any other expression (including BinaryOp like x * 2),
+                                        // create a projection item first so the expression is evaluated
+                                        // before collect aggregates the results
+                                        _ => {
                                             let alias =
                                                 format!("__collect_arg_{}", aggregations.len());
                                             projection_items.push(ProjectionItem {
@@ -1785,7 +1810,6 @@ impl<'a> QueryPlanner<'a> {
                                             });
                                             alias
                                         }
-                                        _ => continue,
                                     };
                                     aggregations.push(Aggregation::Collect {
                                         column,

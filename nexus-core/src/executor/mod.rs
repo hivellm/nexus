@@ -1212,7 +1212,12 @@ impl Executor {
                 }
                 Operator::Project { items } => {
                     projection_columns = items.iter().map(|item| item.alias.clone()).collect();
-                    if has_aggregate_ahead {
+                    // Check if Project contains collect argument items (__collect_arg_*)
+                    // If so, we must NOT defer - these need to be evaluated before Aggregate
+                    let has_collect_args = items
+                        .iter()
+                        .any(|item| item.alias.starts_with("__collect_arg_"));
+                    if has_aggregate_ahead && !has_collect_args {
                         // Defer Project until after Aggregate to keep source columns (e.g., `r`) available.
                         // Aggregation operator will produce the correct final columns/rows.
                         tracing::debug!(

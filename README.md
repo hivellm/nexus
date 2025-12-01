@@ -5,7 +5,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.12.0%20%7C%2097.66%25%20Compatibility-success.svg)
+![Status](https://img.shields.io/badge/status-v0.12.0%20%7C%2097.99%25%20Compatibility-success.svg)
 ![Tests](https://img.shields.io/badge/tests-2949%2B%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
@@ -24,7 +24,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 **Production Ready!** 🚀
 
 - ✅ **~55% openCypher Compatibility** - Core clauses (MATCH, CREATE, MERGE, SET, DELETE, REMOVE, WHERE, RETURN, ORDER BY, LIMIT, SKIP, UNION, WITH, UNWIND, FOREACH) and ~60 functions
-- ✅ **97.66% Compatibility Tests** - 292/300 Neo4j compatibility tests passing + 2949+ unit tests (see [CHANGELOG.md](CHANGELOG.md) for details)
+- ✅ **97.99% Compatibility Tests** - 293/300 Neo4j compatibility tests passing + 2949+ unit tests (see [CHANGELOG.md](CHANGELOG.md) for details)
 - ✅ **19 GDS Procedures** - PageRank (standard, weighted, parallel), betweenness, eigenvector, Dijkstra, A*, Yen's k-paths, Louvain, label propagation, triangle count, clustering coefficients
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
