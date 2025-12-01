@@ -2884,7 +2884,7 @@ impl Executor {
             Vec::new()
         };
 
-        let rows = if had_existing_rows {
+        let rows: Vec<HashMap<String, Value>> = if had_existing_rows {
             context
                 .result_set
                 .rows
@@ -2897,32 +2897,64 @@ impl Executor {
             Vec::new()
         };
 
-        let mut result_rows: Vec<HashMap<String, Value>> = Vec::new();
+        // Neo4j semantics: group by mandatory vars, keep passing rows OR one NULL row per group
+        // Identify mandatory variables (all vars NOT in optional_vars)
+        let all_vars: std::collections::HashSet<&String> =
+            rows.first().map(|r| r.keys().collect()).unwrap_or_default();
+        let optional_set: std::collections::HashSet<&String> = optional_vars.iter().collect();
+        let mandatory_vars: Vec<&String> = all_vars.difference(&optional_set).cloned().collect();
+
+        // Helper to create a group key from mandatory variables
+        let make_group_key = |row: &HashMap<String, Value>| -> String {
+            mandatory_vars
+                .iter()
+                .map(|var| {
+                    let val = row.get(*var).cloned().unwrap_or(Value::Null);
+                    format!("{}={:?}", var, val)
+                })
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+
+        // Group rows by mandatory variables and evaluate predicate
+        let mut groups: std::collections::HashMap<String, Vec<(HashMap<String, Value>, bool)>> =
+            std::collections::HashMap::new();
 
         for row in &rows {
-            // Check if all optional vars are already NULL in this row
+            let group_key = make_group_key(row);
             let all_optional_null = optional_vars
                 .iter()
                 .all(|var| matches!(row.get(var), None | Some(Value::Null)));
 
-            if all_optional_null {
-                // All optional vars are NULL - keep row as-is (no filtering needed)
-                result_rows.push(row.clone());
+            let predicate_passes = if all_optional_null {
+                false // NULL row doesn't "pass" - it's a fallback
             } else {
-                // At least one optional var has a value - evaluate predicate
-                let predicate_result = self.evaluate_predicate_on_row(row, context, &expr)?;
+                self.evaluate_predicate_on_row(row, context, &expr)?
+            };
 
-                if predicate_result {
-                    // Predicate passed - keep row as-is
-                    result_rows.push(row.clone());
-                } else {
-                    // Predicate failed - set optional vars to NULL but keep the row
-                    let mut modified_row = row.clone();
-                    for var in optional_vars {
-                        modified_row.insert(var.clone(), Value::Null);
-                    }
-                    result_rows.push(modified_row);
+            groups
+                .entry(group_key)
+                .or_default()
+                .push((row.clone(), predicate_passes));
+        }
+
+        // Build result: for each group, keep passing rows OR one NULL row
+        let mut result_rows: Vec<HashMap<String, Value>> = Vec::new();
+        for (_group_key, group_rows) in groups {
+            let passing_rows: Vec<_> = group_rows
+                .iter()
+                .filter(|(_, passes)| *passes)
+                .map(|(row, _)| row.clone())
+                .collect();
+
+            if !passing_rows.is_empty() {
+                result_rows.extend(passing_rows);
+            } else if let Some((template_row, _)) = group_rows.first() {
+                let mut null_row = template_row.clone();
+                for var in optional_vars {
+                    null_row.insert(var.clone(), Value::Null);
                 }
+                result_rows.push(null_row);
             }
         }
 
