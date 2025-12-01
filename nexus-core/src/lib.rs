@@ -462,7 +462,7 @@ impl Engine {
                                         self.delete_node(node_id)?;
                                     } else {
                                         let node_record = self.storage.read_node(node_id)?;
-                                        if node_record.first_rel_ptr != u64::MAX {
+                                        if node_record.first_rel_ptr != 0 {
                                             return Err(Error::CypherExecution(
                                                 "Cannot DELETE node with existing relationships; use DETACH DELETE"
                                                     .to_string(),
@@ -1499,7 +1499,7 @@ impl Engine {
                             } else {
                                 // Regular DELETE: check for relationships
                                 let node_record = self.storage.read_node(node_id)?;
-                                if node_record.first_rel_ptr != u64::MAX {
+                                if node_record.first_rel_ptr != 0 {
                                     return Err(Error::CypherExecution(format!(
                                         "Cannot DELETE node {} with existing relationships; use DETACH DELETE",
                                         node_id
