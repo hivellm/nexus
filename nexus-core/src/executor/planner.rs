@@ -1498,7 +1498,19 @@ impl<'a> QueryPlanner<'a> {
             std::slice::from_ref(start_pattern),
             first_is_optional,
             operators,
+            &std::collections::HashSet::new(), // No previously bound vars for first pattern
         )?;
+
+        // Track variables bound by the first pattern (for OPTIONAL MATCH handling)
+        let mut previously_bound_vars: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for element in &start_pattern.elements {
+            if let PatternElement::Node(node) = element {
+                if let Some(var) = &node.variable {
+                    previously_bound_vars.insert(var.clone());
+                }
+            }
+        }
 
         // Process additional patterns (for comma-separated MATCH patterns like (p1:...), (p2:...))
         // Each additional pattern needs its own NodeByLabel + Filter operators
@@ -1511,11 +1523,36 @@ impl<'a> QueryPlanner<'a> {
             // This will be handled by wrapping the pattern operators in a way that preserves NULL values
             let _is_optional_pattern = *is_optional;
 
+            // CRITICAL FIX: For OPTIONAL MATCH patterns, if ANY node variable is already bound
+            // from a previous pattern, we should NOT add NodeByLabel for unbound nodes.
+            // The Expand operator will handle finding the unbound nodes via relationship traversal.
+            let pattern_has_bound_var = pattern.elements.iter().any(|el| {
+                if let PatternElement::Node(node) = el {
+                    node.variable
+                        .as_ref()
+                        .map_or(false, |v| previously_bound_vars.contains(v))
+                } else {
+                    false
+                }
+            });
+
             // Add NodeByLabel operators for nodes in this additional pattern
             for element in &pattern.elements {
                 if let PatternElement::Node(node) = element {
                     if let Some(variable) = &node.variable {
                         if all_target_nodes.contains(variable) {
+                            continue;
+                        }
+
+                        // Skip NodeByLabel for unbound vars in OPTIONAL MATCH if pattern has a bound var
+                        if *is_optional
+                            && pattern_has_bound_var
+                            && !previously_bound_vars.contains(variable)
+                        {
+                            eprintln!(
+                                "PLANNER: Skipping NodeByLabel for '{}' in OPTIONAL MATCH (pattern has bound var)",
+                                variable
+                            );
                             continue;
                         }
 
@@ -1569,6 +1606,7 @@ impl<'a> QueryPlanner<'a> {
                 std::slice::from_ref(pattern),
                 *is_optional,
                 operators,
+                &previously_bound_vars,
             )?;
         }
 
@@ -2268,6 +2306,7 @@ impl<'a> QueryPlanner<'a> {
         patterns: &[Pattern],
         is_optional: bool,
         operators: &mut Vec<Operator>,
+        previously_bound_vars: &std::collections::HashSet<String>,
     ) -> Result<()> {
         let mut tmp_var_counter = 0;
 
@@ -2317,6 +2356,33 @@ impl<'a> QueryPlanner<'a> {
                         // This ensures multi-hop patterns chain correctly
                         prev_node_var = Some(target_var.clone());
 
+                        // CRITICAL FIX: For OPTIONAL MATCH, if target is already bound but source is not,
+                        // we need to reverse the traversal direction and swap source/target
+                        let (final_source_var, final_target_var, final_direction) = if is_optional
+                            && !previously_bound_vars.is_empty()
+                        {
+                            let source_bound = previously_bound_vars.contains(&source_var);
+                            let target_bound = previously_bound_vars.contains(&target_var);
+
+                            if target_bound && !source_bound {
+                                // Target is bound, source is not - reverse the traversal
+                                eprintln!(
+                                    "PLANNER: Reversing traversal for OPTIONAL MATCH: {} <- {} (was {} -> {})",
+                                    source_var, target_var, source_var, target_var
+                                );
+                                let reversed_direction = match direction {
+                                    Direction::Outgoing => Direction::Incoming,
+                                    Direction::Incoming => Direction::Outgoing,
+                                    Direction::Both => Direction::Both,
+                                };
+                                (target_var.clone(), source_var.clone(), reversed_direction)
+                            } else {
+                                (source_var.clone(), target_var.clone(), direction)
+                            }
+                        } else {
+                            (source_var.clone(), target_var.clone(), direction)
+                        };
+
                         // Get type_ids from relationship types (support multiple types like :TYPE1|TYPE2)
                         // CRITICAL FIX: Use get_or_create_type to ensure type exists even if not yet in catalog
                         // This handles cases where relationships are created but type lookup fails
@@ -2354,10 +2420,10 @@ impl<'a> QueryPlanner<'a> {
                             // Use regular Expand operator for single-hop relationships
                             operators.push(Operator::Expand {
                                 type_ids,
-                                source_var,
-                                target_var,
+                                source_var: final_source_var,
+                                target_var: final_target_var,
                                 rel_var: rel.variable.clone().unwrap_or_default(),
-                                direction,
+                                direction: final_direction,
                                 optional: is_optional,
                             });
                         }

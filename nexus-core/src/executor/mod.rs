@@ -3184,14 +3184,31 @@ impl Executor {
                     })
                     .unwrap_or(Value::Null);
 
-                // Skip rows that don't have a valid source value
+                // Handle rows that don't have a valid source value
                 if source_value.is_null() {
-                    tracing::debug!(
-                        "Expand: skipping row {} of {} - source_var '{}' is Null",
-                        row_idx + 1,
-                        rows.len(),
-                        source_var
-                    );
+                    if optional {
+                        // OPTIONAL MATCH semantics: preserve the row with NULL for target and rel
+                        // This handles chained OPTIONAL MATCHes where the previous optional produced NULL
+                        eprintln!(
+                            "OPTIONAL MATCH: source_var '{}' is NULL, preserving row with NULL target/rel",
+                            source_var
+                        );
+                        let mut new_row = row.clone();
+                        if !target_var.is_empty() {
+                            new_row.insert(target_var.to_string(), Value::Null);
+                        }
+                        if !rel_var.is_empty() {
+                            new_row.insert(rel_var.to_string(), Value::Null);
+                        }
+                        expanded_rows.push(new_row);
+                    } else {
+                        tracing::debug!(
+                            "Expand: skipping row {} of {} - source_var '{}' is Null",
+                            row_idx + 1,
+                            rows.len(),
+                            source_var
+                        );
+                    }
                     continue;
                 }
 
