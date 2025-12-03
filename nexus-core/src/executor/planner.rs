@@ -594,6 +594,7 @@ impl<'a> QueryPlanner<'a> {
         let mut create_patterns = Vec::new(); // Collect CREATE to insert after MATCH
         let mut with_operators: Vec<(Vec<ReturnItem>, bool, Option<Expression>)> = Vec::new(); // Collect WITH clauses with optional WHERE
         let mut with_has_aggregation = false; // Track if WITH clause has aggregation
+        let mut with_aggregation_where: Option<Expression> = None; // Track WHERE from WITH with aggregation
         let mut match_hints = Vec::new(); // Collect hints from MATCH clauses
         let mut order_by_clause: Option<(Vec<String>, Vec<bool>)> = None; // Collect ORDER BY to add after projection
 
@@ -717,6 +718,10 @@ impl<'a> QueryPlanner<'a> {
                     for item in &with_clause.items {
                         if self.contains_aggregation(&item.expression) {
                             with_has_aggregation = true;
+                            // Store the WHERE clause to be applied after aggregation
+                            if let Some(wc) = &with_clause.where_clause {
+                                with_aggregation_where = Some(wc.expression.clone());
+                            }
                             break;
                         }
                     }
@@ -872,6 +877,7 @@ impl<'a> QueryPlanner<'a> {
                 unwind_before_match,
                 &match_hints,
                 &order_by_clause,
+                &with_aggregation_where,
                 &mut operators,
             )?;
         }
@@ -888,6 +894,7 @@ impl<'a> QueryPlanner<'a> {
         // Skip WITH operators that contain aggregation - they are handled by Aggregate operator
         for (with_items, with_distinct, where_expr) in with_operators.iter() {
             // Check if WITH has aggregation - if so, skip (Aggregate operator handles it)
+            // Note: with_aggregation_where is already set earlier in the WITH clause processing
             let has_agg = with_items
                 .iter()
                 .any(|item| self.contains_aggregation(&item.expression));
@@ -1266,6 +1273,18 @@ impl<'a> QueryPlanner<'a> {
                         streaming_optimized: false,
                         push_down_optimized: false,
                     });
+
+                    // If WITH had a WHERE clause with aggregation, add Filter after Aggregate
+                    if let Some(ref where_expression) = with_aggregation_where {
+                        let filter_str = self.expression_to_string(where_expression)?;
+                        tracing::debug!(
+                            "WITH aggregation WHERE: Adding Filter '{}' after Aggregate",
+                            filter_str
+                        );
+                        operators.push(Operator::Filter {
+                            predicate: filter_str,
+                        });
+                    }
                 } else {
                     // Regular projection (no aggregations)
                     let projection_items: Vec<ProjectionItem> = return_items
@@ -1347,6 +1366,7 @@ impl<'a> QueryPlanner<'a> {
         unwind_before_match: bool,
         hints: &[QueryHint],
         order_by_clause: &Option<(Vec<String>, Vec<bool>)>,
+        with_aggregation_where: &Option<Expression>, // WHERE from WITH with aggregation
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         // CRITICAL: Insert UNWIND operators FIRST when they precede MATCH in the query
@@ -2140,6 +2160,18 @@ impl<'a> QueryPlanner<'a> {
                     streaming_optimized: false,
                     push_down_optimized: false,
                 });
+
+                // If WITH had a WHERE clause with aggregation, add Filter after Aggregate
+                if let Some(where_expression) = with_aggregation_where {
+                    let filter_str = self.expression_to_string(where_expression)?;
+                    tracing::debug!(
+                        "WITH aggregation WHERE (pattern branch): Adding Filter '{}' after Aggregate",
+                        filter_str
+                    );
+                    operators.push(Operator::Filter {
+                        predicate: filter_str,
+                    });
+                }
 
                 // After aggregation, apply any non-aggregate functions that wrap aggregations
                 // (e.g., head(collect(...)), tail(collect(...)), reverse(collect(...)))
