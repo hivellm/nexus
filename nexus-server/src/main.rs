@@ -314,6 +314,15 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
             tracing::debug!("Handler called!");
             "Handler called successfully"
         }))
+        // GraphQL endpoints
+        .route("/graphql", post({
+            let server = nexus_server.clone();
+            let graphql_schema = api::graphql::create_schema(server);
+            move |req| {
+                let schema = graphql_schema.clone();
+                api::graphql::graphql_handler(axum::extract::State(schema), req)
+            }
+        }))
         // Always insert None auth context for endpoints when auth is disabled
         .layer({
             let auth_enabled = config.auth.enabled;
@@ -661,6 +670,10 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
             },
         ));
     }
+
+    // Add GraphQL playground route in debug builds
+    #[cfg(debug_assertions)]
+    let app = app.route("/graphql/playground", get(api::graphql::graphql_playground));
 
     // Apply middleware layers
     let app = app

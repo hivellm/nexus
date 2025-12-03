@@ -133,7 +133,9 @@
       "Bash(cmd.exe /c \"taskkill /F /IM nexus-server.exe\")",
       "Bash(cmd.exe /c \"taskkill /F /IM nexus-server.exe 2>nul\")",
       "Bash(cmd.exe /c \"taskkill /F /IM nexus-server.exe 2>nul || echo No servers running\")",
-      "Bash(cmd.exe /c \"taskkill /F /IM nexus-server.exe 2>nul || echo No server\")"
+      "Bash(cmd.exe /c \"taskkill /F /IM nexus-server.exe 2>nul || echo No server\")",
+      "Bash(Select-String -Pattern \"assertion|error|FAILED|value|length\")",
+      "Bash(cmd.exe /c \"start /B target\\release\\nexus-server.exe\")"
     ],
     "deny": [],
     "ask": []

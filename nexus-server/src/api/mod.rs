@@ -17,6 +17,7 @@ pub mod graph_correlation;
 #[path = "graph_correlation_mcp_tests.rs"]
 pub mod graph_correlation_mcp_tests;
 pub mod graph_correlation_umicp;
+pub mod graphql;
 pub mod health;
 pub mod indexes;
 pub mod ingest;

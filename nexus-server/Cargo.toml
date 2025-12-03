@@ -48,6 +48,10 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
 
+# GraphQL dependencies
+async-graphql.workspace = true
+async-graphql-axum.workspace = true
+
 # Async runtime
 tokio.workspace = true
 async-stream = "0.3"
