@@ -136,7 +136,8 @@
       "Bash(cmd.exe /c \"taskkill /F /IM nexus-server.exe 2>nul || echo No server\")",
       "Bash(Select-String -Pattern \"assertion|error|FAILED|value|length\")",
       "Bash(cmd.exe /c \"start /B target\\release\\nexus-server.exe\")",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []
