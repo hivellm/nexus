@@ -489,7 +489,7 @@ increase(nexus_audit_log_failures_total[5m]) > 0
 ```
 
 Full rationale, call-site inventory, and regression-test pointers live in
-`docs/SECURITY_AUDIT.md §5 "Audit-log failure policy (fail-open)"`.
+`docs/security/SECURITY_AUDIT.md §5 "Audit-log failure policy (fail-open)"`.
 
 ## Security Best Practices
 

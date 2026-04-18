@@ -859,9 +859,9 @@ curl http://localhost:15474/health
 
 - **Architecture**: `docs/ARCHITECTURE.md` - Complete system design
 - **Roadmap**: `docs/ROADMAP.md` - Development phases and milestones
-- **User Guide**: `docs/USER_GUIDE.md` - Usage documentation
-- **Authentication**: `docs/AUTHENTICATION.md` - Security setup
-- **Performance**: `docs/PERFORMANCE.md` - Benchmarks and tuning
+- **User Guide**: `docs/guides/USER_GUIDE.md` - Usage documentation
+- **Authentication**: `docs/security/AUTHENTICATION.md` - Security setup
+- **Performance**: `docs/performance/PERFORMANCE_V1.md` - Benchmarks and tuning
 
 ### Specifications
 

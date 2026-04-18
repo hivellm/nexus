@@ -1206,20 +1206,25 @@ This replaces an older pattern that kept every subsystem in its own
 `api::data::ENGINE`, …), which broke test isolation — two tests that
 each called `init_engine` silently collided on the same process-wide
 singleton. The migration is sliced into `phase2a`–`phase2e`; phase2a
-landed cypher + data, phase2b landed schema + stats + knn, and phase2c
-lands the performance-monitoring axis (query statistics, plan cache,
-DBMS procedures, MCP tool statistics, MCP tool cache). All five of
-those monitoring subsystems are now fields on `NexusServer` and are
-constructed inside `NexusServer::new` with the defaults the old
-`init_performance_monitoring(1000, 1000, 100, 10)` and
-`init_mcp_performance_monitoring(500, 1000, 3600, 100)` pair supplied;
-`main.rs` no longer wires them separately. To add a new monitored
-dimension: add an `Arc<_>` field to `NexusServer`, build it inside
-`NexusServer::new` with whatever defaults apply, and read it from
-handlers via `server.<field>` — do not reach for a `OnceLock`. Later
-slices migrate graph-correlation / health / prometheus onto the same
-handle and add a final `tests/no_oncelock_globals.rs` guard that fails
-if the anti-pattern comes back.
+landed cypher + data, phase2b landed schema + stats + knn, phase2c
+landed the performance-monitoring axis (query statistics, plan cache,
+DBMS procedures, MCP tool statistics, MCP tool cache), and phase2d
+lands graph correlation + comparison + UMICP: the
+`GraphCorrelationManager` (shared correlation-graph builder), the two
+comparison `Graph` instances, and the `GraphUmicpHandler` (JSON-RPC
+dispatcher for `graph.*` methods) now hang off `NexusServer`. `main.rs`
+no longer provisions temp dirs or calls `init_graphs` /
+`init_manager` / `init_umicp_handler`; those helpers and their
+`OnceLock`s are gone. Default comparison graphs are built inside
+`NexusServer::new` via the private `build_default_comparison_graphs`
+helper, which roots each graph at its own fresh temp dir and falls
+back to `std::env::temp_dir()` if `tempfile::tempdir()` fails. To add
+a new dimension: add an `Arc<_>` field to `NexusServer`, build it
+inside `NexusServer::new` with whatever defaults apply, and read it
+from handlers via `server.<field>` — do not reach for a `OnceLock`.
+The final phase2e slice migrates health + prometheus and adds a
+`tests/no_oncelock_globals.rs` guard that fails if the anti-pattern
+comes back.
 
 ## References
 

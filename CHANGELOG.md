@@ -143,9 +143,9 @@ increase(nexus_audit_log_failures_total[5m]) > 0
 **Metric**: `nexus_audit_log_failures_total` exported at `GET /prometheus`
 with HELP text pointing operators at the alert template.
 
-**Docs**: [docs/SECURITY_AUDIT.md §5](docs/SECURITY_AUDIT.md) documents the
+**Docs**: [docs/security/SECURITY_AUDIT.md §5](docs/security/SECURITY_AUDIT.md) documents the
 full policy (behaviour, rationale, alarm template, code-location
-inventory, "not fail-closed" guard). [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
+inventory, "not fail-closed" guard). [docs/security/AUTHENTICATION.md](docs/security/AUTHENTICATION.md)
 cross-links from its audit section.
 
 ### ⚡ Async Lock Migration — `DatabaseManager` off tokio workers (2026-04-18)
@@ -670,7 +670,7 @@ Tuning and troubleshooting guidance in `docs/performance/MEMORY_TUNING.md`.
   - `NEXUS_REPLICATION_SYNC_QUORUM`: Quorum size for sync mode
 
 - **Documentation**:
-  - `docs/REPLICATION.md` - Complete replication guide
+  - `docs/operations/REPLICATION.md` - Complete replication guide
   - OpenAPI specification updated with replication endpoints
 
 - **Testing**: 26 unit tests covering all replication components

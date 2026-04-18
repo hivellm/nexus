@@ -36,7 +36,7 @@
 #   curl http://localhost:15474/health
 #   docker logs nexus
 #
-# For more details, see docs/DEPLOYMENT_GUIDE.md
+# For more details, see docs/guides/DEPLOYMENT_GUIDE.md
 
 # Build stage
 FROM rustlang/rust:nightly AS builder

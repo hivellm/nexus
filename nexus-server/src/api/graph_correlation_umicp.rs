@@ -9,7 +9,12 @@
 //! - graph.patterns - Detect patterns in graphs
 //! - graph.export - Export graphs to various formats
 
-use axum::{extract::Json, response::Json as AxumJson};
+use axum::{
+    extract::{Json, State},
+    response::Json as AxumJson,
+};
+
+use crate::NexusServer;
 use nexus_core::graph::correlation::visualization::{
     VisualizationConfig, apply_layout, render_graph_to_svg,
 };
@@ -523,27 +528,128 @@ impl Default for GraphUmicpHandler {
     }
 }
 
-/// Global UMICP handler instance
-static UMICP_HANDLER: std::sync::OnceLock<Arc<GraphUmicpHandler>> = std::sync::OnceLock::new();
-
-/// Initialize UMICP handler
-pub fn init_umicp_handler(handler: Arc<GraphUmicpHandler>) -> anyhow::Result<()> {
-    UMICP_HANDLER
-        .set(handler)
-        .map_err(|_| anyhow::anyhow!("Failed to set UMICP handler"))?;
-    Ok(())
-}
-
-/// Get UMICP handler instance
-fn get_umicp_handler() -> Arc<GraphUmicpHandler> {
-    UMICP_HANDLER
-        .get_or_init(|| Arc::new(GraphUmicpHandler::new()))
-        .clone()
-}
-
 /// Handle UMICP request endpoint
-pub async fn handle_umicp_request(Json(request): Json<UmicpRequest>) -> AxumJson<UmicpResponse> {
-    let handler = get_umicp_handler();
+pub async fn handle_umicp_request(
+    State(server): State<Arc<NexusServer>>,
+    Json(request): Json<UmicpRequest>,
+) -> AxumJson<UmicpResponse> {
+    let handler = server.umicp_handler.clone();
     let response = handler.handle_request(request).await;
     AxumJson(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::RwLock as PlRwLock;
+    use tokio::sync::RwLock as TokioRwLock;
+
+    fn build_test_server() -> Arc<NexusServer> {
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(crate::NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn test_handle_umicp_request_rejects_unknown_method() {
+        let server = build_test_server();
+        let req = UmicpRequest {
+            method: "graph.unknown".to_string(),
+            params: None,
+            context: None,
+        };
+        let resp = handle_umicp_request(State(server), Json(req)).await.0;
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.as_ref().unwrap().code, "METHOD_NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn test_handle_umicp_generate_without_params_returns_invalid_params() {
+        let server = build_test_server();
+        let req = UmicpRequest {
+            method: "graph.generate".to_string(),
+            params: None,
+            context: None,
+        };
+        let resp = handle_umicp_request(State(server), Json(req)).await.0;
+        assert_eq!(resp.error.as_ref().unwrap().code, "INVALID_PARAMS");
+    }
+
+    #[tokio::test]
+    async fn test_two_servers_do_not_share_umicp_graph_registry() {
+        let server_a = build_test_server();
+        let server_b = build_test_server();
+
+        // Generate a graph on server A.
+        let params = serde_json::json!({
+            "graph_type": "Call",
+            "files": {"a.rs": "fn main() {}"}
+        });
+        let req = UmicpRequest {
+            method: "graph.generate".to_string(),
+            params: Some(params),
+            context: None,
+        };
+        let resp_a = handle_umicp_request(State(Arc::clone(&server_a)), Json(req))
+            .await
+            .0;
+        assert!(
+            resp_a.error.is_none(),
+            "generate failed: {:?}",
+            resp_a.error
+        );
+        let graph_id = resp_a
+            .result
+            .as_ref()
+            .and_then(|r| r.get("graph_id"))
+            .and_then(|v| v.as_str())
+            .expect("graph_id")
+            .to_string();
+
+        // Look it up on server B — it must not be found.
+        let req = UmicpRequest {
+            method: "graph.get".to_string(),
+            params: Some(serde_json::json!({"graph_id": graph_id})),
+            context: None,
+        };
+        let resp_b = handle_umicp_request(State(Arc::clone(&server_b)), Json(req))
+            .await
+            .0;
+        assert!(resp_b.error.is_some());
+        assert_eq!(resp_b.error.as_ref().unwrap().code, "GRAPH_NOT_FOUND");
+    }
 }

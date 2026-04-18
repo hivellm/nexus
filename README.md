@@ -35,7 +35,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ✅ **2954+ Tests Passing** - 100% success rate, 70%+ coverage
 - ⚠️ **Known Limitations**: Constraints (UNIQUE, EXISTS), Advanced indexes (FULL-TEXT, POINT)
 
-See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complete details.
+See [Neo4j Compatibility Report](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) for complete details.
 
 ## 🌟 **Key Features**
 
@@ -282,7 +282,7 @@ All official SDKs (Rust, Python, TypeScript, Go, C#) include database management
 - `switch_database(name)` / `switchDatabase(name)`
 - `drop_database(name)` / `dropDatabase(name)`
 
-See [User Guide - Multi-Database Support](docs/USER_GUIDE.md#multi-database-support) for complete documentation.
+See [User Guide - Multi-Database Support](docs/guides/USER_GUIDE.md#multi-database-support) for complete documentation.
 
 ## 🏗️ **Architecture**
 
@@ -367,7 +367,7 @@ See [User Guide - Multi-Database Support](docs/USER_GUIDE.md#multi-database-supp
 - **Query Execution**: **Nexus wins 22/22 benchmarks** with advanced optimizations
 - **MATCH+CREATE**: 95% improvement (34ms → 1.75ms) - **56.7% faster than Neo4j**
 
-See [Performance Analysis](docs/PERFORMANCE.md) for comprehensive benchmarks.
+See [Performance Analysis](docs/performance/PERFORMANCE_V1.md) for comprehensive benchmarks.
 
 ## 📖 **Documentation**
 
@@ -390,9 +390,9 @@ See [Performance Analysis](docs/PERFORMANCE.md) for comprehensive benchmarks.
 - 🔗 [**Component DAG**](docs/DAG.md) - Module dependencies and build order
 
 ### **Compatibility & Testing**
-- ✅ [**Neo4j Compatibility Report**](docs/NEO4J_COMPATIBILITY_REPORT.md) - Comprehensive compatibility analysis (287/300 tests passing - 95.99%)
-- 📊 [**User Guide**](docs/USER_GUIDE.md) - Legacy usage guide (see [new docs](docs/users/) for updated version)
-- 🔐 [**Authentication Guide**](docs/AUTHENTICATION.md) - Security and authentication setup
+- ✅ [**Neo4j Compatibility Report**](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) - Comprehensive compatibility analysis (287/300 tests passing - 95.99%)
+- 📊 [**User Guide**](docs/guides/USER_GUIDE.md) - Legacy usage guide (see [new docs](docs/users/) for updated version)
+- 🔐 [**Authentication Guide**](docs/security/AUTHENTICATION.md) - Security and authentication setup
 
 ### **Detailed Specifications**
 - 💾 [**Storage Format**](docs/specs/storage-format.md) - Record store binary layouts
@@ -582,7 +582,7 @@ increase(nexus_audit_log_failures_total[5m]) > 0
 
 Converting audit failures into 500s would give an attacker who can cause IO
 pressure a lever to mass-reject legitimate traffic. Full rationale:
-[`docs/SECURITY_AUDIT.md §5`](docs/SECURITY_AUDIT.md).
+[`docs/security/SECURITY_AUDIT.md §5`](docs/security/SECURITY_AUDIT.md).
 
 ### **RESP3 debug port**
 

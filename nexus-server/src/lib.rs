@@ -16,7 +16,7 @@
 //! - POST /mcp - MCP StreamableHTTP endpoint
 
 use parking_lot::RwLock;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock as TokioRwLock;
 
 pub mod api;
@@ -60,6 +60,27 @@ pub struct NexusServer {
     pub mcp_tool_stats: Arc<nexus_core::performance::mcp_tool_stats::McpToolStatistics>,
     /// MCP tool response cache.
     pub mcp_tool_cache: Arc<nexus_core::performance::McpToolCache>,
+
+    // ── Graph correlation + comparison + UMICP (phase2d) ────────────────
+    /// Shared correlation-graph builder for `/correlation/graphs/*`
+    /// handlers and the MCP `graph_correlation_*` tools. A `std::Mutex`
+    /// — not a `tokio::sync::Mutex` — because
+    /// `nexus_core::graph::correlation::GraphCorrelationManager` holds
+    /// data that is not `Send` across `.await` points; every caller
+    /// locks synchronously and releases before awaiting again.
+    pub graph_correlation_manager:
+        Arc<Mutex<nexus_core::graph::correlation::GraphCorrelationManager>>,
+    /// First of the two graphs the `/comparison/*` endpoints diff.
+    /// Wrapped in `Arc<Mutex<Graph>>` because `Graph` contains a
+    /// `RefCell` internally (inherited from the record-store cache),
+    /// so it is not `Sync`.
+    pub graph_a: Arc<Mutex<nexus_core::Graph>>,
+    /// Second of the two graphs the `/comparison/*` endpoints diff.
+    pub graph_b: Arc<Mutex<nexus_core::Graph>>,
+    /// UMICP dispatcher used by `POST /umicp/graph` — routes JSON-RPC
+    /// style requests (`graph.generate`, `graph.analyze`, ...) onto the
+    /// shared correlation subsystem.
+    pub umicp_handler: Arc<crate::api::graph_correlation_umicp::GraphUmicpHandler>,
 }
 
 impl NexusServer {
@@ -91,6 +112,21 @@ impl NexusServer {
         let mcp_tool_stats =
             Arc::new(nexus_core::performance::mcp_tool_stats::McpToolStatistics::new(500, 1000));
         let mcp_tool_cache = Arc::new(nexus_core::performance::McpToolCache::new(3600, 100));
+
+        // Graph correlation / comparison / UMICP state (phase2d).
+        //
+        // Each server owns two empty graphs rooted at fresh temp dirs;
+        // the comparison endpoints diff these until callers overwrite
+        // them. `new` stays infallible so test fixtures do not have to
+        // plumb `Result` through — if temp-dir creation fails we fall
+        // back to a fresh in-memory catalog that still produces a
+        // structurally valid empty graph.
+        let (graph_a, graph_b) = build_default_comparison_graphs();
+
+        let graph_correlation_manager = Arc::new(Mutex::new(
+            nexus_core::graph::correlation::GraphCorrelationManager::new(),
+        ));
+        let umicp_handler = Arc::new(crate::api::graph_correlation_umicp::GraphUmicpHandler::new());
 
         // Periodic sweeper for the DBMS connection / query trackers.
         //
@@ -131,6 +167,10 @@ impl NexusServer {
             dbms_procedures,
             mcp_tool_stats,
             mcp_tool_cache,
+            graph_correlation_manager,
+            graph_a,
+            graph_b,
+            umicp_handler,
         }
     }
 
@@ -200,4 +240,49 @@ impl NexusServer {
             }
         });
     }
+}
+
+/// Build the two default comparison graphs the `/comparison/*` handlers
+/// operate against. Each is a freshly-allocated `Graph` rooted at its
+/// own `tempfile::tempdir` so the server starts with a well-defined
+/// empty state. If temp-dir creation fails for whatever reason (read
+/// only FS, exhausted handles, etc.) we fall back to a process-local
+/// path under `std::env::temp_dir()` suffixed with a monotonic id; the
+/// resulting graph is still structurally valid.
+fn build_default_comparison_graphs()
+-> (Arc<Mutex<nexus_core::Graph>>, Arc<Mutex<nexus_core::Graph>>) {
+    fn build_one(label: &str) -> nexus_core::Graph {
+        let dir = match tempfile::tempdir() {
+            Ok(d) => d.keep(),
+            Err(e) => {
+                tracing::warn!(
+                    "comparison graph '{}': tempdir() failed ({}), falling back to env::temp_dir",
+                    label,
+                    e
+                );
+                let fallback = std::env::temp_dir().join(format!(
+                    "nexus-cmp-{}-{}",
+                    label,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0),
+                ));
+                std::fs::create_dir_all(&fallback).expect("fallback temp dir");
+                fallback
+            }
+        };
+        let store =
+            nexus_core::storage::RecordStore::new(&dir).expect("RecordStore on fresh temp dir");
+        let catalog = Arc::new(
+            nexus_core::catalog::Catalog::new(dir.join("catalog"))
+                .expect("Catalog on fresh temp dir"),
+        );
+        nexus_core::Graph::new(store, catalog)
+    }
+
+    (
+        Arc::new(Mutex::new(build_one("a"))),
+        Arc::new(Mutex::new(build_one("b"))),
+    )
 }

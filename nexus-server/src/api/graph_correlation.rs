@@ -1,23 +1,12 @@
 //! Graph Correlation API endpoints
 
+use axum::extract::State;
 use axum::{http::StatusCode, response::Json};
-use nexus_core::graph::correlation::{
-    CorrelationGraph, GraphCorrelationManager, GraphSourceData, GraphType,
-};
+use nexus_core::graph::correlation::{CorrelationGraph, GraphSourceData, GraphType};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-/// Global graph correlation manager
-static GRAPH_MANAGER: std::sync::OnceLock<Arc<Mutex<GraphCorrelationManager>>> =
-    std::sync::OnceLock::new();
-
-/// Initialize graph correlation manager
-pub fn init_manager(manager: Arc<Mutex<GraphCorrelationManager>>) -> anyhow::Result<()> {
-    GRAPH_MANAGER
-        .set(manager)
-        .map_err(|_| anyhow::anyhow!("Failed to set graph manager"))?;
-    Ok(())
-}
+use crate::NexusServer;
 
 /// Generate correlation graph request
 #[derive(Debug, Deserialize)]
@@ -63,6 +52,7 @@ pub struct GraphTypesResponse {
 
 /// Generate a correlation graph
 pub async fn generate_graph(
+    State(server): State<Arc<NexusServer>>,
     Json(request): Json<GenerateGraphRequest>,
 ) -> Result<Json<GenerateGraphResponse>, StatusCode> {
     tracing::info!(
@@ -70,11 +60,6 @@ pub async fn generate_graph(
         request.name,
         request.graph_type
     );
-
-    let manager = GRAPH_MANAGER.get().ok_or_else(|| {
-        tracing::error!("Graph manager not initialized");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
 
     let graph_type = match request.graph_type.to_lowercase().as_str() {
         "call" => GraphType::Call,
@@ -102,7 +87,7 @@ pub async fn generate_graph(
         source_data.add_imports(file, imports);
     }
 
-    match manager.lock() {
+    match server.graph_correlation_manager.lock() {
         Ok(mgr) => match mgr.build_graph(graph_type, &source_data) {
             Ok(graph) => {
                 tracing::info!(
@@ -132,15 +117,12 @@ pub async fn generate_graph(
 }
 
 /// Get available graph types
-pub async fn get_graph_types() -> Result<Json<GraphTypesResponse>, StatusCode> {
+pub async fn get_graph_types(
+    State(server): State<Arc<NexusServer>>,
+) -> Result<Json<GraphTypesResponse>, StatusCode> {
     tracing::info!("Getting available graph types");
 
-    let manager = GRAPH_MANAGER.get().ok_or_else(|| {
-        tracing::error!("Graph manager not initialized");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    match manager.lock() {
+    match server.graph_correlation_manager.lock() {
         Ok(mgr) => {
             let types = mgr
                 .available_graph_types()
@@ -163,6 +145,48 @@ pub async fn get_graph_types() -> Result<Json<GraphTypesResponse>, StatusCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::RwLock as PlRwLock;
+    use tokio::sync::RwLock as TokioRwLock;
+
+    fn build_test_server() -> Arc<NexusServer> {
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
 
     #[test]
     fn test_default_graph_name() {
@@ -170,11 +194,32 @@ mod tests {
         assert_eq!(name, "Generated Graph");
     }
 
-    #[test]
-    fn test_graph_type_parsing() {
-        assert_eq!("call".to_lowercase(), "call");
-        assert_eq!("dependency".to_lowercase(), "dependency");
-        assert_eq!("dataflow".to_lowercase(), "dataflow");
-        assert_eq!("component".to_lowercase(), "component");
+    #[tokio::test]
+    async fn test_generate_graph_rejects_unknown_type() {
+        let server = build_test_server();
+        let req = GenerateGraphRequest {
+            graph_type: "not-a-type".to_string(),
+            files: std::collections::HashMap::new(),
+            functions: std::collections::HashMap::new(),
+            imports: std::collections::HashMap::new(),
+            name: "t".to_string(),
+        };
+        let resp = generate_graph(State(server), Json(req)).await.expect("ok");
+        assert!(!resp.0.success);
+        assert!(
+            resp.0
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Invalid graph type")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_graph_types_lists_known_types() {
+        let server = build_test_server();
+        let resp = get_graph_types(State(server)).await.expect("ok");
+        assert!(resp.0.success);
+        assert!(!resp.0.types.is_empty());
     }
 }

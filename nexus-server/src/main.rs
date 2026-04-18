@@ -306,35 +306,9 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // Initialize Prometheus metrics
     api::prometheus::init();
 
-    // Initialize comparison service with dummy graphs
-    // In a real implementation, these would be actual graph instances
-    let temp_dir_a = tempfile::tempdir()?;
-    let temp_dir_b = tempfile::tempdir()?;
-
-    let store_a = nexus_core::storage::RecordStore::new(temp_dir_a.path())?;
-    let store_b = nexus_core::storage::RecordStore::new(temp_dir_b.path())?;
-
-    let catalog_a = Arc::new(nexus_core::catalog::Catalog::new(
-        temp_dir_a.path().join("catalog"),
-    )?);
-    let catalog_b = Arc::new(nexus_core::catalog::Catalog::new(
-        temp_dir_b.path().join("catalog"),
-    )?);
-
-    let graph_a = Arc::new(std::sync::Mutex::new(nexus_core::Graph::new(
-        store_a, catalog_a,
-    )));
-    let graph_b = Arc::new(std::sync::Mutex::new(nexus_core::Graph::new(
-        store_b, catalog_b,
-    )));
-
-    api::comparison::init_graphs(graph_a, graph_b)?;
-
-    // Initialize graph correlation manager
-    let graph_manager = Arc::new(std::sync::Mutex::new(
-        nexus_core::graph::correlation::GraphCorrelationManager::new(),
-    ));
-    api::graph_correlation::init_manager(graph_manager)?;
+    // The comparison graphs + correlation manager + UMICP handler are
+    // owned by NexusServer::new (phase2d), so the `init_graphs` /
+    // `init_manager` scaffolding that used to live here is gone.
 
     // Initialize rate limiter (for future use)
     let _rate_limiter = RateLimiter::new();
