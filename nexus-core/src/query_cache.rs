@@ -100,13 +100,18 @@ pub struct QueryCacheConfig {
 
 impl Default for QueryCacheConfig {
     fn default() -> Self {
+        // The previous defaults (10K entries / 512 MB / 1 h max TTL) let the
+        // cache alone consume half a gigabyte before eviction kicked in — a
+        // major contributor to runaway RSS on long-running servers. These
+        // tighter numbers keep the cache useful for hot repeat queries
+        // without letting it balloon into the dominant memory consumer.
         Self {
-            max_entries: 10000,
-            max_memory_bytes: 512 * 1024 * 1024,   // 512MB
-            default_ttl: Duration::from_secs(300), // 5 minutes
+            max_entries: 1_000,
+            max_memory_bytes: 64 * 1024 * 1024,    // 64 MB
+            default_ttl: Duration::from_secs(120), // 2 minutes
             adaptive_ttl: true,
-            min_ttl: Duration::from_secs(30),   // 30 seconds
-            max_ttl: Duration::from_secs(3600), // 1 hour
+            min_ttl: Duration::from_secs(30),  // 30 seconds
+            max_ttl: Duration::from_secs(600), // 10 minutes
         }
     }
 }
