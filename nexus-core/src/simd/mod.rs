@@ -27,6 +27,13 @@
 //! max(abs, 1)` for f64, bit-exact for integer/bitmap ops).
 
 pub mod dispatch;
+pub mod distance;
 pub mod scalar;
+
+#[cfg(target_arch = "aarch64")]
+pub mod aarch64;
+
+#[cfg(target_arch = "x86_64")]
+pub mod x86;
 
 pub use dispatch::{CpuFeatures, cpu};
