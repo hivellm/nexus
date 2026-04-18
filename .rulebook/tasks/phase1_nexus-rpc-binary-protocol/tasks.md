@@ -15,11 +15,11 @@
 - [x] 2.3 Top-level `run(state, cmd, args)` matches on uppercased command and routes to sub-modules
 
 ## 3. Cypher dispatch
-- [ ] 3.1 Implement `CYPHER` command in `dispatch/cypher.rs`: args = `[query: Str, params: Map?]`
-- [ ] 3.2 Reuse the global `EXECUTOR` from `api::cypher::execute` (no duplication of planning logic)
-- [ ] 3.3 Encode Cypher result as `Map{columns: Array<Str>, rows: Array<Array<NexusValue>>, stats: Map, execution_time_ms: Int}`
-- [ ] 3.4 Map executor errors to `Response::err(id, formatted_message)` preserving the HTTP error text
-- [ ] 3.5 Unit tests: `CYPHER "RETURN 1"` returns `rows = [[1]]` via RPC
+- [x] 3.1 Implement `CYPHER` command in `dispatch/cypher.rs`: args = `[query: Str, params: Map?]`
+- [x] 3.2 Reuse the global `EXECUTOR` from `api::cypher::execute` (no duplication of planning logic)
+- [x] 3.3 Encode Cypher result as `Map{columns: Array<Str>, rows: Array<Array<NexusValue>>, stats: Map, execution_time_ms: Int}`
+- [x] 3.4 Map executor errors to `Response::err(id, formatted_message)` preserving the HTTP error text
+- [x] 3.5 Unit tests: `CYPHER "RETURN 1"` returns `rows = [[1]]` via RPC
 
 ## 4. Graph CRUD dispatch
 - [ ] 4.1 `CREATE_NODE` — args `[labels: Array<Str>, props: Map]`, returns node id

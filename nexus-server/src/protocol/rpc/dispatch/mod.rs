@@ -13,6 +13,7 @@
 //! accept loop shares with handlers (auth flag, connection id).
 
 pub mod admin;
+pub mod cypher;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,6 +79,7 @@ pub async fn run(
 
     match cmd.as_str() {
         "PING" | "HELLO" | "AUTH" | "QUIT" => admin::run(state, cmd.as_str(), &args).await,
+        "CYPHER" => cypher::run(state, cmd.as_str(), &args).await,
         other => Err(format!("ERR unknown command '{other}'")),
     }
 }
