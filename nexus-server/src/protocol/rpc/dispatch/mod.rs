@@ -16,6 +16,7 @@ pub mod admin;
 pub mod convert;
 pub mod cypher;
 pub mod graph;
+pub mod knn;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -85,6 +86,7 @@ pub async fn run(
         "CREATE_NODE" | "CREATE_REL" | "UPDATE_NODE" | "DELETE_NODE" | "MATCH_NODES" => {
             graph::run(state, cmd.as_str(), &args).await
         }
+        "KNN_SEARCH" | "KNN_TRAVERSE" => knn::run(state, cmd.as_str(), &args).await,
         other => Err(format!("ERR unknown command '{other}'")),
     }
 }

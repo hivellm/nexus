@@ -30,10 +30,10 @@
 - [x] 4.6 Unit tests: full CRUD round-trip against an in-memory engine
 
 ## 5. KNN dispatch
-- [ ] 5.1 `KNN_SEARCH` — args `[label: Str, embedding: Bytes|Array<Float>, k: Int, filter: Map?]`
-- [ ] 5.2 `KNN_TRAVERSE` — args `[seeds: Array<Int>, depth: Int, filter: Map?]`
-- [ ] 5.3 Accept embedding as `Bytes` (raw f32 little-endian) OR `Array<Float>` for language parity
-- [ ] 5.4 Unit tests: embedding as Bytes decodes to `Vec<f32>` identically to Array<Float>
+- [x] 5.1 `KNN_SEARCH` — args `[label: Str, embedding: Bytes|Array<Float>, k: Int, filter: Map?]`
+- [x] 5.2 `KNN_TRAVERSE` — args `[seeds: Array<Int>, depth: Int, filter: Map?]`
+- [x] 5.3 Accept embedding as `Bytes` (raw f32 little-endian) OR `Array<Float>` for language parity
+- [x] 5.4 Unit tests: embedding as Bytes decodes to `Vec<f32>` identically to Array<Float>
 
 ## 6. Ingest, schema, database, admin
 - [ ] 6.1 `INGEST` — args `[nodes: Array<Map>, rels: Array<Map>]`, returns per-batch stats
