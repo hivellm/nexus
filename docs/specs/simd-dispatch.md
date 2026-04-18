@@ -17,11 +17,14 @@ the conventions below, update this spec first.
 
 ```text
 nexus-core/src/simd/
-├── mod.rs              re-exports: cpu(), CpuFeatures, bitmap, distance
+├── mod.rs              re-exports: cpu(), CpuFeatures, bitmap, distance,
+│                       reduce, compare
 ├── dispatch.rs         CpuFeatures + OnceLock<CpuFeatures> probe
 ├── scalar.rs           reference kernels (ground truth)
 ├── distance.rs         safe public API for f32 dot/l2_sq/cosine/normalize
 ├── bitmap.rs           safe public API for popcount/and_popcount
+├── reduce.rs           safe public API for sum/min/max (i64/f64/f32)
+├── compare.rs          safe public API for eq/ne/lt/le/gt/ge (i64/f64)
 ├── x86.rs              #[cfg(target_arch="x86_64")] kernels
 └── aarch64.rs          #[cfg(target_arch="aarch64")] kernels
 ```
@@ -140,13 +143,24 @@ active tier so ops can confirm.
 
 Reference numbers measured on Ryzen 9 7950X3D (Zen 4, AVX-512F + VPOPCNTQ):
 
-| Op               | Scale      | Scalar  | Dispatch | Speedup |
-|------------------|------------|---------|----------|---------|
-| `dot_f32`        | dim=768    | 438 ns  | 34.5 ns  | 12.7×   |
-| `dot_f32`        | dim=1024   | 580 ns  | 50.8 ns  | 11.4×   |
-| `dot_f32`        | dim=1536   | 893 ns  | 70.3 ns  | 12.7×   |
-| `l2_sq_f32`      | dim=512    | 285 ns  | 21.0 ns  | 13.5×   |
-| `popcount_u64`   | 4096 words | 1.52 µs | 136 ns   | ~11×    |
+| Op               | Scale        | Scalar   | Dispatch | Speedup |
+|------------------|--------------|----------|----------|---------|
+| `dot_f32`        | dim=768      | 438 ns   | 34.5 ns  | 12.7×   |
+| `dot_f32`        | dim=1024     | 580 ns   | 50.8 ns  | 11.4×   |
+| `dot_f32`        | dim=1536     | 893 ns   | 70.3 ns  | 12.7×   |
+| `l2_sq_f32`      | dim=512      | 285 ns   | 21.0 ns  | 13.5×   |
+| `popcount_u64`   | 4096 words   | 1.52 µs  | 136 ns   | ~11×    |
+| `sum_f64`        | n=262 144    | 150 µs   | 19 µs    | 7.9×    |
+| `sum_f32`        | n=262 144    | 152 µs   | 9.5 µs   | 15.9×   |
+| `sum_i64`        | n=1 024      | 73 ns    | 30 ns    | 2.4×    |
+| `eq_i64`         | n=262 144    | 69 µs    | 24 µs    | 2.9×    |
+| `lt_i64`         | n=262 144    | 110 µs   | 25 µs    | 4.4×    |
+| `lt_f64`         | n=262 144    | 53 µs    | 24 µs    | 2.2×    |
+
+At the 2 MiB i64 sum row (`sum_i64` n=262 144) scalar and dispatch
+tie because the workload is memory-bandwidth bound on Zen 4. At the
+1 KiB row (`sum_i64` n=1 024) the dispatch still wins ~2.4× because
+the data fits in L1.
 
 The ADR-003 acceptance target of ≥4× AVX2 vs scalar at dim=768 is
 cleared by more than 3×. CI is expected to refuse a PR that regresses
@@ -200,12 +214,16 @@ first, the gate wires up in that task).
 | Kind      | Path                                              |
 |-----------|---------------------------------------------------|
 | Module    | `nexus-core/src/simd/`                            |
-| Unit tests| `nexus-core/src/simd/{dispatch,scalar,distance,bitmap}.rs` under `#[cfg(test)]` |
+| Unit tests| `nexus-core/src/simd/{dispatch,scalar,distance,bitmap,reduce,compare}.rs` under `#[cfg(test)]` |
 | Proptest  | `nexus-core/tests/simd_scalar_properties.rs`      |
 | Proptest  | `nexus-core/tests/simd_distance_parity.rs`        |
 | Proptest  | `nexus-core/tests/simd_bitmap_parity.rs`          |
+| Proptest  | `nexus-core/tests/simd_reduce_parity.rs`          |
+| Proptest  | `nexus-core/tests/simd_compare_parity.rs`         |
 | Benches   | `nexus-core/benches/simd_distance.rs`             |
 | Benches   | `nexus-core/benches/simd_popcount.rs`             |
+| Benches   | `nexus-core/benches/simd_reduce.rs`               |
+| Benches   | `nexus-core/benches/simd_compare.rs`              |
 | Decision  | `.rulebook/decisions/003-simd-dispatch-…`         |
 
 Related spec updates will land in `knn-integration.md` (§ "Distance
