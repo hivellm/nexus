@@ -27,6 +27,7 @@
 //! max(abs, 1)` for f64, bit-exact for integer/bitmap ops).
 
 pub mod bitmap;
+pub mod compare;
 pub mod dispatch;
 pub mod distance;
 pub mod reduce;

@@ -211,6 +211,66 @@ pub fn max_f32(values: &[f32]) -> Option<f32> {
     acc
 }
 
+// ── compare kernels ──────────────────────────────────────────────────────────
+//
+// Each returns a packed bitmap (Vec<u64>, LSB first per word): bit
+// `i` is `1` iff the predicate `values[i] <op> scalar` holds.
+//
+// f64 predicates use IEEE ordered semantics: any NaN operand makes
+// the predicate false (including `eq` — NaN != NaN — and `lt`/`gt`).
+// `ne` returns `true` for NaN vs anything, matching scalar f64 `!=`.
+
+fn bitmap_bytes(len: usize) -> Vec<u64> {
+    vec![0u64; len.div_ceil(64)]
+}
+
+#[inline(always)]
+fn set_bit(out: &mut [u64], idx: usize) {
+    out[idx / 64] |= 1u64 << (idx % 64);
+}
+
+macro_rules! scalar_cmp_i64 {
+    ($name:ident, $op:tt) => {
+        #[inline(always)]
+        pub fn $name(values: &[i64], scalar: i64) -> Vec<u64> {
+            let mut out = bitmap_bytes(values.len());
+            for (i, &v) in values.iter().enumerate() {
+                if v $op scalar {
+                    set_bit(&mut out, i);
+                }
+            }
+            out
+        }
+    };
+}
+scalar_cmp_i64!(eq_i64, ==);
+scalar_cmp_i64!(ne_i64, !=);
+scalar_cmp_i64!(lt_i64, <);
+scalar_cmp_i64!(le_i64, <=);
+scalar_cmp_i64!(gt_i64, >);
+scalar_cmp_i64!(ge_i64, >=);
+
+macro_rules! scalar_cmp_f64 {
+    ($name:ident, $op:tt) => {
+        #[inline(always)]
+        pub fn $name(values: &[f64], scalar: f64) -> Vec<u64> {
+            let mut out = bitmap_bytes(values.len());
+            for (i, &v) in values.iter().enumerate() {
+                if v $op scalar {
+                    set_bit(&mut out, i);
+                }
+            }
+            out
+        }
+    };
+}
+scalar_cmp_f64!(eq_f64, ==);
+scalar_cmp_f64!(ne_f64, !=);
+scalar_cmp_f64!(lt_f64, <);
+scalar_cmp_f64!(le_f64, <=);
+scalar_cmp_f64!(gt_f64, >);
+scalar_cmp_f64!(ge_f64, >=);
+
 // ── bitmap kernels ────────────────────────────────────────────────────────────
 
 /// Population count over a slice of `u64` words.

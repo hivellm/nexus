@@ -888,3 +888,414 @@ pub unsafe fn max_f32_avx512(values: &[f32]) -> Option<f32> {
     }
     Some(_mm512_reduce_max_ps(acc))
 }
+
+// ── i64 / f64 compare kernels — packed Vec<u64> output ────────────────────────
+//
+// Each kernel produces one bit per element in a `Vec<u64>` (LSB-first
+// per word). Four i64 lanes fit in one AVX2 step → 4 bits deposited
+// at position `i * 4` of the output; eight lanes via AVX-512 → 8 bits.
+// Since 64 is divisible by 4 and by 8, no lane deposit crosses a word
+// boundary.
+
+#[inline(always)]
+fn i64_bitmap_len(len: usize) -> usize {
+    len.div_ceil(64)
+}
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn eq_i64_avx2(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm256_set1_epi64x(scalar);
+    let ptr = values.as_ptr();
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_si256(ptr.add(i * 4) as *const __m256i);
+        let cmp = _mm256_cmpeq_epi64(v, bcast);
+        let mask = _mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64 & 0xF;
+        let bit_pos = i * 4;
+        out[bit_pos / 64] |= mask << (bit_pos % 64);
+    }
+    for i in (chunks * 4)..len {
+        if values[i] == scalar {
+            out[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    out
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn eq_i64_avx512(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm512_set1_epi64(scalar);
+    let ptr = values.as_ptr() as *const i64;
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_epi64(ptr.add(i * 8));
+        let m: __mmask8 = _mm512_cmpeq_epi64_mask(v, bcast);
+        let bit_pos = i * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_epi64(load_mask, ptr.add(chunks * 8));
+        let m: __mmask8 = _mm512_mask_cmpeq_epi64_mask(load_mask, v, bcast);
+        let bit_pos = chunks * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    out
+}
+
+/// Inequality = NOT eq over the loaded lanes.
+///
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn ne_i64_avx2(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm256_set1_epi64x(scalar);
+    let ptr = values.as_ptr();
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_si256(ptr.add(i * 4) as *const __m256i);
+        let cmp = _mm256_cmpeq_epi64(v, bcast);
+        let mask = (!_mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64) & 0xF;
+        let bit_pos = i * 4;
+        out[bit_pos / 64] |= mask << (bit_pos % 64);
+    }
+    for i in (chunks * 4)..len {
+        if values[i] != scalar {
+            out[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    out
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn ne_i64_avx512(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm512_set1_epi64(scalar);
+    let ptr = values.as_ptr() as *const i64;
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_epi64(ptr.add(i * 8));
+        let m: __mmask8 = !_mm512_cmpeq_epi64_mask(v, bcast);
+        let bit_pos = i * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_epi64(load_mask, ptr.add(chunks * 8));
+        // `!eq` inside the loaded lanes only.
+        let eq: __mmask8 = _mm512_mask_cmpeq_epi64_mask(load_mask, v, bcast);
+        let m: __mmask8 = load_mask & !eq;
+        let bit_pos = chunks * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    out
+}
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn gt_i64_avx2(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm256_set1_epi64x(scalar);
+    let ptr = values.as_ptr();
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_si256(ptr.add(i * 4) as *const __m256i);
+        let cmp = _mm256_cmpgt_epi64(v, bcast);
+        let mask = _mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64 & 0xF;
+        let bit_pos = i * 4;
+        out[bit_pos / 64] |= mask << (bit_pos % 64);
+    }
+    for i in (chunks * 4)..len {
+        if values[i] > scalar {
+            out[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    out
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn gt_i64_avx512(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm512_set1_epi64(scalar);
+    let ptr = values.as_ptr() as *const i64;
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_epi64(ptr.add(i * 8));
+        let m: __mmask8 = _mm512_cmpgt_epi64_mask(v, bcast);
+        let bit_pos = i * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_epi64(load_mask, ptr.add(chunks * 8));
+        let m: __mmask8 = _mm512_mask_cmpgt_epi64_mask(load_mask, v, bcast);
+        let bit_pos = chunks * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    out
+}
+
+/// lt(a, s) = gt(s, a): derive via operand swap.
+///
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn lt_i64_avx2(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm256_set1_epi64x(scalar);
+    let ptr = values.as_ptr();
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_si256(ptr.add(i * 4) as *const __m256i);
+        // scalar > v  ⇔  v < scalar
+        let cmp = _mm256_cmpgt_epi64(bcast, v);
+        let mask = _mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64 & 0xF;
+        let bit_pos = i * 4;
+        out[bit_pos / 64] |= mask << (bit_pos % 64);
+    }
+    for i in (chunks * 4)..len {
+        if values[i] < scalar {
+            out[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    out
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn lt_i64_avx512(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm512_set1_epi64(scalar);
+    let ptr = values.as_ptr() as *const i64;
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_epi64(ptr.add(i * 8));
+        let m: __mmask8 = _mm512_cmplt_epi64_mask(v, bcast);
+        let bit_pos = i * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_epi64(load_mask, ptr.add(chunks * 8));
+        let m: __mmask8 = _mm512_mask_cmplt_epi64_mask(load_mask, v, bcast);
+        let bit_pos = chunks * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    out
+}
+
+/// ge(a, s) = NOT lt(a, s).
+///
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn ge_i64_avx2(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm256_set1_epi64x(scalar);
+    let ptr = values.as_ptr();
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_si256(ptr.add(i * 4) as *const __m256i);
+        // lt = cmpgt(scalar, v); ge = NOT lt.
+        let cmp = _mm256_cmpgt_epi64(bcast, v);
+        let mask = (!_mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64) & 0xF;
+        let bit_pos = i * 4;
+        out[bit_pos / 64] |= mask << (bit_pos % 64);
+    }
+    for i in (chunks * 4)..len {
+        if values[i] >= scalar {
+            out[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    out
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn ge_i64_avx512(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm512_set1_epi64(scalar);
+    let ptr = values.as_ptr() as *const i64;
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_epi64(ptr.add(i * 8));
+        let m: __mmask8 = _mm512_cmpge_epi64_mask(v, bcast);
+        let bit_pos = i * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_epi64(load_mask, ptr.add(chunks * 8));
+        let m: __mmask8 = _mm512_mask_cmpge_epi64_mask(load_mask, v, bcast);
+        let bit_pos = chunks * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    out
+}
+
+/// le(a, s) = NOT gt(a, s).
+///
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn le_i64_avx2(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm256_set1_epi64x(scalar);
+    let ptr = values.as_ptr();
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_si256(ptr.add(i * 4) as *const __m256i);
+        let cmp = _mm256_cmpgt_epi64(v, bcast);
+        let mask = (!_mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64) & 0xF;
+        let bit_pos = i * 4;
+        out[bit_pos / 64] |= mask << (bit_pos % 64);
+    }
+    for i in (chunks * 4)..len {
+        if values[i] <= scalar {
+            out[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    out
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn le_i64_avx512(values: &[i64], scalar: i64) -> Vec<u64> {
+    let len = values.len();
+    let mut out = vec![0u64; i64_bitmap_len(len)];
+    let bcast = _mm512_set1_epi64(scalar);
+    let ptr = values.as_ptr() as *const i64;
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_epi64(ptr.add(i * 8));
+        let m: __mmask8 = _mm512_cmple_epi64_mask(v, bcast);
+        let bit_pos = i * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_epi64(load_mask, ptr.add(chunks * 8));
+        let m: __mmask8 = _mm512_mask_cmple_epi64_mask(load_mask, v, bcast);
+        let bit_pos = chunks * 8;
+        out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+    }
+    out
+}
+
+// ── f64 compare kernels ───────────────────────────────────────────────────────
+//
+// IEEE ordered semantics: `eq/lt/le/gt/ge` return false if either
+// operand is NaN. `ne` uses the _NEQ_UQ predicate (unordered not-equal)
+// so that NaN vs anything is `true`, matching Rust's `!=` on f64.
+
+macro_rules! f64_cmp_avx2 {
+    ($name:ident, $imm:ident) => {
+        /// # Safety
+        /// Host must advertise `avx2`.
+        #[target_feature(enable = "avx2")]
+        pub unsafe fn $name(values: &[f64], scalar: f64) -> Vec<u64> {
+            let len = values.len();
+            let mut out = vec![0u64; i64_bitmap_len(len)];
+            let bcast = _mm256_set1_pd(scalar);
+            let ptr = values.as_ptr();
+            let chunks = len / 4;
+            for i in 0..chunks {
+                let v = _mm256_loadu_pd(ptr.add(i * 4));
+                let cmp = _mm256_cmp_pd::<{ $imm }>(v, bcast);
+                let mask = _mm256_movemask_pd(cmp) as u64 & 0xF;
+                let bit_pos = i * 4;
+                out[bit_pos / 64] |= mask << (bit_pos % 64);
+            }
+            for i in (chunks * 4)..len {
+                let v = values[i];
+                let keep = match $imm {
+                    _CMP_EQ_OQ => v == scalar,
+                    _CMP_NEQ_UQ => v != scalar,
+                    _CMP_LT_OQ => v < scalar,
+                    _CMP_LE_OQ => v <= scalar,
+                    _CMP_GT_OQ => v > scalar,
+                    _CMP_GE_OQ => v >= scalar,
+                    _ => unreachable!(),
+                };
+                if keep {
+                    out[i / 64] |= 1u64 << (i % 64);
+                }
+            }
+            out
+        }
+    };
+}
+f64_cmp_avx2!(eq_f64_avx2, _CMP_EQ_OQ);
+f64_cmp_avx2!(ne_f64_avx2, _CMP_NEQ_UQ);
+f64_cmp_avx2!(lt_f64_avx2, _CMP_LT_OQ);
+f64_cmp_avx2!(le_f64_avx2, _CMP_LE_OQ);
+f64_cmp_avx2!(gt_f64_avx2, _CMP_GT_OQ);
+f64_cmp_avx2!(ge_f64_avx2, _CMP_GE_OQ);
+
+macro_rules! f64_cmp_avx512 {
+    ($name:ident, $imm:ident) => {
+        /// # Safety
+        /// Host must advertise `avx512f`.
+        #[target_feature(enable = "avx512f")]
+        pub unsafe fn $name(values: &[f64], scalar: f64) -> Vec<u64> {
+            let len = values.len();
+            let mut out = vec![0u64; i64_bitmap_len(len)];
+            let bcast = _mm512_set1_pd(scalar);
+            let ptr = values.as_ptr();
+            let chunks = len / 8;
+            for i in 0..chunks {
+                let v = _mm512_loadu_pd(ptr.add(i * 8));
+                let m: __mmask8 = _mm512_cmp_pd_mask::<{ $imm }>(v, bcast);
+                let bit_pos = i * 8;
+                out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+            }
+            let tail = len - chunks * 8;
+            if tail > 0 {
+                let load_mask: __mmask8 = (1u8 << tail) - 1;
+                let v = _mm512_maskz_loadu_pd(load_mask, ptr.add(chunks * 8));
+                let m: __mmask8 = _mm512_mask_cmp_pd_mask::<{ $imm }>(load_mask, v, bcast);
+                let bit_pos = chunks * 8;
+                out[bit_pos / 64] |= (m as u64) << (bit_pos % 64);
+            }
+            out
+        }
+    };
+}
+f64_cmp_avx512!(eq_f64_avx512, _CMP_EQ_OQ);
+f64_cmp_avx512!(ne_f64_avx512, _CMP_NEQ_UQ);
+f64_cmp_avx512!(lt_f64_avx512, _CMP_LT_OQ);
+f64_cmp_avx512!(le_f64_avx512, _CMP_LE_OQ);
+f64_cmp_avx512!(gt_f64_avx512, _CMP_GT_OQ);
+f64_cmp_avx512!(ge_f64_avx512, _CMP_GE_OQ);
