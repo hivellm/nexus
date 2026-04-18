@@ -16,6 +16,17 @@ pub mod parser;
 /// Query planner for optimizing Cypher execution
 pub mod planner;
 
+/// Hard upper bound on rows materialised by a single physical operator.
+///
+/// Most operators (label scan, all-nodes scan, expand, cartesian product)
+/// collect intermediate results into a `Vec<Value>` or `Vec<Row>` before
+/// handing them to the next stage. Without this ceiling, a single query
+/// against a large graph — especially one with an accidental cross product
+/// — can allocate arbitrarily large collections and drive the process into
+/// OOM. Exceeding this limit surfaces as `Error::OutOfMemory`, giving the
+/// caller a deterministic failure instead of a silent host-wide crash.
+pub const MAX_INTERMEDIATE_ROWS: usize = 1_000_000;
+
 /// Executor configuration for controlling execution behavior
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
@@ -2399,9 +2410,17 @@ impl Executor {
         // Use HashSet to track seen node IDs since bitmap should already be unique
         use std::collections::HashSet;
         let mut seen_node_ids = HashSet::new();
-        let mut results = Vec::new();
+        let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
+        let mut results = Vec::with_capacity(cap_hint);
 
         for node_id in bitmap.iter() {
+            if results.len() >= MAX_INTERMEDIATE_ROWS {
+                return Err(Error::OutOfMemory(format!(
+                    "NodeByLabel scan would return more than {} rows \
+                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate",
+                    MAX_INTERMEDIATE_ROWS
+                )));
+            }
             let node_id_u64 = node_id as u64;
 
             // Skip if we've already seen this node ID (shouldn't happen, but safety check)
@@ -2427,13 +2446,20 @@ impl Executor {
 
     /// Execute AllNodesScan operator (scan all nodes regardless of label)
     fn execute_all_nodes_scan(&self) -> Result<Vec<Value>> {
-        let mut results = Vec::new();
-
         // Get the total number of nodes from the store
         let total_nodes = self.store().node_count();
+        let cap_hint = (total_nodes as usize).min(MAX_INTERMEDIATE_ROWS);
+        let mut results = Vec::with_capacity(cap_hint);
 
         // Scan all node IDs from 0 to total_nodes-1
         for node_id in 0..total_nodes {
+            if results.len() >= MAX_INTERMEDIATE_ROWS {
+                return Err(Error::OutOfMemory(format!(
+                    "AllNodesScan would return more than {} rows \
+                     (MAX_INTERMEDIATE_ROWS); add a label predicate or LIMIT",
+                    MAX_INTERMEDIATE_ROWS
+                )));
+            }
             // Skip deleted nodes
             if let Ok(node_record) = self.store().read_node(node_id) {
                 if node_record.is_deleted() {
