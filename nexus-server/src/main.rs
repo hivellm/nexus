@@ -134,17 +134,9 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // handler reads via State<Arc<NexusServer>>.
     let executor = Arc::new(api::cypher::build_executor()?);
 
-    // Share executor with knn API (not yet migrated to NexusServer — see
-    // phase2b_consolidate-oncelock-schema-stats-knn).
-    api::knn::init_executor(executor.clone())?;
+    // schema / stats / knn handlers all read server state via
+    // State<Arc<NexusServer>> now (see phase2b); no init_* dance needed.
 
-    // The Engine already contains Catalog, LabelIndex, KnnIndex etc.
-    // For the new data endpoints, we'll use the Engine's components directly via engine_arc.
-    // No need to create separate instances - they should all come from Engine.
-
-    // Initialize engine for API modules still reading global state
-    // (stats — not yet migrated, see phase2b).
-    api::stats::init_engine(engine_arc.clone())?;
     // Initialize performance monitoring (not yet migrated, see phase2c)
     api::performance::init_performance_monitoring(1000, 1000, 100, 10)?; // 1000ms threshold, 1000 max slow queries, 100 plan cache size, 10MB memory
 

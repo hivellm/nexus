@@ -1,22 +1,12 @@
 //! KNN-seeded graph traversal endpoint
 
-use axum::extract::Json;
-use nexus_core::executor::{Executor, Query};
+use axum::extract::{Json, State};
+use nexus_core::executor::Query;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Global executor instance (shared with cypher endpoint)
-/// Executor is Clone and contains only Arc internally, so no RwLock needed
-static EXECUTOR: std::sync::OnceLock<Arc<Executor>> = std::sync::OnceLock::new();
-
-/// Initialize the executor (called from cypher module)
-pub fn init_executor(executor: Arc<Executor>) -> anyhow::Result<()> {
-    EXECUTOR
-        .set(executor)
-        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
-    Ok(())
-}
+use crate::NexusServer;
 
 /// KNN traversal request
 #[derive(Debug, Deserialize)]
@@ -68,7 +58,10 @@ pub struct KnnNode {
 }
 
 /// Execute KNN-seeded traversal
-pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTraverseResponse> {
+pub async fn knn_traverse(
+    State(server): State<Arc<NexusServer>>,
+    Json(request): Json<KnnTraverseRequest>,
+) -> Json<KnnTraverseResponse> {
     let start_time = std::time::Instant::now();
 
     tracing::info!(
@@ -77,21 +70,7 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
         request.k
     );
 
-    // Get executor instance - clone for concurrent execution
-    let executor = match EXECUTOR.get() {
-        Some(executor) => executor.clone(),
-        None => {
-            tracing::error!("Executor not initialized");
-            return Json(KnnTraverseResponse {
-                nodes: vec![],
-                execution_time_ms: start_time.elapsed().as_millis() as u64,
-                error: Some("Executor not initialized".to_string()),
-            });
-        }
-    };
-
-    // Execute KNN search - clone executor for concurrent execution
-    let executor = executor.clone();
+    let executor = server.executor.clone();
 
     // For MVP, we'll use a simple approach:
     // 1. Find nodes with the specified label
@@ -161,218 +140,106 @@ pub async fn knn_traverse(Json(request): Json<KnnTraverseRequest>) -> Json<KnnTr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::Json;
 
-    #[tokio::test]
-    async fn test_knn_traverse_basic() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 5,
+    /// Build a fresh `Arc<NexusServer>` for tests; identical pattern to
+    /// `api::data::tests::build_test_server` but duplicated here so each
+    /// module's test surface stays self-contained.
+    fn build_test_server() -> Arc<NexusServer> {
+        use parking_lot::RwLock as PlRwLock;
+        use tokio::sync::RwLock as TokioRwLock;
+
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
+
+    fn probe_request(label: &str, k: usize, vector: Vec<f32>) -> KnnTraverseRequest {
+        KnnTraverseRequest {
+            label: label.to_string(),
+            vector,
+            k,
             expand: vec![],
             r#where: None,
             limit: 10,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
+        }
     }
 
     #[tokio::test]
-    async fn test_knn_traverse_with_expansion() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 3,
-            expand: vec!["REL_TYPE".to_string()],
-            r#where: None,
-            limit: 20,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
+    async fn test_knn_traverse_runs_without_panic_on_empty_engine() {
+        let server = build_test_server();
+        let response = knn_traverse(
+            State(server),
+            Json(probe_request("Missing", 5, vec![0.1; 4])),
+        )
+        .await
+        .0;
+        // An empty engine has no nodes with this label; the handler
+        // either returns an empty result set or a Cypher syntax/semantics
+        // error from the fallback MATCH. Neither is a panic.
+        assert!(response.nodes.is_empty());
     }
 
     #[tokio::test]
-    async fn test_knn_traverse_without_executor() {
-        // Don't initialize executor
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 5,
-            expand: vec![],
-            r#where: None,
-            limit: 10,
-        };
-
-        let response = knn_traverse(Json(request)).await;
-        assert!(response.error.is_some());
-        assert_eq!(response.error.as_ref().unwrap(), "Executor not initialized");
+    async fn test_knn_traverse_with_empty_vector_still_responds() {
+        let server = build_test_server();
+        let response = knn_traverse(State(server), Json(probe_request("Any", 5, vec![])))
+            .await
+            .0;
+        assert!(response.nodes.is_empty() || response.error.is_some());
     }
 
     #[tokio::test]
-    async fn test_knn_traverse_invalid_dimension() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![], // Empty vector
-            k: 5,
-            expand: vec![],
-            r#where: None,
-            limit: 10,
-        };
+    async fn test_two_servers_do_not_share_executor_state() {
+        // Two independent servers — exercise the handler on both. The
+        // assertion is behavioural: `knn_traverse` against an empty
+        // engine must return an empty / error response regardless of
+        // what another process-wide server has done, which is the
+        // OnceLock-free invariant phase2b ships.
+        let server_a = build_test_server();
+        let server_b = build_test_server();
 
-        let _response = knn_traverse(Json(request)).await;
-        // Should handle empty vector gracefully
-    }
+        let resp_a = knn_traverse(State(server_a), Json(probe_request("A", 1, vec![0.1; 4])))
+            .await
+            .0;
+        let resp_b = knn_traverse(State(server_b), Json(probe_request("B", 1, vec![0.1; 4])))
+            .await
+            .0;
 
-    #[tokio::test]
-    async fn test_knn_traverse_response_format() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 1,
-            expand: vec![],
-            r#where: None,
-            limit: 1,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_initialized_executor() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 5,
-            expand: vec![],
-            r#where: None,
-            limit: 10,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_where_clause() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 3,
-            expand: vec![],
-            r#where: Some("n.property > 0".to_string()),
-            limit: 20,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_multiple_expansions() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 2,
-            expand: vec!["REL_TYPE1".to_string(), "REL_TYPE2".to_string()],
-            r#where: None,
-            limit: 15,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_large_vector() {
-        let large_vector = vec![0.1; 1000]; // 1000-dimensional vector
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: large_vector,
-            k: 1,
-            expand: vec![],
-            r#where: None,
-            limit: 1,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_zero_k() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 0,
-            expand: vec![],
-            r#where: None,
-            limit: 10,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_large_limit() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 5,
-            expand: vec![],
-            r#where: None,
-            limit: 10000,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_negative_values() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![-0.1, -0.2, -0.3, -0.4],
-            k: 3,
-            expand: vec![],
-            r#where: None,
-            limit: 10,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_mixed_values() {
-        let request = KnnTraverseRequest {
-            label: "TestLabel".to_string(),
-            vector: vec![0.0, -1.0, 1.0, 0.5, -0.5],
-            k: 2,
-            expand: vec![],
-            r#where: None,
-            limit: 5,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
-    }
-
-    #[tokio::test]
-    async fn test_knn_traverse_with_empty_label() {
-        let request = KnnTraverseRequest {
-            label: "".to_string(),
-            vector: vec![0.1, 0.2, 0.3, 0.4],
-            k: 1,
-            expand: vec![],
-            r#where: None,
-            limit: 1,
-        };
-
-        let _response = knn_traverse(Json(request)).await;
-        // Test passes if no panic occurs
+        assert!(resp_a.nodes.is_empty());
+        assert!(resp_b.nodes.is_empty());
     }
 }

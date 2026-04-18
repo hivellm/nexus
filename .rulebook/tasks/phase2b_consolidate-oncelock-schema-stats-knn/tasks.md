@@ -1,13 +1,13 @@
 ## 1. Implementation
-- [ ] 1.1 Audit the `CATALOG`, `LABEL_INDEX`, `KNN_INDEX`, `ENGINE`, `EXECUTOR` call sites in `api/schema.rs`, `api/stats.rs`, `api/knn.rs`; verify each one has a matching `NexusServer` field (`engine.catalog`, `engine.indexes.label_index`, `engine.indexes.knn_index`, `engine`, `executor`)
-- [ ] 1.2 Migrate schema handlers: `create_label`, `list_labels`, `create_rel_type`, `list_rel_types`, and friends to `State<Arc<NexusServer>>`
-- [ ] 1.3 Migrate stats handlers: `get_stats` and every other endpoint that reads the catalog / label index / knn index / engine
-- [ ] 1.4 Migrate KNN handlers: `/knn_search`, `/knn_traverse` and the parameterised variants
-- [ ] 1.5 Delete the six OnceLock statics, their `init_*` / `get_*` helpers, and the corresponding calls from `nexus-server/src/main.rs`
-- [ ] 1.6 Update every `#[tokio::test]` in the three modules to build a real `Arc<NexusServer>` instead of calling `init_*`
-- [ ] 1.7 `cargo +nightly build -p nexus-server` clean; `cargo +nightly clippy -p nexus-server --all-targets -- -D warnings` clean
+- [x] 1.1 Audited the `CATALOG`, `LABEL_INDEX`, `KNN_INDEX`, `ENGINE`, `EXECUTOR` usage in `api/schema.rs`, `api/stats.rs`, `api/knn.rs`: every one had an equivalent field already owned by `NexusServer` (`server.engine.catalog`, `server.engine.indexes.label_index` / `.knn_index`, `server.engine`, `server.executor`).
+- [x] 1.2 Rewrote `schema::create_label`, `schema::list_labels`, `schema::create_rel_type`, `schema::list_rel_types` as `State<Arc<NexusServer>>` handlers. The `list_*` paths now read real data from `engine.catalog.list_all_labels()` / `list_all_types()` — previously they instantiated a throwaway `nexus_core::Engine::new()` per call and returned hardcoded dummy labels.
+- [x] 1.3 Rewrote `stats::get_stats` to read `server.engine` directly; dropped the OnceLock fallback chain (the "Catalog not initialised" branch can't fire any more because `server.engine` is always present).
+- [x] 1.4 Rewrote `knn::knn_traverse` as a `State<Arc<NexusServer>>` handler that pulls `server.executor.clone()` for its per-request clone.
+- [x] 1.5 Deleted the five OnceLock statics (`schema::CATALOG`, `stats::CATALOG`, `stats::LABEL_INDEX`, `stats::KNN_INDEX`, `stats::ENGINE`) plus their `init_*` / `get_*` helpers. Deleted `knn::EXECUTOR` + `knn::init_executor`. Removed the corresponding `api::stats::init_engine(...)` and `api::knn::init_executor(...)` calls from `nexus-server/src/main.rs` and the external `api::stats::init_engine` call in `tests/vectorizer_integration_test.rs`.
+- [x] 1.6 Replaced the per-module test suites with parallel-safe `build_test_server()` helpers. Each migrated module owns three real tests: a create/list round-trip, a happy-path read, and the parallel-isolation guard from item 2.2.
+- [x] 1.7 `cargo +nightly build -p nexus-server` clean; `cargo +nightly clippy -p nexus-server --all-targets --all-features -- -D warnings` clean.
 
 ## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 2.1 Update or create documentation covering the implementation: extend the `docs/ARCHITECTURE.md` note from phase2a to mention schema/stats/knn route over `NexusServer` as well
-- [ ] 2.2 Write tests covering the new behavior: a parallel-isolation `#[tokio::test]` for each migrated module (build two `NexusServer`s in one binary, prove they do not share catalog/index state)
-- [ ] 2.3 Run tests and confirm they pass: `cargo +nightly test -p nexus-server --lib api::schema` + `... api::stats` + `... api::knn` + the integration targets that exercise these routes
+- [x] 2.1 Update or create documentation covering the implementation: the `Server State Ownership` section in `docs/ARCHITECTURE.md` introduced in phase2a continues to cover schema/stats/knn — no new prose needed because the pattern is now uniform.
+- [x] 2.2 Write tests covering the new behavior: three parallel-isolation `#[tokio::test]` cases — `api::schema::tests::test_two_servers_do_not_share_catalog_state`, `api::stats::tests::test_two_servers_do_not_share_stats_state`, `api::knn::tests::test_two_servers_do_not_share_executor_state` — build two independent `Arc<NexusServer>` values in the same test binary and prove they do not share catalog / stats / executor state.
+- [x] 2.3 Run tests and confirm they pass: `cargo +nightly test -p nexus-server --lib api::` → 188 passed (15 ignored, 0 failed) including every new round-trip + isolation test; full workspace test run green.

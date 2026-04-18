@@ -1,45 +1,10 @@
 //! Database statistics endpoints
 
-use axum::extract::Json;
-use nexus_core::{
-    catalog::Catalog,
-    index::{KnnIndex, LabelIndex},
-};
+use axum::extract::{Json, State};
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
-/// Global instances
-static CATALOG: std::sync::OnceLock<Arc<RwLock<Catalog>>> = std::sync::OnceLock::new();
-static LABEL_INDEX: std::sync::OnceLock<Arc<RwLock<LabelIndex>>> = std::sync::OnceLock::new();
-static KNN_INDEX: std::sync::OnceLock<Arc<RwLock<KnnIndex>>> = std::sync::OnceLock::new();
-static ENGINE: std::sync::OnceLock<Arc<RwLock<nexus_core::Engine>>> = std::sync::OnceLock::new();
-
-/// Initialize the instances
-pub fn init_instances(
-    catalog: Arc<RwLock<Catalog>>,
-    label_index: Arc<RwLock<LabelIndex>>,
-    knn_index: Arc<RwLock<KnnIndex>>,
-) -> anyhow::Result<()> {
-    CATALOG
-        .set(catalog)
-        .map_err(|_| anyhow::anyhow!("Failed to set catalog"))?;
-    LABEL_INDEX
-        .set(label_index)
-        .map_err(|_| anyhow::anyhow!("Failed to set label index"))?;
-    KNN_INDEX
-        .set(knn_index)
-        .map_err(|_| anyhow::anyhow!("Failed to set knn index"))?;
-    Ok(())
-}
-
-/// Initialize the engine for stats
-pub fn init_engine(engine: Arc<RwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
-    ENGINE
-        .set(engine)
-        .map_err(|_| anyhow::anyhow!("Failed to set engine for stats"))?;
-    Ok(())
-}
+use crate::NexusServer;
 
 /// Database statistics response
 #[derive(Debug, Serialize)]
@@ -129,14 +94,13 @@ pub struct KnnIndexStats {
     pub avg_search_time_us: f64,
 }
 
-/// Get database statistics
-pub async fn get_stats() -> Json<DatabaseStatsResponse> {
+/// Get database statistics.
+pub async fn get_stats(State(server): State<Arc<NexusServer>>) -> Json<DatabaseStatsResponse> {
     tracing::info!("Getting database statistics");
 
-    // Try to get stats from Engine first (if available)
-    if let Some(engine) = ENGINE.get() {
-        let mut engine_guard = engine.write().await;
-        if let Ok(engine_stats) = engine_guard.stats() {
+    let mut engine = server.engine.write().await;
+    match engine.stats() {
+        Ok(engine_stats) => {
             tracing::info!(
                 "Database stats - Labels: {}, RelTypes: {}, Nodes: {}, Rels: {}",
                 engine_stats.labels,
@@ -145,7 +109,7 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
                 engine_stats.relationships
             );
 
-            return Json(DatabaseStatsResponse {
+            Json(DatabaseStatsResponse {
                 catalog: CatalogStats {
                     label_count: engine_stats.labels as usize,
                     rel_type_count: engine_stats.rel_types as usize,
@@ -157,55 +121,17 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
                     total_nodes: engine_stats.nodes as usize,
                 },
                 knn_index: KnnIndexStats {
-                    total_vectors: 0, // Engine stats doesn't have this yet
+                    total_vectors: 0, // Engine stats doesn't expose this yet
                     dimension: 128,
                     avg_search_time_us: 0.0,
                 },
                 simd: Some(collect_simd_stats()),
                 error: None,
-            });
+            })
         }
-    }
-
-    // Fallback to old method if Engine not available
-    // Get catalog stats
-    let catalog_stats = match CATALOG.get() {
-        Some(catalog) => {
-            let catalog = catalog.read().await;
-            match catalog.get_statistics() {
-                Ok(stats) => CatalogStats {
-                    label_count: stats.label_count as usize,
-                    rel_type_count: stats.type_count as usize,
-                    node_count: stats.node_counts.values().sum::<u64>() as usize,
-                    rel_count: stats.rel_counts.values().sum::<u64>() as usize,
-                },
-                Err(e) => {
-                    tracing::error!("Failed to get catalog stats: {}", e);
-                    return Json(DatabaseStatsResponse {
-                        catalog: CatalogStats {
-                            label_count: 0,
-                            rel_type_count: 0,
-                            node_count: 0,
-                            rel_count: 0,
-                        },
-                        label_index: LabelIndexStats {
-                            indexed_labels: 0,
-                            total_nodes: 0,
-                        },
-                        knn_index: KnnIndexStats {
-                            total_vectors: 0,
-                            dimension: 0,
-                            avg_search_time_us: 0.0,
-                        },
-                        simd: Some(collect_simd_stats()),
-                        error: Some(format!("Failed to get catalog stats: {}", e)),
-                    });
-                }
-            }
-        }
-        None => {
-            tracing::error!("Catalog not initialized");
-            return Json(DatabaseStatsResponse {
+        Err(e) => {
+            tracing::error!("Failed to get engine stats: {}", e);
+            Json(DatabaseStatsResponse {
                 catalog: CatalogStats {
                     label_count: 0,
                     rel_type_count: 0,
@@ -222,158 +148,96 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
                     avg_search_time_us: 0.0,
                 },
                 simd: Some(collect_simd_stats()),
-                error: Some("Catalog not initialized".to_string()),
-            });
+                error: Some(format!("Failed to get engine stats: {e}")),
+            })
         }
-    };
-
-    // Get label index stats
-    let label_index_stats = match LABEL_INDEX.get() {
-        Some(label_index) => {
-            let label_index = label_index.read().await;
-            let stats = label_index.get_stats();
-            LabelIndexStats {
-                indexed_labels: stats.label_count as usize,
-                total_nodes: stats.total_nodes as usize,
-            }
-        }
-        None => {
-            tracing::error!("Label index not initialized");
-            LabelIndexStats {
-                indexed_labels: 0,
-                total_nodes: 0,
-            }
-        }
-    };
-
-    // Get KNN index stats
-    let knn_index_stats = match KNN_INDEX.get() {
-        Some(knn_index) => {
-            let knn_index = knn_index.read().await;
-            let stats = knn_index.get_stats();
-            KnnIndexStats {
-                total_vectors: stats.total_vectors as usize,
-                dimension: stats.dimension,
-                avg_search_time_us: stats.avg_search_time_us,
-            }
-        }
-        None => {
-            tracing::error!("KNN index not initialized");
-            KnnIndexStats {
-                total_vectors: 0,
-                dimension: 0,
-                avg_search_time_us: 0.0,
-            }
-        }
-    };
-
-    tracing::info!(
-        "Database stats - Labels: {}, RelTypes: {}, Nodes: {}, Rels: {}, Vectors: {}",
-        catalog_stats.label_count,
-        catalog_stats.rel_type_count,
-        catalog_stats.node_count,
-        catalog_stats.rel_count,
-        knn_index_stats.total_vectors
-    );
-
-    Json(DatabaseStatsResponse {
-        catalog: catalog_stats,
-        label_index: label_index_stats,
-        knn_index: knn_index_stats,
-        simd: Some(collect_simd_stats()),
-        error: None,
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexus_core::{
-        catalog::Catalog,
-        index::{KnnIndex, LabelIndex},
-    };
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
+
+    fn build_test_server() -> Arc<NexusServer> {
+        use parking_lot::RwLock as PlRwLock;
+        use tokio::sync::RwLock as TokioRwLock;
+
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
 
     #[tokio::test]
-    async fn test_get_stats_without_catalog() {
-        let response = get_stats().await;
-        // Check if catalog is initialized (may be initialized by other tests)
-        if let Some(err) = response.error.as_ref() {
-            assert_eq!(err, "Catalog not initialized");
-            assert_eq!(response.catalog.label_count, 0);
-            assert_eq!(response.catalog.rel_type_count, 0);
-            assert_eq!(response.catalog.node_count, 0);
-            assert_eq!(response.catalog.rel_count, 0);
+    async fn test_get_stats_returns_engine_counters() {
+        let server = build_test_server();
+        let response = get_stats(State(server)).await.0;
+        assert!(
+            response.error.is_none(),
+            "stats failed: {:?}",
+            response.error
+        );
+        assert!(response.simd.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_two_servers_do_not_share_stats_state() {
+        let server_a = build_test_server();
+        let server_b = build_test_server();
+
+        // Create a node on server A via the Engine directly.
+        {
+            let mut engine = server_a.engine.write().await;
+            engine
+                .create_node(vec!["A".to_string()], serde_json::json!({}))
+                .unwrap();
         }
-        // If catalog is initialized, the request succeeds with no error —
-        // nothing to assert beyond that.
-    }
 
-    #[tokio::test]
-    #[ignore] // TODO: Fix assertion failure - response.error should be None
-    async fn test_get_stats_with_initialized_catalog() {
-        let catalog = Arc::new(RwLock::new(Catalog::default()));
-        let label_index = Arc::new(RwLock::new(LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(KnnIndex::new(128).unwrap()));
+        let stats_a = get_stats(State(Arc::clone(&server_a))).await.0;
+        let stats_b = get_stats(State(Arc::clone(&server_b))).await.0;
 
-        let _ = init_instances(catalog, label_index, knn_index);
-
-        let response = get_stats().await;
-        assert!(response.error.is_none());
-        assert_eq!(response.catalog.label_count, 0); // New catalog
-        assert_eq!(response.catalog.rel_type_count, 0);
-        assert_eq!(response.catalog.node_count, 0);
-        assert_eq!(response.catalog.rel_count, 0);
-        assert_eq!(response.label_index.indexed_labels, 0);
-        assert_eq!(response.label_index.total_nodes, 0);
-        assert_eq!(response.knn_index.total_vectors, 0);
-        // Note: dimension may be 0 if KNN_INDEX is not properly initialized in test environment
-    }
-
-    #[tokio::test]
-    async fn test_get_stats_with_partial_initialization() {
-        let catalog = Arc::new(RwLock::new(Catalog::default()));
-        let _label_index = Arc::new(RwLock::new(LabelIndex::new()));
-        let _knn_index = Arc::new(RwLock::new(KnnIndex::new(256)));
-
-        // Initialize only catalog (ignore if already set)
-        let _ = CATALOG.set(catalog);
-
-        let response = get_stats().await;
-        assert!(response.error.is_none());
-        assert_eq!(response.catalog.label_count, 0);
-        assert_eq!(response.label_index.indexed_labels, 0);
-        assert_eq!(response.knn_index.total_vectors, 0);
-    }
-
-    #[tokio::test]
-    async fn test_get_stats_with_different_dimensions() {
-        let catalog = Arc::new(RwLock::new(Catalog::default()));
-        let label_index = Arc::new(RwLock::new(LabelIndex::new()));
-        let knn_index = Arc::new(RwLock::new(KnnIndex::new(512).unwrap()));
-
-        let _ = init_instances(catalog, label_index, knn_index);
-
-        let response = get_stats().await;
-        assert!(response.error.is_none());
-        // Note: dimension may be 0 if KNN_INDEX is not properly initialized in test environment
-    }
-
-    #[tokio::test]
-    async fn test_get_stats_response_structure() {
-        let response = get_stats().await;
-
-        // Test that all required fields are present
-        assert!(response.error.is_some());
-        assert_eq!(response.catalog.label_count, 0);
-        assert_eq!(response.catalog.rel_type_count, 0);
-        assert_eq!(response.catalog.node_count, 0);
-        assert_eq!(response.catalog.rel_count, 0);
-        assert_eq!(response.label_index.indexed_labels, 0);
-        assert_eq!(response.label_index.total_nodes, 0);
-        assert_eq!(response.knn_index.total_vectors, 0);
-        assert_eq!(response.knn_index.dimension, 0);
-        assert_eq!(response.knn_index.avg_search_time_us, 0.0);
+        assert!(stats_a.error.is_none());
+        assert!(stats_b.error.is_none());
+        assert!(
+            stats_a.catalog.node_count >= 1,
+            "server A should see its created node"
+        );
+        assert_eq!(
+            stats_b.catalog.node_count, 0,
+            "server B should not see nodes created on server A"
+        );
     }
 }

@@ -1,21 +1,10 @@
 //! Schema management endpoints
 
-use axum::extract::Json;
-use nexus_core::catalog::Catalog;
+use axum::extract::{Json, State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
-/// Global catalog instance
-static CATALOG: std::sync::OnceLock<Arc<RwLock<Catalog>>> = std::sync::OnceLock::new();
-
-/// Initialize the catalog
-pub fn init_catalog(catalog: Arc<RwLock<Catalog>>) -> anyhow::Result<()> {
-    CATALOG
-        .set(catalog)
-        .map_err(|_| anyhow::anyhow!("Failed to set catalog"))?;
-    Ok(())
-}
+use crate::NexusServer;
 
 /// Create label request
 #[derive(Debug, Deserialize)]
@@ -75,24 +64,16 @@ pub struct ListRelTypesResponse {
     pub error: Option<String>,
 }
 
-/// Create a new label
-pub async fn create_label(Json(request): Json<CreateLabelRequest>) -> Json<CreateLabelResponse> {
+/// Create a new label. Registers the name in the shared engine's
+/// catalog and returns the allocated `LabelId`.
+pub async fn create_label(
+    State(server): State<Arc<NexusServer>>,
+    Json(request): Json<CreateLabelRequest>,
+) -> Json<CreateLabelResponse> {
     tracing::info!("Creating label: {}", request.name);
 
-    let catalog_guard = match CATALOG.get() {
-        Some(catalog) => catalog,
-        None => {
-            tracing::error!("Catalog not initialized");
-            return Json(CreateLabelResponse {
-                label_id: 0,
-                message: "".to_string(),
-                error: Some("Catalog not initialized".to_string()),
-            });
-        }
-    };
-
-    let catalog = catalog_guard.write().await;
-    match catalog.get_or_create_label(&request.name) {
+    let engine = server.engine.read().await;
+    match engine.catalog.get_or_create_label(&request.name) {
         Ok(label_id) => {
             tracing::info!("Label '{}' created with ID: {}", request.name, label_id);
             Json(CreateLabelResponse {
@@ -105,92 +86,41 @@ pub async fn create_label(Json(request): Json<CreateLabelRequest>) -> Json<Creat
             tracing::error!("Failed to create label '{}': {}", request.name, e);
             Json(CreateLabelResponse {
                 label_id: 0,
-                message: "".to_string(),
+                message: String::new(),
                 error: Some(e.to_string()),
             })
         }
     }
 }
 
-/// List all labels
-pub async fn list_labels() -> Json<ListLabelsResponse> {
+/// List every label registered in the engine's catalog.
+pub async fn list_labels(State(server): State<Arc<NexusServer>>) -> Json<ListLabelsResponse> {
     tracing::info!("Listing all labels");
 
-    let catalog_guard = match CATALOG.get() {
-        Some(catalog) => catalog,
-        None => {
-            tracing::error!("Catalog not initialized");
-            return Json(ListLabelsResponse {
-                labels: vec![],
-                error: Some("Catalog not initialized".to_string()),
-            });
-        }
-    };
+    let engine = server.engine.read().await;
+    let labels: Vec<(String, u32)> = engine
+        .catalog
+        .list_all_labels()
+        .into_iter()
+        .map(|(id, name)| (name, id))
+        .collect();
 
-    let _catalog = catalog_guard.read().await;
-    // Implement proper label listing
-    match nexus_core::Engine::new() {
-        Ok(engine) => {
-            let mut engine = engine; // Make mutable
-            let stats = match engine.stats() {
-                Ok(stats) => stats,
-                Err(e) => {
-                    tracing::error!("Failed to get engine stats: {}", e);
-                    return Json(ListLabelsResponse {
-                        labels: vec![],
-                        error: Some(format!("Failed to get engine stats: {}", e)),
-                    });
-                }
-            };
-
-            // For now, return a basic list based on available stats
-            // In a full implementation, we'd query the catalog for actual labels
-            let labels = if stats.labels > 0 {
-                vec![
-                    ("Person".to_string(), 10),
-                    ("Company".to_string(), 5),
-                    ("Product".to_string(), 15),
-                ]
-            } else {
-                vec![]
-            };
-
-            tracing::info!("Listed {} labels", labels.len());
-            Json(ListLabelsResponse {
-                labels,
-                error: None,
-            })
-        }
-        Err(e) => {
-            tracing::error!("Failed to initialize engine: {}", e);
-            Json(ListLabelsResponse {
-                labels: vec![],
-                error: Some(format!("Failed to initialize engine: {}", e)),
-            })
-        }
-    }
+    tracing::info!("Listed {} labels", labels.len());
+    Json(ListLabelsResponse {
+        labels,
+        error: None,
+    })
 }
 
-/// Create a new relationship type
+/// Create a new relationship type.
 pub async fn create_rel_type(
+    State(server): State<Arc<NexusServer>>,
     Json(request): Json<CreateRelTypeRequest>,
 ) -> Json<CreateRelTypeResponse> {
     tracing::info!("Creating relationship type: {}", request.name);
 
-    let catalog_guard = match CATALOG.get() {
-        Some(catalog) => catalog,
-        None => {
-            tracing::error!("Catalog not initialized");
-            return Json(CreateRelTypeResponse {
-                type_id: 0,
-                message: "".to_string(),
-                error: Some("Catalog not initialized".to_string()),
-            });
-        }
-    };
-
-    let catalog = catalog_guard.write().await;
-    match catalog.get_or_create_type(&request.name) {
+    let engine = server.engine.read().await;
+    match engine.catalog.get_or_create_type(&request.name) {
         Ok(type_id) => {
             tracing::info!(
                 "Relationship type '{}' created with ID: {}",
@@ -211,272 +141,140 @@ pub async fn create_rel_type(
             );
             Json(CreateRelTypeResponse {
                 type_id: 0,
-                message: "".to_string(),
+                message: String::new(),
                 error: Some(e.to_string()),
             })
         }
     }
 }
 
-/// List all relationship types
-pub async fn list_rel_types() -> Json<ListRelTypesResponse> {
+/// List every relationship type registered in the catalog.
+pub async fn list_rel_types(State(server): State<Arc<NexusServer>>) -> Json<ListRelTypesResponse> {
     tracing::info!("Listing all relationship types");
 
-    let catalog_guard = match CATALOG.get() {
-        Some(catalog) => catalog,
-        None => {
-            tracing::error!("Catalog not initialized");
-            return Json(ListRelTypesResponse {
-                types: vec![],
-                error: Some("Catalog not initialized".to_string()),
-            });
-        }
-    };
+    let engine = server.engine.read().await;
+    let types: Vec<(String, u32)> = engine
+        .catalog
+        .list_all_types()
+        .into_iter()
+        .map(|(id, name)| (name, id))
+        .collect();
 
-    let _catalog = catalog_guard.read().await;
-    // Implement proper relationship type listing
-    match nexus_core::Engine::new() {
-        Ok(engine) => {
-            let mut engine = engine; // Make mutable
-            let stats = match engine.stats() {
-                Ok(stats) => stats,
-                Err(e) => {
-                    tracing::error!("Failed to get engine stats: {}", e);
-                    return Json(ListRelTypesResponse {
-                        types: vec![],
-                        error: Some(format!("Failed to get engine stats: {}", e)),
-                    });
-                }
-            };
-
-            // For now, return a basic list based on available stats
-            // In a full implementation, we'd query the catalog for actual types
-            let types = if stats.rel_types > 0 {
-                vec![
-                    ("KNOWS".to_string(), 20),
-                    ("WORKS_AT".to_string(), 8),
-                    ("BOUGHT".to_string(), 12),
-                ]
-            } else {
-                vec![]
-            };
-
-            tracing::info!("Listed {} relationship types", types.len());
-            Json(ListRelTypesResponse { types, error: None })
-        }
-        Err(e) => {
-            tracing::error!("Failed to initialize engine: {}", e);
-            Json(ListRelTypesResponse {
-                types: vec![],
-                error: Some(format!("Failed to initialize engine: {}", e)),
-            })
-        }
-    }
+    tracing::info!("Listed {} relationship types", types.len());
+    Json(ListRelTypesResponse { types, error: None })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::Json;
-    use nexus_core::catalog::Catalog;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
 
-    #[tokio::test]
-    async fn test_create_label_without_catalog() {
-        let request = CreateLabelRequest {
-            name: "Person".to_string(),
-        };
+    fn build_test_server() -> Arc<NexusServer> {
+        use parking_lot::RwLock as PlRwLock;
+        use tokio::sync::RwLock as TokioRwLock;
 
-        let response = create_label(Json(request)).await;
-        // Check if catalog is initialized (may be initialized by other tests)
-        if let Some(err) = response.error.as_ref() {
-            assert_eq!(err, "Catalog not initialized");
-            assert_eq!(response.label_id, 0);
-        }
-        // If catalog is initialized, the request should succeed (label_id
-        // will be a valid id, possibly zero for the first entry — nothing
-        // to assert there beyond the absence of an error).
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
     }
 
     #[tokio::test]
-    async fn test_create_label_with_empty_name() {
-        let request = CreateLabelRequest {
-            name: "".to_string(),
-        };
+    async fn test_create_and_list_labels_round_trip() {
+        let server = build_test_server();
 
-        let response = create_label(Json(request)).await;
-        assert!(response.error.is_some());
-        // Empty name should result in a validation error, not catalog initialization error
-        let error = response.error.as_ref().unwrap();
+        let out = create_label(
+            State(Arc::clone(&server)),
+            Json(CreateLabelRequest {
+                name: "Person".to_string(),
+            }),
+        )
+        .await
+        .0;
+        assert!(out.error.is_none(), "create failed: {:?}", out.error);
+
+        let listed = list_labels(State(server)).await.0;
+        assert!(listed.error.is_none());
         assert!(
-            error.contains("empty")
-                || error.contains("invalid")
-                || error.contains("MDB_BAD_VALSIZE")
-                || error.contains("Catalog not initialized")
+            listed.labels.iter().any(|(n, _)| n == "Person"),
+            "expected 'Person' in listed labels: {:?}",
+            listed.labels
         );
     }
 
     #[tokio::test]
-    async fn test_create_label_with_long_name() {
-        let long_name = "A".repeat(1000);
-        let request = CreateLabelRequest { name: long_name };
+    async fn test_create_and_list_rel_types_round_trip() {
+        let server = build_test_server();
 
-        let response = create_label(Json(request)).await;
-        assert!(response.error.is_some());
-        // Long name should result in a validation error, not catalog initialization error
-        let error = response.error.as_ref().unwrap();
+        let out = create_rel_type(
+            State(Arc::clone(&server)),
+            Json(CreateRelTypeRequest {
+                name: "KNOWS".to_string(),
+            }),
+        )
+        .await
+        .0;
+        assert!(out.error.is_none(), "create failed: {:?}", out.error);
+
+        let listed = list_rel_types(State(server)).await.0;
+        assert!(listed.error.is_none());
         assert!(
-            error.contains("long")
-                || error.contains("invalid")
-                || error.contains("MDB_BAD_VALSIZE")
-                || error.contains("Catalog not initialized")
+            listed.types.iter().any(|(n, _)| n == "KNOWS"),
+            "expected 'KNOWS' in listed types: {:?}",
+            listed.types
         );
     }
 
     #[tokio::test]
-    async fn test_create_label_with_special_characters() {
-        let request = CreateLabelRequest {
-            name: "Person-123_Test".to_string(),
-        };
+    async fn test_two_servers_do_not_share_catalog_state() {
+        let server_a = build_test_server();
+        let server_b = build_test_server();
 
-        let response = create_label(Json(request)).await;
-        // Check if catalog is initialized (may be initialized by other tests)
-        match response.error.as_ref() {
-            Some(err) => assert_eq!(err, "Catalog not initialized"),
-            None => assert!(response.label_id > 0),
-        }
-    }
+        let _ = create_label(
+            State(Arc::clone(&server_a)),
+            Json(CreateLabelRequest {
+                name: "OnlyOnA".to_string(),
+            }),
+        )
+        .await;
 
-    #[tokio::test]
-    async fn test_create_label_with_initialized_catalog() {
-        let catalog = Arc::new(RwLock::new(Catalog::default()));
-        // Try to initialize catalog, but don't fail if already initialized
-        let _ = init_catalog(catalog.clone());
-
-        let request = CreateLabelRequest {
-            name: "Person".to_string(),
-        };
-
-        let response = create_label(Json(request)).await;
-        assert!(response.error.is_none());
-        // Note: label_id can be 0 for the first label if catalog uses 0-based indexing
-        // Just verify that the request succeeded (label_id will be valid)
-        assert!(response.message.contains("Person"));
-    }
-
-    #[tokio::test]
-    async fn test_list_labels_without_catalog() {
-        let response = list_labels().await;
-        // Check if catalog is initialized (may be initialized by other tests)
-        // If not initialized, should have an error
-        // If initialized by other tests, labels may not be empty
-        if let Some(err) = response.error.as_ref() {
-            assert_eq!(err, "Catalog not initialized");
-        }
-        // Note: Cannot assert labels.len() == 0 because other tests may have added labels
-        // The catalog is global and shared across tests
-    }
-
-    #[tokio::test]
-    async fn test_list_labels_with_initialized_catalog() {
-        let catalog = Arc::new(RwLock::new(Catalog::default()));
-        // Try to initialize catalog, but don't fail if already initialized
-        let _ = init_catalog(catalog.clone());
-
-        let response = list_labels().await;
-        // Note: Cannot assert labels.len() == 0 because the global catalog
-        // may have been initialized by other tests with existing labels.
-        // The OnceLock only allows the first initialization to succeed.
-        // Just verify there's no error.
-        assert!(response.error.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_create_rel_type_without_catalog() {
-        let request = CreateRelTypeRequest {
-            name: "KNOWS".to_string(),
-        };
-
-        let response = create_rel_type(Json(request)).await;
-        // Check if catalog is initialized (may be initialized by other tests)
-        if let Some(err) = response.error.as_ref() {
-            assert_eq!(err, "Catalog not initialized");
-        }
-        assert_eq!(response.type_id, 0);
-    }
-
-    #[tokio::test]
-    async fn test_create_rel_type_with_empty_name() {
-        let request = CreateRelTypeRequest {
-            name: "".to_string(),
-        };
-
-        let response = create_rel_type(Json(request)).await;
-        assert!(response.error.is_some());
-        // Empty name should result in a validation error, not catalog initialization error
-        let error = response.error.as_ref().unwrap();
+        let listed_b = list_labels(State(server_b)).await.0;
         assert!(
-            error.contains("empty")
-                || error.contains("invalid")
-                || error.contains("MDB_BAD_VALSIZE")
-                || error.contains("Catalog not initialized")
+            !listed_b.labels.iter().any(|(n, _)| n == "OnlyOnA"),
+            "server B must not see 'OnlyOnA' registered on server A: {:?}",
+            listed_b.labels
         );
-    }
-
-    #[tokio::test]
-    async fn test_create_rel_type_with_special_characters() {
-        let request = CreateRelTypeRequest {
-            name: "WORKS_FOR-123".to_string(),
-        };
-
-        let response = create_rel_type(Json(request)).await;
-        // Check if catalog is initialized (may be initialized by other tests)
-        if let Some(err) = response.error.as_ref() {
-            assert_eq!(err, "Catalog not initialized");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_create_rel_type_with_initialized_catalog() {
-        let catalog = Arc::new(RwLock::new(Catalog::default()));
-        // Try to initialize catalog, but don't fail if already initialized
-        let _ = init_catalog(catalog.clone());
-
-        let request = CreateRelTypeRequest {
-            name: "KNOWS".to_string(),
-        };
-
-        let response = create_rel_type(Json(request)).await;
-        // If catalog is initialized, should succeed
-        // If not (because already initialized by another test), might fail
-        match response.error.as_ref() {
-            None => assert!(response.message.contains("KNOWS")),
-            Some(err) => assert!(err.contains("Catalog")),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_list_rel_types_without_catalog() {
-        let response = list_rel_types().await;
-        // The response might have an error or be empty depending on catalog state
-        if let Some(err) = response.error.as_ref() {
-            assert_eq!(err, "Catalog not initialized");
-        }
-        // If no error, the types list should be empty or contain existing types
-    }
-
-    #[tokio::test]
-    async fn test_list_rel_types_with_initialized_catalog() {
-        let catalog = Arc::new(RwLock::new(Catalog::default()));
-        // Try to initialize catalog, but don't fail if already initialized
-        let _ = init_catalog(catalog.clone());
-
-        let response = list_rel_types().await;
-        // Note: Cannot assert types.len() == 0 because the global catalog
-        // may have been initialized by other tests with existing rel types.
-        // The OnceLock only allows the first initialization to succeed.
-        // Just verify there's no error.
-        assert!(response.error.is_none());
     }
 }
