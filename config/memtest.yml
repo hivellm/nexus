@@ -1,0 +1,84 @@
+# Nexus memory-test configuration.
+# Mirrors production-ish defaults but with tighter caps so memory regressions
+# become visible under `mem_limit=512m` in docker-compose.memtest.yml.
+#
+# NOTE: As of the branch-start state, nexus-server/src/config.rs::Config::from_env
+# only reads a small subset of env vars (NEXUS_ADDR, NEXUS_DATA_DIR, auth flags).
+# Storage/cache/WAL/MVCC values are hardcoded in Rust. This YAML therefore
+# documents the INTENT — Phase 1 changes the Rust defaults to match, and a
+# later task can add full YAML loading. Mounted into the container for
+# forward-compatibility.
+
+server:
+  addr: "0.0.0.0:15474"
+  workers: 2                    # reduce thread noise in RSS measurements
+  timeout_secs: 30
+  max_body_size_mb: 10
+
+storage:
+  data_dir: "/app/data"
+
+  page_cache:
+    capacity: 5000              # 40 MB (half of default)
+    eviction_policy: "clock"
+
+  wal:
+    checkpoint_interval_secs: 120
+    max_wal_size_mb: 256
+    fsync_on_commit: true
+
+  mvcc:
+    enabled: true
+    gc_interval_secs: 30        # more aggressive GC to surface retention bugs
+    max_versions: 50
+
+multi_database:
+  enabled: true
+  default_database: "neo4j"
+  databases_dir: "/app/data/databases"
+  max_databases: 10
+  auto_create_default: true
+
+authentication:
+  enabled: false                # memtest only; never expose publicly
+  require_for_public_bind: false
+  jwt_secret: "memtest-do-not-use-in-production"
+  jwt_expiration: 3600
+  api_key_length: 32
+  rate_limit:
+    per_minute: 10000
+    per_hour: 1000000
+
+replication:
+  role: "master"
+  master_url: null
+  mode: "async"
+  sync_quorum: 1
+  timeout_ms: 5000
+  reconnect:
+    enabled: false
+    initial_delay_ms: 1000
+    max_delay_ms: 60000
+    max_retries: 0
+
+vectorizer:
+  url: "http://localhost:15002"
+  sync_enabled: false
+  sync_collections: []
+  auto_embed_fields: []
+  rrf_k: 60
+
+logging:
+  level: "info"
+  format: "pretty"
+  file:
+    enabled: false
+    path: "/app/logs/nexus.log"
+    rotation: "daily"
+
+metrics:
+  enabled: false
+  endpoint: "/metrics"
+  tracing:
+    enabled: false
+    endpoint: "http://localhost:4317"
