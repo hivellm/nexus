@@ -44,6 +44,40 @@ pub fn init_performance_monitoring(
         .map_err(|_| anyhow::anyhow!("Failed to set plan cache"))?;
 
     let dbms_procedures = Arc::new(DbmsProcedures::new());
+
+    // Periodic cleanup task for the connection/query trackers.
+    //
+    // Why this exists: the Cypher handler calls
+    // `ConnectionTracker::register_connection` on every request, which
+    // inserts into a shared `HashMap<String, ConnectionInfo>`. HTTP
+    // clients rarely call `unregister_connection` (the server doesn't see
+    // a clean disconnect for keep-alive pools, bursts, or crashed
+    // clients), so without this sweeper the map grows with every request
+    // and dominates RSS under sustained load. A jemalloc heap diff
+    // caught this concretely as a ~520 B / request growth rooted at
+    // `register_connection → reserve_rehash`.
+    //
+    // The thresholds are deliberately generous so short-lived bursts
+    // still show up in `GET /performance/statistics`; the goal is only
+    // to stop unbounded growth, not to punish recent activity.
+    const CLEANUP_INTERVAL_SECS: u64 = 60;
+    const CONNECTION_IDLE_SECS: u64 = 300; // evict after 5 min idle
+    const QUERY_MAX_AGE_SECS: u64 = 600; // forget completed queries after 10 min
+
+    let tracker_for_cleanup = dbms_procedures.get_connection_tracker();
+    tokio::spawn(async move {
+        let mut ticker =
+            tokio::time::interval(std::time::Duration::from_secs(CLEANUP_INTERVAL_SECS));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Skip the immediate first tick.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            tracker_for_cleanup.cleanup_stale_connections(CONNECTION_IDLE_SECS);
+            tracker_for_cleanup.cleanup_old_queries(QUERY_MAX_AGE_SECS);
+        }
+    });
+
     DBMS_PROCEDURES
         .set(dbms_procedures)
         .map_err(|_| anyhow::anyhow!("Failed to set DBMS procedures"))?;

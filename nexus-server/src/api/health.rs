@@ -1,9 +1,27 @@
 //! Health check and monitoring endpoints
+//!
+//! # History
+//!
+//! This module previously performed its checks by spawning a brand-new
+//! [`nexus_core::Engine`] inside every handler — `check_database`,
+//! `check_storage`, `check_indexes`, `check_wal`, and `check_page_cache`
+//! each created their own temporary engine with its own LMDB catalog,
+//! memory-mapped record stores, page cache, async-WAL writer thread, HNSW
+//! index, etc. Under the default Docker healthcheck cadence (every 10s)
+//! that meant **five full engines torn up and torn down per check**, and
+//! under concurrent request load those ephemeral engines fought the live
+//! engine for address space, thread pool slots, and allocator arenas. It
+//! was the primary driver of the runaway RSS growth (~60 GB observed)
+//! reported against the server.
+//!
+//! The current implementation only inspects lightweight filesystem state
+//! so it is safe to call at arbitrary frequency. Deep "active" probes
+//! must be wired through the shared engine handle in future work, not
+//! spawned in the handler.
 
 use axum::extract::Json;
 use serde::Serialize;
 use std::time::{Duration, Instant};
-use tokio::time::timeout;
 
 /// Health check response
 #[derive(Debug, Serialize)]
@@ -117,224 +135,92 @@ async fn check_components() -> ComponentHealth {
     }
 }
 
-/// Check database connectivity
+/// Quick existence probe: verify the data directory from `NEXUS_DATA_DIR`
+/// (default `./data`) is reachable. Never spawns an engine.
+fn probe_data_dir() -> ComponentStatus {
+    let start = Instant::now();
+    let path = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+    match std::fs::metadata(&path) {
+        Ok(m) if m.is_dir() => ComponentStatus {
+            status: HealthStatus::Healthy,
+            response_time_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
+            error: None,
+        },
+        Ok(_) => ComponentStatus {
+            status: HealthStatus::Degraded,
+            response_time_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
+            error: Some(format!("{} exists but is not a directory", path)),
+        },
+        Err(e) => ComponentStatus {
+            status: HealthStatus::Unhealthy,
+            response_time_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
+            error: Some(format!("data dir {} unreachable: {}", path, e)),
+        },
+    }
+}
+
+/// Check database connectivity.
+///
+/// Verifies the catalog file is present under the data dir. A cheap file
+/// stat — does not instantiate a new engine.
 async fn check_database() -> ComponentStatus {
     let start = Instant::now();
-
-    // Check actual database connectivity
-    match timeout(Duration::from_secs(5), async {
-        // Try to create a test engine instance to verify database connectivity
-        // Use tempfile to keep directory alive during check
-        let temp_dir = match tempfile::tempdir() {
-            Ok(dir) => dir,
-            Err(e) => return Err(format!("Failed to create temp directory: {}", e)),
-        };
-        match nexus_core::Engine::with_data_dir(temp_dir.path()) {
-            Ok(mut engine) => {
-                // Test basic operations
-                let _stats = engine
-                    .stats()
-                    .map_err(|e| format!("Stats check failed: {}", e))?;
-                let _health = engine
-                    .health_check()
-                    .map_err(|e| format!("Health check failed: {}", e))?;
-                // Keep temp_dir alive until here
-                drop(engine);
-                drop(temp_dir);
-                Ok::<(), String>(())
-            }
-            Err(e) => Err(format!("Database initialization failed: {}", e)),
-        }
-    })
-    .await
-    {
-        Ok(Ok(_)) => ComponentStatus {
+    let dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+    let catalog = std::path::Path::new(&dir).join("catalog.mdb");
+    let elapsed = || start.elapsed().as_secs_f64() * 1000.0;
+    if catalog.exists() {
+        ComponentStatus {
             status: HealthStatus::Healthy,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
+            response_time_ms: Some(elapsed()),
             error: None,
-        },
-        Ok(Err(e)) => ComponentStatus {
-            status: HealthStatus::Unhealthy,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: Some(e),
-        },
-        Err(_) => ComponentStatus {
-            status: HealthStatus::Unhealthy,
-            response_time_ms: Some(5000.0),
-            error: Some("Database check timeout".to_string()),
-        },
+        }
+    } else {
+        // First boot with an empty data dir is legitimate — treat as Degraded
+        // rather than Unhealthy so the container doesn't flap on startup.
+        ComponentStatus {
+            status: HealthStatus::Degraded,
+            response_time_ms: Some(elapsed()),
+            error: Some(format!("{} not found (first boot?)", catalog.display())),
+        }
     }
 }
 
-/// Check storage layer
+/// Check storage layer: data directory reachable.
 async fn check_storage() -> ComponentStatus {
-    let start = Instant::now();
-
-    // Check actual storage layer
-    match timeout(Duration::from_secs(3), async {
-        // Create a test engine to verify storage
-        match nexus_core::Engine::new() {
-            Ok(mut engine) => {
-                // Test storage operations
-                let _stats = engine
-                    .stats()
-                    .map_err(|e| format!("Storage stats failed: {}", e))?;
-                // Test creating a test node
-                let _node_id = engine
-                    .create_node(vec!["Test".to_string()], serde_json::Value::Null)
-                    .map_err(|e| format!("Storage write test failed: {}", e))?;
-                Ok::<(), String>(())
-            }
-            Err(e) => Err(format!("Storage initialization failed: {}", e)),
-        }
-    })
-    .await
-    {
-        Ok(Ok(_)) => ComponentStatus {
-            status: HealthStatus::Healthy,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: None,
-        },
-        Ok(Err(e)) => ComponentStatus {
-            status: HealthStatus::Degraded,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: Some(e),
-        },
-        Err(_) => ComponentStatus {
-            status: HealthStatus::Unhealthy,
-            response_time_ms: Some(3000.0),
-            error: Some("Storage check timeout".to_string()),
-        },
-    }
+    probe_data_dir()
 }
 
-/// Check index layer
+/// Check index layer. No expensive probe yet — flag as Healthy as long as
+/// the data dir itself is reachable. Deep probes need the shared engine.
 async fn check_indexes() -> ComponentStatus {
-    let start = Instant::now();
-
-    // Check actual index layer
-    match timeout(Duration::from_secs(2), async {
-        // Create a test engine to verify indexes
-        match nexus_core::Engine::new() {
-            Ok(engine) => {
-                // Test index operations
-                let mut engine = engine; // Make mutable
-                let _stats = engine
-                    .stats()
-                    .map_err(|e| format!("Index stats failed: {}", e))?;
-                // Test KNN search (even with empty index) - using 128-dimensional vector
-                let test_vector: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
-                let _knn_result = engine
-                    .knn_search("Test", &test_vector, 5)
-                    .map_err(|e| format!("Index search test failed: {}", e))?;
-                Ok::<(), String>(())
-            }
-            Err(e) => Err(format!("Index initialization failed: {}", e)),
-        }
-    })
-    .await
-    {
-        Ok(Ok(_)) => ComponentStatus {
-            status: HealthStatus::Healthy,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: None,
-        },
-        Ok(Err(e)) => ComponentStatus {
-            status: HealthStatus::Degraded,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: Some(e),
-        },
-        Err(_) => ComponentStatus {
-            status: HealthStatus::Unhealthy,
-            response_time_ms: Some(2000.0),
-            error: Some("Index check timeout".to_string()),
-        },
-    }
+    probe_data_dir()
 }
 
-/// Check WAL (Write-Ahead Log)
+/// Check WAL: wal.log file exists under the data directory.
 async fn check_wal() -> ComponentStatus {
     let start = Instant::now();
-
-    // Check actual WAL
-    match timeout(Duration::from_secs(1), async {
-        // Create a test engine to verify WAL
-        match nexus_core::Engine::new() {
-            Ok(mut engine) => {
-                // Test WAL operations by creating a transaction
-                let _stats = engine
-                    .stats()
-                    .map_err(|e| format!("WAL stats failed: {}", e))?;
-                // Test creating a node (which should write to WAL)
-                let _node_id = engine
-                    .create_node(vec!["Test".to_string()], serde_json::Value::Null)
-                    .map_err(|e| format!("WAL write test failed: {}", e))?;
-                Ok::<(), String>(())
-            }
-            Err(e) => Err(format!("WAL initialization failed: {}", e)),
-        }
-    })
-    .await
-    {
-        Ok(Ok(_)) => ComponentStatus {
+    let dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+    let wal = std::path::Path::new(&dir).join("wal.log");
+    let elapsed = || start.elapsed().as_secs_f64() * 1000.0;
+    if wal.exists() {
+        ComponentStatus {
             status: HealthStatus::Healthy,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
+            response_time_ms: Some(elapsed()),
             error: None,
-        },
-        Ok(Err(e)) => ComponentStatus {
+        }
+    } else {
+        ComponentStatus {
             status: HealthStatus::Degraded,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: Some(e),
-        },
-        Err(_) => ComponentStatus {
-            status: HealthStatus::Unhealthy,
-            response_time_ms: Some(1000.0),
-            error: Some("WAL check timeout".to_string()),
-        },
+            response_time_ms: Some(elapsed()),
+            error: Some(format!("{} not found", wal.display())),
+        }
     }
 }
 
-/// Check page cache
+/// Check page cache. No standalone representation on disk — if the
+/// data directory is healthy, consider the cache initialised.
 async fn check_page_cache() -> ComponentStatus {
-    let start = Instant::now();
-
-    // Check actual page cache
-    match timeout(Duration::from_millis(500), async {
-        // Create a test engine to verify page cache
-        match nexus_core::Engine::new() {
-            Ok(engine) => {
-                // Test page cache operations
-                let mut engine = engine; // Make mutable
-                let _stats = engine
-                    .stats()
-                    .map_err(|e| format!("Page cache stats failed: {}", e))?;
-                // Test reading operations (which should use page cache)
-                let _node_result = engine
-                    .get_node(1)
-                    .map_err(|e| format!("Page cache read test failed: {}", e))?;
-                Ok::<(), String>(())
-            }
-            Err(e) => Err(format!("Page cache initialization failed: {}", e)),
-        }
-    })
-    .await
-    {
-        Ok(Ok(_)) => ComponentStatus {
-            status: HealthStatus::Healthy,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: None,
-        },
-        Ok(Err(e)) => ComponentStatus {
-            status: HealthStatus::Degraded,
-            response_time_ms: Some(start.elapsed().as_millis() as f64),
-            error: Some(e),
-        },
-        Err(_) => ComponentStatus {
-            status: HealthStatus::Unhealthy,
-            response_time_ms: Some(500.0),
-            error: Some("Page cache check timeout".to_string()),
-        },
-    }
+    probe_data_dir()
 }
 
 /// Determine overall health status based on component statuses

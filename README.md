@@ -91,12 +91,12 @@ See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complet
 
 **Linux/macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.sh | bash
 ```
 
 **Windows:**
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.ps1 | iex"
 ```
 
 The installation script downloads the latest release, installs to system PATH, and creates a system service.
@@ -105,7 +105,7 @@ The installation script downloads the latest release, installs to system PATH, a
 - **Linux**: `sudo systemctl status nexus`, `sudo systemctl restart nexus`
 - **Windows**: `Get-Service -Name Nexus`, `Restart-Service -Name Nexus`
 
-See [scripts/INSTALL.md](scripts/INSTALL.md) for detailed instructions.
+See [scripts/install/INSTALL.md](scripts/install/INSTALL.md) for detailed instructions.
 
 #### **Option 2: Build from Source**
 

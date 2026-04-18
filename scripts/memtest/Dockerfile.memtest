@@ -1,0 +1,81 @@
+# Dockerfile for controlled memory-profiling runs.
+#
+# Differs from main Dockerfile:
+#   - Debug symbols kept in release build (for heaptrack/perf if needed later)
+#   - Runtime stage ships procps/curl/jq so measure scripts can introspect
+#   - Auth disabled by default (memtest only, never public)
+#
+# Build (run from repo root):
+#   docker build -f scripts/memtest/Dockerfile.memtest -t nexus-memtest:latest .
+#
+# Run via scripts/memtest/docker-compose.memtest.yml (enforces mem_limit=512m).
+
+FROM rustlang/rust:nightly AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+
+COPY nexus-core ./nexus-core
+COPY nexus-server ./nexus-server
+COPY nexus-protocol ./nexus-protocol
+COPY nexus-cli ./nexus-cli
+
+# Keep debug symbols so we can attach heaptrack/perf if RSS climbs unexpectedly.
+ENV CARGO_PROFILE_RELEASE_DEBUG=true
+ENV CARGO_PROFILE_RELEASE_STRIP=false
+
+# Enable the memory-profiling feature (jemalloc + /debug/* endpoints) so we
+# can dump pprof heap profiles at runtime via `POST /debug/heap/dump`.
+RUN cargo +nightly build --release --package nexus-server --features memory-profiling
+
+# Match the glibc of the builder image (rustlang/rust:nightly ≈ debian trixie);
+# using bookworm here produces `GLIBC_2.38 not found` at runtime.
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    procps \
+    jq \
+    libjemalloc2 \
+    libjemalloc-dev \
+    graphviz \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 nexus && \
+    mkdir -p /app/data /app/config /output && \
+    chown -R nexus:nexus /app /output
+
+COPY --from=builder /app/target/release/nexus-server /usr/local/bin/nexus-server
+RUN chmod +x /usr/local/bin/nexus-server
+
+WORKDIR /app
+USER nexus
+
+EXPOSE 15474
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:15474/health || exit 1
+
+ENV NEXUS_ADDR=0.0.0.0:15474
+ENV NEXUS_DATA_DIR=/app/data
+ENV RUST_LOG=info
+
+# jemalloc heap-profile configuration.
+#  - prof:true / prof_active:true  → profiling on from the first allocation
+#  - prof_prefix:/output/jeprof    → where on-demand dumps land
+#  - lg_prof_sample:19             → sample every ~512 KiB (2^19 B)
+#  - lg_prof_interval:31           → auto-dump every ~2 GiB allocated
+#  - prof_leak:true                → detect leaks at exit
+# On-demand dump: `curl -X POST http://<host>:15474/debug/heap/dump`.
+# Post-process: `jeprof --svg nexus-server /output/jeprof.<N>.heap > out.svg`.
+ENV MALLOC_CONF="prof:true,prof_active:true,prof_prefix:/output/jeprof,lg_prof_sample:19,lg_prof_interval:31,prof_leak:true"
+
+CMD ["nexus-server"]

@@ -54,12 +54,12 @@ Complete guide after installation:
 
 **Linux/macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.sh | bash
 ```
 
 **Windows:**
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.ps1 | iex"
 ```
 
 ## Next Steps

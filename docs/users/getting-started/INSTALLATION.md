@@ -16,7 +16,7 @@ This guide covers installing Nexus Graph Database on different platforms.
 ### Linux/macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.sh | bash
 ```
 
 This will:
@@ -28,7 +28,7 @@ This will:
 ### Windows
 
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.ps1 | iex"
 ```
 
 **Note:** Service installation requires Administrator privileges.

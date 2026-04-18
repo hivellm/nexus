@@ -12,7 +12,7 @@ set -euo pipefail
 TAG="${1:?tag required}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-COMPOSE_FILE="${REPO_DIR}/docker-compose.memtest.yml"
+COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.memtest.yml"
 OUT_DIR="${REPO_DIR}/memtest-output"
 mkdir -p "$OUT_DIR"
 

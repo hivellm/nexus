@@ -1,0 +1,53 @@
+# Docker Compose for Nexus memory profiling.
+#
+# Hard memory cap of 512 MB with swap disabled: any leak manifests as
+# OOMKilled (visible via `docker inspect`) instead of exhausting the host.
+#
+# Usage:
+#   docker compose -f scripts/memtest/docker-compose.memtest.yml up --build -d
+#   bash scripts/memtest/run-all.sh <tag>       # e.g. baseline, phase1, phase2
+#   docker compose -f scripts/memtest/docker-compose.memtest.yml down -v
+
+services:
+  nexus-memtest:
+    build:
+      context: ../..
+      dockerfile: scripts/memtest/Dockerfile.memtest
+    image: nexus-memtest:latest
+    container_name: nexus-memtest
+    ports:
+      - "15474:15474"
+    volumes:
+      - nexus-memtest-data:/app/data
+      - ../../config/memtest.yml:/app/config/memtest.yml:ro
+      # Heap profiles written by jemalloc (MALLOC_CONF.prof_prefix) land here
+      # so jeprof on the host can post-process them.
+      - ../../memtest-output/heap:/output
+    environment:
+      # Priority: env vars > config.yml > compiled defaults. The YAML
+      # path below is the subset currently honoured by
+      # Config::from_yaml_file (server + storage.{data_dir, page_cache}).
+      - RUST_LOG=info,nexus_core=info,nexus_server=info
+      - NEXUS_CONFIG_PATH=/app/config/memtest.yml
+      - NEXUS_ADDR=0.0.0.0:15474
+      - NEXUS_DATA_DIR=/app/data
+      - NEXUS_AUTH_ENABLED=false
+    # Larger headroom while diagnosing the runtime leak — we want to OBSERVE
+    # the growth curve, not get OOMKilled at 512m before we can measure.
+    mem_limit: 8g
+    memswap_limit: 8g              # disable swap so OOM is hard-fail, not silent degradation
+    oom_kill_disable: false
+    restart: "no"                  # do not auto-restart on OOM — we want the failure visible
+    # ptrace allows heaptrack/perf attach if we need to profile allocations.
+    cap_add:
+      - SYS_PTRACE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:15474/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  nexus-memtest-data:
+    driver: local

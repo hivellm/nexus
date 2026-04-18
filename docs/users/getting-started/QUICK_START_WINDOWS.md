@@ -22,7 +22,7 @@ Windows-specific guide to get started with Nexus.
 ### Automated Installation
 
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.ps1 | iex"
 ```
 
 ### Manual Installation

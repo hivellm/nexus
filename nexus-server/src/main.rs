@@ -15,6 +15,14 @@
 //! - GET /stats - Database statistics
 //! - POST /mcp - MCP StreamableHTTP endpoint
 
+// Activate jemalloc as the global allocator when the `memory-profiling`
+// feature is enabled. Combined with `MALLOC_CONF=prof:true,...`, this lets
+// ops dump pprof heap profiles from the running process on demand (see
+// `api::debug`).
+#[cfg(all(feature = "memory-profiling", not(target_env = "msvc")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Request},
@@ -308,6 +316,11 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         .route("/health", get(api::health::health_check))
         .route("/metrics", get(api::health::metrics))
         .route("/prometheus", get(api::prometheus::prometheus_metrics))
+        // Memory profiling endpoints. They respond 503 if the crate was
+        // built without `--features memory-profiling`, so the routes are
+        // always wired — no conditional routing required.
+        .route("/debug/memory", get(api::debug::memory_stats))
+        .route("/debug/heap/dump", post(api::debug::heap_dump))
         .route("/test", get(|| async { "Test endpoint working" }))
         .route("/cypher-debug", post(|body: String| async move {
             tracing::debug!("Raw body received on /cypher-debug: {}", body);

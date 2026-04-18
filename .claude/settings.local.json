@@ -101,9 +101,9 @@
       "Bash(cargo +nightly bench:*)",
       "Bash(Select-String -Pattern \"time:|bench|Benchmarking|exists|count\")",
       "Bash(Select-Object -First 50)",
-      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"& { ./scripts/test-neo4j-nexus-compatibility-200.ps1 2>&1 | Select-String -Pattern ''PASS:|FAIL:|Total Tests:|Passed:|Failed:|Pass Rate:|Section'' }\")",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"& { ./scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1 2>&1 | Select-String -Pattern ''PASS:|FAIL:|Total Tests:|Passed:|Failed:|Pass Rate:|Section'' }\")",
       "Bash(Select-String -Pattern \"FAILED|failures:\")",
-      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"& { ./scripts/test-neo4j-nexus-compatibility-200.ps1 2>&1 | Select-String -Pattern ''Total Tests:|Passed:|Failed:|Pass Rate:'' }\")",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"& { ./scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1 2>&1 | Select-String -Pattern ''Total Tests:|Passed:|Failed:|Pass Rate:'' }\")",
       "Bash(cargo +nightly check:*)",
       "Bash(powershell.exe -ExecutionPolicy Bypass -File scripts/benchmark-nexus-vs-neo4j-comprehensive.ps1 -WarmupRuns 1 -BenchmarkRuns 3)",
       "Bash(Select-String -Pattern \"SECTION|OK|FAIL|Compatible|Total Tests|Passed|Pass Rate\")",
@@ -140,6 +140,9 @@
       "Bash(git reset:*)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "additionalDirectories": [
+      "e:\\HiveLLM\\Nexus\\.claude"
+    ]
   }
 }

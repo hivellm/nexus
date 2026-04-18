@@ -100,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - REMOVE property
 
 - **Files Modified**:
-  - `scripts/test-neo4j-nexus-compatibility-200.ps1` - 6 new test sections
+  - `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` - 6 new test sections
   - `rulebook/tasks/complete-neo4j-compatibility/tasks.md` - Updated documentation
 
 ### Temporal Arithmetic Operations 🕐 (2025-11-30)
@@ -512,14 +512,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added - Installation Scripts ✅
 
 - **Automated Installation Scripts**: One-command installation for Linux, macOS, and Windows
-  - **Linux/macOS**: `curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.sh | bash`
-  - **Windows**: `powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install.ps1 | iex"`
+  - **Linux/macOS**: `curl -fsSL https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.sh | bash`
+  - **Windows**: `powershell -c "irm https://raw.githubusercontent.com/hivellm/nexus/main/scripts/install/install.ps1 | iex"`
   - Downloads latest release directly from GitHub (no custom domain required)
   - Installs `nexus-server` binary to system PATH
   - Creates system service (systemd on Linux, launchd on macOS, Windows Service on Windows)
   - Configures auto-restart on system reboot
   - Service management commands included
-  - Comprehensive documentation in `scripts/INSTALL.md`
+  - Comprehensive documentation in `scripts/install/INSTALL.md`
   - Similar to Bun installation pattern for easy adoption
 
 ### Added - Python SDK ✅

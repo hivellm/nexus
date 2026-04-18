@@ -45,7 +45,7 @@ always winning. See `nexus-server/src/config.rs::Config::from_env`.
 
 ## Memtest harness
 
-`Dockerfile.memtest` + `docker-compose.memtest.yml` + `scripts/memtest/`
+`scripts/memtest/` (Dockerfile.memtest + docker-compose.memtest.yml + helpers)
 boot the server with `mem_limit=512m` and swap disabled so leaks fail
 loudly (OOMKilled) instead of thrashing the host.
 
