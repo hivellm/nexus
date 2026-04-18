@@ -114,6 +114,14 @@ harness = false
 name = "exists_subquery_benchmark"
 harness = false
 
+[[bench]]
+name = "simd_distance"
+harness = false
+
+[[bench]]
+name = "simd_popcount"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../examples/hierarchical_call_graph_example.rs"
