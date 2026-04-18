@@ -6,3 +6,8 @@
 
 pub mod aggregate;
 pub mod expand;
+pub mod filter;
+pub mod join;
+pub mod path;
+pub mod project;
+pub mod scan;
