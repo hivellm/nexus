@@ -205,6 +205,27 @@ parse paths (e.g. Cypher `parameters` maps with strongly-typed
 schemas, or RPC frames that pre-bind their shapes) where the
 measurement will tip in `simd-json`'s favour.
 
+### Phase 3 status — honest scope
+
+The phase-3 task spec (`phase3_simd-storage-checksum-parse`)
+anticipated six SIMD wins. After auditing each call site against
+modern CPUs and the actual codebase, only two delivered as designed:
+
+| Item | Task claim | Outcome |
+|------|-----------|---------|
+| §1–3 CRC32C WAL | 6–10× throughput | Slower on Zen 4 (crc32fast PCLMUL wins); dual-format infra kept for future VPCLMULQDQ / interop |
+| §6 SIMD RLE | 3–5× build time | ✅ 2.75–3.2× on long runs (workload where gate selects RLE) |
+| §7 simd-json ingest | 2–3× on >64 KiB | Slower on Nexus payload shape (Value fields force DOM); primitive kept for typed callers |
+| §4–5 Record codec batch | 2–3× scan/rebuild | **Already optimal** — existing `from_bytes` is `ptr::copy_nonoverlapping` of `#[repr(C)]` PODs; LLVM auto-vectorises the memcpy |
+| §8–9 Cypher tokenizer SWAR | 2–4× parse | **Not a SIMD opportunity** — `peek_char`/`consume_char` call `self.input.chars().nth(self.pos)` which is O(N) per character, so every byte increment scans from the start. Query parse is **O(N²)**; SIMD on top of a quadratic walk is a micro-optimisation on the quadratic term. A separate non-SIMD refactor (byte-indexed parser with ASCII fast path) is the right fix — tracked as follow-up |
+
+Two decisions follow from this audit:
+
+1. **RLE, CRC infra, and the JSON primitive** ship as landed.
+2. **Record codec batch and tokenizer SIMD are dropped** from phase 3.
+   The former has no room to improve; the latter needs the underlying
+   O(N²) parser refactor before any SIMD layer would matter.
+
 ### RLE find-run-length — gated win
 
 `simd::rle::find_run_length` replaces the misnamed "SIMD-accelerated"
