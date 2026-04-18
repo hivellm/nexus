@@ -304,27 +304,6 @@ pub struct CypherResponse {
     pub error: Option<String>,
 }
 
-/// Helper function to record query execution for performance monitoring
-#[allow(dead_code)]
-fn record_query_execution(
-    query: &str,
-    execution_time: Duration,
-    success: bool,
-    error: Option<String>,
-    rows_returned: usize,
-) {
-    record_query_execution_with_metrics(
-        query,
-        execution_time,
-        success,
-        error,
-        rows_returned,
-        None,
-        None,
-        None,
-    );
-}
-
 /// Record Prometheus metrics for query execution
 fn record_prometheus_metrics(execution_time_ms: u64, success: bool, cache_hit: bool) {
     if let Some(metrics) = crate::api::prometheus::METRICS.get() {
@@ -337,9 +316,13 @@ fn record_prometheus_metrics(execution_time_ms: u64, success: bool, cache_hit: b
     }
 }
 
-/// Helper function to record query execution with additional metrics
+/// Record a query execution against the server's `query_stats`. The
+/// handler owns the `Arc<NexusServer>` and passes it through every
+/// call site, so there is no fallback path — the stats struct is
+/// always reachable.
 #[allow(clippy::too_many_arguments)]
 fn record_query_execution_with_metrics(
+    server: &NexusServer,
     query: &str,
     execution_time: Duration,
     success: bool,
@@ -349,90 +332,64 @@ fn record_query_execution_with_metrics(
     cache_hits: Option<u64>,
     cache_misses: Option<u64>,
 ) {
-    if let Some(stats) = crate::api::performance::get_query_stats() {
-        stats.record_query_with_metrics(
-            query,
-            execution_time,
-            success,
-            error,
-            rows_returned,
-            memory_usage,
-            cache_hits,
-            cache_misses,
-        );
-    }
+    server.query_stats.record_query_with_metrics(
+        query,
+        execution_time,
+        success,
+        error,
+        rows_returned,
+        memory_usage,
+        cache_hits,
+        cache_misses,
+    );
 }
 
-/// Register connection and query for tracking (with SocketAddr)
-#[allow(dead_code)]
-fn register_connection_and_query(
-    query: &str,
-    addr: &std::net::SocketAddr,
-    auth_context: &Option<AuthContext>,
-) -> String {
-    register_connection_and_query_fallback(query, &addr.to_string(), auth_context)
-}
-
-/// Register connection and query for tracking (fallback version)
+/// Register a connection and query against the server's DBMS
+/// procedures tracker. Returns the generated `connection_id`, which
+/// the handler reuses as the `query_id` for the subsequent
+/// `mark_query_completed` call.
 fn register_connection_and_query_fallback(
+    server: &NexusServer,
     query: &str,
     client_address: &str,
     auth_context: &Option<AuthContext>,
 ) -> String {
-    if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
-        let tracker = dbms_procedures.get_connection_tracker();
-        let username = auth_context
-            .as_ref()
-            .and_then(|ctx| ctx.api_key.user_id.clone());
+    let tracker = server.dbms_procedures.get_connection_tracker();
+    let username = auth_context
+        .as_ref()
+        .and_then(|ctx| ctx.api_key.user_id.clone());
+    let connection_id = tracker.register_connection(username, client_address.to_string());
+    let _query_id = tracker.register_query(connection_id.clone(), query.to_string());
+    connection_id
+}
 
-        // Register connection (or get existing)
-        let connection_id = tracker.register_connection(username, client_address.to_string());
+/// Check plan-cache status for a query. Hashes the query text with
+/// `DefaultHasher` and asks `server.plan_cache` whether that hash has
+/// been seen; returns `(hits, misses)` suitable for
+/// `QueryStatistics::record_query_with_metrics`.
+fn check_query_cache_status(server: &NexusServer, query: &str) -> (u64, u64) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
-        // Register query
-        let _query_id = tracker.register_query(connection_id.clone(), query.to_string());
+    let query_hash = {
+        let mut hasher = DefaultHasher::new();
+        query.hash(&mut hasher);
+        hasher.finish().to_string()
+    };
 
-        connection_id
+    let (exists, _) = server.plan_cache.check_cache_status(&query_hash);
+    if exists {
+        let (hits, misses) = server.plan_cache.get_query_cache_metrics(&query_hash);
+        (hits.max(1), misses)
     } else {
-        // Fallback if DBMS procedures not initialized
-        format!(
-            "conn-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        )
+        (0, 1)
     }
 }
 
-/// Check cache status for a query
-fn check_query_cache_status(query: &str) -> (u64, u64) {
-    if let Some(cache) = crate::api::performance::get_plan_cache() {
-        // Normalize query to match cache pattern (simple approach)
-        // In a real implementation, we'd use the same normalization as the optimizer
-        let query_hash = {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            query.hash(&mut hasher);
-            hasher.finish().to_string()
-        };
-
-        let (exists, _) = cache.check_cache_status(&query_hash);
-        if exists {
-            let (hits, misses) = cache.get_query_cache_metrics(&query_hash);
-            (hits.max(1), misses) // At least 1 hit if exists
-        } else {
-            (0, 1) // Miss
-        }
-    } else {
-        (0, 0) // Cache not available
-    }
-}
-
-/// Mark query as completed in tracker
-fn mark_query_completed(query_id: &str) {
-    if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
-        let tracker = dbms_procedures.get_connection_tracker();
-        tracker.complete_query(query_id);
-    }
+/// Mark a query as completed in the DBMS connection tracker.
+fn mark_query_completed(server: &NexusServer, query_id: &str) {
+    server
+        .dbms_procedures
+        .get_connection_tracker()
+        .complete_query(query_id);
 }

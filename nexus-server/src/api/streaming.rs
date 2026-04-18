@@ -406,34 +406,29 @@ pub async fn handle_nexus_mcp_tool(
     let cache_hit = false;
 
     if is_cacheable {
-        if let Some(cache) = crate::api::mcp_performance::get_mcp_tool_cache() {
-            if let Some(args) = &request.arguments {
-                let args_value = serde_json::Value::Object(args.clone());
-                if let Some(cached_result) = cache.get(&tool_name, &args_value) {
-                    // Return cached result
-                    let execution_time = start_time.elapsed();
+        if let Some(args) = &request.arguments {
+            let args_value = serde_json::Value::Object(args.clone());
+            if let Some(cached_result) = server.mcp_tool_cache.get(&tool_name, &args_value) {
+                // Return cached result
+                let execution_time = start_time.elapsed();
 
-                    // Record statistics
-                    if let Some(stats) = crate::api::mcp_performance::get_mcp_tool_stats() {
-                        let input_size = serde_json::to_string(args).ok().map(|s| s.len() as u64);
-                        let output_size = serde_json::to_string(&cached_result)
-                            .ok()
-                            .map(|s| s.len() as u64);
-                        stats.record_tool_call(
-                            &tool_name,
-                            execution_time,
-                            true,
-                            None,
-                            input_size,
-                            output_size,
-                            Some(true), // Cache hit
-                        );
-                    }
+                let input_size = serde_json::to_string(args).ok().map(|s| s.len() as u64);
+                let output_size = serde_json::to_string(&cached_result)
+                    .ok()
+                    .map(|s| s.len() as u64);
+                server.mcp_tool_stats.record_tool_call(
+                    &tool_name,
+                    execution_time,
+                    true,
+                    None,
+                    input_size,
+                    output_size,
+                    Some(true), // Cache hit
+                );
 
-                    return Ok(CallToolResult::success(vec![Content::text(
-                        cached_result.to_string(),
-                    )]));
-                }
+                return Ok(CallToolResult::success(vec![Content::text(
+                    cached_result.to_string(),
+                )]));
             }
         }
     }
@@ -477,30 +472,28 @@ pub async fn handle_nexus_mcp_tool(
         .map(|s| s.len() as u64);
 
     // Record statistics
-    if let Some(stats) = crate::api::mcp_performance::get_mcp_tool_stats() {
-        stats.record_tool_call(
-            &tool_name,
-            execution_time,
-            success,
-            error,
-            input_size,
-            output_size,
-            if is_cacheable { Some(cache_hit) } else { None },
-        );
-    }
+    server.mcp_tool_stats.record_tool_call(
+        &tool_name,
+        execution_time,
+        success,
+        error,
+        input_size,
+        output_size,
+        if is_cacheable { Some(cache_hit) } else { None },
+    );
 
     // Cache successful results for cacheable tools
-    if is_cacheable && success {
-        if let Some(cache) = crate::api::mcp_performance::get_mcp_tool_cache() {
-            if let Some(args) = &request.arguments {
-                let args_value = serde_json::Value::Object(args.clone());
-                if let Ok(result_value) = &result {
-                    // Serialize result to JSON for caching
-                    if let Ok(result_json) = serde_json::to_value(result_value) {
-                        cache.put(&tool_name, &args_value, result_json, None);
-                    }
-                }
-            }
+    if is_cacheable
+        && success
+        && let Some(args) = &request.arguments
+    {
+        let args_value = serde_json::Value::Object(args.clone());
+        if let Ok(result_value) = &result
+            && let Ok(result_json) = serde_json::to_value(result_value)
+        {
+            server
+                .mcp_tool_cache
+                .put(&tool_name, &args_value, result_json, None);
         }
     }
 

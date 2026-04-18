@@ -507,7 +507,7 @@ pub(crate) async fn execute_user_commands(
 /// Execute query management commands (SHOW QUERIES, TERMINATE QUERY)
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) async fn execute_query_management_commands(
-    _server: Arc<NexusServer>,
+    server: Arc<NexusServer>,
     ast: &nexus_core::executor::parser::CypherQuery,
     start_time: std::time::Instant,
 ) -> Json<CypherResponse> {
@@ -526,72 +526,58 @@ pub(crate) async fn execute_query_management_commands(
                     "status".to_string(),
                 ];
 
-                // Get queries from connection tracker
-                if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
-                    let tracker = dbms_procedures.get_connection_tracker();
-                    let queries = tracker.get_running_queries();
+                let tracker = server.dbms_procedures.get_connection_tracker();
+                let queries = tracker.get_running_queries();
 
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
 
-                    for query_info in queries {
-                        let elapsed_ms = (now - query_info.started_at) * 1000;
-                        let status = if query_info.is_running {
-                            "running"
-                        } else if query_info.cancelled {
-                            "cancelled"
-                        } else {
-                            "completed"
-                        };
+                for query_info in queries {
+                    let elapsed_ms = (now - query_info.started_at) * 1000;
+                    let status = if query_info.is_running {
+                        "running"
+                    } else if query_info.cancelled {
+                        "cancelled"
+                    } else {
+                        "completed"
+                    };
 
-                        rows.push(serde_json::json!([
-                            query_info.query_id,
-                            query_info.query,
-                            query_info.connection_id,
-                            query_info.started_at,
-                            elapsed_ms,
-                            status
-                        ]));
-                    }
+                    rows.push(serde_json::json!([
+                        query_info.query_id,
+                        query_info.query,
+                        query_info.connection_id,
+                        query_info.started_at,
+                        elapsed_ms,
+                        status
+                    ]));
                 }
             }
             nexus_core::executor::parser::Clause::TerminateQuery(terminate_clause) => {
                 columns = vec!["queryId".to_string(), "message".to_string()];
 
-                // Terminate the query
-                if let Some(dbms_procedures) = crate::api::performance::get_dbms_procedures() {
-                    let tracker = dbms_procedures.get_connection_tracker();
-                    let cancelled = tracker.cancel_query(&terminate_clause.query_id);
+                let tracker = server.dbms_procedures.get_connection_tracker();
+                let cancelled = tracker.cancel_query(&terminate_clause.query_id);
 
-                    if cancelled {
-                        rows.push(serde_json::json!([
-                            terminate_clause.query_id.clone(),
-                            format!(
-                                "Query '{}' terminated successfully",
-                                terminate_clause.query_id
-                            )
-                        ]));
-                    } else {
-                        let execution_time = start_time.elapsed().as_millis() as u64;
-                        return Json(CypherResponse {
-                            columns: vec![],
-                            rows: vec![],
-                            execution_time_ms: execution_time,
-                            error: Some(format!(
-                                "Query '{}' not found or already completed",
-                                terminate_clause.query_id
-                            )),
-                        });
-                    }
+                if cancelled {
+                    rows.push(serde_json::json!([
+                        terminate_clause.query_id.clone(),
+                        format!(
+                            "Query '{}' terminated successfully",
+                            terminate_clause.query_id
+                        )
+                    ]));
                 } else {
                     let execution_time = start_time.elapsed().as_millis() as u64;
                     return Json(CypherResponse {
                         columns: vec![],
                         rows: vec![],
                         execution_time_ms: execution_time,
-                        error: Some("Query tracking not enabled".to_string()),
+                        error: Some(format!(
+                            "Query '{}' not found or already completed",
+                            terminate_clause.query_id
+                        )),
                     });
                 }
             }

@@ -136,17 +136,9 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     // schema / stats / knn handlers all read server state via
     // State<Arc<NexusServer>> now (see phase2b); no init_* dance needed.
-
-    // Initialize performance monitoring (not yet migrated, see phase2c)
-    api::performance::init_performance_monitoring(1000, 1000, 100, 10)?; // 1000ms threshold, 1000 max slow queries, 100 plan cache size, 10MB memory
-
-    // Initialize MCP tool performance monitoring (not yet migrated, see phase2c)
-    api::mcp_performance::init_mcp_performance_monitoring(
-        500,  // 500ms threshold for slow tools
-        1000, // Max 1000 slow tool records
-        3600, // 1 hour cache TTL
-        100,  // Max 100 cache entries
-    )?;
+    // Performance + MCP tool monitoring are constructed inside
+    // NexusServer::new (phase2c) with the same defaults the previous
+    // init_* pair used.
 
     // Initialize DatabaseManager for multi-database support
     let database_manager = nexus_core::database::DatabaseManager::new(data_dir.clone().into())?;
@@ -888,8 +880,8 @@ mod tests {
         // If we get here, the locks were acquired successfully
     }
 
-    #[test]
-    fn test_nexus_server_clone() {
+    #[tokio::test]
+    async fn test_nexus_server_clone() {
         let ctx = TestContext::new();
         let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(TokioRwLock::new(engine));
@@ -1129,8 +1121,8 @@ mod tests {
         // Note: axum::Router doesn't have a routes() method, so we just verify it was created
     }
 
-    #[test]
-    fn test_nexus_server_fields() {
+    #[tokio::test]
+    async fn test_nexus_server_fields() {
         let ctx = TestContext::new();
         let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
         let engine_arc = Arc::new(TokioRwLock::new(engine));

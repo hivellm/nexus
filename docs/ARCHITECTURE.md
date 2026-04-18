@@ -1205,11 +1205,19 @@ This replaces an older pattern that kept every subsystem in its own
 `OnceLock<Arc<_>>` per API file (`api::cypher::EXECUTOR`,
 `api::data::ENGINE`, …), which broke test isolation — two tests that
 each called `init_engine` silently collided on the same process-wide
-singleton. The migration is sliced into `phase2a`–`phase2e`; as of
-phase2a the cypher and data handlers read exclusively from
-`NexusServer` and the paired `OnceLock`s + `init_*` / `get_*` helpers
-have been deleted. Later slices migrate schema / stats / knn /
-performance / graph-correlation / health / prometheus onto the same
+singleton. The migration is sliced into `phase2a`–`phase2e`; phase2a
+landed cypher + data, phase2b landed schema + stats + knn, and phase2c
+lands the performance-monitoring axis (query statistics, plan cache,
+DBMS procedures, MCP tool statistics, MCP tool cache). All five of
+those monitoring subsystems are now fields on `NexusServer` and are
+constructed inside `NexusServer::new` with the defaults the old
+`init_performance_monitoring(1000, 1000, 100, 10)` and
+`init_mcp_performance_monitoring(500, 1000, 3600, 100)` pair supplied;
+`main.rs` no longer wires them separately. To add a new monitored
+dimension: add an `Arc<_>` field to `NexusServer`, build it inside
+`NexusServer::new` with whatever defaults apply, and read it from
+handlers via `server.<field>` — do not reach for a `OnceLock`. Later
+slices migrate graph-correlation / health / prometheus onto the same
 handle and add a final `tests/no_oncelock_globals.rs` guard that fails
 if the anti-pattern comes back.
 

@@ -6,99 +6,13 @@
 //! - GET /performance/plan-cache - Plan cache statistics
 //! - POST /performance/plan-cache/clear - Clear plan cache
 
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Json;
-use nexus_core::performance::{
-    dbms_procedures::DbmsProcedures, plan_cache::QueryPlanCache, query_stats::QueryStatistics,
-};
 use serde::Serialize;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-/// Global query statistics instance
-static QUERY_STATS: OnceLock<Arc<QueryStatistics>> = OnceLock::new();
-
-/// Global plan cache instance
-static PLAN_CACHE: OnceLock<Arc<QueryPlanCache>> = OnceLock::new();
-
-/// Global DBMS procedures instance
-static DBMS_PROCEDURES: OnceLock<Arc<DbmsProcedures>> = OnceLock::new();
-
-/// Initialize performance monitoring components
-pub fn init_performance_monitoring(
-    slow_query_threshold_ms: u64,
-    max_slow_queries: usize,
-    plan_cache_size: usize,
-    plan_cache_memory_mb: usize,
-) -> anyhow::Result<()> {
-    let query_stats = Arc::new(QueryStatistics::new(
-        slow_query_threshold_ms,
-        max_slow_queries,
-    ));
-    QUERY_STATS
-        .set(query_stats)
-        .map_err(|_| anyhow::anyhow!("Failed to set query statistics"))?;
-
-    let plan_cache = Arc::new(QueryPlanCache::new(plan_cache_size, plan_cache_memory_mb));
-    PLAN_CACHE
-        .set(plan_cache)
-        .map_err(|_| anyhow::anyhow!("Failed to set plan cache"))?;
-
-    let dbms_procedures = Arc::new(DbmsProcedures::new());
-
-    // Periodic cleanup task for the connection/query trackers.
-    //
-    // Why this exists: the Cypher handler calls
-    // `ConnectionTracker::register_connection` on every request, which
-    // inserts into a shared `HashMap<String, ConnectionInfo>`. HTTP
-    // clients rarely call `unregister_connection` (the server doesn't see
-    // a clean disconnect for keep-alive pools, bursts, or crashed
-    // clients), so without this sweeper the map grows with every request
-    // and dominates RSS under sustained load. A jemalloc heap diff
-    // caught this concretely as a ~520 B / request growth rooted at
-    // `register_connection → reserve_rehash`.
-    //
-    // The thresholds are deliberately generous so short-lived bursts
-    // still show up in `GET /performance/statistics`; the goal is only
-    // to stop unbounded growth, not to punish recent activity.
-    const CLEANUP_INTERVAL_SECS: u64 = 60;
-    const CONNECTION_IDLE_SECS: u64 = 300; // evict after 5 min idle
-    const QUERY_MAX_AGE_SECS: u64 = 600; // forget completed queries after 10 min
-
-    let tracker_for_cleanup = dbms_procedures.get_connection_tracker();
-    tokio::spawn(async move {
-        let mut ticker =
-            tokio::time::interval(std::time::Duration::from_secs(CLEANUP_INTERVAL_SECS));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // Skip the immediate first tick.
-        ticker.tick().await;
-        loop {
-            ticker.tick().await;
-            tracker_for_cleanup.cleanup_stale_connections(CONNECTION_IDLE_SECS);
-            tracker_for_cleanup.cleanup_old_queries(QUERY_MAX_AGE_SECS);
-        }
-    });
-
-    DBMS_PROCEDURES
-        .set(dbms_procedures)
-        .map_err(|_| anyhow::anyhow!("Failed to set DBMS procedures"))?;
-
-    Ok(())
-}
-
-/// Get query statistics instance
-pub fn get_query_stats() -> Option<Arc<QueryStatistics>> {
-    QUERY_STATS.get().cloned()
-}
-
-/// Get plan cache instance
-pub fn get_plan_cache() -> Option<Arc<QueryPlanCache>> {
-    PLAN_CACHE.get().cloned()
-}
-
-/// Get DBMS procedures instance
-pub fn get_dbms_procedures() -> Option<Arc<DbmsProcedures>> {
-    DBMS_PROCEDURES.get().cloned()
-}
+use crate::NexusServer;
 
 /// Query statistics response
 #[derive(Debug, Serialize)]
@@ -193,17 +107,10 @@ pub struct PlanCacheStatisticsResponse {
 
 /// Get query statistics
 /// GET /performance/statistics
-pub async fn get_query_statistics()
--> Result<Json<QueryStatisticsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let stats = get_query_stats().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "Performance monitoring not initialized"
-            })),
-        )
-    })?;
-
+pub async fn get_query_statistics(
+    State(server): State<Arc<NexusServer>>,
+) -> Result<Json<QueryStatisticsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let stats = server.query_stats.clone();
     let summary = stats.get_statistics();
     let pattern_stats = stats.get_pattern_stats();
 
@@ -237,17 +144,10 @@ pub async fn get_query_statistics()
 
 /// Get slow queries
 /// GET /performance/slow-queries
-pub async fn get_slow_queries()
--> Result<Json<SlowQueriesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let stats = get_query_stats().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "Performance monitoring not initialized"
-            })),
-        )
-    })?;
-
+pub async fn get_slow_queries(
+    State(server): State<Arc<NexusServer>>,
+) -> Result<Json<SlowQueriesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let stats = server.query_stats.clone();
     let slow_queries = stats.get_slow_queries();
     let records: Vec<SlowQueryRecord> = slow_queries
         .into_iter()
@@ -269,17 +169,10 @@ pub async fn get_slow_queries()
 
 /// Get plan cache statistics
 /// GET /performance/plan-cache
-pub async fn get_plan_cache_statistics()
--> Result<Json<PlanCacheStatisticsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let cache = get_plan_cache().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "Plan cache not initialized"
-            })),
-        )
-    })?;
-
+pub async fn get_plan_cache_statistics(
+    State(server): State<Arc<NexusServer>>,
+) -> Result<Json<PlanCacheStatisticsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let cache = server.plan_cache.clone();
     let stats = cache.get_statistics();
 
     Ok(Json(PlanCacheStatisticsResponse {
@@ -293,18 +186,10 @@ pub async fn get_plan_cache_statistics()
 
 /// Clear plan cache
 /// POST /performance/plan-cache/clear
-pub async fn clear_plan_cache()
--> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let cache = get_plan_cache().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "Plan cache not initialized"
-            })),
-        )
-    })?;
-
-    cache.invalidate_all();
+pub async fn clear_plan_cache(
+    State(server): State<Arc<NexusServer>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    server.plan_cache.invalidate_all();
 
     Ok(Json(serde_json::json!({
         "status": "success",
@@ -338,17 +223,10 @@ pub struct SlowQueryAnalysisItem {
 
 /// Analyze slow queries
 /// GET /performance/slow-queries/analysis
-pub async fn analyze_slow_queries()
--> Result<Json<SlowQueryAnalysisResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let stats = get_query_stats().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "Performance monitoring not initialized"
-            })),
-        )
-    })?;
-
+pub async fn analyze_slow_queries(
+    State(server): State<Arc<NexusServer>>,
+) -> Result<Json<SlowQueryAnalysisResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let stats = server.query_stats.clone();
     let analyzer = nexus_core::performance::slow_query_analysis::SlowQueryAnalyzer::new();
     let analyses = analyzer.analyze(&stats);
 
@@ -372,248 +250,120 @@ pub async fn analyze_slow_queries()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use parking_lot::RwLock as PlRwLock;
+    use tokio::sync::RwLock as TokioRwLock;
 
-    #[tokio::test]
-    async fn test_get_query_statistics_not_initialized() {
-        // This test may pass or fail depending on initialization order
-        // If already initialized by another test, it will succeed
-        // If not initialized, it should fail
-        let result = get_query_statistics().await;
-        // Just verify it doesn't panic - result can be ok or err depending on test order
-        drop(result);
-    }
-
-    #[tokio::test]
-    async fn test_get_slow_queries_not_initialized() {
-        // This test may pass or fail depending on initialization order
-        let result = get_slow_queries().await;
-        // Just verify it doesn't panic
-        drop(result);
-    }
-
-    #[tokio::test]
-    async fn test_get_plan_cache_statistics_not_initialized() {
-        // This test may pass or fail depending on initialization order
-        let result = get_plan_cache_statistics().await;
-        // Just verify it doesn't panic
-        drop(result);
-    }
-
-    #[tokio::test]
-    async fn test_performance_monitoring_initialization() {
-        // Try to initialize - may succeed or fail if already initialized
-        let _result = init_performance_monitoring(100, 1000, 100, 10);
-        // If already initialized, result will be Err, which is fine
-
-        // Now should be able to get statistics (if initialized)
-        let stats_result = get_query_statistics().await;
-        // Should succeed if initialized (either by this test or previous)
-        assert!(stats_result.is_ok());
-
-        let cache_result = get_plan_cache_statistics().await;
-        assert!(cache_result.is_ok());
-    }
-
-    #[tokio::test]
-    #[ignore = "May fail due to data persistence from other tests"]
-    async fn test_get_query_statistics_with_data() {
-        let _ = init_performance_monitoring(100, 1000, 100, 10);
-
-        // Clear existing stats first to ensure clean state
-        if let Some(stats) = get_query_stats() {
-            stats.clear();
-        }
-
-        // Record some queries
-        if let Some(stats) = get_query_stats() {
-            stats.record_query(
-                "MATCH (n) RETURN n",
-                Duration::from_millis(50),
-                true,
-                None,
-                10,
-            );
-            stats.record_query(
-                "CREATE (n:Person)",
-                Duration::from_millis(30),
-                true,
-                None,
-                1,
-            );
-        }
-
-        let result = get_query_statistics().await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap().0;
-        // May have queries from other tests, so check >= 2
-        assert!(response.statistics.total_queries >= 2);
-        assert!(response.statistics.successful_queries >= 2);
-        // Patterns may vary based on normalization
-        assert!(!response.patterns.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_get_slow_queries_with_data() {
-        // Initialize if not already initialized
-        let _ = init_performance_monitoring(100, 1000, 100, 10);
-
-        // Clear existing slow query log first
-        if let Some(stats) = get_query_stats() {
-            // We can't directly clear slow query log, but we can clear all stats
-            stats.clear();
-        }
-
-        // Record slow queries (above 100ms threshold)
-        if let Some(stats) = get_query_stats() {
-            stats.record_query("SLOW QUERY 1", Duration::from_millis(150), true, None, 10);
-            stats.record_query(
-                "SLOW QUERY 2",
-                Duration::from_millis(200),
-                false,
-                Some("Error".to_string()),
-                0,
-            );
-        }
-
-        let result = get_slow_queries().await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap().0;
-        // May include queries from previous tests - accept >= 2
-        assert!(
-            response.count >= 2,
-            "Expected at least 2 slow queries, got {}",
-            response.count
+    fn build_test_server() -> Arc<NexusServer> {
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
         );
-        assert!(
-            response.queries.len() >= 2,
-            "Expected at least 2 queries, got {}",
-            response.queries.len()
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn test_get_query_statistics_empty_server_returns_zero_counters() {
+        let server = build_test_server();
+        let response = get_query_statistics(State(server)).await.expect("ok");
+        assert_eq!(response.statistics.total_queries, 0);
+        assert_eq!(response.statistics.successful_queries, 0);
+        assert_eq!(response.statistics.failed_queries, 0);
+        assert!(response.patterns.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_slow_queries_empty_server_returns_empty_list() {
+        let server = build_test_server();
+        let response = get_slow_queries(State(server)).await.expect("ok");
+        assert_eq!(response.count, 0);
+        assert!(response.queries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_plan_cache_statistics_starts_empty() {
+        let server = build_test_server();
+        let response = get_plan_cache_statistics(State(server)).await.expect("ok");
+        assert_eq!(response.cached_plans, 0);
+        // hit_rate on an empty cache is defined as 0.0 by QueryPlanCache.
+        assert!(response.hit_rate >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_clear_plan_cache_returns_success() {
+        let server = build_test_server();
+        let response = clear_plan_cache(State(server)).await.expect("ok");
+        assert_eq!(response.0["status"], "success");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_slow_queries_empty_server_returns_empty_list() {
+        let server = build_test_server();
+        let response = analyze_slow_queries(State(server)).await.expect("ok");
+        assert_eq!(response.total_patterns, 0);
+        assert!(response.analyses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_two_servers_do_not_share_performance_state() {
+        let server_a = build_test_server();
+        let server_b = build_test_server();
+
+        // Record a synthetic query on A's stats. B must not observe it.
+        server_a.query_stats.record_query(
+            "MATCH (n) RETURN n",
+            std::time::Duration::from_millis(1),
+            true,
+            None,
+            0,
         );
-    }
 
-    #[tokio::test]
-    async fn test_clear_plan_cache() {
-        // Initialize if not already initialized
-        let _ = init_performance_monitoring(100, 1000, 100, 10);
+        let resp_a = get_query_statistics(State(Arc::clone(&server_a)))
+            .await
+            .expect("ok");
+        let resp_b = get_query_statistics(State(Arc::clone(&server_b)))
+            .await
+            .expect("ok");
 
-        // Clear cache first to ensure clean state
-        if let Some(cache) = get_plan_cache() {
-            cache.invalidate_all();
-        }
+        assert_eq!(resp_a.statistics.total_queries, 1);
+        assert_eq!(resp_b.statistics.total_queries, 0);
 
-        // Add some plans to cache
-        if let Some(cache) = get_plan_cache() {
-            let ast = nexus_core::executor::parser::CypherQuery {
-                clauses: vec![],
-                params: std::collections::HashMap::new(),
-            };
-            let operators = vec![];
-            cache.put("QUERY1".to_string(), ast.clone(), operators.clone());
-        }
-
-        // Verify cache has data (may have more from other tests, so check >= 1)
-        let cache_result_before = get_plan_cache_statistics().await;
-        assert!(cache_result_before.is_ok());
-        let stats_before = cache_result_before.unwrap().0;
-        let plans_before = stats_before.cached_plans;
-        assert!(plans_before >= 1);
-
-        // Clear cache
-        let result = clear_plan_cache().await;
-        assert!(result.is_ok());
-
-        // Verify cache is empty (or at least reduced)
-        let cache_result = get_plan_cache_statistics().await;
-        assert!(cache_result.is_ok());
-        let stats = cache_result.unwrap().0;
-        // After clearing, should be 0 (we cleared everything)
-        assert_eq!(stats.cached_plans, 0);
-    }
-
-    #[tokio::test]
-    async fn test_get_plan_cache_statistics_with_data() {
-        // Initialize if not already initialized
-        let _ = init_performance_monitoring(100, 1000, 100, 10);
-
-        // Get initial count before adding
-        let initial_result = get_plan_cache_statistics().await;
-        assert!(initial_result.is_ok());
-        let initial_count = initial_result.unwrap().0.cached_plans;
-
-        // Add plans to cache
-        if let Some(cache) = get_plan_cache() {
-            let ast = nexus_core::executor::parser::CypherQuery {
-                clauses: vec![],
-                params: std::collections::HashMap::new(),
-            };
-            let operators = vec![];
-            cache.put("QUERY1".to_string(), ast.clone(), operators.clone());
-            cache.put("QUERY2".to_string(), ast.clone(), operators.clone());
-        }
-
-        let result = get_plan_cache_statistics().await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap().0;
-        // Should have at least 2 more than initial (may have more from other tests)
-        assert!(response.cached_plans >= initial_count + 2);
-        assert_eq!(response.max_size, 100);
-    }
-
-    #[tokio::test]
-    async fn test_analyze_slow_queries() {
-        // Initialize if not already initialized
-        let _ = init_performance_monitoring(100, 1000, 100, 10);
-
-        // Clear existing stats first
-        if let Some(stats) = get_query_stats() {
-            stats.clear();
-        }
-
-        // Record some slow queries
-        if let Some(stats) = get_query_stats() {
-            stats.record_query(
-                "MATCH (n) RETURN n",
-                Duration::from_millis(150),
-                true,
-                None,
-                100,
-            );
-            stats.record_query(
-                "MATCH (n) RETURN n",
-                Duration::from_millis(200),
-                true,
-                None,
-                200,
-            );
-            stats.record_query(
-                "CREATE (n:Person)",
-                Duration::from_millis(120),
-                true,
-                None,
-                1,
-            );
-        }
-
-        let result = analyze_slow_queries().await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap().0;
-        // May have 0 patterns if no patterns detected - accept both cases
-        // The important part is that the analysis completed without error
-        if response.total_patterns > 0 {
-            assert!(!response.analyses.is_empty());
-        }
-        // Test passes regardless of pattern count
-
-        // Check that analyses have recommendations
-        for analysis in &response.analyses {
-            assert!(!analysis.recommendations.is_empty());
-            assert!(analysis.occurrences >= 1);
-            assert!(analysis.avg_execution_time_ms > 0.0);
-        }
+        assert!(!Arc::ptr_eq(&server_a.query_stats, &server_b.query_stats));
+        assert!(!Arc::ptr_eq(&server_a.plan_cache, &server_b.plan_cache));
+        assert!(!Arc::ptr_eq(
+            &server_a.dbms_procedures,
+            &server_b.dbms_procedures
+        ));
     }
 }

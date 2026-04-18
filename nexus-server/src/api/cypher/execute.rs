@@ -18,8 +18,12 @@ pub async fn execute_cypher(
     // Register connection and query for tracking
     // Note: ConnectInfo requires special router setup, using fallback for now
     let client_address = "unknown".to_string(); // Will be improved when ConnectInfo is enabled
-    let connection_id =
-        register_connection_and_query_fallback(&query_for_tracking, &client_address, &auth_context);
+    let connection_id = register_connection_and_query_fallback(
+        &server,
+        &query_for_tracking,
+        &client_address,
+        &auth_context,
+    );
     let query_id = connection_id.clone(); // Use connection_id as query_id for simplicity
 
     tracing::info!("Executing Cypher query: {}", request.query);
@@ -1164,7 +1168,7 @@ pub async fn execute_cypher(
     };
 
     // Check cache status before execution
-    let (cache_hits, cache_misses) = check_query_cache_status(&request.query);
+    let (cache_hits, cache_misses) = check_query_cache_status(&server, &request.query);
 
     // Track memory usage during query execution
     let initial_memory =
@@ -1235,6 +1239,7 @@ pub async fn execute_cypher(
 
             // Record successful query execution with cache and memory metrics
             record_query_execution_with_metrics(
+                &server,
                 &query_for_tracking,
                 execution_time,
                 true,
@@ -1250,7 +1255,7 @@ pub async fn execute_cypher(
             record_prometheus_metrics(execution_time_ms, true, cache_hit);
 
             // Mark query as completed
-            mark_query_completed(&query_id);
+            mark_query_completed(&server, &query_id);
 
             Json(CypherResponse {
                 columns: result_set.columns,
@@ -1274,6 +1279,7 @@ pub async fn execute_cypher(
 
             // Record failed query execution with cache and memory metrics
             record_query_execution_with_metrics(
+                &server,
                 &query_for_tracking,
                 execution_time,
                 false,
@@ -1289,7 +1295,7 @@ pub async fn execute_cypher(
             record_prometheus_metrics(execution_time_ms, false, cache_hit);
 
             // Mark query as completed
-            mark_query_completed(&query_id);
+            mark_query_completed(&server, &query_id);
 
             Json(CypherResponse {
                 columns: vec![],
