@@ -14,9 +14,10 @@ remediation pass on `fix/memory-leak-v1`.
 | Vectorizer cache        | 100 MB / 10 000 / 1 h TTL | 32 MB / 1 000 / 10 min TTL | Charged full budget even on deployments that did not use it              |
 | HNSW `max_elements`     | Hardcoded 10 000    | `KnnConfig` (default 1 000) | Every label-scoped KNN index allocated ~15 MB up front                     |
 | HTTP body limit         | Axum default (2 MB, implicit) | 16 MB via `DefaultBodyLimit` (`NEXUS_MAX_BODY_SIZE_MB`) | No config-driven cap; explicit now                       |
-| Executor row ceiling    | Unbounded `Vec`     | `MAX_INTERMEDIATE_ROWS = 1 000 000` | One bad query could allocate multi-GB heap                          |
+| Executor row ceiling    | Unbounded `Vec`     | `MAX_INTERMEDIATE_ROWS = 1 000 000` (scans + expand + var-length) | One bad query could allocate multi-GB heap       |
 | GraphQL rel resolvers   | Unbounded Cypher MATCH | `limit` arg (default 100, cap 500) | N+1 expansion on high-degree nodes                                 |
 | Page cache              | Silent eviction stall | `tracing::warn!` when all pages pinned | Now observable                                               |
+| Metric collector        | Unbounded key map   | `DEFAULT_MAX_METRICS_SIZE = 10 000` unique keys (updates still allowed) | High-cardinality labels could leak memory        |
 
 Concrete expected impact on a cold, empty server:
 
@@ -68,18 +69,20 @@ These were scoped out of this pass and deserve their own work:
    documented in the YAML but no code path triggers `checkpoint()` when
    the file exceeds the threshold. Callers must still drive checkpoints
    explicitly.
-3. **Executor streaming.** `execute_expand` and cartesian-product paths
-   still materialise to `Vec<Row>`. The hardcap stops the bleeding; true
-   streaming evaluation would lift the cap.
+3. **Executor streaming.** Cartesian-product paths and the final
+   projection still materialise to `Vec<Row>`. The hardcap (scans,
+   expand, variable-length) stops the bleeding; true streaming
+   evaluation would lift the cap.
 4. **GraphQL cursor pagination.** Current `limit` resolves the acute
    issue but does not support stable cursors for paging through large
    neighbourhoods.
 5. **MVCC GC verification.** Need a regression test that keeps a long
    snapshot reader alive and asserts that versions of concurrent
    transactions are eventually reclaimed.
-6. **Bounded maps.** `Arc<RwLock<HashMap<_, _>>>` in `monitoring.rs`,
-   `memory_management.rs`, and `database.rs` can still grow without
-   explicit limits. Audit + wrap the risky ones in an LRU adapter.
+6. **Bounded maps.** `MetricCollector.metrics` now has a cardinality
+   cap. `memory_management.rs::allocated_blocks` and the `DashMap`
+   caches in `catalog/mod.rs` remain unbounded; audit + bound them if
+   workloads exercise dynamic labels/keys.
 
 ## Raising the caps
 
