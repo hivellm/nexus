@@ -259,6 +259,32 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
 
     info!("Starting Nexus Server on {}", config.addr);
 
+    // Optional RESP3 listener (see docs/specs/resp3-nexus-commands.md).
+    // Spawned before we start serving HTTP so `redis-cli -p 15476 PING`
+    // is already reachable as soon as the HTTP listener opens.
+    if config.resp3.enabled {
+        match nexus_server::protocol::resp3::spawn_resp3_listener(
+            nexus_server.clone(),
+            config.resp3.addr,
+            config.resp3.require_auth,
+        )
+        .await
+        {
+            Ok(_handle) => {
+                info!(
+                    "Nexus RESP3 listener bound on {} (auth_required={})",
+                    config.resp3.addr, config.resp3.require_auth
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to bind RESP3 listener on {}: {}. HTTP/MCP surfaces continue unaffected.",
+                    config.resp3.addr, e
+                );
+            }
+        }
+    }
+
     // Create MCP router with StreamableHTTP transport
     let mcp_router = create_mcp_router(nexus_server.clone()).await?;
 

@@ -24,6 +24,38 @@ pub struct Config {
     pub auth: AuthConfig,
     /// Multi-database configuration
     pub multi_database: MultiDatabaseConfig,
+    /// RESP3 listener configuration (additive to the HTTP port).
+    pub resp3: Resp3Config,
+}
+
+/// Configuration for the optional RESP3 TCP listener. Disabled or enabled
+/// per deployment via the `[resp3]` section of `config.yml` or the
+/// corresponding `NEXUS_RESP3_*` env vars. The listener is additive: HTTP,
+/// MCP, UMICP, etc. keep running regardless of this flag.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Resp3Config {
+    /// Whether the RESP3 listener is spawned at all.
+    pub enabled: bool,
+    /// Bind address (host:port). Defaults to `127.0.0.1:15476` — loopback
+    /// on purpose, so a plaintext debugging port is never exposed to the
+    /// internet by default.
+    pub addr: SocketAddr,
+    /// Whether the listener requires `AUTH` / `HELLO AUTH` before running
+    /// any non-pre-auth command. Inherits from the top-level
+    /// `auth.enabled` by default so flipping authentication on/off for the
+    /// whole server flips it for RESP3 too.
+    pub require_auth: bool,
+}
+
+impl Default for Resp3Config {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            addr: "127.0.0.1:15476".parse().unwrap(),
+            require_auth: true,
+        }
+    }
 }
 
 /// Multi-database configuration
@@ -114,6 +146,7 @@ impl Default for Config {
             root_user: RootUserConfig::default(),
             auth: AuthConfig::default(),
             multi_database: MultiDatabaseConfig::default(),
+            resp3: Resp3Config::default(),
         }
     }
 }
@@ -308,6 +341,22 @@ impl Config {
                 .unwrap_or(auth.require_health_auth);
         }
 
+        // RESP3: disabled by default; `NEXUS_RESP3_ENABLED=true` opts in,
+        // `NEXUS_RESP3_ADDR` overrides the bind address, and auth requirement
+        // mirrors the top-level auth flag unless overridden.
+        let resp3_enabled = std::env::var("NEXUS_RESP3_ENABLED")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(false);
+        let resp3_addr: SocketAddr = std::env::var("NEXUS_RESP3_ADDR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| "127.0.0.1:15476".parse().unwrap());
+        let resp3_require_auth = std::env::var("NEXUS_RESP3_REQUIRE_AUTH")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(auth.enabled);
+
         Self {
             addr,
             data_dir,
@@ -316,6 +365,11 @@ impl Config {
             root_user,
             auth,
             multi_database: MultiDatabaseConfig::default(),
+            resp3: Resp3Config {
+                enabled: resp3_enabled,
+                addr: resp3_addr,
+                require_auth: resp3_require_auth,
+            },
         }
     }
 

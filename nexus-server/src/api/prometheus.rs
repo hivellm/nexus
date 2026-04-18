@@ -91,6 +91,11 @@ impl PrometheusMetrics {
         // docs/SECURITY_AUDIT.md): the request still returns 401/429/500,
         // but ops can alarm on this counter.
         let audit_log_failures = nexus_core::auth::audit_log_failures_total();
+        // RESP3 listener metrics — these are process-wide counters
+        // maintained inside `nexus_server::protocol::resp3::server`, so
+        // they pick up bumps from every connection regardless of which
+        // `PrometheusMetrics` instance formatted the response.
+        let resp3 = crate::protocol::resp3::server::metrics_snapshot();
 
         let avg_time = if total > 0 {
             total_time as f64 / total as f64
@@ -145,6 +150,30 @@ nexus_active_connections {active_conns}
 # HELP nexus_audit_log_failures_total Audit-log write failures observed by the auth middleware (fail-open: request still returned original auth error, but the event was not persisted). Alarm when this counter moves. See docs/SECURITY_AUDIT.md.
 # TYPE nexus_audit_log_failures_total counter
 nexus_audit_log_failures_total {audit_log_failures}
+
+# HELP nexus_resp3_connections Currently-live RESP3 TCP connections.
+# TYPE nexus_resp3_connections gauge
+nexus_resp3_connections {resp3_connections}
+
+# HELP nexus_resp3_commands_total Total RESP3 commands dispatched since server start.
+# TYPE nexus_resp3_commands_total counter
+nexus_resp3_commands_total {resp3_commands}
+
+# HELP nexus_resp3_commands_error_total RESP3 commands that returned an error response.
+# TYPE nexus_resp3_commands_error_total counter
+nexus_resp3_commands_error_total {resp3_commands_error}
+
+# HELP nexus_resp3_command_duration_microseconds_total Sum of RESP3 handler wall-clock durations in microseconds. Divide by nexus_resp3_commands_total for an average.
+# TYPE nexus_resp3_command_duration_microseconds_total counter
+nexus_resp3_command_duration_microseconds_total {resp3_duration}
+
+# HELP nexus_resp3_bytes_read_total Bytes read from RESP3 sockets since start.
+# TYPE nexus_resp3_bytes_read_total counter
+nexus_resp3_bytes_read_total {resp3_bytes_read}
+
+# HELP nexus_resp3_bytes_written_total Bytes written to RESP3 sockets since start.
+# TYPE nexus_resp3_bytes_written_total counter
+nexus_resp3_bytes_written_total {resp3_bytes_written}
 "#,
             total = total,
             successful = successful,
@@ -155,7 +184,13 @@ nexus_audit_log_failures_total {audit_log_failures}
             cache_misses = cache_misses,
             cache_hit_rate = cache_hit_rate,
             active_conns = active_conns,
-            audit_log_failures = audit_log_failures
+            audit_log_failures = audit_log_failures,
+            resp3_connections = resp3.active_connections,
+            resp3_commands = resp3.commands_total,
+            resp3_commands_error = resp3.commands_error_total,
+            resp3_duration = resp3.command_duration_microseconds_total,
+            resp3_bytes_read = resp3.bytes_read_total,
+            resp3_bytes_written = resp3.bytes_written_total,
         )
     }
 }

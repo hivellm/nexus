@@ -760,6 +760,28 @@ Cross-service communication protocol for distributed AI systems.
 
 ---
 
+## RESP3 Integration
+
+Nexus ships an optional RESP3-compatible TCP listener so RESP clients
+(`redis-cli`, Jedis, redis-rb, RedisInsight, ...) can talk to the graph
+database with a Nexus command vocabulary (`CYPHER`, `NODE.*`, `KNN.*`,
+...). **It is transport-only**: `SET key value` returns
+`-ERR unknown command 'SET' (Nexus is a graph DB, see HELP)`.
+
+- **Enabled via** `[resp3].enabled = true` in `config.yml` or
+  `NEXUS_RESP3_ENABLED=true`.
+- **Default port** `15476` (HTTP is 15474).
+- **Auth** inherits from `[auth].enabled`; a single
+  `HELLO 3 AUTH <user> <pass>` round-trip covers negotiation and login.
+- **Metrics** surface at `GET /prometheus` as
+  `nexus_resp3_*` (connections, commands, duration, bytes).
+
+Full command reference, wire-format notes, RESP2 downgrade matrix, and
+`redis-cli` examples live in
+[`docs/specs/resp3-nexus-commands.md`](resp3-nexus-commands.md).
+
+---
+
 ## Client Libraries
 
 ### Rust Client (nexus-protocol)
