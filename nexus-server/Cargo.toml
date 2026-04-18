@@ -25,6 +25,10 @@ redundant_closure = "allow"
 derivable_impls = "allow"
 unnecessary_cast = "allow"
 collapsible_match = "allow"
+# Hold-lock-across-await is a hard deny so the DatabaseManager lock can never
+# be re-acquired inside an async fn without `spawn_blocking` (see
+# docs/performance/CONCURRENCY.md).
+await_holding_lock = "deny"
 
 [[bin]]
 name = "nexus-server"

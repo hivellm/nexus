@@ -20,11 +20,15 @@ pub(crate) async fn execute_database_commands(
                 if columns.is_empty() {
                     columns = vec!["database".to_string(), "message".to_string()];
                 }
-                let manager = server.database_manager.read();
 
-                // Check if database exists
-                let databases = manager.list_databases();
-                let db_exists = databases.iter().any(|db| db.name == use_db.name);
+                let dbm = server.database_manager.clone();
+                let needle = use_db.name.clone();
+                let db_exists = tokio::task::spawn_blocking(move || {
+                    let manager = dbm.read();
+                    manager.list_databases().iter().any(|db| db.name == needle)
+                })
+                .await
+                .expect("spawn_blocking panicked");
 
                 if db_exists {
                     rows.push(serde_json::json!([
@@ -43,20 +47,36 @@ pub(crate) async fn execute_database_commands(
             }
             nexus_core::executor::parser::Clause::ShowDatabases => {
                 columns = vec!["name".to_string(), "default".to_string()];
-                let manager = server.database_manager.read();
-                let databases = manager.list_databases();
-                let default_db = manager.default_database_name();
+
+                let dbm = server.database_manager.clone();
+                let (databases, default_db) = tokio::task::spawn_blocking(move || {
+                    let manager = dbm.read();
+                    (
+                        manager.list_databases(),
+                        manager.default_database_name().to_string(),
+                    )
+                })
+                .await
+                .expect("spawn_blocking panicked");
 
                 for db in databases {
-                    rows.push(serde_json::json!([db.name, db.name == default_db]));
+                    rows.push(serde_json::json!([db.name.clone(), db.name == default_db]));
                 }
             }
             nexus_core::executor::parser::Clause::CreateDatabase(create_db) => {
                 columns = vec!["name".to_string(), "message".to_string()];
-                let manager = server.database_manager.write();
 
-                match manager.create_database(&create_db.name) {
-                    Ok(_) => {
+                let dbm = server.database_manager.clone();
+                let name_for_task = create_db.name.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let manager = dbm.write();
+                    manager.create_database(&name_for_task).map(|_| ())
+                })
+                .await
+                .expect("spawn_blocking panicked");
+
+                match result {
+                    Ok(()) => {
                         rows.push(serde_json::json!([
                             create_db.name.clone(),
                             format!("Database '{}' created successfully", create_db.name)
@@ -75,10 +95,19 @@ pub(crate) async fn execute_database_commands(
             }
             nexus_core::executor::parser::Clause::DropDatabase(drop_db) => {
                 columns = vec!["message".to_string()];
-                let manager = server.database_manager.write();
 
-                match manager.drop_database(&drop_db.name, drop_db.if_exists) {
-                    Ok(_) => {
+                let dbm = server.database_manager.clone();
+                let name_for_task = drop_db.name.clone();
+                let if_exists = drop_db.if_exists;
+                let result = tokio::task::spawn_blocking(move || {
+                    let manager = dbm.write();
+                    manager.drop_database(&name_for_task, if_exists).map(|_| ())
+                })
+                .await
+                .expect("spawn_blocking panicked");
+
+                match result {
+                    Ok(()) => {
                         rows.push(serde_json::json!([format!(
                             "Database '{}' dropped successfully",
                             drop_db.name

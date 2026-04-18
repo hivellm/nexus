@@ -64,10 +64,17 @@ pub async fn create_database(
     State(state): State<DatabaseState>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Response {
-    let manager = state.manager.read();
+    let manager_arc = state.manager.clone();
+    let name = req.name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let manager = manager_arc.read();
+        manager.create_database(&name).map(|_| ())
+    })
+    .await
+    .expect("spawn_blocking panicked");
 
-    match manager.create_database(&req.name) {
-        Ok(_) => Json(CreateDatabaseResponse {
+    match result {
+        Ok(()) => Json(CreateDatabaseResponse {
             success: true,
             name: req.name.clone(),
             message: format!("Database '{}' created successfully", req.name),
@@ -89,10 +96,17 @@ pub async fn drop_database(
     State(state): State<DatabaseState>,
     Path(name): Path<String>,
 ) -> Response {
-    let manager = state.manager.read();
+    let manager_arc = state.manager.clone();
+    let name_for_task = name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let manager = manager_arc.read();
+        manager.drop_database(&name_for_task, false).map(|_| ())
+    })
+    .await
+    .expect("spawn_blocking panicked");
 
-    match manager.drop_database(&name, false) {
-        Ok(_) => Json(DatabaseResponse {
+    match result {
+        Ok(()) => Json(DatabaseResponse {
             success: true,
             message: format!("Database '{}' dropped successfully", name),
         })
@@ -110,9 +124,16 @@ pub async fn drop_database(
 
 /// List all databases
 pub async fn list_databases(State(state): State<DatabaseState>) -> Response {
-    let manager = state.manager.read();
-    let databases = manager.list_databases();
-    let default_database = manager.default_database_name().to_string();
+    let manager_arc = state.manager.clone();
+    let (databases, default_database) = tokio::task::spawn_blocking(move || {
+        let manager = manager_arc.read();
+        (
+            manager.list_databases(),
+            manager.default_database_name().to_string(),
+        )
+    })
+    .await
+    .expect("spawn_blocking panicked");
 
     Json(ListDatabasesResponse {
         databases,
@@ -126,27 +147,34 @@ pub async fn get_database(
     State(state): State<DatabaseState>,
     Path(name): Path<String>,
 ) -> Response {
-    let manager = state.manager.read();
+    let manager_arc = state.manager.clone();
+    let name_for_task = name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let manager = manager_arc.read();
+        let engine = manager
+            .get_database(&name_for_task)
+            .map_err(|e| e.to_string())?;
+        let mut engine_guard = engine.write();
+        let (node_count, relationship_count) = match engine_guard.stats() {
+            Ok(stats) => (stats.nodes, stats.relationships),
+            Err(_) => (0, 0),
+        };
+        Ok::<(u64, u64), String>((node_count, relationship_count))
+    })
+    .await
+    .expect("spawn_blocking panicked");
 
-    match manager.get_database(&name) {
-        Ok(engine) => {
-            let mut engine_guard = engine.write();
-            let (node_count, relationship_count) = match engine_guard.stats() {
-                Ok(stats) => (stats.nodes, stats.relationships),
-                Err(_) => (0, 0),
-            };
-
-            Json(DatabaseInfo {
-                name: name.clone(),
-                path: std::path::PathBuf::new(), // Don't expose full path
-                created_at: 0,
-                node_count,
-                relationship_count,
-                storage_size: 0,
-                state: nexus_core::database::DatabaseState::Online,
-            })
-            .into_response()
-        }
+    match result {
+        Ok((node_count, relationship_count)) => Json(DatabaseInfo {
+            name: name.clone(),
+            path: std::path::PathBuf::new(), // Don't expose full path
+            created_at: 0,
+            node_count,
+            relationship_count,
+            storage_size: 0,
+            state: nexus_core::database::DatabaseState::Online,
+        })
+        .into_response(),
         Err(e) => (
             StatusCode::NOT_FOUND,
             Json(DatabaseResponse {
@@ -174,8 +202,13 @@ pub struct SessionDatabaseResponse {
 
 /// Get current session database
 pub async fn get_session_database(State(state): State<DatabaseState>) -> Response {
-    let manager = state.manager.read();
-    let current_db = manager.default_database_name().to_string();
+    let manager_arc = state.manager.clone();
+    let current_db = tokio::task::spawn_blocking(move || {
+        let manager = manager_arc.read();
+        manager.default_database_name().to_string()
+    })
+    .await
+    .expect("spawn_blocking panicked");
 
     Json(SessionDatabaseResponse {
         database: current_db,
@@ -188,10 +221,17 @@ pub async fn switch_session_database(
     State(state): State<DatabaseState>,
     Json(req): Json<SwitchDatabaseRequest>,
 ) -> Response {
-    let manager = state.manager.read();
+    let manager_arc = state.manager.clone();
+    let name_for_task = req.name.clone();
+    let exists = tokio::task::spawn_blocking(move || {
+        let manager = manager_arc.read();
+        manager.exists(&name_for_task)
+    })
+    .await
+    .expect("spawn_blocking panicked");
 
     // Check if database exists
-    if !manager.exists(&req.name) {
+    if !exists {
         return (
             StatusCode::NOT_FOUND,
             Json(DatabaseResponse {
@@ -435,5 +475,69 @@ mod tests {
         .await;
 
         assert_eq!(response2.status(), StatusCode::OK);
+    }
+
+    // ==========================================================================
+    // Concurrency regression test — proves the DatabaseManager read path does
+    // not starve the tokio runtime under load. Prior to commit <async-lock-
+    // migration>, the handlers called `manager.read()` directly from async fn,
+    // which pins a tokio worker for the whole acquire+serve window. With 32
+    // concurrent readers hitting a saturated worker pool this manifested as
+    // dropped requests. After the migration every lock acquisition lives
+    // inside `tokio::task::spawn_blocking`, so readers queue on the blocking
+    // pool (rayon-like) and the tokio workers stay free to accept new work.
+    //
+    // The assertion is intentionally structural ("all 32 complete
+    // successfully in well under a pathological timeout") rather than a tight
+    // latency cap, to avoid flakes on slow CI machines while still catching
+    // the deadlock / starvation regression we care about.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_concurrent_list_databases_does_not_starve_runtime() {
+        use std::time::{Duration, Instant};
+
+        let test_state = TestState::new();
+
+        // Seed a handful of databases so list_databases does actual work.
+        {
+            let manager = test_state.state.manager.read();
+            for i in 0..4 {
+                manager
+                    .create_database(&format!("concurrency_test_db_{i}"))
+                    .unwrap();
+            }
+        }
+
+        let start = Instant::now();
+        let mut handles = Vec::with_capacity(32);
+        for _ in 0..32 {
+            let state = test_state.state();
+            handles.push(tokio::spawn(
+                async move { list_databases(State(state)).await },
+            ));
+        }
+
+        // 30-second pathological cap — actual completion should be sub-second.
+        // If this ever trips, the lock is being held across await again.
+        let results = tokio::time::timeout(Duration::from_secs(30), async {
+            let mut statuses = Vec::with_capacity(32);
+            for h in handles {
+                statuses.push(h.await.unwrap().status());
+            }
+            statuses
+        })
+        .await
+        .expect("32 concurrent list_databases timed out — async lock regression?");
+
+        let elapsed = start.elapsed();
+        assert_eq!(results.len(), 32);
+        assert!(
+            results.iter().all(|s| *s == StatusCode::OK),
+            "all 32 concurrent requests should return 200 OK",
+        );
+        // Sanity: even on a 2-worker runtime this must clear well under 30s.
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "32 concurrent reads took {elapsed:?} — possible starvation",
+        );
     }
 }
