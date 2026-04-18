@@ -1,8 +1,8 @@
-//! NexusRPC — the native binary transport for Nexus.
+//! Native binary RPC protocol shared between `nexus-server` and the Rust SDK.
 //!
-//! NexusRPC is a length-prefixed MessagePack framing designed to replace
-//! HTTP+JSON as the preferred SDK transport for high-throughput Cypher
-//! traffic, bulk ingest, and KNN queries where the JSON tax is measurable.
+//! A length-prefixed MessagePack framing designed to replace HTTP+JSON as
+//! the preferred SDK transport for high-throughput Cypher traffic, bulk
+//! ingest, and KNN queries where the JSON tax is measurable.
 //!
 //! ## Wire format
 //!
@@ -14,29 +14,28 @@
 //! ```
 //!
 //! A single TCP connection multiplexes many concurrent requests: each
-//! `Request` carries a caller-chosen `id: u32` which the server echoes
-//! back on the matching `Response`. The id `u32::MAX` is reserved for
-//! server-initiated push frames (pubsub, streaming Cypher).
+//! [`Request`] carries a caller-chosen `id: u32` which the server echoes
+//! back on the matching [`Response`]. The id [`PUSH_ID`] (`u32::MAX`) is
+//! reserved for server-initiated push frames.
 //!
 //! See `docs/specs/rpc-wire-format.md` for the authoritative specification
 //! and `docs/specs/api-protocols.md` for the transport matrix.
 //!
-//! ## Layout
+//! ## Why this lives in `nexus-protocol`
 //!
-//! - [`types`] — [`NexusValue`], [`Request`], [`Response`].
-//! - [`codec`] — length-prefix framing + async read/write helpers.
-//! - [`server`] — TCP accept loop + per-connection dispatch.
-//! - [`dispatch`] — command routing to graph/cypher/knn/ingest/schema/admin.
-//!
-//! The layout mirrors `synap_rpc` from the sister Synap project, with wire
-//! types renamed to `NexusValue` for clarity in cross-project tooling.
+//! Wire types and the codec are zero-knowledge of server internals — they
+//! are consumed both by the server's accept loop and by the Rust SDK's
+//! client. Putting them in this crate lets the SDK depend on them without
+//! pulling in all of `nexus-server` (database manager, executor, auth).
+//! Server-only pieces — the TCP accept loop and per-command dispatch —
+//! stay inside `nexus-server::protocol::rpc`.
 
 pub mod codec;
 pub mod types;
 
 pub use codec::{
-    DecodeError, decode_frame, encode_frame, read_request, read_response, write_request,
-    write_response,
+    DecodeError, decode_frame, decode_frame_with_limit, encode_frame, read_request,
+    read_request_with_limit, read_response, write_request, write_response,
 };
 pub use types::{NexusValue, Request, Response};
 

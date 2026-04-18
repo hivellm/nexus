@@ -1,16 +1,16 @@
 ## 1. Wire types and codec
-- [x] 1.1 Create `nexus-server/src/protocol/mod.rs` with `pub mod envelope; pub mod nexus_rpc;`
-- [x] 1.2 Define `NexusValue`, `Request`, `Response` in `nexus_rpc/types.rs` (mirror `synap_rpc/types.rs`)
+- [x] 1.1 Create `nexus-server/src/protocol/mod.rs` with `pub mod envelope; pub mod rpc;`
+- [x] 1.2 Define `NexusValue`, `Request`, `Response` in `rpc/types.rs` (mirror `synap_rpc/types.rs`)
 - [x] 1.3 Add `From` impls for String, &str, i64, bool, Vec<u8>, f64 on `NexusValue`
 - [x] 1.4 Add `as_str` / `as_bytes` / `as_int` / `as_float` / `is_null` helpers on `NexusValue`
-- [x] 1.5 Implement `encode_frame` / `decode_frame` in `nexus_rpc/codec.rs` (4-byte LE len prefix + rmp-serde body)
+- [x] 1.5 Implement `encode_frame` / `decode_frame` in `rpc/codec.rs` (4-byte LE len prefix + rmp-serde body)
 - [x] 1.6 Implement async `read_request` / `read_response` / `write_request` / `write_response` helpers
 - [x] 1.7 Unit tests: roundtrip all `NexusValue` variants through rmp-serde
 - [x] 1.8 Unit tests: partial-header and partial-body decode returns `Ok(None)`
 - [x] 1.9 Unit tests: frames exceeding `max_frame_bytes` reject with a specific error
 
 ## 2. Dispatcher scaffolding
-- [ ] 2.1 Create `nexus_rpc/dispatch/mod.rs` with `dispatch(state, req) -> Response` and sub-modules
+- [ ] 2.1 Create `rpc/dispatch/mod.rs` with `dispatch(state, req) -> Response` and sub-modules
 - [ ] 2.2 Implement argument helpers: `arg_str`, `arg_bytes`, `arg_int`, `arg_float`, `arg_map`, `arg_array`
 - [ ] 2.3 Top-level `run(state, cmd, args)` matches on uppercased command and routes to sub-modules
 
@@ -45,7 +45,7 @@
 - [ ] 6.7 Reject unauthenticated commands when `auth.required && !authenticated` (except `PING`/`HELLO`/`AUTH`/`QUIT`)
 
 ## 7. TCP server and accept loop
-- [ ] 7.1 Implement `spawn_nexus_rpc_listener(state, addr)` in `nexus_rpc/server.rs` (copy Synap's shape)
+- [ ] 7.1 Implement `spawn_rpc_listener(state, addr)` in `rpc/server.rs` (copy Synap's shape)
 - [ ] 7.2 Per-connection: split into `(read_half, write_half)`, spawn a writer task behind an mpsc channel
 - [ ] 7.3 Per-request: `tokio::spawn` a task that calls `dispatch` and sends `(Response, cmd, elapsed, in_bytes)` to the writer
 - [ ] 7.4 Cap in-flight-per-connection via semaphore (`max_in_flight_per_conn`); excess requests wait
@@ -56,12 +56,12 @@
 - [ ] 8.1 Add `RpcConfig { enabled, host, port, max_frame_bytes, max_in_flight_per_conn }` to `nexus-server/src/config.rs`
 - [ ] 8.2 Default `enabled = true`, `host = "0.0.0.0"`, `port = 15475`
 - [ ] 8.3 Support `NEXUS_RPC_ADDR` env override for ops parity with `NEXUS_ADDR`
-- [ ] 8.4 Register prometheus metrics: `nexus_rpc_connections`, `nexus_rpc_commands_total`, `nexus_rpc_command_duration_seconds`, `nexus_rpc_frame_size_bytes_in/out`
-- [ ] 8.5 Add `metrics::record_nexus_rpc_command(cmd, ok, elapsed)` helper
+- [ ] 8.4 Register prometheus metrics: `nexus_rpc_connections`, `nexus_rpc_commands_total`, `nexus_rpc_command_duration_seconds`, `nexus_rpc_frame_size_bytes_in/out` (the `nexus_` prefix here is the project-wide Prometheus namespace, not the module path)
+- [ ] 8.5 Add `metrics::record_rpc_command(cmd, ok, elapsed)` helper
 - [ ] 8.6 Slow-command warning threshold: 2 ms (configurable via `rpc.slow_threshold_ms`)
 
 ## 9. Main wiring
-- [ ] 9.1 In `nexus-server/src/main.rs`, after `axum::serve` is prepared, call `spawn_nexus_rpc_listener` when `config.rpc.enabled`
+- [ ] 9.1 In `nexus-server/src/main.rs`, after `axum::serve` is prepared, call `spawn_rpc_listener` when `config.rpc.enabled`
 - [ ] 9.2 Log `"Nexus RPC listening on {addr}"` at INFO on startup
 - [ ] 9.3 Integration test: boot the server and PING via the RPC port returns PONG in <5 ms
 - [ ] 9.4 Integration test: a Cypher `RETURN 1` via RPC matches the HTTP response exactly

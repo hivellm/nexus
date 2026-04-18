@@ -1,4 +1,4 @@
-//! NexusRPC wire types shared by client and server.
+//! RPC wire types shared by client and server.
 //!
 //! All frames encode with rmp-serde's default externally-tagged representation
 //! so `NexusValue::Null` serializes as the string `"Null"` and payload variants
@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A dynamically-typed value carried by NexusRPC requests and responses.
+/// A dynamically-typed value carried by RPC requests and responses.
 ///
 /// This is deliberately a small value-type enum, not an `Any`: every SDK
 /// should be able to reconstruct the full set of variants with a `match` and

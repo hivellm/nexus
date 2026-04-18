@@ -1,4 +1,4 @@
-//! NexusRPC length-prefixed MessagePack codec.
+//! RPC length-prefixed MessagePack codec.
 //!
 //! Wire format:
 //! ```text
