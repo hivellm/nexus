@@ -12,6 +12,10 @@ pub struct Config {
     pub addr: SocketAddr,
     /// Data directory
     pub data_dir: String,
+    /// Maximum request body size in bytes. Enforced via Axum's
+    /// `DefaultBodyLimit` layer to keep bulk ingest payloads from
+    /// monopolising memory.
+    pub max_body_size_bytes: usize,
     /// Root user configuration
     pub root_user: RootUserConfig,
     /// Authentication configuration
@@ -100,6 +104,10 @@ impl Default for Config {
         Self {
             addr: "127.0.0.1:15474".parse().unwrap(),
             data_dir: "./data".to_string(),
+            // 16 MiB — generous for single Cypher statements and small bulk
+            // ingest payloads, but bounded so a single oversized POST cannot
+            // exhaust the server's allocator.
+            max_body_size_bytes: 16 * 1024 * 1024,
             root_user: RootUserConfig::default(),
             auth: AuthConfig::default(),
             multi_database: MultiDatabaseConfig::default(),
@@ -156,6 +164,13 @@ impl Config {
 
         let data_dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
 
+        // Max body size: NEXUS_MAX_BODY_SIZE_MB overrides the 16 MiB default.
+        let max_body_size_bytes = std::env::var("NEXUS_MAX_BODY_SIZE_MB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|mb| mb * 1024 * 1024)
+            .unwrap_or(16 * 1024 * 1024);
+
         // Try to load from config file first (will be overridden by env vars)
         let (mut root_user, mut auth) = Self::from_auth_file("config")
             .unwrap_or_else(|| (RootUserConfig::default(), AuthConfig::default()));
@@ -199,6 +214,7 @@ impl Config {
         Self {
             addr,
             data_dir,
+            max_body_size_bytes,
             root_user,
             auth,
             multi_database: MultiDatabaseConfig::default(),

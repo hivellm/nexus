@@ -17,7 +17,7 @@
 
 use axum::{
     Json, Router,
-    extract::Request,
+    extract::{DefaultBodyLimit, Request},
     middleware::Next,
     routing::{any, delete, get, post, put},
 };
@@ -677,6 +677,11 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
 
     // Apply middleware layers
     let app = app
+        // Cap request body size. Without this, Axum allows bodies up to its
+        // internal default (2 MB) but we want the value to come from config
+        // so ops can tune it per deployment. A single oversized POST must
+        // not be able to exhaust the server allocator.
+        .layer(DefaultBodyLimit::max(config.max_body_size_bytes))
         // Compression for responses (gzip, deflate, br)
         .layer(CompressionLayer::new())
         // CORS support
