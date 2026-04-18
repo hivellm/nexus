@@ -26,6 +26,7 @@
 //! `docs/specs/simd-dispatch.md` (`1e-5` absolute for f32, `1e-9 *
 //! max(abs, 1)` for f64, bit-exact for integer/bitmap ops).
 
+pub mod bitmap;
 pub mod dispatch;
 pub mod distance;
 pub mod scalar;
