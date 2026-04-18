@@ -89,14 +89,18 @@ pub struct CacheConfig {
 
 impl Default for CacheConfig {
     fn default() -> Self {
+        // Previously 100 MB with a 1-hour TTL and 100-item warming batches,
+        // which accumulated a large working set on deployments that do not
+        // actually use the vectorizer. These defaults keep the cache cheap
+        // by default; deployments that benefit can raise them explicitly.
         Self {
-            max_entries: 10000,
-            max_memory_bytes: 100 * 1024 * 1024,    // 100MB
-            default_ttl: Duration::from_secs(3600), // 1 hour
+            max_entries: 1_000,
+            max_memory_bytes: 32 * 1024 * 1024,    // 32 MB
+            default_ttl: Duration::from_secs(600), // 10 minutes
             eviction_policy: EvictionPolicy::Lru,
             enable_warming: true,
             enable_preloading: true,
-            warming_batch_size: 100,
+            warming_batch_size: 20,
             preload_window: Duration::from_secs(300), // 5 minutes
         }
     }
