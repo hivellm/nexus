@@ -65,6 +65,7 @@ pub mod replication;
 pub mod retry;
 pub mod security;
 pub mod session;
+pub mod simd;
 pub mod storage;
 pub mod transaction;
 pub mod udf;
