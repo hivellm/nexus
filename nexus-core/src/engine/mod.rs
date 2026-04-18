@@ -1038,7 +1038,7 @@ impl Engine {
     }
 
     /// Get async WAL statistics (if available)
-    pub fn async_wal_stats(&self) -> Option<wal::AsyncWalStats> {
+    pub fn async_wal_stats(&self) -> Option<wal::AsyncWalStatsSnapshot> {
         self.async_wal_writer.as_ref().map(|w| w.stats())
     }
 

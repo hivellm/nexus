@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod async_wal;
-pub use async_wal::{AsyncWalConfig, AsyncWalStats, AsyncWalWriter};
+pub use async_wal::{AsyncWalConfig, AsyncWalStats, AsyncWalStatsSnapshot, AsyncWalWriter};
 
 /// Magic leading byte identifying a "v2" WAL frame that carries an
 /// explicit `checksum_algo` field. Old v1 frames always start with a

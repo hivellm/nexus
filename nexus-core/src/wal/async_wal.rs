@@ -30,30 +30,81 @@ enum WalCommand {
     Shutdown,
 }
 
-/// Statistics for the async WAL writer
-#[derive(Debug, Clone, Default)]
+/// Thread-safe statistics for the async WAL writer.
+///
+/// Every counter is an `AtomicU64`; writes use `fetch_add` / `store`,
+/// reads use `load(Ordering::Relaxed)`. [`AsyncWalStats::snapshot`]
+/// returns an owned [`AsyncWalStatsSnapshot`] (the plain-data view
+/// consumers actually want to inspect).
+///
+/// This replaces the pre-v1.0 pattern of casting `Arc<AsyncWalStats>`
+/// through a `*mut` (`unsafe { &mut *(Arc::as_ptr(&self.stats) as
+/// *mut AsyncWalStats) }`), which aliased `&mut` across threads and
+/// was a data race under the Rust memory model. The fields here are
+/// exposed as atomics so `Arc` sharing is sound.
+#[derive(Debug, Default)]
 pub struct AsyncWalStats {
     /// Total entries submitted to writer
-    pub entries_submitted: u64,
+    pub entries_submitted: std::sync::atomic::AtomicU64,
     /// Total entries actually written
-    pub entries_written: u64,
+    pub entries_written: std::sync::atomic::AtomicU64,
     /// Total batches flushed
-    pub batches_flushed: u64,
+    pub batches_flushed: std::sync::atomic::AtomicU64,
     /// Total force flushes requested
-    pub force_flushes: u64,
+    pub force_flushes: std::sync::atomic::AtomicU64,
     /// Total write latency (in microseconds)
-    pub total_write_latency_us: u64,
+    pub total_write_latency_us: std::sync::atomic::AtomicU64,
     /// Total flush latency (in microseconds)
-    pub total_flush_latency_us: u64,
+    pub total_flush_latency_us: std::sync::atomic::AtomicU64,
     /// Number of batches that timed out (vs size-based)
-    pub timeout_batches: u64,
+    pub timeout_batches: std::sync::atomic::AtomicU64,
     /// Number of batches that hit max size (vs timeout-based)
-    pub size_batches: u64,
+    pub size_batches: std::sync::atomic::AtomicU64,
     /// Current queue depth
-    pub current_queue_depth: u64,
+    pub current_queue_depth: std::sync::atomic::AtomicU64,
     /// Max queue depth seen
-    pub max_queue_depth: u64,
+    pub max_queue_depth: std::sync::atomic::AtomicU64,
     /// Total WAL I/O errors encountered
+    pub wal_errors: std::sync::atomic::AtomicU64,
+}
+
+impl AsyncWalStats {
+    /// Load every counter under `Ordering::Relaxed` into an owned
+    /// plain-data snapshot. Consumers should read via this method
+    /// rather than poking the atomics directly.
+    pub fn snapshot(&self) -> AsyncWalStatsSnapshot {
+        use std::sync::atomic::Ordering::Relaxed;
+        AsyncWalStatsSnapshot {
+            entries_submitted: self.entries_submitted.load(Relaxed),
+            entries_written: self.entries_written.load(Relaxed),
+            batches_flushed: self.batches_flushed.load(Relaxed),
+            force_flushes: self.force_flushes.load(Relaxed),
+            total_write_latency_us: self.total_write_latency_us.load(Relaxed),
+            total_flush_latency_us: self.total_flush_latency_us.load(Relaxed),
+            timeout_batches: self.timeout_batches.load(Relaxed),
+            size_batches: self.size_batches.load(Relaxed),
+            current_queue_depth: self.current_queue_depth.load(Relaxed),
+            max_queue_depth: self.max_queue_depth.load(Relaxed),
+            wal_errors: self.wal_errors.load(Relaxed),
+        }
+    }
+}
+
+/// Plain-data snapshot of [`AsyncWalStats`], safe to clone and expose
+/// through public APIs. Values are consistent per-field but the
+/// snapshot as a whole is not atomic across all counters.
+#[derive(Debug, Clone, Default)]
+pub struct AsyncWalStatsSnapshot {
+    pub entries_submitted: u64,
+    pub entries_written: u64,
+    pub batches_flushed: u64,
+    pub force_flushes: u64,
+    pub total_write_latency_us: u64,
+    pub total_flush_latency_us: u64,
+    pub timeout_batches: u64,
+    pub size_batches: u64,
+    pub current_queue_depth: u64,
+    pub max_queue_depth: u64,
     pub wal_errors: u64,
 }
 
@@ -142,12 +193,21 @@ impl AsyncWalWriter {
     ///
     /// This method will block if the queue is full (based on max_queue_depth).
     pub fn append(&self, entry: WalEntry) -> Result<()> {
-        // Update stats
-        let current_stats = unsafe { &mut *(Arc::as_ptr(&self.stats) as *mut AsyncWalStats) };
-        current_stats.entries_submitted += 1;
-        current_stats.current_queue_depth += 1;
-        if current_stats.current_queue_depth > current_stats.max_queue_depth {
-            current_stats.max_queue_depth = current_stats.current_queue_depth;
+        use std::sync::atomic::Ordering::Relaxed;
+        // Update stats atomically — `fetch_add` returns the previous
+        // value; the `max` compare is a relaxed CAS loop below.
+        self.stats.entries_submitted.fetch_add(1, Relaxed);
+        let new_depth = self.stats.current_queue_depth.fetch_add(1, Relaxed) + 1;
+        let mut max = self.stats.max_queue_depth.load(Relaxed);
+        while new_depth > max {
+            match self
+                .stats
+                .max_queue_depth
+                .compare_exchange_weak(max, new_depth, Relaxed, Relaxed)
+            {
+                Ok(_) => break,
+                Err(current) => max = current,
+            }
         }
 
         // Send command (this may block if queue is full)
@@ -162,9 +222,8 @@ impl AsyncWalWriter {
     ///
     /// This ensures all previously submitted entries are written and synced to disk.
     pub fn flush(&self) -> Result<()> {
-        // Update stats
-        let current_stats = unsafe { &mut *(Arc::as_ptr(&self.stats) as *mut AsyncWalStats) };
-        current_stats.force_flushes += 1;
+        use std::sync::atomic::Ordering::Relaxed;
+        self.stats.force_flushes.fetch_add(1, Relaxed);
 
         self.sender
             .send(WalCommand::Flush)
@@ -173,9 +232,9 @@ impl AsyncWalWriter {
         Ok(())
     }
 
-    /// Get current statistics
-    pub fn stats(&self) -> AsyncWalStats {
-        self.stats.as_ref().clone()
+    /// Get a consistent-per-field snapshot of the current statistics.
+    pub fn stats(&self) -> AsyncWalStatsSnapshot {
+        self.stats.snapshot()
     }
 
     /// Get configuration
@@ -220,10 +279,20 @@ impl AsyncWalWriter {
             match receiver.recv_timeout(config.max_batch_age.min(config.flush_interval)) {
                 Ok(WalCommand::Append(entry)) => {
                     batch.push(entry);
-                    let current_stats =
-                        unsafe { &mut *(Arc::as_ptr(&stats) as *mut AsyncWalStats) };
-                    if current_stats.current_queue_depth > 0 {
-                        current_stats.current_queue_depth -= 1;
+                    // Decrement queue depth without underflow via a
+                    // relaxed CAS loop that stops at zero.
+                    use std::sync::atomic::Ordering::Relaxed;
+                    let mut depth = stats.current_queue_depth.load(Relaxed);
+                    while depth > 0 {
+                        match stats.current_queue_depth.compare_exchange_weak(
+                            depth,
+                            depth - 1,
+                            Relaxed,
+                            Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(cur) => depth = cur,
+                        }
                     }
 
                     // Check if batch reached max size - flush immediately
@@ -331,17 +400,16 @@ impl AsyncWalWriter {
                         let elapsed = start_time.elapsed();
                         let elapsed_us = elapsed.as_micros() as u64;
 
-                        let current_stats =
-                            unsafe { &mut *(Arc::as_ptr(stats) as *mut AsyncWalStats) };
-                        current_stats.entries_written += batch.len() as u64;
-                        current_stats.batches_flushed += 1;
-                        current_stats.total_write_latency_us += elapsed_us;
+                        use std::sync::atomic::Ordering::Relaxed;
+                        stats.entries_written.fetch_add(batch.len() as u64, Relaxed);
+                        stats.batches_flushed.fetch_add(1, Relaxed);
+                        stats.total_write_latency_us.fetch_add(elapsed_us, Relaxed);
 
                         // Track if batch was flushed due to size limit vs timeout
                         if batch.len() >= config.max_batch_size {
-                            current_stats.size_batches += 1;
+                            stats.size_batches.fetch_add(1, Relaxed);
                         } else {
-                            current_stats.timeout_batches += 1;
+                            stats.timeout_batches.fetch_add(1, Relaxed);
                         }
 
                         if retry_count > 0 {
@@ -374,8 +442,8 @@ impl AsyncWalWriter {
         }
 
         // If we get here, all retries failed
-        let current_stats = unsafe { &mut *(Arc::as_ptr(stats) as *mut AsyncWalStats) };
-        current_stats.wal_errors += batch.len() as u64;
+        use std::sync::atomic::Ordering::Relaxed;
+        stats.wal_errors.fetch_add(batch.len() as u64, Relaxed);
 
         tracing::error!(
             "CRITICAL: Failed to flush WAL batch after {} retries. {} entries lost!",
@@ -552,5 +620,35 @@ mod tests {
         );
 
         writer.shutdown().unwrap();
+    }
+
+    /// Regression test for the `unsafe { &mut *(Arc::as_ptr(...) as
+    /// *mut AsyncWalStats) }` data race: 10 threads call `append` in
+    /// parallel; every one of them must be counted. With the old
+    /// pointer-cast implementation the final `entries_submitted`
+    /// could come in below 10 under Miri / stressed loads; with the
+    /// atomic counters it must be exactly 10.
+    #[test]
+    fn concurrent_appends_count_exactly() {
+        use std::sync::Arc as ArcT;
+        let (writer, _dir) = create_test_writer();
+        let writer = ArcT::new(writer);
+        let threads: Vec<_> = (0..10)
+            .map(|i| {
+                let w = ArcT::clone(&writer);
+                thread::spawn(move || {
+                    w.append(WalEntry::CreateNode {
+                        node_id: i,
+                        label_bits: 0,
+                    })
+                    .unwrap();
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let snap = writer.stats();
+        assert_eq!(snap.entries_submitted, 10);
     }
 }

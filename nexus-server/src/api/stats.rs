@@ -50,9 +50,50 @@ pub struct DatabaseStatsResponse {
     pub label_index: LabelIndexStats,
     /// KNN index statistics
     pub knn_index: KnnIndexStats,
+    /// SIMD kernel tier per op (runtime-selected). Useful for ops to
+    /// confirm which vectorised path the running binary picked. Omitted
+    /// on serialisation when `None` for forward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simd: Option<SimdStats>,
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Per-op SIMD kernel tier names. Values are static strings from the
+/// `simd::*` dispatch modules (e.g. `"avx512"`, `"avx2"`, `"neon"`,
+/// `"scalar"`, `"scalar (NEXUS_SIMD_DISABLE)"`).
+#[derive(Debug, Serialize)]
+pub struct SimdStats {
+    /// CpuFeatures probe summary — short name of the highest-tier path
+    /// the host supports.
+    pub preferred_tier: &'static str,
+    /// Per-op kernel tiers as `{ op_name: tier_name }`.
+    pub kernels: std::collections::BTreeMap<&'static str, &'static str>,
+}
+
+fn collect_simd_stats() -> SimdStats {
+    use nexus_core::simd;
+    let mut kernels = std::collections::BTreeMap::new();
+    for (name, tier) in simd::distance::kernel_tiers() {
+        kernels.insert(name, tier);
+    }
+    for (name, tier) in simd::bitmap::kernel_tiers() {
+        kernels.insert(name, tier);
+    }
+    for (name, tier) in simd::reduce::kernel_tiers() {
+        kernels.insert(name, tier);
+    }
+    for (name, tier) in simd::compare::kernel_tiers() {
+        kernels.insert(name, tier);
+    }
+    // RLE has a single kernel pointer; expose it under the same namespace
+    // so operators see it alongside the others.
+    kernels.insert("find_run_length_u64", simd::rle::kernel_tier());
+    SimdStats {
+        preferred_tier: simd::cpu().preferred_tier(),
+        kernels,
+    }
 }
 
 /// Catalog statistics
@@ -120,6 +161,7 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
                     dimension: 128,
                     avg_search_time_us: 0.0,
                 },
+                simd: Some(collect_simd_stats()),
                 error: None,
             });
         }
@@ -155,6 +197,7 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
                             dimension: 0,
                             avg_search_time_us: 0.0,
                         },
+                        simd: Some(collect_simd_stats()),
                         error: Some(format!("Failed to get catalog stats: {}", e)),
                     });
                 }
@@ -178,6 +221,7 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
                     dimension: 0,
                     avg_search_time_us: 0.0,
                 },
+                simd: Some(collect_simd_stats()),
                 error: Some("Catalog not initialized".to_string()),
             });
         }
@@ -236,6 +280,7 @@ pub async fn get_stats() -> Json<DatabaseStatsResponse> {
         catalog: catalog_stats,
         label_index: label_index_stats,
         knn_index: knn_index_stats,
+        simd: Some(collect_simd_stats()),
         error: None,
     })
 }
