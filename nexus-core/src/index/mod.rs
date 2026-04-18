@@ -6,6 +6,7 @@
 //! - Full-text index: Tantivy per label/key
 //! - KNN index: Simple cosine similarity for MVP
 
+use crate::simd;
 use crate::{Error, Result};
 use hnsw_rs::prelude::*;
 use parking_lot::RwLock;
@@ -16,6 +17,31 @@ use std::sync::Arc;
 pub mod btree;
 pub mod fulltext;
 pub mod pending_updates;
+
+/// SIMD-backed cosine distance plugged into HNSW.
+///
+/// Delegates to `crate::simd::distance::cosine_f32`, which resolves
+/// to the fastest kernel the host CPU supports (AVX-512 → AVX2 → SSE4.2
+/// → NEON → Scalar). Produces bit-equivalent results to `DistSimdCosine`
+/// within the `1e-4` tolerance documented in ADR-003.
+#[derive(Default, Copy, Clone)]
+pub struct DistSimdCosine;
+
+impl Distance<f32> for DistSimdCosine {
+    fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
+        simd::distance::cosine_f32(va, vb)
+    }
+}
+
+/// SIMD-backed squared L2 distance (Euclidean²) plugged into HNSW.
+#[derive(Default, Copy, Clone)]
+pub struct DistSimdL2;
+
+impl Distance<f32> for DistSimdL2 {
+    fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
+        simd::distance::l2_sq_f32(va, vb)
+    }
+}
 
 /// Type alias for property index trees
 type PropertyIndexTree = BTreeMap<PropertyValue, RoaringBitmap>;
@@ -317,7 +343,7 @@ impl Default for KnnConfig {
 #[derive(Clone)]
 pub struct KnnIndex {
     /// HNSW index for fast KNN search
-    hnsw: Arc<RwLock<Hnsw<'static, f32, DistCosine>>>,
+    hnsw: Arc<RwLock<Hnsw<'static, f32, DistSimdCosine>>>,
     /// Mapping from node_id to vector index in HNSW
     node_to_index: Arc<RwLock<HashMap<u64, usize>>>,
     /// Mapping from vector index to node_id
@@ -366,7 +392,7 @@ impl KnnIndex {
             config.max_elements,
             config.max_layer,
             config.ef_construction,
-            DistCosine,
+            DistSimdCosine,
         );
 
         Ok(Self {
@@ -527,7 +553,7 @@ impl KnnIndex {
             self.config.max_elements,
             self.config.max_layer,
             self.config.ef_construction,
-            DistCosine,
+            DistSimdCosine,
         );
 
         // Clear mappings
@@ -542,14 +568,14 @@ impl KnnIndex {
         Ok(())
     }
 
-    /// Normalize a vector to unit length
+    /// Normalize a vector to unit length.
+    ///
+    /// Uses the SIMD-dispatched `simd::distance::normalize_f32` kernel
+    /// (AVX-512 → AVX2 → SSE4.2 → NEON → Scalar) — the method keeps
+    /// its `&self` signature for API compatibility but the kernel
+    /// selection is stateless.
     pub fn normalize_vector(&self, vector: &mut [f32]) {
-        let norm: f32 = vector.iter().map(|&x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for x in vector.iter_mut() {
-                *x /= norm;
-            }
-        }
+        simd::distance::normalize_f32(vector);
     }
 }
 

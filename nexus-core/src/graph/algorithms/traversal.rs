@@ -1582,19 +1582,56 @@ impl Graph {
         edges_in_community as f64 - edges_outside as f64 * 0.5
     }
 
-    /// Calculate Jaccard Similarity between two nodes
-    /// Returns similarity score (0.0 to 1.0)
-    pub fn jaccard_similarity(&self, node1: u64, node2: u64) -> f64 {
+    /// Build packed u64 bitmaps of the neighbour sets of `node1` and
+    /// `node2` over a common universe of bit positions (one per node in
+    /// `self.adjacency`). The two bitmaps have identical length so the
+    /// SIMD bitmap kernels can consume them directly.
+    fn pack_neighbor_bitmaps(&self, node1: u64, node2: u64) -> Option<(Vec<u64>, Vec<u64>)> {
         if !self.has_node(node1) || !self.has_node(node2) {
-            return 0.0;
+            return None;
         }
 
-        let neighbors1: HashSet<u64> = self.get_neighbors(node1).iter().map(|(n, _)| *n).collect();
-        let neighbors2: HashSet<u64> = self.get_neighbors(node2).iter().map(|(n, _)| *n).collect();
+        let mut idx_of: HashMap<u64, usize> = HashMap::with_capacity(self.adjacency.len());
+        for (i, &n) in self.adjacency.keys().enumerate() {
+            idx_of.insert(n, i);
+        }
+        let total = idx_of.len();
+        let words = total.div_ceil(64);
 
-        let intersection = neighbors1.intersection(&neighbors2).count();
-        let union = neighbors1.union(&neighbors2).count();
+        let mut bitmap1 = vec![0u64; words];
+        let mut bitmap2 = vec![0u64; words];
 
+        for (n, _) in self.get_neighbors(node1) {
+            if let Some(&idx) = idx_of.get(n) {
+                bitmap1[idx / 64] |= 1u64 << (idx % 64);
+            }
+        }
+        for (n, _) in self.get_neighbors(node2) {
+            if let Some(&idx) = idx_of.get(n) {
+                bitmap2[idx / 64] |= 1u64 << (idx % 64);
+            }
+        }
+
+        Some((bitmap1, bitmap2))
+    }
+
+    /// Calculate Jaccard Similarity between two nodes based on their
+    /// neighbour sets. Returns `|A ∩ B| / |A ∪ B|` in the range
+    /// `[0.0, 1.0]`, or `0.0` if either node is missing or both
+    /// neighbour sets are empty.
+    ///
+    /// Uses the SIMD-dispatched `simd::bitmap::{popcount,and_popcount}`
+    /// kernels — at 10K+ scale the bitmap AND+popcount path wins
+    /// decisively over the previous `HashSet::intersection` on dense
+    /// adjacency.
+    pub fn jaccard_similarity(&self, node1: u64, node2: u64) -> f64 {
+        let Some((b1, b2)) = self.pack_neighbor_bitmaps(node1, node2) else {
+            return 0.0;
+        };
+        let intersection = crate::simd::bitmap::and_popcount_u64(&b1, &b2);
+        let card1 = crate::simd::bitmap::popcount_u64(&b1);
+        let card2 = crate::simd::bitmap::popcount_u64(&b2);
+        let union = card1 + card2 - intersection;
         if union == 0 {
             0.0
         } else {
@@ -1602,34 +1639,24 @@ impl Graph {
         }
     }
 
-    /// Calculate Cosine Similarity between two nodes (based on neighbor vectors)
-    /// Returns similarity score (-1.0 to 1.0)
+    /// Calculate Cosine Similarity between two nodes (based on their
+    /// binary-indicator neighbour vectors). Returns `|A ∩ B| / √(|A| *
+    /// |B|)` in the range `[0.0, 1.0]` — negative values do not occur
+    /// with 0/1 membership.
+    ///
+    /// SIMD-accelerated via `simd::bitmap::{popcount,and_popcount}`.
     pub fn cosine_similarity(&self, node1: u64, node2: u64) -> f64 {
-        if !self.has_node(node1) || !self.has_node(node2) {
+        let Some((b1, b2)) = self.pack_neighbor_bitmaps(node1, node2) else {
             return 0.0;
-        }
-
-        let all_nodes: HashSet<u64> = self.adjacency.keys().cloned().collect();
-        let neighbors1: HashSet<u64> = self.get_neighbors(node1).iter().map(|(n, _)| *n).collect();
-        let neighbors2: HashSet<u64> = self.get_neighbors(node2).iter().map(|(n, _)| *n).collect();
-
-        let mut dot_product = 0.0;
-        let mut norm1 = 0.0;
-        let mut norm2 = 0.0;
-
-        for &node in &all_nodes {
-            let val1 = if neighbors1.contains(&node) { 1.0 } else { 0.0 };
-            let val2 = if neighbors2.contains(&node) { 1.0 } else { 0.0 };
-            dot_product += val1 * val2;
-            norm1 += val1 * val1;
-            norm2 += val2 * val2;
-        }
-
-        let denominator = f64::sqrt(norm1 * norm2);
-        if denominator == 0.0 {
+        };
+        let intersection = crate::simd::bitmap::and_popcount_u64(&b1, &b2) as f64;
+        let card1 = crate::simd::bitmap::popcount_u64(&b1) as f64;
+        let card2 = crate::simd::bitmap::popcount_u64(&b2) as f64;
+        let denom = (card1 * card2).sqrt();
+        if denom == 0.0 {
             0.0
         } else {
-            dot_product / denominator
+            intersection / denom
         }
     }
 
