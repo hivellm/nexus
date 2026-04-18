@@ -12,7 +12,7 @@
 - [x] 2.4 Split `nexus-core/src/graph/algorithms.rs` (2,560 LOC) into `algorithms/{mod, traversal, tests}.rs` — façade 220 LOC (-91.4%)
 
 ## 3. Tier 3 — Medium priority (~11k LOC)
-- [ ] 3.1 Split `nexus-core/tests/regression_extended.rs` (2,184 LOC) by feature area
+- [x] 3.1 Split `nexus-core/tests/regression_extended.rs` (2,184 LOC) into `regression_extended_{create,match,relationships,functions,union,engine,simple}.rs` — 7 files, 140-583 LOC each; 118 tests all passing
 - [ ] 3.2 Split `nexus-core/tests/neo4j_compatibility_test.rs` (2,103 LOC) by Neo4j section
 - [ ] 3.3 Split `tests/integration_test.rs` (2,090 LOC) into `integration/{crud,transactions,indexes}.rs`
 - [ ] 3.4 Split `nexus-core/src/graph/correlation/pattern_recognition.rs` (2,008 LOC) into `patterns/{detector,rules,matcher}.rs`

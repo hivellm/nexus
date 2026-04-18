@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧱 Regression Test Split (Tier 3.1) (2026-04-18)
+
+**`nexus-core/tests/regression_extended.rs` was 2,184 LOC covering seven
+feature areas in a single integration-test binary. Split by feature area
+into seven cohesive test binaries — each one now compiles and runs
+independently, and `cargo test --test regression_extended_match`
+(etc.) exercises just the relevant slice.**
+
+```
+regression_extended.rs                 2,184 LOC  → removed
+regression_extended_create.rs          NEW →  423 LOC  — 25 CREATE tests
+regression_extended_match.rs           NEW →  312 LOC  — 17 MATCH/WHERE tests
+regression_extended_relationships.rs   NEW →  583 LOC  — 24 relationship tests
+regression_extended_functions.rs       NEW →  343 LOC  — 20 function tests
+regression_extended_union.rs           NEW →  225 LOC  — 10 UNION tests
+regression_extended_engine.rs          NEW →  172 LOC  — 12 Engine-API tests
+regression_extended_simple.rs          NEW →  140 LOC  — 10 smoke tests
+```
+
+Pure refactor — every test body is byte-identical to the original
+(comments and `setup_test_engine` / `setup_isolated_test_engine` calls
+preserved). Dead `use nexus_core::Engine` import dropped (the type name
+was never referenced at the call sites). All 118 tests pass under
+`cargo +nightly test --package nexus-core --test regression_extended_*`
+and workspace-wide clippy is warning-clean.
+
+**Benefits**:
+- Merge-conflict surface reduced — unrelated test additions no longer
+  collide on a single file.
+- Parallel `cargo test` scheduling — the seven binaries run concurrently
+  (~0.4 s wall-clock for the full suite versus the old serialized run).
+- AI-agent-friendly file sizes — largest file (`relationships`, 583 LOC)
+  is well under the 1,500 LOC target.
+
 ### 🧱 Engine Module Split (Tier 1.5) (2026-04-18)
 
 **`nexus-core/src/engine/mod.rs` was 4,636 LOC — the largest remaining
