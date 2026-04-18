@@ -52,14 +52,15 @@ WORKDIR /app
 
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
-COPY nexus-core/Cargo.toml ./nexus-core/
-COPY nexus-server/Cargo.toml ./nexus-server/
-COPY nexus-protocol/Cargo.toml ./nexus-protocol/
 
-# Copy source code
+# Copy source for every workspace member declared in the root Cargo.toml.
+# `cargo build --workspace` fails with "failed to load manifest for
+# workspace member" if any member directory is missing — notably nexus-cli,
+# which was absent from this Dockerfile previously.
 COPY nexus-core ./nexus-core
 COPY nexus-server ./nexus-server
 COPY nexus-protocol ./nexus-protocol
+COPY nexus-cli ./nexus-cli
 
 # Build in release mode
 RUN cargo +nightly build --release --workspace
