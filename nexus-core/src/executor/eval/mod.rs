@@ -7,4 +7,7 @@
 //! Each submodule attaches an `impl Executor { … }` block extending the
 //! core type declared in `super::engine`.
 
+pub mod arithmetic;
+pub mod predicate;
 pub mod projection;
+pub mod temporal;
