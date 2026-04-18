@@ -20,6 +20,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub mod clustering;
 pub mod config;
 pub mod stats;
 
@@ -4114,123 +4115,10 @@ impl Engine {
         self.indexes.knn_search(label, vector, k)
     }
 
-    /// Perform node clustering on the graph
-    pub fn cluster_nodes(&mut self, config: ClusteringConfig) -> Result<ClusteringResult> {
-        // Convert storage to simple graph for clustering
-        let simple_graph = self.convert_to_simple_graph()?;
-        let engine = ClusteringEngine::new(config);
-        engine.cluster(&simple_graph)
-    }
-
-    /// Convert the storage to a simple graph for clustering and analysis
-    pub fn convert_to_simple_graph(&mut self) -> Result<graph::simple::Graph> {
-        let mut simple_graph = graph::simple::Graph::new();
-
-        // Scan all nodes and add them to the simple graph
-        for node_id in 0..self.storage.node_count() {
-            if let Ok(Some(node_record)) = self.get_node(node_id) {
-                // Convert labels from bitmap to vector
-                let labels = self
-                    .catalog
-                    .get_labels_from_bitmap(node_record.label_bits)?;
-
-                // Create node in simple graph
-                let simple_node_id = graph::simple::NodeId::new(node_id);
-                let node = graph::simple::Node::new(simple_node_id, labels);
-
-                // Load properties if they exist
-                if node_record.prop_ptr != 0 {
-                    if let Ok(Some(_properties)) = self.storage.load_node_properties(node_id) {
-                        // Properties are loaded but not yet integrated into simple graph
-                        // This will be handled in future property integration
-                    }
-                }
-
-                simple_graph.update_node(node)?;
-            }
-        }
-
-        // Scan all relationships and add them to the simple graph
-        for rel_id in 0..self.storage.relationship_count() {
-            if let Ok(Some(rel_record)) = self.get_relationship(rel_id) {
-                // Get relationship type name
-                let rel_type = self
-                    .catalog
-                    .get_type_name(rel_record.type_id)
-                    .unwrap_or_else(|_| Some("UNKNOWN".to_string()))
-                    .unwrap_or_else(|| "UNKNOWN".to_string());
-
-                // Load properties if they exist
-                if rel_record.prop_ptr != 0 {
-                    if let Ok(Some(_properties)) = self.storage.load_relationship_properties(rel_id)
-                    {
-                        // Properties are loaded but not yet integrated into simple graph
-                        // This will be handled in future property integration
-                    }
-                }
-
-                // Create edge in simple graph
-                let source_id = graph::simple::NodeId::new(rel_record.src_id);
-                let target_id = graph::simple::NodeId::new(rel_record.dst_id);
-
-                simple_graph.create_edge(source_id, target_id, rel_type)?;
-            }
-        }
-
-        Ok(simple_graph)
-    }
-
-    /// Perform label-based grouping of nodes
-    pub fn group_nodes_by_labels(&mut self) -> Result<ClusteringResult> {
-        let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::LabelBased,
-            feature_strategy: FeatureStrategy::LabelBased,
-            distance_metric: DistanceMetric::Euclidean,
-            random_seed: None,
-        };
-        self.cluster_nodes(config)
-    }
-
-    /// Perform property-based grouping of nodes
-    pub fn group_nodes_by_property(&mut self, property_key: &str) -> Result<ClusteringResult> {
-        let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::PropertyBased {
-                property_key: property_key.to_string(),
-            },
-            feature_strategy: FeatureStrategy::PropertyBased {
-                property_keys: vec![property_key.to_string()],
-            },
-            distance_metric: DistanceMetric::Euclidean,
-            random_seed: None,
-        };
-        self.cluster_nodes(config)
-    }
-
-    /// Perform K-means clustering on nodes
-    pub fn kmeans_cluster_nodes(
-        &mut self,
-        k: usize,
-        max_iterations: usize,
-    ) -> Result<ClusteringResult> {
-        let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::KMeans { k, max_iterations },
-            feature_strategy: FeatureStrategy::Structural,
-            distance_metric: DistanceMetric::Euclidean,
-            random_seed: Some(42),
-        };
-        self.cluster_nodes(config)
-    }
-
-    /// Perform community detection on nodes
-    pub fn detect_communities(&mut self) -> Result<ClusteringResult> {
-        let config = ClusteringConfig {
-            algorithm: ClusteringAlgorithm::CommunityDetection,
-            feature_strategy: FeatureStrategy::Structural,
-            distance_metric: DistanceMetric::Euclidean,
-            random_seed: None,
-        };
-        self.cluster_nodes(config)
-    }
+    // Clustering methods (cluster_nodes, convert_to_simple_graph,
+    // group_nodes_by_labels, group_nodes_by_property,
+    // kmeans_cluster_nodes, detect_communities) live in
+    // `engine/clustering.rs`.
 
     /// Export graph data to JSON format
     pub fn export_to_json(&mut self) -> Result<serde_json::Value> {
