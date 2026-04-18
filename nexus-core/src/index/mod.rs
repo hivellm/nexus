@@ -276,6 +276,40 @@ impl Default for LabelIndex {
     }
 }
 
+/// Configuration for an HNSW-backed KNN index.
+///
+/// HNSW keeps its graph and vector data resident in RAM, so `max_elements`
+/// directly bounds memory footprint. A single `KnnIndex` with 10_000 slots
+/// and 128-dim f32 vectors consumes ~15 MB; multiply by number of labels
+/// that get their own index.
+#[derive(Debug, Clone, Copy)]
+pub struct KnnConfig {
+    /// Upper bound on vectors stored in the index. HNSW allocates this
+    /// capacity eagerly, so keep it close to the expected working-set size.
+    pub max_elements: usize,
+    /// Maximum number of outgoing connections per node (HNSW `M`).
+    pub max_connections: usize,
+    /// Maximum layer count in the HNSW hierarchy.
+    pub max_layer: usize,
+    /// Size of the dynamic candidate list during graph construction.
+    pub ef_construction: usize,
+}
+
+impl Default for KnnConfig {
+    fn default() -> Self {
+        // Previous hardcoded values reserved 10_000 slots unconditionally,
+        // which is expensive for small deployments that only create a handful
+        // of vectors. Callers with larger working sets should construct a
+        // KnnConfig explicitly rather than relying on the default.
+        Self {
+            max_elements: 1_000,
+            max_connections: 16,
+            max_layer: 16,
+            ef_construction: 200,
+        }
+    }
+}
+
 /// KNN vector index using HNSW (Hierarchical Navigable Small World)
 ///
 /// Maps node_id → embedding for fast similarity search.
@@ -290,6 +324,9 @@ pub struct KnnIndex {
     index_to_node: Arc<RwLock<HashMap<usize, u64>>>,
     /// Vector dimension
     dimension: usize,
+    /// HNSW configuration — retained so `clear()` can recreate the index
+    /// with the same parameters the caller chose at construction time.
+    config: KnnConfig,
     /// Statistics
     stats: Arc<RwLock<KnnIndexStats>>,
     /// Next available index
@@ -308,14 +345,15 @@ pub struct KnnIndexStats {
 }
 
 impl KnnIndex {
-    /// Create a new KNN index
+    /// Create a new KNN index with a caller-supplied HNSW configuration.
     ///
     /// # Arguments
     /// * `dimension` - Vector dimension (must be > 0 and <= 4096)
+    /// * `config`    - HNSW parameters; see [`KnnConfig`]
     ///
     /// # Errors
     /// Returns an error if dimension is invalid
-    pub fn new(dimension: usize) -> Result<Self> {
+    pub fn with_config(dimension: usize, config: KnnConfig) -> Result<Self> {
         if dimension == 0 || dimension > 4096 {
             return Err(Error::InvalidId(format!(
                 "Invalid vector dimension: {}",
@@ -323,15 +361,20 @@ impl KnnIndex {
             )));
         }
 
-        // Create HNSW index with cosine distance
-        // Parameters: max_nb_connection, max_elements, max_layer, ef_construction, distance_function
-        let hnsw = Hnsw::new(16, 10000, 16, 200, DistCosine);
+        let hnsw = Hnsw::new(
+            config.max_connections,
+            config.max_elements,
+            config.max_layer,
+            config.ef_construction,
+            DistCosine,
+        );
 
         Ok(Self {
             hnsw: Arc::new(RwLock::new(hnsw)),
             node_to_index: Arc::new(RwLock::new(HashMap::new())),
             index_to_node: Arc::new(RwLock::new(HashMap::new())),
             dimension,
+            config,
             stats: Arc::new(RwLock::new(KnnIndexStats {
                 total_vectors: 0,
                 dimension,
@@ -341,7 +384,15 @@ impl KnnIndex {
         })
     }
 
-    /// Create a new KNN index with default parameters
+    /// Create a new KNN index with default HNSW parameters.
+    ///
+    /// Equivalent to `KnnIndex::with_config(dimension, KnnConfig::default())`.
+    /// Callers that need more capacity should construct [`KnnConfig`] explicitly.
+    pub fn new(dimension: usize) -> Result<Self> {
+        Self::with_config(dimension, KnnConfig::default())
+    }
+
+    /// Create a new KNN index with default parameters (alias of [`KnnIndex::new`]).
     pub fn new_default(dimension: usize) -> Result<Self> {
         Self::new(dimension)
     }
@@ -470,8 +521,14 @@ impl KnnIndex {
         let mut index_to_node = self.index_to_node.write();
         let mut next_index = self.next_index.write();
 
-        // Create new HNSW index
-        *hnsw = Hnsw::new(16, 10000, 16, 200, DistCosine);
+        // Recreate the HNSW index using the config this instance was built with.
+        *hnsw = Hnsw::new(
+            self.config.max_connections,
+            self.config.max_elements,
+            self.config.max_layer,
+            self.config.ef_construction,
+            DistCosine,
+        );
 
         // Clear mappings
         node_to_index.clear();
