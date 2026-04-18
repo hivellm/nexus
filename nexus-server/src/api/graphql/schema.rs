@@ -178,19 +178,25 @@ impl CypherResult {
 // Helper functions
 
 fn build_nodes_query(filter: &NodeFilterInput) -> String {
-    let mut query = String::from("MATCH (n)");
+    let mut query = String::from("MATCH (n");
 
-    // Add label filter
+    // Add label filter. Cypher syntax uses `(n:Foo|Bar)` for multi-label
+    // alternatives; the previous implementation emitted a double-colon
+    // `(n)::Foo` because each label got prefixed with `:` and then the
+    // whole string was prefixed with `:` again — that broke the `nodes`
+    // GraphQL resolver under tests asserting on row[0].
     if let Some(labels) = &filter.labels {
         if !labels.is_empty() {
             let label_str = labels
                 .iter()
-                .map(|l| format!(":{}", l))
+                .map(|l| l.as_str())
                 .collect::<Vec<_>>()
                 .join("|");
-            query.push_str(&format!(":{}", label_str));
+            query.push(':');
+            query.push_str(&label_str);
         }
     }
+    query.push(')');
 
     // Add WHERE clause for properties
     if let Some(props) = &filter.properties {
@@ -268,9 +274,25 @@ fn row_to_node(row: &[serde_json::Value]) -> GQLResult<Option<Node>> {
         return Ok(None);
     }
 
-    // Extract node ID from first column
-    let node_id: u64 =
-        serde_json::from_value(row[0].clone()).map_err(|_| "Failed to parse node ID")?;
+    // Extract node ID from first column. The executor's `id()` function
+    // returns `Null` when the argument is not a node (or the node lacks a
+    // `_nexus_id`); treating that as a soft skip rather than a hard error
+    // keeps the handler resilient to rows that slipped through a malformed
+    // MATCH, and is consistent with how `row_to_relationship` handles its
+    // id columns (`.unwrap_or(0)`).
+    let node_id: u64 = match row[0] {
+        serde_json::Value::Null => return Ok(None),
+        _ => match serde_json::from_value(row[0].clone()) {
+            Ok(n) => n,
+            Err(_) => {
+                tracing::debug!(
+                    "row_to_node: skipping row whose first column is not a numeric id: {:?}",
+                    row[0]
+                );
+                return Ok(None);
+            }
+        },
+    };
 
     Ok(Some(convert_row_to_node(node_id, row)?))
 }
