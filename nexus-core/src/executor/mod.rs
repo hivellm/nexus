@@ -14,6 +14,10 @@
 pub mod context;
 /// `Executor` struct, constructors, accessors, row-lock helpers
 pub mod engine;
+/// Expression evaluation (projection eval and siblings)
+pub mod eval;
+/// Physical operator execution (aggregate/filter/expand/join/...)
+pub mod operators;
 /// Query optimizer for cost-based optimization
 pub mod optimizer;
 pub mod parser;
@@ -833,7 +837,7 @@ impl Executor {
     }
 
     /// Check if query is a simple MATCH query that can be executed directly
-    fn is_simple_match_query(&self, cypher: &str) -> bool {
+    pub(super) fn is_simple_match_query(&self, cypher: &str) -> bool {
         let cypher = cypher.trim();
 
         // Simple patterns: "MATCH (n) RETURN count(n)"
@@ -858,7 +862,7 @@ impl Executor {
     }
 
     /// Execute simple MATCH queries directly (bypass operator planning)
-    fn execute_simple_match_directly(&self, query: &Query) -> Result<ResultSet> {
+    pub(super) fn execute_simple_match_directly(&self, query: &Query) -> Result<ResultSet> {
         let cypher = query.cypher.trim();
 
         // Only optimize COUNT(*) for now - other queries are better handled by the traditional pipeline
@@ -872,7 +876,7 @@ impl Executor {
     }
 
     /// Execute COUNT(*) directly from storage
-    fn execute_count_all_nodes(&self) -> Result<ResultSet> {
+    pub(super) fn execute_count_all_nodes(&self) -> Result<ResultSet> {
         // Count non-deleted nodes directly from storage
         // This is more reliable than using catalog statistics which may not be updated
         let total_nodes = self.store().node_count();
@@ -941,7 +945,7 @@ impl Executor {
     }
 
     /// Convert AST to physical operators
-    fn ast_to_operators(&mut self, ast: &parser::CypherQuery) -> Result<Vec<Operator>> {
+    pub(super) fn ast_to_operators(&mut self, ast: &parser::CypherQuery) -> Result<Vec<Operator>> {
         let mut operators = Vec::new();
 
         for clause in &ast.clauses {
@@ -1035,7 +1039,7 @@ impl Executor {
 
     /// Execute CREATE pattern to create nodes and relationships
     /// Returns map of variable names to created node IDs
-    fn execute_create_pattern_with_variables(
+    pub(super) fn execute_create_pattern_with_variables(
         &self,
         pattern: &parser::Pattern,
     ) -> Result<(
@@ -1058,7 +1062,7 @@ impl Executor {
     }
 
     /// Internal implementation of CREATE pattern execution
-    fn execute_create_pattern_internal(
+    pub(super) fn execute_create_pattern_internal(
         &self,
         pattern: &parser::Pattern,
         created_nodes: &mut std::collections::HashMap<String, u64>,
@@ -1456,7 +1460,7 @@ impl Executor {
     }
 
     /// Convert expression to JSON value
-    fn expression_to_json_value(&self, expr: &parser::Expression) -> Result<Value> {
+    pub(super) fn expression_to_json_value(&self, expr: &parser::Expression) -> Result<Value> {
         match expr {
             parser::Expression::Literal(lit) => match lit {
                 parser::Literal::String(s) => Ok(Value::String(s.clone())),
@@ -1482,7 +1486,11 @@ impl Executor {
     }
 
     /// Check constraints before creating a node
-    fn check_constraints(&self, label_ids: &[u32], properties: &serde_json::Value) -> Result<()> {
+    pub(super) fn check_constraints(
+        &self,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) -> Result<()> {
         let constraint_manager = self.catalog().constraint_manager().read();
 
         // Check constraints for each label
@@ -1550,7 +1558,7 @@ impl Executor {
     }
 
     /// Convert expression to string representation
-    fn expression_to_string(&self, expr: &parser::Expression) -> Result<String> {
+    pub(super) fn expression_to_string(&self, expr: &parser::Expression) -> Result<String> {
         match expr {
             parser::Expression::Variable(name) => Ok(name.clone()),
             parser::Expression::PropertyAccess { variable, property } => {
@@ -1592,7 +1600,7 @@ impl Executor {
     }
 
     /// Execute NodeByLabel operator
-    fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
+    pub(super) fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
         // Always use label_index - label_id 0 is valid (it's the first label)
         let bitmap = self.label_index().get_nodes(label_id)?;
 
@@ -1635,7 +1643,7 @@ impl Executor {
     }
 
     /// Execute AllNodesScan operator (scan all nodes regardless of label)
-    fn execute_all_nodes_scan(&self) -> Result<Vec<Value>> {
+    pub(super) fn execute_all_nodes_scan(&self) -> Result<Vec<Value>> {
         // Get the total number of nodes from the store
         let total_nodes = self.store().node_count();
         let cap_hint = (total_nodes as usize).min(MAX_INTERMEDIATE_ROWS);
@@ -1674,7 +1682,7 @@ impl Executor {
     ///
     /// This method attempts to use property indexes to accelerate WHERE clauses
     /// by avoiding full table scans for equality and range queries.
-    fn try_index_based_filter(
+    pub(super) fn try_index_based_filter(
         &self,
         context: &mut ExecutionContext,
         predicate: &str,
@@ -1767,7 +1775,10 @@ impl Executor {
     }
 
     /// Parse simple equality filter: variable.property = 'value'
-    fn parse_equality_filter(&self, predicate: &str) -> Option<(String, String, String)> {
+    pub(super) fn parse_equality_filter(
+        &self,
+        predicate: &str,
+    ) -> Option<(String, String, String)> {
         let predicate = predicate.trim();
 
         // Look for pattern: variable.property = 'value' or variable.property = value
@@ -1796,7 +1807,10 @@ impl Executor {
         None
     }
     /// Parse range filter: variable.property > value, variable.property < value, etc.
-    fn parse_range_filter(&self, predicate: &str) -> Option<(String, String, String, String)> {
+    pub(super) fn parse_range_filter(
+        &self,
+        predicate: &str,
+    ) -> Option<(String, String, String, String)> {
         let predicate = predicate.trim();
 
         // Look for range operators
@@ -1831,7 +1845,11 @@ impl Executor {
     }
 
     /// Execute Filter operator with index optimization
-    fn execute_filter(&self, context: &mut ExecutionContext, predicate: &str) -> Result<()> {
+    pub(super) fn execute_filter(
+        &self,
+        context: &mut ExecutionContext,
+        predicate: &str,
+    ) -> Result<()> {
         // Try index-based filtering first (optimization for Phase 5)
         if let Some(optimized_rows) = self.try_index_based_filter(context, predicate)? {
             // Index-based filtering succeeded, use optimized results
@@ -2135,7 +2153,7 @@ impl Executor {
     /// Execute OptionalFilter operator - special filter for WHERE after OPTIONAL MATCH
     /// Unlike regular Filter, if predicate fails but optional_vars are involved,
     /// the row is preserved with optional_vars set to NULL instead of being removed
-    fn execute_optional_filter(
+    pub(super) fn execute_optional_filter(
         &self,
         context: &mut ExecutionContext,
         predicate: &str,
@@ -2263,7 +2281,7 @@ impl Executor {
 
     /// Execute Expand operator
     #[allow(clippy::too_many_arguments)]
-    fn execute_expand(
+    pub(super) fn execute_expand(
         &self,
         context: &mut ExecutionContext,
         type_ids: &[u32],
@@ -2800,7 +2818,7 @@ impl Executor {
     /// Execute DELETE or DETACH DELETE operator
     /// Note: This collects node IDs but doesn't actually delete them.
     /// Actual deletion must be handled at Engine level (lib.rs) before executor runs.
-    fn execute_delete(
+    pub(super) fn execute_delete(
         &self,
         context: &mut ExecutionContext,
         _variables: &[String],
@@ -2818,7 +2836,7 @@ impl Executor {
     }
 
     /// Execute Project operator
-    fn execute_project(
+    pub(super) fn execute_project(
         &self,
         context: &mut ExecutionContext,
         items: &[ProjectionItem],
@@ -3180,7 +3198,7 @@ impl Executor {
     /// 1. Evaluates expressions and creates new variables with aliased names
     /// 2. Replaces the current scope (old variables are removed)
     /// 3. Does NOT finalize result_set (that's what RETURN/Project does)
-    fn execute_with(
+    pub(super) fn execute_with(
         &self,
         context: &mut ExecutionContext,
         items: &[ProjectionItem],
@@ -3272,7 +3290,7 @@ impl Executor {
     }
 
     /// Execute Limit operator
-    fn execute_limit(&self, context: &mut ExecutionContext, count: usize) -> Result<()> {
+    pub(super) fn execute_limit(&self, context: &mut ExecutionContext, count: usize) -> Result<()> {
         if context.result_set.rows.is_empty() {
             let rows = self.materialize_rows_from_variables(context);
             self.update_result_set_from_rows(context, &rows);
@@ -3288,7 +3306,7 @@ impl Executor {
     }
 
     /// Execute Sort operator with LIMIT optimization (Phase 5)
-    fn execute_sort(
+    pub(super) fn execute_sort(
         &self,
         context: &mut ExecutionContext,
         columns: &[String],
@@ -3336,7 +3354,7 @@ impl Executor {
     }
 
     /// Check if there's a LIMIT operator following the current sort in the plan
-    fn get_following_limit(&self, context: &ExecutionContext) -> Option<usize> {
+    pub(super) fn get_following_limit(&self, context: &ExecutionContext) -> Option<usize> {
         // This is a simplified check. In a full implementation, we'd need access
         // to the remaining operators in the plan. For Phase 5 MVP, we check
         // if there's a limit stored in the context.
@@ -3350,7 +3368,7 @@ impl Executor {
     ///
     /// Uses a binary heap to maintain only the top K results, avoiding
     /// full sort when K is much smaller than total results.
-    fn execute_top_k_sort(
+    pub(super) fn execute_top_k_sort(
         &self,
         context: &mut ExecutionContext,
         columns: &[String],
@@ -3386,1351 +3404,8 @@ impl Executor {
         Ok(())
     }
 
-    /// Execute Aggregate operator
-    fn execute_aggregate(
-        &self,
-        context: &mut ExecutionContext,
-        group_by: &[String],
-        aggregations: &[Aggregation],
-    ) -> Result<()> {
-        self.execute_aggregate_with_projections(context, group_by, aggregations, None)
-    }
-    /// Execute Aggregate operator with projection items (for evaluating literals in virtual row)
-    fn execute_aggregate_with_projections(
-        &self,
-        context: &mut ExecutionContext,
-        group_by: &[String],
-        aggregations: &[Aggregation],
-        projection_items: Option<&[ProjectionItem]>,
-    ) -> Result<()> {
-        use std::collections::HashMap;
-
-        // Preserve columns from Project operator if they exist (for aggregations with literals)
-        let project_columns = context.result_set.columns.clone();
-
-        // Store rows from Project before we potentially modify them
-        let project_rows = context.result_set.rows.clone();
-
-        // Check if project_columns contain variable names (indicating MATCH was executed before Project)
-        // If columns contain variable names like "n", "a", etc., it means MATCH was executed
-        let has_match_columns = !project_columns.is_empty()
-            && project_columns.iter().any(|col| {
-                // Variable names are typically single letters or short identifiers
-                // Check if column name matches a variable pattern (not an aggregation alias)
-                col.len() <= 10
-                    && !col.starts_with("__")
-                    && !col.contains("(")
-                    && !col.contains(")")
-            });
-
-        // Only create rows from variables if we don't have match columns (indicating MATCH returned empty)
-        // If we have match columns but no rows, it means MATCH was executed but returned empty
-        // In that case, we should not create rows from variables
-        // CRITICAL FIX: When there's GROUP BY, we MUST materialize rows from variables even if has_match_columns is true
-        // because Project was deferred and rows haven't been created yet. Without rows, no groups can be created.
-        if context.result_set.rows.is_empty() && !context.variables.is_empty() {
-            // Only skip materialization if we don't have GROUP BY and have match columns (MATCH returned empty)
-            // If we have GROUP BY, we need rows to create groups, so materialize even with match columns
-            if !has_match_columns || !group_by.is_empty() {
-                let rows = self.materialize_rows_from_variables(context);
-                self.update_result_set_from_rows(context, &rows);
-            }
-        }
-
-        // Check rows AFTER we've stored project_rows, but rows may have been modified
-        let rows = context.result_set.rows.clone();
-
-        // Pre-size HashMap for GROUP BY if we have an estimate (Phase 2.3 optimization)
-        let estimated_groups = if !group_by.is_empty() && !rows.is_empty() {
-            // Estimate: assume ~10% of rows will be unique groups (conservative estimate)
-            // In practice, this could be tuned based on actual data distribution
-            (rows.len() / 10).max(1).min(rows.len())
-        } else {
-            1
-        };
-
-        // Use a more robust key type for grouping that handles NULL and type differences correctly
-        // Convert Vec<Value> to a canonical string representation for reliable hashing
-        let mut groups: HashMap<String, Vec<Row>> = HashMap::with_capacity(estimated_groups);
-
-        // If we have aggregations without GROUP BY and no rows, create a virtual row
-        // This handles cases like: RETURN count(*) (without MATCH)
-        // In Neo4j, this returns 1 for count(*), not 0
-        // Note: If Project created rows with literal values (for aggregations like sum(1)),
-        // those rows should already be in context.result_set.rows
-        // IMPORTANT: Only create virtual row if there are NO variables in context AND no columns from MATCH
-        // If there are variables but no rows, it means MATCH returned empty, so don't create virtual row
-        // Also check if Project columns contain variable names (indicating MATCH was executed)
-        let has_rows = !rows.is_empty() || !project_rows.is_empty();
-        let has_variables = !context.variables.is_empty();
-        // Check if Project created rows with literal values (for aggregations like min(5))
-        // Project should create rows when there are literals, so if rows is empty but we have project_columns,
-        // it means Project didn't create rows (which shouldn't happen for literals)
-        // However, if Project did create rows, we should use those instead of creating a virtual row
-        let needs_virtual_row = rows.is_empty()
-            && project_rows.is_empty()
-            && group_by.is_empty()
-            && !aggregations.is_empty()
-            && !has_variables
-            && !has_match_columns;
-
-        if needs_virtual_row {
-            // Create a virtual row with projected values from columns
-            // The Project operator should have already created rows with literal values
-            // If Project created rows, use those values; otherwise create virtual row with defaults
-            let mut virtual_row_values = Vec::new();
-            if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
-                // Use the values that Project created (these should be the literal values)
-                virtual_row_values = project_rows[0].values.clone();
-            } else if !project_columns.is_empty() {
-                // Project didn't create rows but we have columns - try to evaluate expressions from projection items
-                if let Some(items) = projection_items {
-                    // Evaluate each projection expression to get the literal values
-                    let empty_row_map = std::collections::HashMap::new();
-                    for item in items {
-                        match self.evaluate_projection_expression(
-                            &empty_row_map,
-                            context,
-                            &item.expression,
-                        ) {
-                            Ok(value) => virtual_row_values.push(value),
-                            Err(_) => {
-                                // Fallback to default if evaluation fails
-                                virtual_row_values.push(Value::Number(serde_json::Number::from(1)));
-                            }
-                        }
-                    }
-                } else {
-                    // No projection items available - fallback to default values
-                    for _col in &project_columns {
-                        virtual_row_values.push(Value::Number(serde_json::Number::from(1)));
-                    }
-                }
-            } else {
-                // No columns projected yet, use single value for count(*)
-                virtual_row_values.push(Value::Number(serde_json::Number::from(1)));
-            }
-            // Use empty string as key for empty group (no GROUP BY)
-            groups.entry(String::new()).or_default().push(Row {
-                values: virtual_row_values.clone(),
-            });
-        }
-
-        // Use project_rows if rows is empty (Project created rows with literal values)
-        // Clone project_rows so we can use it later for virtual row handling in aggregations
-        // CRITICAL FIX: When there's GROUP BY and rows is empty, materialize from variables
-        // because Project was deferred and rows haven't been created yet
-        let rows_to_process = if rows.is_empty() && !project_rows.is_empty() {
-            project_rows.clone()
-        } else if rows.is_empty() && !group_by.is_empty() && !context.variables.is_empty() {
-            // GROUP BY but no rows - materialize from variables if Project was deferred
-            // This happens when Project is deferred until after Aggregate
-            let materialized_rows = self.materialize_rows_from_variables(context);
-            if !materialized_rows.is_empty() {
-                // Convert to Row format for grouping
-                let columns = context.result_set.columns.clone();
-                materialized_rows
-                    .iter()
-                    .map(|row_map| Row {
-                        values: columns
-                            .iter()
-                            .map(|col| row_map.get(col).cloned().unwrap_or(Value::Null))
-                            .collect(),
-                    })
-                    .collect()
-            } else {
-                rows
-            }
-        } else {
-            rows
-        };
-
-        for row in rows_to_process {
-            let mut group_key_values = Vec::new();
-            for col in group_by {
-                // CRITICAL FIX: Always use project_columns if available for GROUP BY
-                // This ensures we use the correct column names created by Project operator
-                // The project_columns should contain the aliases (e.g., "person") that match
-                // the GROUP BY columns, while context.result_set.columns may have different names
-                let columns_to_use = if !project_columns.is_empty() {
-                    &project_columns
-                } else {
-                    &context.result_set.columns
-                };
-                if let Some(index) = self.get_column_index(col, columns_to_use) {
-                    if index < row.values.len() {
-                        group_key_values.push(row.values[index].clone());
-                    } else {
-                        // Index found but row doesn't have enough values - this shouldn't happen
-                        // but handle gracefully
-                        group_key_values.push(Value::Null);
-                    }
-                } else {
-                    // Column not found - this can happen when Project was deferred (adopted for Aggregate)
-                    // In that case, we need to evaluate the projection expression using projection_items
-                    if let Some(items) = projection_items {
-                        // Find the projection item that matches the GROUP BY column
-                        if let Some(projection_item) = items.iter().find(|item| item.alias == *col)
-                        {
-                            // Convert row back to HashMap to evaluate expression
-                            let current_columns = if !project_columns.is_empty() {
-                                &project_columns
-                            } else {
-                                &context.result_set.columns
-                            };
-                            let row_map: HashMap<String, Value> = current_columns
-                                .iter()
-                                .zip(row.values.iter())
-                                .map(|(col, val)| (col.clone(), val.clone()))
-                                .collect();
-                            // Evaluate the projection expression to get the GROUP BY value
-                            match self.evaluate_projection_expression(
-                                &row_map,
-                                context,
-                                &projection_item.expression,
-                            ) {
-                                Ok(value) => group_key_values.push(value),
-                                Err(_) => group_key_values.push(Value::Null),
-                            }
-                        } else {
-                            // Projection item not found - use Null
-                            group_key_values.push(Value::Null);
-                        }
-                    } else {
-                        // No projection_items available - use Null
-                        group_key_values.push(Value::Null);
-                    }
-                }
-            }
-
-            // Convert group key to canonical string representation for reliable hashing
-            // This ensures that NULL values, numbers, strings, etc. are compared correctly
-            let group_key = serde_json::to_string(&group_key_values).unwrap_or_default();
-            groups.entry(group_key).or_default().push(row);
-        }
-
-        // IMPORTANT: Clear rows AFTER we've created virtual row and added it to groups
-        context.result_set.rows.clear();
-
-        // If we needed a virtual row but groups is empty, create result directly without processing groups
-        // This handles the case where virtual row creation somehow failed or groups is empty
-        if needs_virtual_row && groups.is_empty() && group_by.is_empty() {
-            let mut result_row = Vec::new();
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::Count { column, .. } => {
-                        if column.is_none() {
-                            Value::Number(serde_json::Number::from(1))
-                        } else {
-                            Value::Number(serde_json::Number::from(0))
-                        }
-                    }
-                    Aggregation::Sum { .. } => Value::Number(serde_json::Number::from(1)),
-                    Aggregation::Avg { .. } => Value::Number(
-                        serde_json::Number::from_f64(10.0).unwrap_or(serde_json::Number::from(10)),
-                    ),
-                    Aggregation::Collect { .. } => Value::Array(Vec::new()),
-                    _ => Value::Null,
-                };
-                result_row.push(agg_value);
-            }
-            context.result_set.rows.push(Row { values: result_row });
-
-            // Set columns and return early
-            let mut columns = group_by.to_vec();
-            columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
-            context.result_set.columns = columns;
-            let row_maps = self.result_set_as_rows(context);
-            self.update_variables_from_rows(context, &row_maps);
-            return Ok(());
-        }
-
-        // Check if we have an empty result set with aggregations but no GROUP BY
-        // But only if we didn't create a virtual row (i.e., we had MATCH that returned nothing)
-        // Note: If we created a virtual row, groups should not be empty, so is_empty_aggregation should be false
-        // IMPORTANT: If there are variables but no rows, OR if there are MATCH columns but no rows, it means MATCH returned empty
-        let is_empty_aggregation = groups.is_empty()
-            && group_by.is_empty()
-            && (has_variables || has_match_columns)
-            && !has_rows
-            && !needs_virtual_row;
-
-        // Use project_columns for column lookups if available
-        // CRITICAL FIX: If projection_items contains columns that aren't in project_columns,
-        // we need to add them to columns_for_lookup so that aggregations can find them
-        let extended_columns: Vec<String> = if let Some(items) = projection_items {
-            // Start with project_columns, then add any missing columns from projection_items
-            let mut cols = project_columns.clone();
-            for item in items {
-                if !cols.contains(&item.alias) {
-                    cols.push(item.alias.clone());
-                }
-            }
-            cols
-        } else {
-            project_columns.clone()
-        };
-
-        let columns_for_lookup = if !extended_columns.is_empty() {
-            &extended_columns
-        } else {
-            &context.result_set.columns
-        };
-
-        // Pre-size result rows vector based on estimated groups
-        let estimated_result_rows = groups.len().max(1);
-        context.result_set.rows.reserve(estimated_result_rows);
-
-        // 🚀 PARALLEL AGGREGATION: Use parallel processing for large group sets
-        // This optimizes COUNT, GROUP BY, and other aggregation operations
-        let use_parallel_processing = groups.len() > 100; // Threshold for parallel processing
-
-        // Process groups - this should include the virtual row if one was created
-        // If groups is empty but we need a virtual row, create result directly
-        if groups.is_empty() && needs_virtual_row && group_by.is_empty() {
-            let mut result_row = Vec::new();
-
-            // Get virtual row values if available (from projection items)
-            // If project_rows is empty, evaluate projection_items directly
-            let virtual_row_values: Option<Vec<Value>> =
-                if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
-                    Some(project_rows[0].values.clone())
-                } else if let Some(items) = projection_items {
-                    // Evaluate projection items directly to get literal values
-                    let empty_row_map = std::collections::HashMap::new();
-                    let mut values = Vec::new();
-                    for item in items {
-                        match self.evaluate_projection_expression(
-                            &empty_row_map,
-                            context,
-                            &item.expression,
-                        ) {
-                            Ok(value) => values.push(value),
-                            Err(_) => values.push(Value::Null),
-                        }
-                    }
-                    if !values.is_empty() {
-                        Some(values)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::Count { column, .. } => {
-                        if column.is_none() {
-                            Value::Number(serde_json::Number::from(1))
-                        } else {
-                            Value::Number(serde_json::Number::from(0))
-                        }
-                    }
-                    Aggregation::Sum { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Number(serde_json::Number::from(1))
-                                }
-                            } else {
-                                Value::Number(serde_json::Number::from(1))
-                            }
-                        } else {
-                            Value::Number(serde_json::Number::from(1))
-                        }
-                    }
-                    Aggregation::Avg { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Number(
-                                        serde_json::Number::from_f64(10.0)
-                                            .unwrap_or(serde_json::Number::from(10)),
-                                    )
-                                }
-                            } else {
-                                Value::Number(
-                                    serde_json::Number::from_f64(10.0)
-                                        .unwrap_or(serde_json::Number::from(10)),
-                                )
-                            }
-                        } else {
-                            Value::Number(
-                                serde_json::Number::from_f64(10.0)
-                                    .unwrap_or(serde_json::Number::from(10)),
-                            )
-                        }
-                    }
-                    Aggregation::Min { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                Value::Null
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::Max { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                Value::Null
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::Collect { column, .. } => {
-                        // Try to get value from virtual row and wrap in array
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() && !vr_vals[col_idx].is_null() {
-                                    Value::Array(vec![vr_vals[col_idx].clone()])
-                                } else {
-                                    Value::Array(Vec::new())
-                                }
-                            } else {
-                                Value::Array(Vec::new())
-                            }
-                        } else {
-                            Value::Array(Vec::new())
-                        }
-                    }
-                    _ => Value::Null,
-                };
-                result_row.push(agg_value);
-            }
-            context.result_set.rows.push(Row {
-                values: result_row.clone(),
-            });
-            // Set columns and return early
-            let mut columns = group_by.to_vec();
-            columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
-            context.result_set.columns = columns;
-            let row_maps = self.result_set_as_rows(context);
-            self.update_variables_from_rows(context, &row_maps);
-            return Ok(());
-        }
-        for (group_key_str, group_rows) in groups {
-            let effective_row_count = if group_rows.is_empty() && needs_virtual_row {
-                1
-            } else {
-                group_rows.len()
-            };
-
-            // Parse the group key back to Vec<Value> for the result row
-            let group_key: Vec<Value> = serde_json::from_str(&group_key_str).unwrap_or_else(|_| {
-                // Fallback: if parsing fails, use empty vector (shouldn't happen, but be safe)
-                Vec::new()
-            });
-            let mut result_row = group_key;
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::CountStarOptimized { .. } => {
-                        // 🚀 PARALLEL COUNT OPTIMIZATION: Use parallel counting for large datasets
-                        // This significantly improves COUNT(*) performance on large result sets
-                        let count = if effective_row_count > 1000 {
-                            use rayon::prelude::*;
-                            group_rows.par_iter().map(|_| 1u64).sum()
-                        } else {
-                            effective_row_count as u64
-                        };
-                        Value::Number(serde_json::Number::from(count))
-                    }
-                    Aggregation::Count {
-                        column, distinct, ..
-                    } => {
-                        if column.is_none() {
-                            // Phase 2.2.1: COUNT(*) pushdown optimization
-                            // Use metadata when: no GROUP BY, no WHERE filters, and we're counting all nodes
-                            let count =
-                                if group_by.is_empty() && effective_row_count == group_rows.len() {
-                                    // Try to use catalog metadata for COUNT(*) optimization
-                                    // This works when we're counting all nodes without filters
-                                    match self.catalog().get_total_node_count() {
-                                        Ok(metadata_count) if metadata_count > 0 => {
-                                            // Use metadata count if available and rows match
-                                            // Only use if we're processing all nodes (no filters applied)
-                                            if group_rows.is_empty()
-                                                || group_rows.len() as u64 == metadata_count
-                                            {
-                                                metadata_count
-                                            } else {
-                                                effective_row_count as u64
-                                            }
-                                        }
-                                        _ => effective_row_count as u64,
-                                    }
-                                } else {
-                                    effective_row_count as u64
-                                };
-                            Value::Number(serde_json::Number::from(count))
-                        } else {
-                            // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                            let col_name = column.as_ref().unwrap();
-                            let count = if *distinct {
-                                // COUNT(DISTINCT) - count unique non-null values
-                                let estimated_unique = (group_rows.len() / 2).max(1);
-                                let mut unique_values =
-                                    std::collections::HashSet::with_capacity(estimated_unique);
-                                for row in &group_rows {
-                                    if let Some(val) = self.extract_value_from_row(
-                                        row,
-                                        col_name,
-                                        columns_for_lookup,
-                                    ) {
-                                        if !val.is_null() {
-                                            unique_values.insert(val.to_string());
-                                        }
-                                    }
-                                }
-                                unique_values.len()
-                            } else {
-                                // COUNT(col) - count non-null values
-                                let mut count = 0;
-                                for row in &group_rows {
-                                    if let Some(val) = self.extract_value_from_row(
-                                        row,
-                                        col_name,
-                                        columns_for_lookup,
-                                    ) {
-                                        if !val.is_null() {
-                                            count += 1;
-                                        }
-                                    }
-                                }
-                                count
-                            };
-                            Value::Number(serde_json::Number::from(count))
-                        }
-                    }
-                    Aggregation::Sum { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        // This handles cases where column is "n.value" but rows only have "n" (the node object)
-                        // Handle empty group_rows with virtual row case
-                        if group_rows.is_empty() && needs_virtual_row {
-                            // Virtual row case - return the literal value (1)
-                            Value::Number(serde_json::Number::from(1))
-                        } else {
-                            // Calculate sum using extract_value_from_row
-                            let sum: f64 = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                        .and_then(|v| self.value_to_number(&v).ok())
-                                })
-                                .sum();
-                            // Return sum as integer if whole number, otherwise as float
-                            if sum.fract() == 0.0 {
-                                Value::Number(serde_json::Number::from(sum as i64))
-                            } else {
-                                Value::Number(
-                                    serde_json::Number::from_f64(sum)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        }
-                    }
-                    Aggregation::Avg { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        // Handle empty group_rows with virtual row case
-                        if group_rows.is_empty() && needs_virtual_row {
-                            // Virtual row case - return the literal value (10 for avg(10))
-                            Value::Number(
-                                serde_json::Number::from_f64(10.0)
-                                    .unwrap_or(serde_json::Number::from(10)),
-                            )
-                        } else {
-                            // Calculate sum and count using extract_value_from_row
-                            let mut sum = 0.0;
-                            let mut count = 0;
-                            for row in &group_rows {
-                                if let Some(val) =
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                {
-                                    if let Ok(num) = self.value_to_number(&val) {
-                                        sum += num;
-                                        count += 1;
-                                    }
-                                }
-                            }
-
-                            if count == 0 {
-                                Value::Null
-                            } else {
-                                // Calculate average from sum and count
-                                let avg = sum / count as f64;
-                                Value::Number(
-                                    serde_json::Number::from_f64(avg)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        }
-                    }
-                    Aggregation::Min { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        let mut min_val: Option<Value> = None;
-                        let mut min_num: Option<f64> = None;
-
-                        for row in &group_rows {
-                            if let Some(val) =
-                                self.extract_value_from_row(row, column, columns_for_lookup)
-                            {
-                                if !val.is_null() {
-                                    // Try to convert to number for efficient comparison
-                                    if let Ok(num) = self.value_to_number(&val) {
-                                        if min_num.is_none() || num < min_num.unwrap() {
-                                            min_num = Some(num);
-                                            min_val = Some(val);
-                                        }
-                                    } else {
-                                        // For non-numeric, fall back to value comparison
-                                        if min_val.is_none() {
-                                            min_val = Some(val);
-                                        } else {
-                                            // String comparison
-                                            let a_str = min_val.as_ref().unwrap().to_string();
-                                            let b_str = val.to_string();
-                                            if b_str < a_str {
-                                                min_val = Some(val);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        min_val.unwrap_or(Value::Null)
-                    }
-                    Aggregation::Max { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        let mut max_val: Option<Value> = None;
-                        let mut max_num: Option<f64> = None;
-
-                        for row in &group_rows {
-                            if let Some(val) =
-                                self.extract_value_from_row(row, column, columns_for_lookup)
-                            {
-                                if !val.is_null() {
-                                    // Try to convert to number for efficient comparison
-                                    if let Ok(num) = self.value_to_number(&val) {
-                                        if max_num.is_none() || num > max_num.unwrap() {
-                                            max_num = Some(num);
-                                            max_val = Some(val);
-                                        }
-                                    } else {
-                                        // For non-numeric, fall back to value comparison
-                                        if max_val.is_none() {
-                                            max_val = Some(val);
-                                        } else {
-                                            // String comparison
-                                            let a_str = max_val.as_ref().unwrap().to_string();
-                                            let b_str = val.to_string();
-                                            if b_str > a_str {
-                                                max_val = Some(val);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        max_val.unwrap_or(Value::Null)
-                    }
-                    Aggregation::Collect {
-                        column, distinct, ..
-                    } => {
-                        // Use extract_value_from_row which correctly handles PropertyAccess (e.g., p.name)
-                        // Pre-size Vec for COLLECT (Phase 2.3 optimization)
-                        let estimated_collect_size = group_rows.len();
-                        let mut collected_values = Vec::with_capacity(estimated_collect_size);
-
-                        // Handle virtual row case: if we have exactly one row and it's a virtual row,
-                        // collect that single value into an array
-                        if needs_virtual_row
-                            && (group_rows.len() == 1
-                                || (group_rows.is_empty() && !project_rows.is_empty()))
-                        {
-                            let row_to_use = if group_rows.len() == 1 {
-                                group_rows.first()
-                            } else if !project_rows.is_empty() {
-                                project_rows.first()
-                            } else {
-                                None
-                            };
-                            if let Some(row) = row_to_use {
-                                if let Some(val) =
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                {
-                                    if !val.is_null() {
-                                        Value::Array(vec![val])
-                                    } else {
-                                        Value::Array(Vec::new())
-                                    }
-                                } else {
-                                    Value::Array(Vec::new())
-                                }
-                            } else {
-                                Value::Array(Vec::new())
-                            }
-                        } else if *distinct {
-                            // COLLECT(DISTINCT col) - collect unique values
-                            let mut seen = std::collections::HashSet::new();
-                            for row in &group_rows {
-                                if let Some(val) =
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                {
-                                    if !val.is_null() {
-                                        let val_str = val.to_string();
-                                        if seen.insert(val_str) {
-                                            collected_values.push(val);
-                                        }
-                                    }
-                                }
-                            }
-                            Value::Array(collected_values)
-                        } else {
-                            // COLLECT(col) - collect all non-null values
-                            for row in &group_rows {
-                                if let Some(val) =
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                {
-                                    if !val.is_null() {
-                                        collected_values.push(val);
-                                    }
-                                }
-                            }
-                            Value::Array(collected_values)
-                        }
-                    }
-                    Aggregation::PercentileDisc {
-                        column, percentile, ..
-                    } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let mut values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            if values.is_empty() {
-                                Value::Null
-                            } else {
-                                values.sort_by(|a, b| {
-                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                });
-                                // Discrete percentile: nearest value
-                                let index = ((*percentile * (values.len() - 1) as f64).round()
-                                    as usize)
-                                    .min(values.len() - 1);
-                                Value::Number(
-                                    serde_json::Number::from_f64(values[index])
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::PercentileCont {
-                        column, percentile, ..
-                    } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let mut values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            if values.is_empty() {
-                                Value::Null
-                            } else {
-                                values.sort_by(|a, b| {
-                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                });
-                                // Continuous percentile: linear interpolation
-                                let position = *percentile * (values.len() - 1) as f64;
-                                let lower_idx = position.floor() as usize;
-                                let upper_idx = position.ceil() as usize;
-
-                                let result = if lower_idx == upper_idx {
-                                    values[lower_idx]
-                                } else {
-                                    let lower = values[lower_idx];
-                                    let upper = values[upper_idx];
-                                    let fraction = position - lower_idx as f64;
-                                    lower + (upper - lower) * fraction
-                                };
-
-                                Value::Number(
-                                    serde_json::Number::from_f64(result)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::StDev { column, .. } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            if values.len() < 2 {
-                                Value::Null
-                            } else {
-                                // Sample standard deviation (Bessel's correction: n-1)
-                                let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                let variance = values
-                                    .iter()
-                                    .map(|v| {
-                                        let diff = v - mean;
-                                        diff * diff
-                                    })
-                                    .sum::<f64>()
-                                    / (values.len() - 1) as f64;
-                                let std_dev = variance.sqrt();
-                                Value::Number(
-                                    serde_json::Number::from_f64(std_dev)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::StDevP { column, .. } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            if values.is_empty() {
-                                Value::Null
-                            } else {
-                                // Population standard deviation (divide by n)
-                                let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                let variance = values
-                                    .iter()
-                                    .map(|v| {
-                                        let diff = v - mean;
-                                        diff * diff
-                                    })
-                                    .sum::<f64>()
-                                    / values.len() as f64;
-                                let std_dev = variance.sqrt();
-                                Value::Number(
-                                    serde_json::Number::from_f64(std_dev)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                };
-                result_row.push(agg_value);
-            }
-
-            context.result_set.rows.push(Row { values: result_row });
-        }
-
-        // If no groups were processed but we need a virtual row, create result row directly
-        // This handles the case where virtual row was created but groups processing failed
-        // OR when we need a virtual row but groups is empty for some reason
-        if context.result_set.rows.is_empty() && !aggregations.is_empty() && group_by.is_empty() {
-            let mut result_row = Vec::new();
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::Count { column, .. } => {
-                        if column.is_none() {
-                            // COUNT(*) without MATCH returns 1
-                            Value::Number(serde_json::Number::from(1))
-                        } else {
-                            Value::Number(serde_json::Number::from(0))
-                        }
-                    }
-                    Aggregation::Sum { column, .. } => {
-                        // SUM with literal without MATCH returns the literal value
-                        // Check if we can find the column in project_columns to get the actual value
-                        if !column.is_empty() {
-                            if let Some(_col_idx) = self.get_column_index(column, &project_columns)
-                            {
-                                // Try to get value from project_columns metadata if available
-                                // For now, use 1 as default (matches virtual row creation)
-                                Value::Number(serde_json::Number::from(1))
-                            } else {
-                                Value::Number(serde_json::Number::from(1))
-                            }
-                        } else {
-                            Value::Number(serde_json::Number::from(0))
-                        }
-                    }
-                    Aggregation::Avg { column, .. } => {
-                        // AVG with literal without MATCH returns the literal value
-                        // For avg(10), the virtual row should have 10, so return 10
-                        // But we use 1 as default from virtual row creation
-                        // Actually, we should check the original literal - for now use 10 for avg test
-                        if !column.is_empty() {
-                            // Try to infer from column name or use default
-                            // For avg(10), return 10.0
-                            Value::Number(
-                                serde_json::Number::from_f64(10.0)
-                                    .unwrap_or(serde_json::Number::from(10)),
-                            )
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::Collect { .. } => Value::Array(Vec::new()),
-                    _ => Value::Null,
-                };
-                result_row.push(agg_value);
-            }
-            context.result_set.rows.push(Row { values: result_row });
-        }
-
-        // If we needed a virtual row but no rows were added, create one now
-        // This is a safety fallback in case groups processing somehow failed
-        if needs_virtual_row && context.result_set.rows.is_empty() && group_by.is_empty() {
-            let mut result_row = Vec::new();
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::Count { column, .. } => {
-                        if column.is_none() {
-                            Value::Number(serde_json::Number::from(1))
-                        } else {
-                            Value::Number(serde_json::Number::from(0))
-                        }
-                    }
-                    Aggregation::Sum { .. } => Value::Number(serde_json::Number::from(1)),
-                    Aggregation::Avg { .. } => Value::Number(
-                        serde_json::Number::from_f64(10.0).unwrap_or(serde_json::Number::from(10)),
-                    ),
-                    Aggregation::Collect { .. } => Value::Array(Vec::new()),
-                    _ => Value::Null,
-                };
-                result_row.push(agg_value);
-            }
-            context.result_set.rows.push(Row { values: result_row });
-        }
-
-        // If no groups and no GROUP BY, still return one row with aggregation values
-        // This handles cases like: MATCH (n:NonExistent) RETURN count(*)
-        if is_empty_aggregation {
-            // Clear any existing rows first
-            context.result_set.rows.clear();
-            let mut result_row = Vec::new();
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::Count { .. } => {
-                        // COUNT on empty set returns 0
-                        Value::Number(serde_json::Number::from(0))
-                    }
-                    Aggregation::Collect { .. } => {
-                        // COLLECT on empty set returns empty array
-                        Value::Array(Vec::new())
-                    }
-                    Aggregation::Sum { .. } => {
-                        // SUM on empty set returns NULL (Neo4j behavior)
-                        Value::Null
-                    }
-                    _ => {
-                        // AVG/MIN/MAX on empty set return NULL
-                        Value::Null
-                    }
-                };
-                result_row.push(agg_value);
-            }
-            context.result_set.rows.push(Row { values: result_row });
-        }
-        // CRITICAL: Final check - if we needed a virtual row, ALWAYS ensure we have correct values
-        // This is the ultimate fallback to fix any issues with groups processing
-        // BUT: Only execute if we don't have variables or MATCH columns (no MATCH that returned empty)
-        // IMPORTANT: Don't execute if is_empty_aggregation was already handled (it has priority)
-        if !is_empty_aggregation
-            && needs_virtual_row
-            && group_by.is_empty()
-            && !has_variables
-            && !has_match_columns
-        {
-            // Always replace rows when we needed a virtual row - this ensures correctness
-            context.result_set.rows.clear();
-            let mut result_row = Vec::new();
-
-            // Get virtual row values if available (from projection items)
-            // If project_rows is empty, evaluate projection_items directly
-            let virtual_row_values: Option<Vec<Value>> =
-                if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
-                    Some(project_rows[0].values.clone())
-                } else if let Some(items) = projection_items {
-                    // Evaluate projection items directly to get literal values
-                    let empty_row_map = std::collections::HashMap::new();
-                    let mut values = Vec::new();
-                    for item in items {
-                        match self.evaluate_projection_expression(
-                            &empty_row_map,
-                            context,
-                            &item.expression,
-                        ) {
-                            Ok(value) => values.push(value),
-                            Err(_) => values.push(Value::Null),
-                        }
-                    }
-                    if !values.is_empty() {
-                        Some(values)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::Count { column, .. } => {
-                        if column.is_none() {
-                            Value::Number(serde_json::Number::from(1))
-                        } else {
-                            Value::Number(serde_json::Number::from(0))
-                        }
-                    }
-                    Aggregation::Sum { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Number(serde_json::Number::from(1))
-                                }
-                            } else {
-                                Value::Number(serde_json::Number::from(1))
-                            }
-                        } else {
-                            Value::Number(serde_json::Number::from(1))
-                        }
-                    }
-                    Aggregation::Avg { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Number(
-                                        serde_json::Number::from_f64(10.0)
-                                            .unwrap_or(serde_json::Number::from(10)),
-                                    )
-                                }
-                            } else {
-                                Value::Number(
-                                    serde_json::Number::from_f64(10.0)
-                                        .unwrap_or(serde_json::Number::from(10)),
-                                )
-                            }
-                        } else {
-                            Value::Number(
-                                serde_json::Number::from_f64(10.0)
-                                    .unwrap_or(serde_json::Number::from(10)),
-                            )
-                        }
-                    }
-                    Aggregation::Min { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                Value::Null
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::Max { column, .. } => {
-                        // Try to get value from virtual row
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() {
-                                    vr_vals[col_idx].clone()
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                Value::Null
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::Collect { column, .. } => {
-                        // Try to get value from virtual row and wrap in array
-                        if let Some(ref vr_vals) = virtual_row_values {
-                            if let Some(col_idx) = self.get_column_index(column, columns_for_lookup)
-                            {
-                                if col_idx < vr_vals.len() && !vr_vals[col_idx].is_null() {
-                                    Value::Array(vec![vr_vals[col_idx].clone()])
-                                } else {
-                                    Value::Array(Vec::new())
-                                }
-                            } else {
-                                Value::Array(Vec::new())
-                            }
-                        } else {
-                            Value::Array(Vec::new())
-                        }
-                    }
-                    _ => Value::Null,
-                };
-                result_row.push(agg_value);
-            }
-            context.result_set.rows.push(Row {
-                values: result_row.clone(),
-            });
-        }
-
-        // FINAL ABSOLUTE CHECK: If we have aggregations without GROUP BY and result has Null or is empty,
-        // ALWAYS create virtual row result - this is the ultimate fallback
-        // This handles cases where Project created rows but they're empty or incorrect
-        // BUT: Only execute if we don't have variables or MATCH columns (no MATCH that returned empty)
-        // IMPORTANT: Don't execute if is_empty_aggregation was already handled (it has priority)
-        if !is_empty_aggregation
-            && group_by.is_empty()
-            && !aggregations.is_empty()
-            && !has_variables
-            && !has_match_columns
-        {
-            let has_null_or_empty = context.result_set.rows.is_empty()
-                || context
-                    .result_set
-                    .rows
-                    .iter()
-                    .any(|row| row.values.is_empty() || row.values.iter().any(|v| v.is_null()));
-
-            // Only create virtual row if we truly need it (no valid rows exist)
-            if has_null_or_empty {
-                context.result_set.rows.clear();
-                let mut result_row = Vec::new();
-
-                // Get virtual row values if available (from projection items)
-                // If project_rows is empty, evaluate projection_items directly
-                let virtual_row_values: Option<Vec<Value>> =
-                    if !project_rows.is_empty() && !project_rows[0].values.is_empty() {
-                        Some(project_rows[0].values.clone())
-                    } else if let Some(items) = projection_items {
-                        // Evaluate projection items directly to get literal values
-                        let empty_row_map = std::collections::HashMap::new();
-                        let mut values = Vec::new();
-                        for item in items {
-                            match self.evaluate_projection_expression(
-                                &empty_row_map,
-                                context,
-                                &item.expression,
-                            ) {
-                                Ok(value) => values.push(value),
-                                Err(_) => values.push(Value::Null),
-                            }
-                        }
-                        if !values.is_empty() {
-                            Some(values)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                for agg in aggregations {
-                    let agg_value = match agg {
-                        Aggregation::Count { column, .. } => {
-                            if column.is_none() {
-                                Value::Number(serde_json::Number::from(1))
-                            } else {
-                                Value::Number(serde_json::Number::from(0))
-                            }
-                        }
-                        Aggregation::Sum { column, .. } => {
-                            // Try to get value from virtual row
-                            if let Some(ref vr_vals) = virtual_row_values {
-                                if let Some(col_idx) =
-                                    self.get_column_index(column, columns_for_lookup)
-                                {
-                                    if col_idx < vr_vals.len() {
-                                        vr_vals[col_idx].clone()
-                                    } else {
-                                        Value::Number(serde_json::Number::from(1))
-                                    }
-                                } else {
-                                    Value::Number(serde_json::Number::from(1))
-                                }
-                            } else {
-                                Value::Number(serde_json::Number::from(1))
-                            }
-                        }
-                        Aggregation::Avg { column, .. } => {
-                            // Try to get value from virtual row
-                            if let Some(ref vr_vals) = virtual_row_values {
-                                if let Some(col_idx) =
-                                    self.get_column_index(column, columns_for_lookup)
-                                {
-                                    if col_idx < vr_vals.len() {
-                                        vr_vals[col_idx].clone()
-                                    } else {
-                                        Value::Number(
-                                            serde_json::Number::from_f64(10.0)
-                                                .unwrap_or(serde_json::Number::from(10)),
-                                        )
-                                    }
-                                } else {
-                                    Value::Number(
-                                        serde_json::Number::from_f64(10.0)
-                                            .unwrap_or(serde_json::Number::from(10)),
-                                    )
-                                }
-                            } else {
-                                Value::Number(
-                                    serde_json::Number::from_f64(10.0)
-                                        .unwrap_or(serde_json::Number::from(10)),
-                                )
-                            }
-                        }
-                        Aggregation::Min { column, .. } => {
-                            // Try to get value from virtual row
-                            if let Some(ref vr_vals) = virtual_row_values {
-                                if let Some(col_idx) =
-                                    self.get_column_index(column, columns_for_lookup)
-                                {
-                                    if col_idx < vr_vals.len() {
-                                        vr_vals[col_idx].clone()
-                                    } else {
-                                        Value::Null
-                                    }
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                Value::Null
-                            }
-                        }
-                        Aggregation::Max { column, .. } => {
-                            // Try to get value from virtual row
-                            if let Some(ref vr_vals) = virtual_row_values {
-                                if let Some(col_idx) =
-                                    self.get_column_index(column, columns_for_lookup)
-                                {
-                                    if col_idx < vr_vals.len() {
-                                        vr_vals[col_idx].clone()
-                                    } else {
-                                        Value::Null
-                                    }
-                                } else {
-                                    Value::Null
-                                }
-                            } else {
-                                Value::Null
-                            }
-                        }
-                        Aggregation::Collect { column, .. } => {
-                            // Try to get value from virtual row and wrap in array
-                            if let Some(ref vr_vals) = virtual_row_values {
-                                if let Some(col_idx) =
-                                    self.get_column_index(column, columns_for_lookup)
-                                {
-                                    if col_idx < vr_vals.len() && !vr_vals[col_idx].is_null() {
-                                        Value::Array(vec![vr_vals[col_idx].clone()])
-                                    } else {
-                                        Value::Array(Vec::new())
-                                    }
-                                } else {
-                                    Value::Array(Vec::new())
-                                }
-                            } else {
-                                Value::Array(Vec::new())
-                            }
-                        }
-                        _ => Value::Null,
-                    };
-                    result_row.push(agg_value);
-                }
-                context.result_set.rows.push(Row {
-                    values: result_row.clone(),
-                });
-            }
-        }
-
-        let mut columns = group_by.to_vec();
-        columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
-        context.result_set.columns = columns;
-
-        let row_maps = self.result_set_as_rows(context);
-        self.update_variables_from_rows(context, &row_maps);
-
-        Ok(())
-    }
-
     /// Execute Union operator
-    fn execute_union(
+    pub(super) fn execute_union(
         &self,
         context: &mut ExecutionContext,
         left: &[Operator],
@@ -5056,7 +3731,7 @@ impl Executor {
     }
 
     /// Execute CREATE operator with context from MATCH
-    fn execute_create_with_context(
+    pub(super) fn execute_create_with_context(
         &self,
         context: &mut ExecutionContext,
         pattern: &parser::Pattern,
@@ -5449,7 +4124,11 @@ impl Executor {
         Ok(())
     }
     /// Execute a single operator and return results
-    fn execute_operator(&self, context: &mut ExecutionContext, operator: &Operator) -> Result<()> {
+    pub(super) fn execute_operator(
+        &self,
+        context: &mut ExecutionContext,
+        operator: &Operator,
+    ) -> Result<()> {
         match operator {
             Operator::NodeByLabel { label_id, variable } => {
                 let nodes = self.execute_node_by_label(*label_id)?;
@@ -5723,7 +4402,7 @@ impl Executor {
     }
 
     /// Execute Join operator
-    fn execute_join(
+    pub(super) fn execute_join(
         &self,
         context: &mut ExecutionContext,
         left: &Operator,
@@ -5784,7 +4463,12 @@ impl Executor {
     }
 
     /// Check if two rows match based on join condition
-    fn rows_match(&self, left_row: &Row, right_row: &Row, condition: Option<&str>) -> Result<bool> {
+    pub(super) fn rows_match(
+        &self,
+        left_row: &Row,
+        right_row: &Row,
+        condition: Option<&str>,
+    ) -> Result<bool> {
         match condition {
             Some(_cond) => {
                 // For now, implement simple equality matching
@@ -5808,7 +4492,7 @@ impl Executor {
     }
 
     /// Execute IndexScan operator
-    fn execute_index_scan(
+    pub(super) fn execute_index_scan(
         &self,
         context: &mut ExecutionContext,
         index_type: IndexType,
@@ -5897,7 +4581,7 @@ impl Executor {
     }
 
     /// Try advanced join algorithms (Hash Join, Merge Join)
-    fn try_advanced_relationship_join(
+    pub(super) fn try_advanced_relationship_join(
         &self,
         left_result: &ResultSet,
         right_result: &ResultSet,
@@ -5948,14 +4632,14 @@ impl Executor {
     }
 
     /// Determine if Hash Join should be used
-    fn should_use_hash_join(&self, left_size: usize, right_size: usize) -> bool {
+    pub(super) fn should_use_hash_join(&self, left_size: usize, right_size: usize) -> bool {
         // Hash join is good when one side fits in memory and the other is larger
         // Use a heuristic: if smaller side is < 1000 rows, hash join is usually better
         left_size.min(right_size) < 1000
     }
 
     /// Determine if Merge Join should be used
-    fn should_use_merge_join(
+    pub(super) fn should_use_merge_join(
         &self,
         left_result: &ResultSet,
         right_result: &ResultSet,
@@ -5969,7 +4653,7 @@ impl Executor {
     }
 
     /// Check if a result set is sorted on a given column index
-    fn is_sorted_on_key(&self, result: &ResultSet, key_idx: usize) -> bool {
+    pub(super) fn is_sorted_on_key(&self, result: &ResultSet, key_idx: usize) -> bool {
         if result.rows.is_empty() || key_idx >= result.rows[0].values.len() {
             return false;
         }
@@ -5996,14 +4680,14 @@ impl Executor {
     }
 
     /// Parse join condition to extract column indices
-    fn parse_join_condition(&self, condition: &str) -> Result<(usize, usize)> {
+    pub(super) fn parse_join_condition(&self, condition: &str) -> Result<(usize, usize)> {
         // Simple parsing for conditions like "n.id = m.id" or "left.id = right.id"
         // For now, assume first column of each side
         Ok((0, 0))
     }
 
     /// Execute Hash Join algorithm
-    fn execute_hash_join(
+    pub(super) fn execute_hash_join(
         &self,
         left_result: &ResultSet,
         right_result: &ResultSet,
@@ -6090,7 +4774,7 @@ impl Executor {
     }
 
     /// Execute Merge Join algorithm
-    fn execute_merge_join(
+    pub(super) fn execute_merge_join(
         &self,
         left_result: &ResultSet,
         right_result: &ResultSet,
@@ -6170,7 +4854,7 @@ impl Executor {
     }
 
     /// Convert row value to hash key
-    fn row_value_to_key(&self, value: &Value) -> String {
+    pub(super) fn row_value_to_key(&self, value: &Value) -> String {
         match value {
             Value::Number(n) => format!("{}", n),
             Value::String(s) => s.clone(),
@@ -6180,7 +4864,7 @@ impl Executor {
     }
 
     /// Compare two values for merge join
-    fn compare_values_for_ordering(&self, a: &Value, b: &Value) -> std::cmp::Ordering {
+    pub(super) fn compare_values_for_ordering(&self, a: &Value, b: &Value) -> std::cmp::Ordering {
         match (a, b) {
             (Value::Number(x), Value::Number(y)) => x
                 .as_f64()
@@ -6193,7 +4877,7 @@ impl Executor {
     }
 
     /// Fallback nested loop join implementation
-    fn execute_nested_loop_join(
+    pub(super) fn execute_nested_loop_join(
         &self,
         context: &mut ExecutionContext,
         left_context: &ExecutionContext,
@@ -6329,7 +5013,11 @@ impl Executor {
         Ok(())
     }
     /// Execute Distinct operator
-    fn execute_distinct(&self, context: &mut ExecutionContext, columns: &[String]) -> Result<()> {
+    pub(super) fn execute_distinct(
+        &self,
+        context: &mut ExecutionContext,
+        columns: &[String],
+    ) -> Result<()> {
         if context.result_set.rows.is_empty() && !context.variables.is_empty() {
             let rows = self.materialize_rows_from_variables(context);
             self.update_result_set_from_rows(context, &rows);
@@ -6407,7 +5095,12 @@ impl Executor {
 
     /// Extract value from a row for a given column name.
     /// Handles PropertyAccess columns (like "n.value") by extracting from the node object.
-    fn extract_value_from_row(&self, row: &Row, column: &str, columns: &[String]) -> Option<Value> {
+    pub(super) fn extract_value_from_row(
+        &self,
+        row: &Row,
+        column: &str,
+        columns: &[String],
+    ) -> Option<Value> {
         // First try direct column lookup
         if let Some(idx) = columns.iter().position(|c| c == column) {
             if idx < row.values.len() {
@@ -6441,12 +5134,12 @@ impl Executor {
     }
 
     /// Get the index of a column by name
-    fn get_column_index(&self, column_name: &str, columns: &[String]) -> Option<usize> {
+    pub(super) fn get_column_index(&self, column_name: &str, columns: &[String]) -> Option<usize> {
         columns.iter().position(|col| col == column_name)
     }
 
     /// Evaluate a predicate expression against a node
-    fn evaluate_predicate(
+    pub(super) fn evaluate_predicate(
         &self,
         node: &Value,
         expr: &parser::Expression,
@@ -6571,7 +5264,7 @@ impl Executor {
     }
 
     /// Evaluate an expression against a node
-    fn evaluate_expression(
+    pub(super) fn evaluate_expression(
         &self,
         node: &Value,
         expr: &parser::Expression,
@@ -6824,7 +5517,7 @@ impl Executor {
     }
 
     /// Compare two values for equality, handling numeric type differences (1.0 == 1)
-    fn values_equal_for_comparison(&self, left: &Value, right: &Value) -> bool {
+    pub(super) fn values_equal_for_comparison(&self, left: &Value, right: &Value) -> bool {
         match (left, right) {
             (Value::Number(a), Value::Number(b)) => {
                 // Compare numbers (handle int/float conversion)
@@ -6873,7 +5566,12 @@ impl Executor {
     }
 
     /// Compare two values using a comparison function
-    fn compare_values<F>(&self, left: &Value, right: &Value, compare_fn: F) -> Result<bool>
+    pub(super) fn compare_values<F>(
+        &self,
+        left: &Value,
+        right: &Value,
+        compare_fn: F,
+    ) -> Result<bool>
     where
         F: FnOnce(f64, f64) -> bool,
     {
@@ -6883,7 +5581,7 @@ impl Executor {
     }
 
     /// Convert a value to a number
-    fn value_to_number(&self, value: &Value) -> Result<f64> {
+    pub(super) fn value_to_number(&self, value: &Value) -> Result<f64> {
         match value {
             Value::Number(n) => n.as_f64().ok_or_else(|| Error::TypeMismatch {
                 expected: "number".to_string(),
@@ -6906,7 +5604,7 @@ impl Executor {
     }
 
     /// Convert a value to a boolean
-    fn value_to_bool(&self, value: &Value) -> Result<bool> {
+    pub(super) fn value_to_bool(&self, value: &Value) -> Result<bool> {
         match value {
             Value::Bool(b) => Ok(*b),
             Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0) != 0.0),
@@ -6918,7 +5616,7 @@ impl Executor {
     }
 
     /// Find relationships for a node
-    fn find_relationships(
+    pub(super) fn find_relationships(
         &self,
         node_id: u64,
         type_ids: &[u32],
@@ -7495,7 +6193,7 @@ impl Executor {
         Ok(relationships)
     }
     /// Phase 8.3: Filter relationships using property index when applicable
-    fn filter_relationships_by_property_index(
+    pub(super) fn filter_relationships_by_property_index(
         &self,
         relationships: &[RelationshipInfo],
         type_id: Option<u32>,
@@ -7523,7 +6221,7 @@ impl Executor {
     }
 
     /// Phase 8.3: Extract relationship property filters from WHERE clause and use index
-    fn use_relationship_property_index_for_expand(
+    pub(super) fn use_relationship_property_index_for_expand(
         &self,
         type_ids: &[u32],
         _context: &ExecutionContext,
@@ -7566,7 +6264,7 @@ struct VariableLengthPathVisitor {
 }
 
 impl VariableLengthPathVisitor {
-    fn new(
+    pub(super) fn new(
         start_node: u64,
         min_length: usize,
         max_length: usize,
@@ -7585,7 +6283,7 @@ impl VariableLengthPathVisitor {
         }
     }
 
-    fn get_paths(self) -> Vec<(Vec<u64>, Vec<u64>)> {
+    pub(super) fn get_paths(self) -> Vec<(Vec<u64>, Vec<u64>)> {
         self.paths
     }
 }
@@ -7666,7 +6364,7 @@ impl TraversalVisitor for VariableLengthPathVisitor {
 impl Executor {
     /// Execute variable-length path expansion using BFS
     #[allow(clippy::too_many_arguments)]
-    fn execute_variable_length_path(
+    pub(super) fn execute_variable_length_path(
         &self,
         context: &mut ExecutionContext,
         type_id: Option<u32>,
@@ -7923,7 +6621,7 @@ impl Executor {
     }
 
     /// Find shortest path between two nodes using BFS
-    fn find_shortest_path(
+    pub(super) fn find_shortest_path(
         &self,
         start_id: u64,
         end_id: u64,
@@ -8001,7 +6699,7 @@ impl Executor {
     }
 
     /// Find all shortest paths between two nodes using BFS
-    fn find_all_shortest_paths(
+    pub(super) fn find_all_shortest_paths(
         &self,
         start_id: u64,
         end_id: u64,
@@ -8076,7 +6774,7 @@ impl Executor {
 
     /// DFS helper to find all paths of a specific length
     #[allow(clippy::too_many_arguments)]
-    fn find_paths_dfs(
+    pub(super) fn find_paths_dfs(
         &self,
         current: u64,
         target: u64,
@@ -8156,7 +6854,7 @@ impl Executor {
     }
 
     /// Convert Path to JSON Value
-    fn path_to_value(&self, path: &Path) -> Value {
+    pub(super) fn path_to_value(&self, path: &Path) -> Value {
         let mut path_obj = serde_json::Map::new();
 
         // Add nodes array
@@ -8191,7 +6889,7 @@ impl Executor {
     }
 
     /// Read a node as a JSON value
-    fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
+    pub(super) fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
         let node_record = self.store().read_node(node_id)?;
 
         if node_record.is_deleted() {
@@ -8251,7 +6949,7 @@ impl Executor {
     }
 
     /// Get a column value from a node for sorting
-    fn get_column_value(&self, node: &Value, column: &str) -> Value {
+    pub(super) fn get_column_value(&self, node: &Value, column: &str) -> Value {
         if let Value::Object(props) = node {
             if let Some(value) = props.get(column) {
                 value.clone()
@@ -8275,7 +6973,7 @@ impl Executor {
     }
 
     /// Compare values for sorting
-    fn compare_values_for_sort(&self, a: &Value, b: &Value) -> std::cmp::Ordering {
+    pub(super) fn compare_values_for_sort(&self, a: &Value, b: &Value) -> std::cmp::Ordering {
         match (a, b) {
             (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
             (Value::Null, _) => std::cmp::Ordering::Less,
@@ -8311,7 +7009,7 @@ impl Executor {
     }
 
     /// Convert a value to string for comparison
-    fn value_to_string(&self, value: &Value) -> String {
+    pub(super) fn value_to_string(&self, value: &Value) -> String {
         match value {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
@@ -8322,7 +7020,7 @@ impl Executor {
         }
     }
     /// Execute UNWIND operator - expands a list into rows
-    fn execute_unwind(
+    pub(super) fn execute_unwind(
         &self,
         context: &mut ExecutionContext,
         expression: &str,
@@ -8417,7 +7115,7 @@ impl Executor {
     }
 
     /// Convert Row to HashMap for expression evaluation
-    fn row_to_map(&self, row: &Row, columns: &[String]) -> HashMap<String, Value> {
+    pub(super) fn row_to_map(&self, row: &Row, columns: &[String]) -> HashMap<String, Value> {
         let mut map = HashMap::new();
         for (idx, col_name) in columns.iter().enumerate() {
             if let Some(value) = row.values.get(idx) {
@@ -8428,7 +7126,7 @@ impl Executor {
     }
 
     /// Execute new index scan operation
-    fn execute_index_scan_new(
+    pub(super) fn execute_index_scan_new(
         &self,
         context: &mut ExecutionContext,
         _index_name: &str,
@@ -8445,7 +7143,7 @@ impl Executor {
     }
 
     /// Execute LOAD CSV operator
-    fn execute_load_csv(
+    pub(super) fn execute_load_csv(
         &self,
         context: &mut ExecutionContext,
         url: &str,
@@ -8597,7 +7295,7 @@ impl Executor {
     }
 
     /// Execute CALL procedure operator
-    fn execute_call_procedure(
+    pub(super) fn execute_call_procedure(
         &self,
         context: &mut ExecutionContext,
         procedure_name: &str,
@@ -8734,7 +7432,7 @@ impl Executor {
     }
 
     /// Execute db.labels() procedure
-    fn execute_db_labels_procedure(
+    pub(super) fn execute_db_labels_procedure(
         &self,
         context: &mut ExecutionContext,
         yield_columns: Option<&Vec<String>>,
@@ -8773,7 +7471,7 @@ impl Executor {
     }
 
     /// Execute db.propertyKeys() procedure
-    fn execute_db_property_keys_procedure(
+    pub(super) fn execute_db_property_keys_procedure(
         &self,
         context: &mut ExecutionContext,
         yield_columns: Option<&Vec<String>>,
@@ -8806,7 +7504,7 @@ impl Executor {
     }
 
     /// Execute db.relationshipTypes() procedure
-    fn execute_db_relationship_types_procedure(
+    pub(super) fn execute_db_relationship_types_procedure(
         &self,
         context: &mut ExecutionContext,
         yield_columns: Option<&Vec<String>>,
@@ -8841,7 +7539,7 @@ impl Executor {
     }
 
     /// Execute db.schema() procedure
-    fn execute_db_schema_procedure(
+    pub(super) fn execute_db_schema_procedure(
         &self,
         context: &mut ExecutionContext,
         yield_columns: Option<&Vec<String>>,
@@ -8950,7 +7648,7 @@ impl Executor {
     }
 
     /// Execute SHOW DATABASES command
-    fn execute_show_databases(&self) -> Result<ResultSet> {
+    pub(super) fn execute_show_databases(&self) -> Result<ResultSet> {
         if let Some(db_manager_arc) = self.shared.database_manager() {
             let db_manager = db_manager_arc.read();
             let databases = db_manager.list_databases();
@@ -9039,7 +7737,11 @@ impl Executor {
     }
 
     /// Execute CREATE DATABASE command
-    fn execute_create_database(&self, name: &str, if_not_exists: bool) -> Result<ResultSet> {
+    pub(super) fn execute_create_database(
+        &self,
+        name: &str,
+        if_not_exists: bool,
+    ) -> Result<ResultSet> {
         if let Some(db_manager_arc) = self.shared.database_manager() {
             let db_manager = db_manager_arc.read();
             // Check if database already exists
@@ -9084,7 +7786,7 @@ impl Executor {
     }
 
     /// Execute DROP DATABASE command
-    fn execute_drop_database(&self, name: &str, if_exists: bool) -> Result<ResultSet> {
+    pub(super) fn execute_drop_database(&self, name: &str, if_exists: bool) -> Result<ResultSet> {
         if let Some(db_manager_arc) = self.shared.database_manager() {
             let db_manager = db_manager_arc.read();
             // Check if trying to drop default database
@@ -9135,7 +7837,7 @@ impl Executor {
         }
     }
 
-    fn execute_alter_database(
+    pub(super) fn execute_alter_database(
         &self,
         name: &str,
         read_only: Option<bool>,
@@ -9177,7 +7879,7 @@ impl Executor {
         }
     }
 
-    fn execute_use_database(&self, name: &str) -> Result<ResultSet> {
+    pub(super) fn execute_use_database(&self, name: &str) -> Result<ResultSet> {
         if let Some(db_manager_arc) = self.shared.database_manager() {
             let db_manager = db_manager_arc.read();
             // Check if database exists
@@ -9205,7 +7907,7 @@ impl Executor {
     }
 
     /// Evaluate an expression in the current context
-    fn evaluate_expression_in_context(
+    pub(super) fn evaluate_expression_in_context(
         &self,
         context: &ExecutionContext,
         expr: &parser::Expression,
@@ -9235,7 +7937,7 @@ impl Executor {
     /// Apply Cartesian product of new values with existing variables in context
     /// This expands all existing array variables by repeating each element M times (where M is new_values.len())
     /// and creates the new variable by repeating the whole sequence N times (where N is existing row count).
-    fn apply_cartesian_product(
+    pub(super) fn apply_cartesian_product(
         &self,
         context: &mut ExecutionContext,
         new_var: &str,
@@ -9301,7 +8003,7 @@ impl Executor {
         Ok(())
     }
 
-    fn materialize_rows_from_variables(
+    pub(super) fn materialize_rows_from_variables(
         &self,
         context: &ExecutionContext,
     ) -> Vec<HashMap<String, Value>> {
@@ -9511,7 +8213,7 @@ impl Executor {
         rows
     }
 
-    fn update_result_set_from_rows(
+    pub(super) fn update_result_set_from_rows(
         &self,
         context: &mut ExecutionContext,
         rows: &[HashMap<String, Value>],
@@ -9729,7 +8431,7 @@ impl Executor {
     }
 
     /// Check if an expression can be evaluated without variables (only literals and operations)
-    fn can_evaluate_without_variables(&self, expr: &parser::Expression) -> bool {
+    pub(super) fn can_evaluate_without_variables(&self, expr: &parser::Expression) -> bool {
         match expr {
             parser::Expression::Literal(_) => true,
             parser::Expression::Parameter(_) => true, // Parameters can be evaluated
@@ -9806,3139 +8508,9 @@ impl Executor {
             }
         }
     }
-    fn evaluate_projection_expression(
-        &self,
-        row: &HashMap<String, Value>,
-        context: &ExecutionContext,
-        expr: &parser::Expression,
-    ) -> Result<Value> {
-        match expr {
-            parser::Expression::Variable(name) => {
-                let result = row.get(name).cloned().unwrap_or(Value::Null);
-                tracing::debug!(
-                    "evaluate_projection_expression: Variable '{}' -> {:?}",
-                    name,
-                    result
-                );
-                Ok(result)
-            }
-            parser::Expression::PropertyAccess { variable, property } => {
-                // Check if this is a point method call (e.g., point.distance())
-                if property == "distance" {
-                    // Get the point from the variable
-                    if let Some(Value::Object(_)) = row.get(variable) {
-                        // This is a point object, but we need another point to calculate distance
-                        // For now, return a function that can be called with another point
-                        // In Cypher, this would be: point1.distance(point2)
-                        // We'll handle this as a special case - the syntax would be different
-                        // For now, return null and document that distance() function should be used
-                        return Ok(Value::Null);
-                    }
-                }
-
-                // First try to get the entity from the row
-                let mut entity_opt = if let Some(e) = row.get(variable) {
-                    Some(e.clone())
-                } else {
-                    // If not in row, try to get from context variables (for single values, not arrays)
-                    context.get_variable(variable).and_then(|v| {
-                        // If it's an array, take the first element (for compatibility)
-                        match v {
-                            Value::Array(arr) => arr.first().cloned(),
-                            _ => Some(v.clone()),
-                        }
-                    })
-                };
-
-                // CRITICAL FIX: If property is not found and entity is a node, reload it from storage
-                // This handles the case where prop_ptr was reset to 0 and properties need to be recovered via reverse_index
-                if let Some(ref entity) = entity_opt {
-                    let prop_value = Self::extract_property(entity, property);
-                    if prop_value.is_null() {
-                        // Property not found - try to reload node if it has _nexus_id
-                        if let Some(node_id) = Self::extract_entity_id(entity) {
-                            // Check if it's a node (not a relationship) by checking if it doesn't have "type" property
-                            if let Value::Object(obj) = entity {
-                                if !obj.contains_key("type") {
-                                    // It's a node - reload it to recover properties via reverse_index
-                                    if let Ok(reloaded_node) = self.read_node_as_value(node_id) {
-                                        // Use reloaded node for property access
-                                        entity_opt = Some(reloaded_node);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                    }
-                }
-
-                // Handle point accessor aliases (Neo4j compatibility)
-                // point.latitude should return y, point.longitude should return x
-                let actual_property = match property.as_str() {
-                    "latitude" => {
-                        // Check if this is a point object (has x, y, crs)
-                        if let Some(Value::Object(ref obj)) = entity_opt {
-                            if obj.contains_key("x")
-                                && obj.contains_key("y")
-                                && obj.contains_key("crs")
-                            {
-                                "y"
-                            } else {
-                                property
-                            }
-                        } else {
-                            property
-                        }
-                    }
-                    "longitude" => {
-                        // Check if this is a point object (has x, y, crs)
-                        if let Some(Value::Object(ref obj)) = entity_opt {
-                            if obj.contains_key("x")
-                                && obj.contains_key("y")
-                                && obj.contains_key("crs")
-                            {
-                                "x"
-                            } else {
-                                property
-                            }
-                        } else {
-                            property
-                        }
-                    }
-                    _ => property,
-                };
-
-                Ok(entity_opt
-                    .as_ref()
-                    .map(|e| Self::extract_property(e, actual_property))
-                    .unwrap_or(Value::Null))
-            }
-            parser::Expression::ArrayIndex { base, index } => {
-                // Evaluate the base expression (should return an array)
-                let base_value = self.evaluate_projection_expression(row, context, base)?;
-
-                // Evaluate the index expression (should return an integer)
-                let index_value = self.evaluate_projection_expression(row, context, index)?;
-
-                // Extract index as i64
-                // Handle both integer and float numbers (floats come from unary minus)
-                let idx = match index_value {
-                    Value::Number(n) => n
-                        .as_i64()
-                        .or_else(|| n.as_f64().map(|f| f as i64))
-                        .unwrap_or(0),
-                    _ => return Ok(Value::Null), // Invalid index type
-                };
-
-                // Access array element
-                match base_value {
-                    Value::Array(arr) => {
-                        // Handle negative indices (Python-style)
-                        let array_len = arr.len() as i64;
-                        let actual_idx = if idx < 0 {
-                            (array_len + idx) as usize
-                        } else {
-                            idx as usize
-                        };
-
-                        // Return element or null if out of bounds
-                        Ok(arr.get(actual_idx).cloned().unwrap_or(Value::Null))
-                    }
-                    _ => Ok(Value::Null), // Base is not an array
-                }
-            }
-            parser::Expression::ArraySlice { base, start, end } => {
-                // Evaluate the base expression (should return an array)
-                let base_value = self.evaluate_projection_expression(row, context, base)?;
-
-                match base_value {
-                    Value::Array(arr) => {
-                        let array_len = arr.len() as i64;
-
-                        // Evaluate start index (default to 0)
-                        let start_idx = if let Some(start_expr) = start {
-                            let start_val =
-                                self.evaluate_projection_expression(row, context, start_expr)?;
-                            match start_val {
-                                Value::Number(n) => {
-                                    // Handle both integer and float numbers (floats come from unary minus)
-                                    let idx = n
-                                        .as_i64()
-                                        .or_else(|| n.as_f64().map(|f| f as i64))
-                                        .unwrap_or(0);
-                                    // Handle negative indices
-                                    if idx < 0 {
-                                        ((array_len + idx).max(0)) as usize
-                                    } else {
-                                        idx.min(array_len) as usize
-                                    }
-                                }
-                                _ => 0,
-                            }
-                        } else {
-                            0
-                        };
-
-                        // Evaluate end index (default to array length)
-                        let end_idx = if let Some(end_expr) = end {
-                            let end_val =
-                                self.evaluate_projection_expression(row, context, end_expr)?;
-                            match end_val {
-                                Value::Number(n) => {
-                                    // Handle both integer and float numbers (floats come from unary minus)
-                                    let idx = n
-                                        .as_i64()
-                                        .or_else(|| n.as_f64().map(|f| f as i64))
-                                        .unwrap_or(array_len);
-                                    // Handle negative indices
-                                    // In Cypher, negative end index excludes that many elements from the end
-                                    // e.g., [1..-1] means from index 1 to (length - 1), excluding the last element
-                                    if idx < 0 {
-                                        let calculated = array_len + idx;
-                                        // Ensure we don't go below 0, but negative end should exclude elements
-                                        if calculated <= 0 {
-                                            0
-                                        } else {
-                                            calculated as usize
-                                        }
-                                    } else {
-                                        idx.min(array_len) as usize
-                                    }
-                                }
-                                _ => arr.len(),
-                            }
-                        } else {
-                            arr.len()
-                        };
-
-                        // Return slice (empty if start >= end)
-                        if start_idx <= end_idx && start_idx < arr.len() {
-                            let slice = arr[start_idx..end_idx.min(arr.len())].to_vec();
-                            Ok(Value::Array(slice))
-                        } else {
-                            Ok(Value::Array(Vec::new()))
-                        }
-                    }
-                    _ => Ok(Value::Null), // Base is not an array
-                }
-            }
-            parser::Expression::Literal(literal) => match literal {
-                parser::Literal::String(s) => Ok(Value::String(s.clone())),
-                parser::Literal::Integer(i) => Ok(Value::Number((*i).into())),
-                parser::Literal::Float(f) => Ok(serde_json::Number::from_f64(*f)
-                    .map(Value::Number)
-                    .unwrap_or(Value::Null)),
-                parser::Literal::Boolean(b) => Ok(Value::Bool(*b)),
-                parser::Literal::Null => Ok(Value::Null),
-                parser::Literal::Point(p) => Ok(p.to_json_value()),
-            },
-            parser::Expression::Parameter(name) => {
-                Ok(context.params.get(name).cloned().unwrap_or(Value::Null))
-            }
-            parser::Expression::FunctionCall { name, args } => {
-                let lowered = name.to_lowercase();
-
-                // First, check if it's a registered UDF
-                if let Some(udf) = self.shared.udf_registry.get(&lowered) {
-                    // Evaluate arguments
-                    let mut evaluated_args = Vec::new();
-                    for arg_expr in args {
-                        let arg_value =
-                            self.evaluate_projection_expression(row, context, arg_expr)?;
-                        evaluated_args.push(arg_value);
-                    }
-
-                    // Execute UDF
-                    return udf
-                        .execute(&evaluated_args)
-                        .map_err(|e| Error::CypherSyntax(format!("UDF execution error: {}", e)));
-                }
-
-                // If not a UDF, check built-in functions
-                match lowered.as_str() {
-                    "labels" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            // Extract node ID from the value
-                            let node_id = if let Value::Object(obj) = &value {
-                                // Try to get _nexus_id from the object
-                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
-                                    id.as_u64()
-                                } else {
-                                    None
-                                }
-                            } else if let Value::String(id_str) = &value {
-                                // Try to parse as string ID
-                                id_str.parse::<u64>().ok()
-                            } else {
-                                None
-                            };
-
-                            if let Some(nid) = node_id {
-                                // Read the node record to get labels
-                                if let Ok(node_record) = self.store().read_node(nid) {
-                                    if let Ok(label_names) = self
-                                        .catalog()
-                                        .get_labels_from_bitmap(node_record.label_bits)
-                                    {
-                                        let labels: Vec<Value> =
-                                            label_names.into_iter().map(Value::String).collect();
-                                        return Ok(Value::Array(labels));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "type" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            // Extract relationship ID from the value
-                            let rel_id = if let Value::Object(obj) = &value {
-                                // Try to get _nexus_id from the object
-                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
-                                    id.as_u64()
-                                } else {
-                                    None
-                                }
-                            } else if let Value::String(id_str) = &value {
-                                // Try to parse as string ID
-                                id_str.parse::<u64>().ok()
-                            } else {
-                                None
-                            };
-
-                            if let Some(rid) = rel_id {
-                                // Read the relationship record to get type_id
-                                if let Ok(rel_record) = self.store().read_rel(rid) {
-                                    if let Ok(Some(type_name)) =
-                                        self.catalog().get_type_name(rel_record.type_id)
-                                    {
-                                        return Ok(Value::String(type_name));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "keys" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            // Extract keys from the value (node or relationship)
-                            if let Value::Object(obj) = &value {
-                                let mut keys: Vec<String> = obj
-                                    .keys()
-                                    .filter(|k| {
-                                        // Exclude internal fields:
-                                        // - Fields starting with _ (like _nexus_id, _nexus_type)
-                                        // - "type" field (internal relationship type)
-                                        !k.starts_with('_') && *k != "type"
-                                    })
-                                    .map(|k| k.to_string())
-                                    .collect();
-                                keys.sort();
-                                let key_values: Vec<Value> =
-                                    keys.into_iter().map(Value::String).collect();
-                                return Ok(Value::Array(key_values));
-                            }
-                        }
-                        Ok(Value::Array(Vec::new()))
-                    }
-                    "id" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            // Extract node or relationship ID from _nexus_id
-                            if let Value::Object(obj) = &value {
-                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
-                                    return Ok(Value::Number(id.clone()));
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Database functions
-                    "database" => {
-                        // Return current database name
-                        // If DatabaseManager is available, get current database
-                        // Otherwise return default "neo4j"
-                        if let Some(db_manager_arc) = self.shared.database_manager() {
-                            let db_manager = db_manager_arc.read();
-                            Ok(Value::String(
-                                db_manager.default_database_name().to_string(),
-                            ))
-                        } else {
-                            Ok(Value::String("neo4j".to_string()))
-                        }
-                    }
-                    "db" => {
-                        // Alias for database()
-                        if let Some(db_manager_arc) = self.shared.database_manager() {
-                            let db_manager = db_manager_arc.read();
-                            Ok(Value::String(
-                                db_manager.default_database_name().to_string(),
-                            ))
-                        } else {
-                            Ok(Value::String("neo4j".to_string()))
-                        }
-                    }
-                    // String functions
-                    "tolower" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::String(s) = value {
-                                return Ok(Value::String(s.to_lowercase()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "toupper" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::String(s) = value {
-                                return Ok(Value::String(s.to_uppercase()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "substring" => {
-                        // substring(string, start, [length])
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let start_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::Number(start_num)) =
-                                (string_val, start_val)
-                            {
-                                let char_len = s.chars().count() as i64;
-                                // Handle both integer and float numbers (floats come from unary minus)
-                                let start_i64 = start_num
-                                    .as_i64()
-                                    .or_else(|| start_num.as_f64().map(|f| f as i64))
-                                    .unwrap_or(0);
-
-                                // Handle negative indices (count from end)
-                                let start = if start_i64 < 0 {
-                                    ((char_len + start_i64).max(0)) as usize
-                                } else {
-                                    start_i64.min(char_len) as usize
-                                };
-
-                                if args.len() >= 3 {
-                                    let length_val = self
-                                        .evaluate_projection_expression(row, context, &args[2])?;
-                                    if let Value::Number(len_num) = length_val {
-                                        let length = len_num.as_i64().unwrap_or(0).max(0) as usize;
-                                        let chars: Vec<char> = s.chars().collect();
-                                        let end = (start + length).min(chars.len());
-                                        return Ok(Value::String(
-                                            chars[start..end].iter().collect(),
-                                        ));
-                                    }
-                                } else {
-                                    // No length specified - take from start to end
-                                    let chars: Vec<char> = s.chars().collect();
-                                    return Ok(Value::String(chars[start..].iter().collect()));
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "trim" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::String(s) = value {
-                                return Ok(Value::String(s.trim().to_string()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "ltrim" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::String(s) = value {
-                                return Ok(Value::String(s.trim_start().to_string()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "rtrim" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::String(s) = value {
-                                return Ok(Value::String(s.trim_end().to_string()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "replace" => {
-                        // replace(string, search, replace)
-                        if args.len() >= 3 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let search_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-                            let replace_val =
-                                self.evaluate_projection_expression(row, context, &args[2])?;
-
-                            if let (
-                                Value::String(s),
-                                Value::String(search),
-                                Value::String(replace),
-                            ) = (string_val, search_val, replace_val)
-                            {
-                                return Ok(Value::String(s.replace(&search, &replace)));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "split" => {
-                        // split(string, delimiter)
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let delim_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::String(delim)) =
-                                (string_val, delim_val)
-                            {
-                                let parts: Vec<Value> = s
-                                    .split(&delim)
-                                    .map(|part| Value::String(part.to_string()))
-                                    .collect();
-                                return Ok(Value::Array(parts));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Regex functions
-                    "regexmatch" => {
-                        // regexMatch(string, pattern) - returns true if pattern matches string
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let pattern_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::String(pattern)) =
-                                (string_val, pattern_val)
-                            {
-                                match regex::Regex::new(&pattern) {
-                                    Ok(re) => return Ok(Value::Bool(re.is_match(&s))),
-                                    Err(_) => return Ok(Value::Bool(false)),
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "regexreplace" => {
-                        // regexReplace(string, pattern, replacement) - replaces first match
-                        if args.len() >= 3 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let pattern_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-                            let replacement_val =
-                                self.evaluate_projection_expression(row, context, &args[2])?;
-
-                            if let (
-                                Value::String(s),
-                                Value::String(pattern),
-                                Value::String(replacement),
-                            ) = (string_val, pattern_val, replacement_val)
-                            {
-                                match regex::Regex::new(&pattern) {
-                                    Ok(re) => {
-                                        // Replace only the first match
-                                        let result = re.replace(&s, replacement.as_str());
-                                        return Ok(Value::String(result.into_owned()));
-                                    }
-                                    Err(_) => return Ok(Value::String(s)),
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "regexreplaceall" => {
-                        // regexReplaceAll(string, pattern, replacement) - replaces all matches
-                        if args.len() >= 3 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let pattern_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-                            let replacement_val =
-                                self.evaluate_projection_expression(row, context, &args[2])?;
-
-                            if let (
-                                Value::String(s),
-                                Value::String(pattern),
-                                Value::String(replacement),
-                            ) = (string_val, pattern_val, replacement_val)
-                            {
-                                match regex::Regex::new(&pattern) {
-                                    Ok(re) => {
-                                        // Replace all matches
-                                        let result = re.replace_all(&s, replacement.as_str());
-                                        return Ok(Value::String(result.into_owned()));
-                                    }
-                                    Err(_) => return Ok(Value::String(s)),
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "regexextract" => {
-                        // regexExtract(string, pattern) - extracts first match
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let pattern_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::String(pattern)) =
-                                (string_val, pattern_val)
-                            {
-                                match regex::Regex::new(&pattern) {
-                                    Ok(re) => {
-                                        if let Some(m) = re.find(&s) {
-                                            return Ok(Value::String(m.as_str().to_string()));
-                                        }
-                                        return Ok(Value::Null);
-                                    }
-                                    Err(_) => return Ok(Value::Null),
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "regexextractall" => {
-                        // regexExtractAll(string, pattern) - extracts all matches as array
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let pattern_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::String(pattern)) =
-                                (string_val, pattern_val)
-                            {
-                                match regex::Regex::new(&pattern) {
-                                    Ok(re) => {
-                                        let matches: Vec<Value> = re
-                                            .find_iter(&s)
-                                            .map(|m| Value::String(m.as_str().to_string()))
-                                            .collect();
-                                        return Ok(Value::Array(matches));
-                                    }
-                                    Err(_) => return Ok(Value::Array(vec![])),
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "regexextractgroups" => {
-                        // regexExtractGroups(string, pattern) - extracts capture groups from first match
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let pattern_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::String(pattern)) =
-                                (string_val, pattern_val)
-                            {
-                                match regex::Regex::new(&pattern) {
-                                    Ok(re) => {
-                                        if let Some(caps) = re.captures(&s) {
-                                            let groups: Vec<Value> = caps
-                                                .iter()
-                                                .skip(1) // Skip the full match (group 0)
-                                                .map(|m| {
-                                                    m.map(|m| Value::String(m.as_str().to_string()))
-                                                        .unwrap_or(Value::Null)
-                                                })
-                                                .collect();
-                                            return Ok(Value::Array(groups));
-                                        }
-                                        return Ok(Value::Null);
-                                    }
-                                    Err(_) => return Ok(Value::Null),
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "regexsplit" => {
-                        // regexSplit(string, pattern) - splits string by regex pattern
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let pattern_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::String(pattern)) =
-                                (string_val, pattern_val)
-                            {
-                                match regex::Regex::new(&pattern) {
-                                    Ok(re) => {
-                                        let parts: Vec<Value> = re
-                                            .split(&s)
-                                            .map(|part| Value::String(part.to_string()))
-                                            .collect();
-                                        return Ok(Value::Array(parts));
-                                    }
-                                    Err(_) => {
-                                        // Fallback to returning original string in array
-                                        return Ok(Value::Array(vec![Value::String(s)]));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Math functions
-                    "abs" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.abs())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "ceil" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.ceil())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "floor" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.floor())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "round" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.round())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "sqrt" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.sqrt())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "pow" => {
-                        // pow(base, exponent)
-                        if args.len() >= 2 {
-                            let base_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let exp_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-                            if base_val.is_null() || exp_val.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let base = self.value_to_number(&base_val)?;
-                            let exp = self.value_to_number(&exp_val)?;
-                            return serde_json::Number::from_f64(base.powf(exp))
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "sin" => {
-                        // sin(angle) - sine function (angle in radians)
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.sin())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "cos" => {
-                        // cos(angle) - cosine function (angle in radians)
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.cos())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "tan" => {
-                        // tan(angle) - tangent function (angle in radians)
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.tan())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Geospatial functions
-                    "distance" => {
-                        // distance(point1, point2) - calculate distance between two points
-                        if args.len() >= 2 {
-                            let p1_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let p2_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            // Try to parse points from JSON values
-                            // Points can be:
-                            // 1. Point literals (already converted to JSON objects via to_json_value)
-                            // 2. JSON objects with x/y/z/crs fields
-                            let p1 = if let Value::Object(_) = &p1_val {
-                                crate::geospatial::Point::from_json_value(&p1_val).map_err(
-                                    |_| Error::CypherSyntax("Invalid point 1".to_string()),
-                                )?
-                            } else {
-                                return Ok(Value::Null);
-                            };
-
-                            let p2 = if let Value::Object(_) = &p2_val {
-                                crate::geospatial::Point::from_json_value(&p2_val).map_err(
-                                    |_| Error::CypherSyntax("Invalid point 2".to_string()),
-                                )?
-                            } else {
-                                return Ok(Value::Null);
-                            };
-
-                            let distance = p1.distance_to(&p2);
-                            return serde_json::Number::from_f64(distance)
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Type conversion functions
-                    "tointeger" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::Number(n) => {
-                                    if let Some(i) = n.as_i64() {
-                                        return Ok(Value::Number(i.into()));
-                                    }
-                                    if let Some(f) = n.as_f64() {
-                                        return Ok(Value::Number((f as i64).into()));
-                                    }
-                                }
-                                Value::String(s) => {
-                                    if let Ok(i) = s.parse::<i64>() {
-                                        return Ok(Value::Number(i.into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "tofloat" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::Number(n) => {
-                                    if let Some(f) = n.as_f64() {
-                                        return serde_json::Number::from_f64(f)
-                                            .map(Value::Number)
-                                            .ok_or_else(|| Error::TypeMismatch {
-                                                expected: "float".to_string(),
-                                                actual: "non-finite".to_string(),
-                                            });
-                                    }
-                                }
-                                Value::String(s) => {
-                                    if let Ok(f) = s.parse::<f64>() {
-                                        return serde_json::Number::from_f64(f)
-                                            .map(Value::Number)
-                                            .ok_or_else(|| Error::TypeMismatch {
-                                                expected: "float".to_string(),
-                                                actual: "non-finite".to_string(),
-                                            });
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "tostring" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => Ok(Value::String(s)),
-                                Value::Number(n) => Ok(Value::String(n.to_string())),
-                                Value::Bool(b) => Ok(Value::String(b.to_string())),
-                                Value::Null => Ok(Value::Null),
-                                Value::Array(_) | Value::Object(_) => {
-                                    Ok(Value::String(value.to_string()))
-                                }
-                            }
-                        } else {
-                            Ok(Value::Null)
-                        }
-                    }
-                    "toboolean" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::Bool(b) => Ok(Value::Bool(b)),
-                                Value::String(s) => {
-                                    let lower = s.to_lowercase();
-                                    if lower == "true" {
-                                        Ok(Value::Bool(true))
-                                    } else if lower == "false" {
-                                        Ok(Value::Bool(false))
-                                    } else {
-                                        Ok(Value::Null)
-                                    }
-                                }
-                                Value::Number(n) => {
-                                    // 0 = false, non-zero = true
-                                    Ok(Value::Bool(n.as_f64().unwrap_or(0.0) != 0.0))
-                                }
-                                _ => Ok(Value::Null),
-                            }
-                        } else {
-                            Ok(Value::Null)
-                        }
-                    }
-                    "todate" => {
-                        // toDate(value) - Convert to date string (YYYY-MM-DD)
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date string
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        return Ok(Value::String(
-                                            date.format("%Y-%m-%d").to_string(),
-                                        ));
-                                    }
-                                    // Try datetime format
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::String(
-                                            dt.date_naive().format("%Y-%m-%d").to_string(),
-                                        ));
-                                    }
-                                }
-                                Value::Object(map) => {
-                                    // Support {year, month, day} format
-                                    let year = map
-                                        .get("year")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                        as i32;
-                                    let month =
-                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
-                                            as u32;
-                                    let day =
-                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-
-                                    if let Some(date) =
-                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
-                                    {
-                                        return Ok(Value::String(
-                                            date.format("%Y-%m-%d").to_string(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Temporal functions
-                    "date" => {
-                        if args.is_empty() {
-                            // Return current date in ISO format (YYYY-MM-DD)
-                            let now = chrono::Local::now();
-                            return Ok(Value::String(now.format("%Y-%m-%d").to_string()));
-                        } else if let Some(arg) = args.first() {
-                            // Parse date from string or map
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse ISO date format
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        return Ok(Value::String(
-                                            date.format("%Y-%m-%d").to_string(),
-                                        ));
-                                    }
-                                }
-                                Value::Object(map) => {
-                                    // Support {year, month, day} format
-                                    let year = map
-                                        .get("year")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                        as i32;
-                                    let month =
-                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
-                                            as u32;
-                                    let day =
-                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-
-                                    if let Some(date) =
-                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
-                                    {
-                                        return Ok(Value::String(
-                                            date.format("%Y-%m-%d").to_string(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "datetime" => {
-                        if args.is_empty() {
-                            // Return current datetime in ISO format
-                            let now = chrono::Local::now();
-                            return Ok(Value::String(now.to_rfc3339()));
-                        } else if let Some(arg) = args.first() {
-                            // Parse datetime from string or map
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse RFC3339/ISO8601 datetime
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::String(dt.to_rfc3339()));
-                                    }
-                                    // Try to parse without timezone
-                                    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(
-                                        &s,
-                                        "%Y-%m-%dT%H:%M:%S",
-                                    ) {
-                                        let local = chrono::Local::now().timezone();
-                                        let dt_local = local
-                                            .from_local_datetime(&dt)
-                                            .earliest()
-                                            .unwrap_or_else(|| local.from_utc_datetime(&dt));
-                                        return Ok(Value::String(dt_local.to_rfc3339()));
-                                    }
-                                }
-                                Value::Object(map) => {
-                                    // Support {year, month, day, hour, minute, second} format
-                                    let year = map
-                                        .get("year")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                        as i32;
-                                    let month =
-                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
-                                            as u32;
-                                    let day =
-                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
-                                        as u32;
-                                    let minute =
-                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-                                    let second =
-                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-
-                                    if let Some(date) =
-                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
-                                    {
-                                        if let Some(time) =
-                                            chrono::NaiveTime::from_hms_opt(hour, minute, second)
-                                        {
-                                            let dt = chrono::NaiveDateTime::new(date, time);
-                                            let local = chrono::Local::now().timezone();
-                                            let dt_local = local
-                                                .from_local_datetime(&dt)
-                                                .earliest()
-                                                .unwrap_or_else(|| local.from_utc_datetime(&dt));
-                                            return Ok(Value::String(dt_local.to_rfc3339()));
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "time" => {
-                        if args.is_empty() {
-                            // Return current time in HH:MM:SS format
-                            let now = chrono::Local::now();
-                            return Ok(Value::String(now.format("%H:%M:%S").to_string()));
-                        } else if let Some(arg) = args.first() {
-                            // Parse time from string or map
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse time format HH:MM:SS
-                                    if let Ok(time) =
-                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
-                                    {
-                                        return Ok(Value::String(
-                                            time.format("%H:%M:%S").to_string(),
-                                        ));
-                                    }
-                                    // Try HH:MM format
-                                    if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M")
-                                    {
-                                        return Ok(Value::String(
-                                            time.format("%H:%M:%S").to_string(),
-                                        ));
-                                    }
-                                }
-                                Value::Object(map) => {
-                                    // Support {hour, minute, second} format
-                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
-                                        as u32;
-                                    let minute =
-                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-                                    let second =
-                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-
-                                    if let Some(time) =
-                                        chrono::NaiveTime::from_hms_opt(hour, minute, second)
-                                    {
-                                        return Ok(Value::String(
-                                            time.format("%H:%M:%S").to_string(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "timestamp" => {
-                        if args.is_empty() {
-                            // Return current Unix timestamp in milliseconds
-                            let now = chrono::Local::now();
-                            let millis = now.timestamp_millis();
-                            return Ok(Value::Number(millis.into()));
-                        } else if let Some(arg) = args.first() {
-                            // Parse timestamp from string or return existing number
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::Number(n) => {
-                                    // Return as-is if already a number
-                                    return Ok(Value::Number(n));
-                                }
-                                Value::String(s) => {
-                                    // Try to parse datetime and convert to timestamp
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        let millis = dt.timestamp_millis();
-                                        return Ok(Value::Number(millis.into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "duration" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                // Support duration components: years, months, days, hours, minutes, seconds
-                                let mut duration_map = Map::new();
-
-                                if let Some(years) = map.get("years") {
-                                    duration_map.insert("years".to_string(), years.clone());
-                                }
-                                if let Some(months) = map.get("months") {
-                                    duration_map.insert("months".to_string(), months.clone());
-                                }
-                                if let Some(days) = map.get("days") {
-                                    duration_map.insert("days".to_string(), days.clone());
-                                }
-                                if let Some(hours) = map.get("hours") {
-                                    duration_map.insert("hours".to_string(), hours.clone());
-                                }
-                                if let Some(minutes) = map.get("minutes") {
-                                    duration_map.insert("minutes".to_string(), minutes.clone());
-                                }
-                                if let Some(seconds) = map.get("seconds") {
-                                    duration_map.insert("seconds".to_string(), seconds.clone());
-                                }
-
-                                return Ok(Value::Object(duration_map));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "duration.between" => {
-                        // duration.between(datetime1, datetime2) - computes the duration between two datetimes
-                        if args.len() >= 2 {
-                            let dt1 =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let dt2 =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if Self::is_datetime_string(&dt1) && Self::is_datetime_string(&dt2) {
-                                return self.datetime_difference(&dt1, &dt2);
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "duration.inMonths" => {
-                        // duration.inMonths(datetime1, datetime2) - duration in months
-                        if args.len() >= 2 {
-                            let dt1 =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let dt2 =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
-                                // Try parsing as dates
-                                let d1 = chrono::NaiveDate::parse_from_str(s1, "%Y-%m-%d").or_else(
-                                    |_| {
-                                        chrono::DateTime::parse_from_rfc3339(s1)
-                                            .map(|dt| dt.date_naive())
-                                    },
-                                );
-                                let d2 = chrono::NaiveDate::parse_from_str(s2, "%Y-%m-%d").or_else(
-                                    |_| {
-                                        chrono::DateTime::parse_from_rfc3339(s2)
-                                            .map(|dt| dt.date_naive())
-                                    },
-                                );
-
-                                if let (Ok(date1), Ok(date2)) = (d1, d2) {
-                                    let months = (date1.year() - date2.year()) * 12
-                                        + (date1.month() as i32 - date2.month() as i32);
-
-                                    let mut result_map = Map::new();
-                                    result_map
-                                        .insert("months".to_string(), Value::Number(months.into()));
-                                    return Ok(Value::Object(result_map));
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "duration.inDays" => {
-                        // duration.inDays(datetime1, datetime2) - duration in days
-                        if args.len() >= 2 {
-                            let dt1 =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let dt2 =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
-                                // Try parsing as dates
-                                let d1 = chrono::NaiveDate::parse_from_str(s1, "%Y-%m-%d").or_else(
-                                    |_| {
-                                        chrono::DateTime::parse_from_rfc3339(s1)
-                                            .map(|dt| dt.date_naive())
-                                    },
-                                );
-                                let d2 = chrono::NaiveDate::parse_from_str(s2, "%Y-%m-%d").or_else(
-                                    |_| {
-                                        chrono::DateTime::parse_from_rfc3339(s2)
-                                            .map(|dt| dt.date_naive())
-                                    },
-                                );
-
-                                if let (Ok(date1), Ok(date2)) = (d1, d2) {
-                                    let days = date1.signed_duration_since(date2).num_days();
-
-                                    let mut result_map = Map::new();
-                                    result_map
-                                        .insert("days".to_string(), Value::Number(days.into()));
-                                    return Ok(Value::Object(result_map));
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "duration.inSeconds" => {
-                        // duration.inSeconds(datetime1, datetime2) - duration in seconds
-                        if args.len() >= 2 {
-                            let dt1 =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let dt2 =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
-                                // Try parsing as datetimes
-                                let d1 = chrono::DateTime::parse_from_rfc3339(s1)
-                                    .map(|dt| dt.with_timezone(&chrono::Utc));
-                                let d2 = chrono::DateTime::parse_from_rfc3339(s2)
-                                    .map(|dt| dt.with_timezone(&chrono::Utc));
-
-                                if let (Ok(dt1), Ok(dt2)) = (d1, d2) {
-                                    let seconds = dt1.signed_duration_since(dt2).num_seconds();
-
-                                    let mut result_map = Map::new();
-                                    result_map.insert(
-                                        "seconds".to_string(),
-                                        Value::Number(seconds.into()),
-                                    );
-                                    return Ok(Value::Object(result_map));
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Path functions
-                    "nodes" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            // If value is already an array, treat it as a path of nodes
-                            if let Value::Array(arr) = value {
-                                // Filter only node objects (objects with _nexus_id)
-                                let nodes: Vec<Value> = arr
-                                    .into_iter()
-                                    .filter(|v| {
-                                        if let Value::Object(obj) = v {
-                                            obj.contains_key("_nexus_id")
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .collect();
-                                return Ok(Value::Array(nodes));
-                            }
-                            // If it's a single node, return it as array
-                            if let Value::Object(obj) = &value {
-                                if obj.contains_key("_nexus_id") {
-                                    return Ok(Value::Array(vec![value]));
-                                }
-                            }
-                        }
-                        Ok(Value::Array(Vec::new()))
-                    }
-                    "relationships" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            // If value is already an array, extract relationships
-                            if let Value::Array(arr) = value {
-                                // Filter only relationship objects (objects with _nexus_type and source/target)
-                                let rels: Vec<Value> = arr
-                                    .into_iter()
-                                    .filter(|v| {
-                                        if let Value::Object(obj) = v {
-                                            obj.contains_key("_nexus_type")
-                                                && (obj.contains_key("_source")
-                                                    || obj.contains_key("_target"))
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .collect();
-                                return Ok(Value::Array(rels));
-                            }
-                            // If it's a single relationship, return it as array
-                            if let Value::Object(obj) = &value {
-                                if obj.contains_key("_nexus_type") {
-                                    return Ok(Value::Array(vec![value]));
-                                }
-                            }
-                        }
-                        Ok(Value::Array(Vec::new()))
-                    }
-                    "length" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            // For arrays representing paths, length is the number of relationships
-                            // which is (number of nodes - 1) or number of relationship objects
-                            if let Value::Array(arr) = value {
-                                // Count relationship objects in the path
-                                let rel_count = arr
-                                    .iter()
-                                    .filter(|v| {
-                                        if let Value::Object(obj) = v {
-                                            obj.contains_key("_nexus_type")
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .count();
-                                return Ok(Value::Number((rel_count as i64).into()));
-                            }
-                            // For a single relationship, length is 1
-                            if let Value::Object(obj) = &value {
-                                if obj.contains_key("_nexus_type") {
-                                    return Ok(Value::Number(1.into()));
-                                }
-                            }
-                        }
-                        Ok(Value::Number(0.into()))
-                    }
-                    "shortestpath" => {
-                        // shortestPath((start)-[*]->(end))
-                        // Returns the shortest path between two nodes
-                        // For now, we support: shortestPath((a)-[*]->(b)) where a and b are variables
-                        if !args.is_empty() {
-                            // Try to extract pattern from first argument
-                            // Pattern should be a PatternComprehension or we need to extract nodes from context
-                            if let parser::Expression::PatternComprehension { pattern, .. } =
-                                &args[0]
-                            {
-                                // Extract start and end nodes from pattern
-                                if let (Some(start_node), Some(end_node)) =
-                                    (pattern.elements.first(), pattern.elements.last())
-                                {
-                                    if let (
-                                        parser::PatternElement::Node(start),
-                                        parser::PatternElement::Node(end),
-                                    ) = (start_node, end_node)
-                                    {
-                                        // Get node IDs from row context
-                                        let start_id = if let Some(var) = &start.variable {
-                                            if let Some(Value::Object(obj)) = row.get(var) {
-                                                if let Some(Value::Number(id)) =
-                                                    obj.get("_nexus_id")
-                                                {
-                                                    id.as_u64()
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        };
-
-                                        let end_id = if let Some(var) = &end.variable {
-                                            if let Some(Value::Object(obj)) = row.get(var) {
-                                                if let Some(Value::Number(id)) =
-                                                    obj.get("_nexus_id")
-                                                {
-                                                    id.as_u64()
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        };
-
-                                        if let (Some(start_id), Some(end_id)) = (start_id, end_id) {
-                                            // Extract relationship type and direction from pattern
-                                            let rel_type = pattern.elements.iter().find_map(|e| {
-                                                if let parser::PatternElement::Relationship(rel) = e
-                                                {
-                                                    rel.types.first().cloned()
-                                                } else {
-                                                    None
-                                                }
-                                            });
-                                            let type_id = rel_type.and_then(|t| {
-                                                self.catalog().get_type_id(&t).ok().flatten()
-                                            });
-                                            let direction = pattern.elements.iter()
-                                                .find_map(|e| {
-                                                    if let parser::PatternElement::Relationship(rel) = e {
-                                                        Some(match rel.direction {
-                                                            parser::RelationshipDirection::Outgoing => Direction::Outgoing,
-                                                            parser::RelationshipDirection::Incoming => Direction::Incoming,
-                                                            parser::RelationshipDirection::Both => Direction::Both,
-                                                        })
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .unwrap_or(Direction::Both);
-
-                                            // Find shortest path using BFS
-                                            if let Ok(Some(path)) = self.find_shortest_path(
-                                                start_id, end_id, type_id, direction,
-                                            ) {
-                                                return Ok(self.path_to_value(&path));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "allshortestpaths" => {
-                        // allShortestPaths((start)-[*]->(end))
-                        // Returns all shortest paths between two nodes
-                        if !args.is_empty() {
-                            if let parser::Expression::PatternComprehension { pattern, .. } =
-                                &args[0]
-                            {
-                                if let (Some(start_node), Some(end_node)) =
-                                    (pattern.elements.first(), pattern.elements.last())
-                                {
-                                    if let (
-                                        parser::PatternElement::Node(start),
-                                        parser::PatternElement::Node(end),
-                                    ) = (start_node, end_node)
-                                    {
-                                        let start_id = if let Some(var) = &start.variable {
-                                            if let Some(Value::Object(obj)) = row.get(var) {
-                                                if let Some(Value::Number(id)) =
-                                                    obj.get("_nexus_id")
-                                                {
-                                                    id.as_u64()
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        };
-
-                                        let end_id = if let Some(var) = &end.variable {
-                                            if let Some(Value::Object(obj)) = row.get(var) {
-                                                if let Some(Value::Number(id)) =
-                                                    obj.get("_nexus_id")
-                                                {
-                                                    id.as_u64()
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        };
-
-                                        if let (Some(start_id), Some(end_id)) = (start_id, end_id) {
-                                            let rel_type = pattern.elements.iter().find_map(|e| {
-                                                if let parser::PatternElement::Relationship(rel) = e
-                                                {
-                                                    rel.types.first().cloned()
-                                                } else {
-                                                    None
-                                                }
-                                            });
-                                            let type_id = rel_type.and_then(|t| {
-                                                self.catalog().get_type_id(&t).ok().flatten()
-                                            });
-                                            let direction = pattern.elements.iter()
-                                                .find_map(|e| {
-                                                    if let parser::PatternElement::Relationship(rel) = e {
-                                                        Some(match rel.direction {
-                                                            parser::RelationshipDirection::Outgoing => Direction::Outgoing,
-                                                            parser::RelationshipDirection::Incoming => Direction::Incoming,
-                                                            parser::RelationshipDirection::Both => Direction::Both,
-                                                        })
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .unwrap_or(Direction::Both);
-
-                                            // Find all shortest paths
-                                            if let Ok(paths) = self.find_all_shortest_paths(
-                                                start_id, end_id, type_id, direction,
-                                            ) {
-                                                let path_values: Vec<Value> = paths
-                                                    .iter()
-                                                    .map(|p| self.path_to_value(p))
-                                                    .collect();
-                                                return Ok(Value::Array(path_values));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // List functions
-                    "size" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::Array(arr) => Ok(Value::Number((arr.len() as i64).into())),
-                                Value::String(s) => Ok(Value::Number((s.len() as i64).into())),
-                                _ => Ok(Value::Null),
-                            }
-                        } else {
-                            Ok(Value::Null)
-                        }
-                    }
-                    "head" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Array(arr) = value {
-                                return Ok(arr.first().cloned().unwrap_or(Value::Null));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "tail" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Array(arr) = value {
-                                if arr.len() > 1 {
-                                    return Ok(Value::Array(arr[1..].to_vec()));
-                                }
-                                return Ok(Value::Array(Vec::new()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "last" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Array(arr) = value {
-                                return Ok(arr.last().cloned().unwrap_or(Value::Null));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "range" => {
-                        // range(start, end, [step])
-                        if args.len() >= 2 {
-                            let start_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let end_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::Number(start_num), Value::Number(end_num)) =
-                                (start_val, end_val)
-                            {
-                                // Convert to i64, handling both integer and float cases
-                                let start = start_num
-                                    .as_i64()
-                                    .or_else(|| start_num.as_f64().map(|f| f as i64))
-                                    .unwrap_or(0);
-                                let end = end_num
-                                    .as_i64()
-                                    .or_else(|| end_num.as_f64().map(|f| f as i64))
-                                    .unwrap_or(0);
-                                let step = if args.len() >= 3 {
-                                    let step_val = self
-                                        .evaluate_projection_expression(row, context, &args[2])?;
-                                    if let Value::Number(s) = step_val {
-                                        s.as_i64()
-                                            .or_else(|| s.as_f64().map(|f| f as i64))
-                                            .unwrap_or(1)
-                                    } else {
-                                        1
-                                    }
-                                } else {
-                                    1
-                                };
-
-                                if step == 0 {
-                                    return Ok(Value::Array(Vec::new()));
-                                }
-
-                                let mut result = Vec::new();
-                                if step > 0 {
-                                    let mut i = start;
-                                    while i <= end {
-                                        result.push(Value::Number(i.into()));
-                                        i += step;
-                                    }
-                                } else {
-                                    let mut i = start;
-                                    while i >= end {
-                                        result.push(Value::Number(i.into()));
-                                        i += step;
-                                    }
-                                }
-                                return Ok(Value::Array(result));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "reverse" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Array(mut arr) = value {
-                                arr.reverse();
-                                return Ok(Value::Array(arr));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "reduce" => {
-                        // reduce(accumulator, variable IN list | expression)
-                        // Example: reduce(total = 0, n IN [1,2,3] | total + n)
-                        if args.len() >= 3 {
-                            // First arg: accumulator initial value
-                            let acc_init =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            // Second arg: variable name (string)
-                            let var_name = if let Value::String(s) =
-                                self.evaluate_projection_expression(row, context, &args[1])?
-                            {
-                                s
-                            } else {
-                                return Ok(Value::Null);
-                            };
-                            // Third arg: list
-                            let list_val =
-                                self.evaluate_projection_expression(row, context, &args[2])?;
-                            if let Value::Array(list) = list_val {
-                                // Fourth arg: expression (optional, if not provided use variable itself)
-                                let expr = args.get(3).cloned();
-
-                                let mut accumulator = acc_init;
-                                for item in list {
-                                    // Set variable in context
-                                    let mut new_row = row.clone();
-                                    new_row.insert(var_name.clone(), item);
-
-                                    // Evaluate expression with new context
-                                    if let Some(ref expr) = expr {
-                                        let result = self.evaluate_projection_expression(
-                                            &new_row, context, expr,
-                                        )?;
-                                        accumulator = result;
-                                    } else {
-                                        accumulator =
-                                            new_row.get(&var_name).cloned().unwrap_or(Value::Null);
-                                    }
-                                }
-                                return Ok(accumulator);
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "extract" => {
-                        // extract(variable IN list | expression)
-                        // Example: extract(n IN [1,2,3] | n * 2)
-                        if args.len() >= 2 {
-                            // First arg: variable name (string)
-                            let var_name = if let Value::String(s) =
-                                self.evaluate_projection_expression(row, context, &args[0])?
-                            {
-                                s
-                            } else {
-                                return Ok(Value::Null);
-                            };
-                            // Second arg: list
-                            let list_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-                            if let Value::Array(list) = list_val {
-                                // Third arg: expression (optional, if not provided use variable itself)
-                                let expr = args.get(2).cloned();
-
-                                let mut results = Vec::new();
-                                for item in list {
-                                    // Set variable in context
-                                    let mut new_row = row.clone();
-                                    new_row.insert(var_name.clone(), item);
-
-                                    // Evaluate expression with new context
-                                    if let Some(ref expr) = expr {
-                                        if let Ok(result) = self
-                                            .evaluate_projection_expression(&new_row, context, expr)
-                                        {
-                                            results.push(result);
-                                        }
-                                    } else {
-                                        results.push(
-                                            new_row.get(&var_name).cloned().unwrap_or(Value::Null),
-                                        );
-                                    }
-                                }
-                                return Ok(Value::Array(results));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "all" => {
-                        // all(variable IN list WHERE predicate)
-                        // Returns true if all elements in list satisfy predicate
-                        if args.len() >= 2 {
-                            let list_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let Value::Array(list) = list_val {
-                                if list.is_empty() {
-                                    return Ok(Value::Bool(true)); // All elements of empty list satisfy predicate
-                                }
-
-                                // If third arg exists, it's the predicate expression
-                                if let Some(predicate) = args.get(2) {
-                                    // Extract variable name from first arg if it's a string
-                                    let var_name = if let Ok(Value::String(s)) =
-                                        self.evaluate_projection_expression(row, context, &args[0])
-                                    {
-                                        s
-                                    } else {
-                                        return Ok(Value::Bool(false));
-                                    };
-
-                                    for item in list {
-                                        let mut new_row = row.clone();
-                                        new_row.insert(var_name.clone(), item);
-
-                                        let result = self.evaluate_projection_expression(
-                                            &new_row, context, predicate,
-                                        )?;
-                                        if !result.as_bool().unwrap_or(false) {
-                                            return Ok(Value::Bool(false));
-                                        }
-                                    }
-                                    return Ok(Value::Bool(true));
-                                }
-                            }
-                        }
-                        Ok(Value::Bool(false))
-                    }
-                    "any" => {
-                        // any(variable IN list WHERE predicate)
-                        // Returns true if any element in list satisfies predicate
-                        if args.len() >= 2 {
-                            let list_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let Value::Array(list) = list_val {
-                                if list.is_empty() {
-                                    return Ok(Value::Bool(false)); // No elements satisfy predicate
-                                }
-
-                                if let Some(predicate) = args.get(2) {
-                                    let var_name = if let Ok(Value::String(s)) =
-                                        self.evaluate_projection_expression(row, context, &args[0])
-                                    {
-                                        s
-                                    } else {
-                                        return Ok(Value::Bool(false));
-                                    };
-
-                                    for item in list {
-                                        let mut new_row = row.clone();
-                                        new_row.insert(var_name.clone(), item);
-
-                                        let result = self.evaluate_projection_expression(
-                                            &new_row, context, predicate,
-                                        )?;
-                                        if result.as_bool().unwrap_or(false) {
-                                            return Ok(Value::Bool(true));
-                                        }
-                                    }
-                                    return Ok(Value::Bool(false));
-                                }
-                            }
-                        }
-                        Ok(Value::Bool(false))
-                    }
-                    "none" => {
-                        // none(variable IN list WHERE predicate)
-                        // Returns true if no elements in list satisfy predicate
-                        if args.len() >= 2 {
-                            let list_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let Value::Array(list) = list_val {
-                                if list.is_empty() {
-                                    return Ok(Value::Bool(true)); // No elements satisfy predicate
-                                }
-
-                                if let Some(predicate) = args.get(2) {
-                                    let var_name = if let Ok(Value::String(s)) =
-                                        self.evaluate_projection_expression(row, context, &args[0])
-                                    {
-                                        s
-                                    } else {
-                                        return Ok(Value::Bool(false));
-                                    };
-
-                                    for item in list {
-                                        let mut new_row = row.clone();
-                                        new_row.insert(var_name.clone(), item);
-
-                                        let result = self.evaluate_projection_expression(
-                                            &new_row, context, predicate,
-                                        )?;
-                                        if result.as_bool().unwrap_or(false) {
-                                            return Ok(Value::Bool(false));
-                                        }
-                                    }
-                                    return Ok(Value::Bool(true));
-                                }
-                            }
-                        }
-                        Ok(Value::Bool(true))
-                    }
-                    "single" => {
-                        // single(variable IN list WHERE predicate)
-                        // Returns true if exactly one element in list satisfies predicate
-                        if args.len() >= 2 {
-                            let list_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let Value::Array(list) = list_val {
-                                if list.is_empty() {
-                                    return Ok(Value::Bool(false)); // No elements satisfy
-                                }
-
-                                if let Some(predicate) = args.get(2) {
-                                    let var_name = if let Ok(Value::String(s)) =
-                                        self.evaluate_projection_expression(row, context, &args[0])
-                                    {
-                                        s
-                                    } else {
-                                        return Ok(Value::Bool(false));
-                                    };
-
-                                    let mut count = 0;
-                                    for item in list {
-                                        let mut new_row = row.clone();
-                                        new_row.insert(var_name.clone(), item);
-
-                                        let result = self.evaluate_projection_expression(
-                                            &new_row, context, predicate,
-                                        )?;
-                                        if result.as_bool().unwrap_or(false) {
-                                            count += 1;
-                                            if count > 1 {
-                                                return Ok(Value::Bool(false));
-                                            }
-                                        }
-                                    }
-                                    return Ok(Value::Bool(count == 1));
-                                }
-                            }
-                        }
-                        Ok(Value::Bool(false))
-                    }
-                    "coalesce" => {
-                        // coalesce(expr1, expr2, ...) - returns first non-null value
-                        // Evaluates arguments in order and returns the first non-null value
-                        for arg in args {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if !value.is_null() {
-                                return Ok(value);
-                            }
-                        }
-                        // All arguments were null
-                        Ok(Value::Null)
-                    }
-                    // Temporal component extraction functions
-                    "year" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date/datetime
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        return Ok(Value::Number((date.year() as i64).into()));
-                                    }
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number((dt.year() as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "month" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date/datetime
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        return Ok(Value::Number((date.month() as i64).into()));
-                                    }
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number((dt.month() as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "day" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date/datetime
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        return Ok(Value::Number((date.day() as i64).into()));
-                                    }
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number((dt.day() as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "hour" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse datetime or time
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number((dt.hour() as i64).into()));
-                                    }
-                                    if let Ok(time) =
-                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
-                                    {
-                                        return Ok(Value::Number((time.hour() as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "minute" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse datetime or time
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number((dt.minute() as i64).into()));
-                                    }
-                                    if let Ok(time) =
-                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
-                                    {
-                                        return Ok(Value::Number((time.minute() as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "second" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse datetime or time
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number((dt.second() as i64).into()));
-                                    }
-                                    if let Ok(time) =
-                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
-                                    {
-                                        return Ok(Value::Number((time.second() as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "quarter" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date/datetime
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        let quarter = (date.month() - 1) / 3 + 1;
-                                        return Ok(Value::Number((quarter as i64).into()));
-                                    }
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        let quarter = (dt.month() - 1) / 3 + 1;
-                                        return Ok(Value::Number((quarter as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "week" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date/datetime
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        return Ok(Value::Number(
-                                            (date.iso_week().week() as i64).into(),
-                                        ));
-                                    }
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number(
-                                            (dt.iso_week().week() as i64).into(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "dayofweek" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date/datetime
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        // Neo4j returns 1-7 (Monday to Sunday)
-                                        return Ok(Value::Number(
-                                            (date.weekday().num_days_from_monday() as i64 + 1)
-                                                .into(),
-                                        ));
-                                    }
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number(
-                                            (dt.weekday().num_days_from_monday() as i64 + 1).into(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "dayofyear" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse date/datetime
-                                    if let Ok(date) =
-                                        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-                                    {
-                                        return Ok(Value::Number((date.ordinal() as i64).into()));
-                                    }
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number((dt.ordinal() as i64).into()));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "millisecond" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse datetime
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number(
-                                            ((dt.timestamp_subsec_millis() % 1000) as i64).into(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "microsecond" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse datetime
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number(
-                                            ((dt.timestamp_subsec_micros() % 1000000) as i64)
-                                                .into(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "nanosecond" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse datetime
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::Number(
-                                            ((dt.timestamp_subsec_nanos() % 1000000000) as i64)
-                                                .into(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Advanced string functions
-                    "left" => {
-                        // left(string, length) - returns leftmost n characters
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let length_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::Number(len_num)) =
-                                (string_val, length_val)
-                            {
-                                let length = len_num.as_i64().unwrap_or(0).max(0) as usize;
-                                let chars: Vec<char> = s.chars().collect();
-                                let end = length.min(chars.len());
-                                return Ok(Value::String(chars[..end].iter().collect()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "right" => {
-                        // right(string, length) - returns rightmost n characters
-                        if args.len() >= 2 {
-                            let string_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let length_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-
-                            if let (Value::String(s), Value::Number(len_num)) =
-                                (string_val, length_val)
-                            {
-                                let length = len_num.as_i64().unwrap_or(0).max(0) as usize;
-                                let chars: Vec<char> = s.chars().collect();
-                                let start = chars.len().saturating_sub(length);
-                                return Ok(Value::String(chars[start..].iter().collect()));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // List functions
-                    // filter() is now handled by the parser - it gets converted to ListComprehension
-                    // during parsing, so it will never reach here as a FunctionCall
-                    "flatten" => {
-                        // flatten(list) - flattens a list of lists by one level
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Array(arr) = value {
-                                let mut result = Vec::new();
-                                for item in arr {
-                                    if let Value::Array(inner) = item {
-                                        result.extend(inner);
-                                    } else {
-                                        result.push(item);
-                                    }
-                                }
-                                return Ok(Value::Array(result));
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "zip" => {
-                        // zip(list1, list2, ...) - zips multiple lists together
-                        if args.len() >= 2 {
-                            let mut lists: Vec<Vec<Value>> = Vec::new();
-                            let mut min_len = usize::MAX;
-
-                            for arg in args {
-                                let value =
-                                    self.evaluate_projection_expression(row, context, arg)?;
-                                if let Value::Array(arr) = value {
-                                    min_len = min_len.min(arr.len());
-                                    lists.push(arr);
-                                } else {
-                                    return Ok(Value::Null);
-                                }
-                            }
-
-                            let mut result = Vec::new();
-                            for i in 0..min_len {
-                                let mut tuple = Vec::new();
-                                for list in &lists {
-                                    tuple.push(list[i].clone());
-                                }
-                                result.push(Value::Array(tuple));
-                            }
-                            return Ok(Value::Array(result));
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Mathematical functions
-                    "asin" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.asin())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "acos" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.acos())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "atan" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.atan())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "atan2" => {
-                        // atan2(y, x) - returns arctangent of y/x
-                        if args.len() >= 2 {
-                            let y_val =
-                                self.evaluate_projection_expression(row, context, &args[0])?;
-                            let x_val =
-                                self.evaluate_projection_expression(row, context, &args[1])?;
-                            if y_val.is_null() || x_val.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let y = self.value_to_number(&y_val)?;
-                            let x = self.value_to_number(&x_val)?;
-                            return serde_json::Number::from_f64(y.atan2(x))
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "exp" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.exp())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "log" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            // Natural logarithm (ln)
-                            return serde_json::Number::from_f64(num.ln())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "log10" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            return serde_json::Number::from_f64(num.log10())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "radians" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            // Convert degrees to radians
-                            return serde_json::Number::from_f64(num.to_radians())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "degrees" => {
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if value.is_null() {
-                                return Ok(Value::Null);
-                            }
-                            let num = self.value_to_number(&value)?;
-                            // Convert radians to degrees
-                            return serde_json::Number::from_f64(num.to_degrees())
-                                .map(Value::Number)
-                                .ok_or_else(|| Error::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    actual: "non-finite".to_string(),
-                                });
-                        }
-                        Ok(Value::Null)
-                    }
-                    "pi" => {
-                        // pi() - returns the mathematical constant π
-                        Ok(Value::Number(
-                            serde_json::Number::from_f64(std::f64::consts::PI).unwrap(),
-                        ))
-                    }
-                    "e" => {
-                        // e() - returns the mathematical constant e
-                        Ok(Value::Number(
-                            serde_json::Number::from_f64(std::f64::consts::E).unwrap(),
-                        ))
-                    }
-                    // Advanced temporal functions
-                    "localtime" => {
-                        // localtime() - returns current local time without timezone
-                        if args.is_empty() {
-                            let now = chrono::Local::now();
-                            return Ok(Value::String(now.format("%H:%M:%S").to_string()));
-                        } else if let Some(arg) = args.first() {
-                            // Parse time from string or map
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse time format
-                                    if let Ok(time) =
-                                        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
-                                    {
-                                        return Ok(Value::String(
-                                            time.format("%H:%M:%S").to_string(),
-                                        ));
-                                    }
-                                    // Try HH:MM format
-                                    if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M")
-                                    {
-                                        return Ok(Value::String(
-                                            time.format("%H:%M:%S").to_string(),
-                                        ));
-                                    }
-                                }
-                                Value::Object(map) => {
-                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
-                                        as u32;
-                                    let minute =
-                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-                                    let second =
-                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-
-                                    if let Some(time) =
-                                        chrono::NaiveTime::from_hms_opt(hour, minute, second)
-                                    {
-                                        return Ok(Value::String(
-                                            time.format("%H:%M:%S").to_string(),
-                                        ));
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "localdatetime" => {
-                        // localdatetime() - returns current local datetime without timezone
-                        if args.is_empty() {
-                            let now = chrono::Local::now();
-                            return Ok(Value::String(now.format("%Y-%m-%dT%H:%M:%S").to_string()));
-                        } else if let Some(arg) = args.first() {
-                            // Parse datetime from string or map
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            match value {
-                                Value::String(s) => {
-                                    // Try to parse datetime format
-                                    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(
-                                        &s,
-                                        "%Y-%m-%dT%H:%M:%S",
-                                    ) {
-                                        return Ok(Value::String(
-                                            dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                        ));
-                                    }
-                                    // Try with timezone and convert to naive
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                        return Ok(Value::String(
-                                            dt.naive_local()
-                                                .format("%Y-%m-%dT%H:%M:%S")
-                                                .to_string(),
-                                        ));
-                                    }
-                                }
-                                Value::Object(map) => {
-                                    let year = map
-                                        .get("year")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                        as i32;
-                                    let month =
-                                        map.get("month").and_then(|v| v.as_u64()).unwrap_or(1)
-                                            as u32;
-                                    let day =
-                                        map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-                                    let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0)
-                                        as u32;
-                                    let minute =
-                                        map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-                                    let second =
-                                        map.get("second").and_then(|v| v.as_u64()).unwrap_or(0)
-                                            as u32;
-
-                                    if let Some(date) =
-                                        chrono::NaiveDate::from_ymd_opt(year, month, day)
-                                    {
-                                        if let Some(time) =
-                                            chrono::NaiveTime::from_hms_opt(hour, minute, second)
-                                        {
-                                            let dt = chrono::NaiveDateTime::new(date, time);
-                                            return Ok(Value::String(
-                                                dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-                                            ));
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    // Duration component extraction functions
-                    "years" => {
-                        // years(duration) - extract years component from duration
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                if let Some(years) = map.get("years") {
-                                    return Ok(years.clone());
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "months" => {
-                        // months(duration) - extract months component from duration
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                if let Some(months) = map.get("months") {
-                                    return Ok(months.clone());
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "weeks" => {
-                        // weeks(duration) - extract weeks component from duration
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                if let Some(weeks) = map.get("weeks") {
-                                    return Ok(weeks.clone());
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "days" => {
-                        // days(duration) - extract days component from duration
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                if let Some(days) = map.get("days") {
-                                    return Ok(days.clone());
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "hours" => {
-                        // hours(duration) - extract hours component from duration
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                if let Some(hours) = map.get("hours") {
-                                    return Ok(hours.clone());
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "minutes" => {
-                        // minutes(duration) - extract minutes component from duration
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                if let Some(minutes) = map.get("minutes") {
-                                    return Ok(minutes.clone());
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "seconds" => {
-                        // seconds(duration) - extract seconds component from duration
-                        if let Some(arg) = args.first() {
-                            let value = self.evaluate_projection_expression(row, context, arg)?;
-                            if let Value::Object(map) = value {
-                                if let Some(seconds) = map.get("seconds") {
-                                    return Ok(seconds.clone());
-                                }
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    _ => Ok(Value::Null),
-                }
-            }
-            parser::Expression::BinaryOp { left, op, right } => {
-                let left_val = self.evaluate_projection_expression(row, context, left)?;
-                let right_val = self.evaluate_projection_expression(row, context, right)?;
-                match op {
-                    parser::BinaryOperator::Add => self.add_values(&left_val, &right_val),
-                    parser::BinaryOperator::Subtract => self.subtract_values(&left_val, &right_val),
-                    parser::BinaryOperator::Multiply => self.multiply_values(&left_val, &right_val),
-                    parser::BinaryOperator::Divide => self.divide_values(&left_val, &right_val),
-                    parser::BinaryOperator::Modulo => self.modulo_values(&left_val, &right_val),
-                    parser::BinaryOperator::Equal => {
-                        // In Neo4j, null = null returns null (not true), and null = anything else returns null
-                        if left_val.is_null() || right_val.is_null() {
-                            Ok(Value::Null)
-                        } else {
-                            Ok(Value::Bool(
-                                self.values_equal_for_comparison(&left_val, &right_val),
-                            ))
-                        }
-                    }
-                    parser::BinaryOperator::NotEqual => {
-                        // In Neo4j, null <> null returns null (not false), and null <> anything else returns null
-                        if left_val.is_null() || right_val.is_null() {
-                            Ok(Value::Null)
-                        } else {
-                            Ok(Value::Bool(left_val != right_val))
-                        }
-                    }
-                    parser::BinaryOperator::LessThan => Ok(Value::Bool(
-                        self.compare_values_for_sort(&left_val, &right_val)
-                            == std::cmp::Ordering::Less,
-                    )),
-                    parser::BinaryOperator::LessThanOrEqual => Ok(Value::Bool(matches!(
-                        self.compare_values_for_sort(&left_val, &right_val),
-                        std::cmp::Ordering::Less | std::cmp::Ordering::Equal
-                    ))),
-                    parser::BinaryOperator::GreaterThan => Ok(Value::Bool(
-                        self.compare_values_for_sort(&left_val, &right_val)
-                            == std::cmp::Ordering::Greater,
-                    )),
-                    parser::BinaryOperator::GreaterThanOrEqual => Ok(Value::Bool(matches!(
-                        self.compare_values_for_sort(&left_val, &right_val),
-                        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
-                    ))),
-                    parser::BinaryOperator::And => {
-                        let result =
-                            self.value_to_bool(&left_val)? && self.value_to_bool(&right_val)?;
-                        Ok(Value::Bool(result))
-                    }
-                    parser::BinaryOperator::Or => {
-                        let result =
-                            self.value_to_bool(&left_val)? || self.value_to_bool(&right_val)?;
-                        Ok(Value::Bool(result))
-                    }
-                    parser::BinaryOperator::StartsWith => {
-                        let left_str = self.value_to_string(&left_val);
-                        let right_str = self.value_to_string(&right_val);
-                        Ok(Value::Bool(left_str.starts_with(&right_str)))
-                    }
-                    parser::BinaryOperator::EndsWith => {
-                        let left_str = self.value_to_string(&left_val);
-                        let right_str = self.value_to_string(&right_val);
-                        Ok(Value::Bool(left_str.ends_with(&right_str)))
-                    }
-                    parser::BinaryOperator::Contains => {
-                        let left_str = self.value_to_string(&left_val);
-                        let right_str = self.value_to_string(&right_val);
-                        Ok(Value::Bool(left_str.contains(&right_str)))
-                    }
-                    parser::BinaryOperator::RegexMatch => {
-                        let left_str = self.value_to_string(&left_val);
-                        let right_str = self.value_to_string(&right_val);
-                        // Use regex crate for pattern matching
-                        match regex::Regex::new(&right_str) {
-                            Ok(re) => Ok(Value::Bool(re.is_match(&left_str))),
-                            Err(_) => Ok(Value::Bool(false)), // Invalid regex pattern returns false
-                        }
-                    }
-                    parser::BinaryOperator::Power => {
-                        // Power operator: left ^ right
-                        self.power_values(&left_val, &right_val)
-                    }
-                    parser::BinaryOperator::In => {
-                        // IN operator: left IN right (where right is a list)
-                        // Check if left_val is in the right_val list
-                        match &right_val {
-                            Value::Array(list) => {
-                                // Check if left_val is in the list
-                                Ok(Value::Bool(list.iter().any(|item| item == &left_val)))
-                            }
-                            _ => {
-                                // Right side is not a list, return false
-                                Ok(Value::Bool(false))
-                            }
-                        }
-                    }
-                    _ => Ok(Value::Null),
-                }
-            }
-            parser::Expression::UnaryOp { op, operand } => {
-                let value = self.evaluate_projection_expression(row, context, operand)?;
-                match op {
-                    parser::UnaryOperator::Not => Ok(Value::Bool(!self.value_to_bool(&value)?)),
-                    parser::UnaryOperator::Minus => {
-                        let number = self.value_to_number(&value)?;
-                        serde_json::Number::from_f64(-number)
-                            .map(Value::Number)
-                            .ok_or_else(|| Error::TypeMismatch {
-                                expected: "number".to_string(),
-                                actual: "non-finite".to_string(),
-                            })
-                    }
-                    parser::UnaryOperator::Plus => Ok(value),
-                }
-            }
-            parser::Expression::IsNull { expr, negated } => {
-                let value = self.evaluate_projection_expression(row, context, expr)?;
-                let is_null = value.is_null();
-                Ok(Value::Bool(if *negated { !is_null } else { is_null }))
-            }
-            parser::Expression::Exists {
-                pattern,
-                where_clause,
-            } => {
-                // Check if the pattern exists in the current context
-                let pattern_exists = self.check_pattern_exists(row, context, pattern)?;
-
-                // If pattern doesn't exist, return false
-                if !pattern_exists {
-                    return Ok(Value::Bool(false));
-                }
-
-                // If WHERE clause is present, evaluate it
-                if let Some(where_expr) = where_clause {
-                    // Create a context with pattern variables for WHERE evaluation
-                    let mut exists_row = row.clone();
-
-                    // Extract variables from pattern and add to row context
-                    for element in &pattern.elements {
-                        match element {
-                            parser::PatternElement::Node(node) => {
-                                if let Some(var) = &node.variable {
-                                    // Try to get variable from current row or context
-                                    if let Some(value) = row.get(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    } else if let Some(value) = context.get_variable(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    }
-                                }
-                            }
-                            parser::PatternElement::Relationship(rel) => {
-                                if let Some(var) = &rel.variable {
-                                    if let Some(value) = row.get(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    } else if let Some(value) = context.get_variable(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Evaluate WHERE condition
-                    let condition_value =
-                        self.evaluate_projection_expression(&exists_row, context, where_expr)?;
-                    let condition_true = self.value_to_bool(&condition_value)?;
-
-                    Ok(Value::Bool(condition_true))
-                } else {
-                    Ok(Value::Bool(pattern_exists))
-                }
-            }
-            parser::Expression::MapProjection { source, items } => {
-                // Evaluate the source expression (should be a node/map)
-                let source_value = self.evaluate_projection_expression(row, context, source)?;
-
-                // Build the projected map
-                let mut projected_map = serde_json::Map::new();
-
-                for item in items {
-                    match item {
-                        parser::MapProjectionItem::Property { property, alias } => {
-                            // Extract property from source
-                            let prop_value = if let Value::Object(obj) = &source_value {
-                                // If source is a node object, get property from properties
-                                if let Some(Value::Object(props)) = obj.get("properties") {
-                                    props.get(property.as_str()).cloned().unwrap_or(Value::Null)
-                                } else {
-                                    obj.get(property.as_str()).cloned().unwrap_or(Value::Null)
-                                }
-                            } else {
-                                Value::Null
-                            };
-
-                            // Use alias if provided, otherwise use property name
-                            let key = alias
-                                .as_ref()
-                                .map(|s| s.as_str())
-                                .unwrap_or(property.as_str())
-                                .to_string();
-                            projected_map.insert(key, prop_value);
-                        }
-                        parser::MapProjectionItem::VirtualKey { key, expression } => {
-                            // Evaluate the expression and use as value
-                            let expr_value =
-                                self.evaluate_projection_expression(row, context, expression)?;
-                            projected_map.insert(key.clone(), expr_value);
-                        }
-                    }
-                }
-
-                Ok(Value::Object(projected_map))
-            }
-            parser::Expression::ListComprehension {
-                variable,
-                list_expression,
-                where_clause,
-                transform_expression,
-            } => {
-                // Evaluate the list expression
-                let list_value =
-                    self.evaluate_projection_expression(row, context, list_expression)?;
-
-                // Convert to array if needed
-                let list_items = match list_value {
-                    Value::Array(items) => items,
-                    Value::Null => Vec::new(),
-                    other => vec![other],
-                };
-
-                // Filter and transform items
-                let mut result_items = Vec::new();
-
-                for item in list_items {
-                    // Create a new row context with the variable bound to this item
-                    let mut comprehension_row = row.clone();
-                    let item_clone = item.clone();
-                    comprehension_row.insert(variable.clone(), item_clone);
-
-                    // Apply WHERE clause if present
-                    if let Some(where_expr) = where_clause {
-                        let condition_value = self.evaluate_projection_expression(
-                            &comprehension_row,
-                            context,
-                            where_expr,
-                        )?;
-
-                        // Only include item if condition is true
-                        if !self.value_to_bool(&condition_value)? {
-                            continue;
-                        }
-                    }
-
-                    // Apply transformation if present, otherwise use item as-is
-                    if let Some(transform_expr) = transform_expression {
-                        let transformed_value = self.evaluate_projection_expression(
-                            &comprehension_row,
-                            context,
-                            transform_expr,
-                        )?;
-                        result_items.push(transformed_value);
-                    } else {
-                        result_items.push(item);
-                    }
-                }
-
-                Ok(Value::Array(result_items))
-            }
-            parser::Expression::PatternComprehension {
-                pattern,
-                where_clause,
-                transform_expression,
-            } => {
-                // Pattern comprehensions collect matching patterns and transform them
-                // This is a simplified implementation that works within the current context
-
-                // For a full implementation, we would need to:
-                // 1. Execute the pattern as a subquery within the current context
-                // 2. Collect all matching results
-                // 3. Apply WHERE clause filtering
-                // 4. Apply transformation expression
-                // 5. Return as array
-
-                // For now, we'll implement a basic version that:
-                // - Extracts variables from the pattern
-                // - Checks if they exist in the current row context
-                // - Applies WHERE and transform if present
-
-                // Extract variables from pattern
-                let mut pattern_vars = Vec::new();
-                for element in &pattern.elements {
-                    match element {
-                        parser::PatternElement::Node(node) => {
-                            if let Some(var) = &node.variable {
-                                pattern_vars.push(var.clone());
-                            }
-                        }
-                        parser::PatternElement::Relationship(rel) => {
-                            if let Some(var) = &rel.variable {
-                                pattern_vars.push(var.clone());
-                            }
-                        }
-                    }
-                }
-
-                // Check if all pattern variables exist in current row
-                let mut all_vars_exist = true;
-                let mut pattern_row = HashMap::new();
-                for var in &pattern_vars {
-                    if let Some(value) = row.get(var) {
-                        pattern_row.insert(var.clone(), value.clone());
-                    } else {
-                        all_vars_exist = false;
-                        break;
-                    }
-                }
-
-                // If pattern variables don't exist in current row, return empty array
-                if !all_vars_exist || pattern_row.is_empty() {
-                    return Ok(Value::Array(Vec::new()));
-                }
-
-                // Apply WHERE clause if present
-                if let Some(where_expr) = where_clause {
-                    let condition_value =
-                        self.evaluate_projection_expression(&pattern_row, context, where_expr)?;
-
-                    // If WHERE condition is false, return empty array
-                    if !self.value_to_bool(&condition_value)? {
-                        return Ok(Value::Array(Vec::new()));
-                    }
-                }
-
-                // Apply transformation if present, otherwise return the pattern variables
-                if let Some(transform_expr) = transform_expression {
-                    // Evaluate transformation expression (can be MapProjection, property access, etc.)
-                    let transformed_value =
-                        self.evaluate_projection_expression(&pattern_row, context, transform_expr)?;
-
-                    // Always return as array (even if single value)
-                    Ok(Value::Array(vec![transformed_value]))
-                } else {
-                    // No transformation - return array of pattern variable values
-                    let values: Vec<Value> = pattern_vars
-                        .iter()
-                        .filter_map(|var| pattern_row.get(var).cloned())
-                        .collect();
-                    Ok(Value::Array(values))
-                }
-            }
-            parser::Expression::List(elements) => {
-                // Evaluate each element and return as JSON array
-                let mut items = Vec::new();
-                for element in elements {
-                    let value = self.evaluate_projection_expression(row, context, element)?;
-                    items.push(value);
-                }
-                Ok(Value::Array(items))
-            }
-            parser::Expression::Map(map) => {
-                // Evaluate each value and return as JSON object
-                let mut obj = serde_json::Map::new();
-                for (key, expr) in map {
-                    let value = self.evaluate_projection_expression(row, context, expr)?;
-                    obj.insert(key.clone(), value);
-                }
-                Ok(Value::Object(obj))
-            }
-            parser::Expression::Case {
-                input,
-                when_clauses,
-                else_clause,
-            } => {
-                // Evaluate input expression if present (generic CASE)
-                let input_value = if let Some(input_expr) = input {
-                    Some(self.evaluate_projection_expression(row, context, input_expr)?)
-                } else {
-                    None
-                };
-
-                // Evaluate WHEN clauses
-                for when_clause in when_clauses {
-                    let condition_value =
-                        self.evaluate_projection_expression(row, context, &when_clause.condition)?;
-
-                    // For generic CASE: compare input with condition
-                    // For simple CASE: evaluate condition as boolean
-                    let matches = if let Some(ref input_val) = input_value {
-                        // Generic CASE: input == condition
-                        input_val == &condition_value
-                    } else {
-                        // Simple CASE: condition is boolean expression
-                        self.value_to_bool(&condition_value)?
-                    };
-
-                    if matches {
-                        return self.evaluate_projection_expression(
-                            row,
-                            context,
-                            &when_clause.result,
-                        );
-                    }
-                }
-
-                // No WHEN clause matched, return ELSE or NULL
-                if let Some(else_expr) = else_clause {
-                    self.evaluate_projection_expression(row, context, else_expr)
-                } else {
-                    Ok(Value::Null)
-                }
-            }
-        }
-    }
 
     /// Check if a pattern exists in the current context
-    fn check_pattern_exists(
+    pub(super) fn check_pattern_exists(
         &self,
         row: &HashMap<String, Value>,
         context: &ExecutionContext,
@@ -13033,7 +8605,7 @@ impl Executor {
         Ok(false)
     }
 
-    fn extract_property(entity: &Value, property: &str) -> Value {
+    pub(super) fn extract_property(entity: &Value, property: &str) -> Value {
         if let Value::Object(obj) = entity {
             // First check directly in the object (for nodes with flat properties)
             // This is the primary case - nodes have properties directly in the object
@@ -13063,7 +8635,7 @@ impl Executor {
         Value::Null
     }
 
-    fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(super) fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
         // Handle null values - null + number or number + null = null (Neo4j behavior)
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
@@ -13102,7 +8674,7 @@ impl Executor {
             })
     }
 
-    fn subtract_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(super) fn subtract_values(&self, left: &Value, right: &Value) -> Result<Value> {
         // Handle null values - null - number or number - null = null (Neo4j behavior)
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
@@ -13133,7 +8705,7 @@ impl Executor {
             })
     }
 
-    fn multiply_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(super) fn multiply_values(&self, left: &Value, right: &Value) -> Result<Value> {
         // Handle null values - null * number or number * null = null (Neo4j behavior)
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
@@ -13148,7 +8720,7 @@ impl Executor {
             })
     }
 
-    fn divide_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(super) fn divide_values(&self, left: &Value, right: &Value) -> Result<Value> {
         // Handle null values - null / number or number / null = null (Neo4j behavior)
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
@@ -13169,7 +8741,7 @@ impl Executor {
             })
     }
 
-    fn power_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(super) fn power_values(&self, left: &Value, right: &Value) -> Result<Value> {
         // Handle null values - null ^ anything or anything ^ null = null
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
@@ -13187,7 +8759,7 @@ impl Executor {
             })
     }
 
-    fn modulo_values(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(super) fn modulo_values(&self, left: &Value, right: &Value) -> Result<Value> {
         // Handle null values - null % anything or anything % null = null
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
@@ -13215,7 +8787,7 @@ impl Executor {
     }
 
     /// Check if value is a duration object (has years, months, days, hours, minutes, or seconds keys)
-    fn is_duration_object(value: &Value) -> bool {
+    pub(super) fn is_duration_object(value: &Value) -> bool {
         if let Value::Object(map) = value {
             map.contains_key("years")
                 || map.contains_key("months")
@@ -13229,7 +8801,7 @@ impl Executor {
     }
 
     /// Check if value is a datetime string (RFC3339 format)
-    fn is_datetime_string(value: &Value) -> bool {
+    pub(super) fn is_datetime_string(value: &Value) -> bool {
         if let Value::String(s) = value {
             chrono::DateTime::parse_from_rfc3339(s).is_ok()
                 || chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").is_ok()
@@ -13240,7 +8812,7 @@ impl Executor {
     }
 
     /// Extract duration components as (years, months, days, hours, minutes, seconds)
-    fn extract_duration_components(value: &Value) -> (i64, i64, i64, i64, i64, i64) {
+    pub(super) fn extract_duration_components(value: &Value) -> (i64, i64, i64, i64, i64, i64) {
         if let Value::Object(map) = value {
             let years = map.get("years").and_then(|v| v.as_i64()).unwrap_or(0);
             let months = map.get("months").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -13255,7 +8827,7 @@ impl Executor {
     }
 
     /// Try to add datetime + duration
-    fn try_datetime_add(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+    pub(super) fn try_datetime_add(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
         // datetime + duration
         if Self::is_datetime_string(left) && Self::is_duration_object(right) {
             return self.datetime_add_duration(left, right).map(Some);
@@ -13268,7 +8840,7 @@ impl Executor {
     }
 
     /// Try to add duration + duration
-    fn try_duration_add(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+    pub(super) fn try_duration_add(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
         if Self::is_duration_object(left) && Self::is_duration_object(right) {
             let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
             let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
@@ -13306,7 +8878,11 @@ impl Executor {
     }
 
     /// Try to subtract datetime - duration
-    fn try_datetime_subtract(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+    pub(super) fn try_datetime_subtract(
+        &self,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Option<Value>> {
         if Self::is_datetime_string(left) && Self::is_duration_object(right) {
             return self.datetime_subtract_duration(left, right).map(Some);
         }
@@ -13314,7 +8890,7 @@ impl Executor {
     }
 
     /// Try to compute datetime - datetime (returns duration)
-    fn try_datetime_diff(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+    pub(super) fn try_datetime_diff(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
         if Self::is_datetime_string(left) && Self::is_datetime_string(right) {
             return self.datetime_difference(left, right).map(Some);
         }
@@ -13322,7 +8898,11 @@ impl Executor {
     }
 
     /// Try to subtract duration - duration
-    fn try_duration_subtract(&self, left: &Value, right: &Value) -> Result<Option<Value>> {
+    pub(super) fn try_duration_subtract(
+        &self,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Option<Value>> {
         if Self::is_duration_object(left) && Self::is_duration_object(right) {
             let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
             let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
@@ -13360,7 +8940,11 @@ impl Executor {
     }
 
     /// Add duration to datetime
-    fn datetime_add_duration(&self, datetime: &Value, duration: &Value) -> Result<Value> {
+    pub(super) fn datetime_add_duration(
+        &self,
+        datetime: &Value,
+        duration: &Value,
+    ) -> Result<Value> {
         let (years, months, days, hours, minutes, seconds) =
             Self::extract_duration_components(duration);
 
@@ -13452,7 +9036,11 @@ impl Executor {
     }
 
     /// Subtract duration from datetime
-    fn datetime_subtract_duration(&self, datetime: &Value, duration: &Value) -> Result<Value> {
+    pub(super) fn datetime_subtract_duration(
+        &self,
+        datetime: &Value,
+        duration: &Value,
+    ) -> Result<Value> {
         let (years, months, days, hours, minutes, seconds) =
             Self::extract_duration_components(duration);
 
@@ -13544,7 +9132,7 @@ impl Executor {
     }
 
     /// Compute difference between two datetimes (returns duration)
-    fn datetime_difference(&self, left: &Value, right: &Value) -> Result<Value> {
+    pub(super) fn datetime_difference(&self, left: &Value, right: &Value) -> Result<Value> {
         if let (Value::String(left_str), Value::String(right_str)) = (left, right) {
             // Try RFC3339 format
             let left_dt = chrono::DateTime::parse_from_rfc3339(left_str)
@@ -13600,7 +9188,7 @@ impl Executor {
         Ok(Value::Null)
     }
 
-    fn update_variables_from_rows(
+    pub(super) fn update_variables_from_rows(
         &self,
         context: &mut ExecutionContext,
         rows: &[HashMap<String, Value>],
@@ -13619,7 +9207,7 @@ impl Executor {
         }
     }
 
-    fn evaluate_predicate_on_row(
+    pub(super) fn evaluate_predicate_on_row(
         &self,
         row: &HashMap<String, Value>,
         context: &ExecutionContext,
@@ -13629,7 +9217,7 @@ impl Executor {
         self.value_to_bool(&value)
     }
 
-    fn extract_entity_id(value: &Value) -> Option<u64> {
+    pub(super) fn extract_entity_id(value: &Value) -> Option<u64> {
         match value {
             Value::Object(obj) => {
                 if let Some(id) = obj.get("_nexus_id").and_then(|id| id.as_u64()) {
@@ -13655,7 +9243,7 @@ impl Executor {
         }
     }
 
-    fn read_relationship_as_value(&self, rel: &RelationshipInfo) -> Result<Value> {
+    pub(super) fn read_relationship_as_value(&self, rel: &RelationshipInfo) -> Result<Value> {
         let type_name = self
             .catalog()
             .get_type_name(rel.type_id)?
@@ -13686,7 +9274,10 @@ impl Executor {
     }
 
     /// Phase 2.4.2: Optimize result_set_as_rows to reduce intermediate copies
-    fn result_set_as_rows(&self, context: &ExecutionContext) -> Vec<HashMap<String, Value>> {
+    pub(super) fn result_set_as_rows(
+        &self,
+        context: &ExecutionContext,
+    ) -> Vec<HashMap<String, Value>> {
         // Pre-size the result vector to avoid reallocations
         let capacity = context.result_set.rows.len();
         let mut result = Vec::with_capacity(capacity);
@@ -13706,342 +9297,6 @@ impl Executor {
         }
 
         result
-    }
-
-    /// Phase 2.5.1: Detect if aggregations are parallelizable
-    /// Aggregations are parallelizable if they don't depend on order and can be merged
-    fn is_parallelizable_aggregation(aggregations: &[Aggregation], group_by: &[String]) -> bool {
-        // Can parallelize if:
-        // 1. No GROUP BY (simple aggregations) OR GROUP BY is simple
-        // 2. Aggregations are commutative (COUNT, SUM, MIN, MAX, AVG)
-        // 3. Not using COLLECT with ordering requirements
-
-        // For now, parallelize COUNT, SUM, MIN, MAX, AVG without GROUP BY
-        if !group_by.is_empty() {
-            // GROUP BY makes it more complex, skip for now
-            return false;
-        }
-
-        // Check if all aggregations are parallelizable
-        aggregations.iter().all(|agg| {
-            matches!(
-                agg,
-                Aggregation::Count { .. }
-                    | Aggregation::Sum { .. }
-                    | Aggregation::Min { .. }
-                    | Aggregation::Max { .. }
-                    | Aggregation::Avg { .. }
-            )
-        })
-    }
-    /// Phase 2.5.2 & 2.5.3: Parallel aggregation for large datasets
-    /// Splits data into chunks and processes in parallel, then merges results
-    fn execute_parallel_aggregation(
-        &self,
-        rows: &[Row],
-        aggregations: &[Aggregation],
-        columns_for_lookup: &[String],
-    ) -> Result<Vec<Value>> {
-        use std::sync::Arc;
-        use std::thread;
-
-        // Threshold for parallelization (only parallelize if we have enough data)
-        const PARALLEL_THRESHOLD: usize = 1000;
-        const CHUNK_SIZE: usize = 500;
-
-        if rows.len() < PARALLEL_THRESHOLD {
-            // Too small, use sequential processing
-            return self.execute_sequential_aggregation(rows, aggregations, columns_for_lookup);
-        }
-
-        // Split into chunks
-        let num_chunks = (rows.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
-        let mut handles = Vec::new();
-
-        for chunk_idx in 0..num_chunks {
-            let start = chunk_idx * CHUNK_SIZE;
-            let end = (start + CHUNK_SIZE).min(rows.len());
-            let chunk = rows[start..end].to_vec();
-            let aggregations_clone = aggregations.to_vec();
-            let columns_clone = columns_for_lookup.to_vec();
-
-            let handle = thread::spawn(move || {
-                // Process chunk sequentially
-                let mut chunk_results = Vec::new();
-                for agg in &aggregations_clone {
-                    match agg {
-                        Aggregation::Count { column, .. } => {
-                            if column.is_none() {
-                                chunk_results
-                                    .push(Value::Number(serde_json::Number::from(chunk.len())));
-                            } else {
-                                let count = chunk
-                                    .iter()
-                                    .filter(|row| {
-                                        if let Some(idx) = columns_clone
-                                            .iter()
-                                            .position(|c| c == column.as_ref().unwrap())
-                                        {
-                                            idx < row.values.len() && !row.values[idx].is_null()
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .count();
-                                chunk_results.push(Value::Number(serde_json::Number::from(count)));
-                            }
-                        }
-                        Aggregation::Sum { column, .. } => {
-                            let sum: f64 = chunk
-                                .iter()
-                                .filter_map(|row| {
-                                    if let Some(idx) =
-                                        columns_clone.iter().position(|c| c == column)
-                                    {
-                                        if idx < row.values.len() {
-                                            // Simple number conversion for parallel processing
-                                            row.values[idx]
-                                                .as_f64()
-                                                .or_else(|| {
-                                                    row.values[idx].as_u64().map(|n| n as f64)
-                                                })
-                                                .or_else(|| {
-                                                    row.values[idx].as_i64().map(|n| n as f64)
-                                                })
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .sum();
-                            chunk_results.push(Value::Number(
-                                serde_json::Number::from_f64(sum)
-                                    .unwrap_or(serde_json::Number::from(0)),
-                            ));
-                        }
-                        Aggregation::Min { column, .. } => {
-                            let min_val = chunk
-                                .iter()
-                                .filter_map(|row| {
-                                    if let Some(idx) =
-                                        columns_clone.iter().position(|c| c == column)
-                                    {
-                                        if idx < row.values.len() && !row.values[idx].is_null() {
-                                            Some(&row.values[idx])
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .min_by(|a, b| {
-                                    let a_num = a.as_f64().or_else(|| a.as_u64().map(|n| n as f64));
-                                    let b_num = b.as_f64().or_else(|| b.as_u64().map(|n| n as f64));
-                                    match (a_num, b_num) {
-                                        (Some(an), Some(bn)) => {
-                                            an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
-                                        }
-                                        _ => std::cmp::Ordering::Equal,
-                                    }
-                                });
-                            chunk_results.push(min_val.cloned().unwrap_or(Value::Null));
-                        }
-                        Aggregation::Max { column, .. } => {
-                            let max_val = chunk
-                                .iter()
-                                .filter_map(|row| {
-                                    if let Some(idx) =
-                                        columns_clone.iter().position(|c| c == column)
-                                    {
-                                        if idx < row.values.len() && !row.values[idx].is_null() {
-                                            Some(&row.values[idx])
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .max_by(|a, b| {
-                                    let a_num = a.as_f64().or_else(|| a.as_u64().map(|n| n as f64));
-                                    let b_num = b.as_f64().or_else(|| b.as_u64().map(|n| n as f64));
-                                    match (a_num, b_num) {
-                                        (Some(an), Some(bn)) => {
-                                            an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
-                                        }
-                                        _ => std::cmp::Ordering::Equal,
-                                    }
-                                });
-                            chunk_results.push(max_val.cloned().unwrap_or(Value::Null));
-                        }
-                        Aggregation::Avg { column, .. } => {
-                            let (sum, count) =
-                                chunk.iter().fold((0.0, 0), |(acc_sum, acc_count), row| {
-                                    if let Some(idx) =
-                                        columns_clone.iter().position(|c| c == column)
-                                    {
-                                        if idx < row.values.len() {
-                                            if let Some(num) = row.values[idx]
-                                                .as_f64()
-                                                .or_else(|| {
-                                                    row.values[idx].as_u64().map(|n| n as f64)
-                                                })
-                                                .or_else(|| {
-                                                    row.values[idx].as_i64().map(|n| n as f64)
-                                                })
-                                            {
-                                                return (acc_sum + num, acc_count + 1);
-                                            }
-                                        }
-                                    }
-                                    (acc_sum, acc_count)
-                                });
-                            if count > 0 {
-                                chunk_results.push(Value::Number(
-                                    serde_json::Number::from_f64(sum / count as f64)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                ));
-                            } else {
-                                chunk_results.push(Value::Null);
-                            }
-                        }
-                        _ => {
-                            // For other aggregations, use null (fallback to sequential)
-                            chunk_results.push(Value::Null);
-                        }
-                    }
-                }
-                chunk_results
-            });
-
-            handles.push(handle);
-        }
-
-        // Collect results from all chunks
-        let mut chunk_results: Vec<Vec<Value>> = Vec::new();
-        for handle in handles {
-            chunk_results.push(handle.join().unwrap());
-        }
-
-        // Phase 2.5.3: Merge results from all chunks
-        let mut final_results = Vec::new();
-        for (agg_idx, agg) in aggregations.iter().enumerate() {
-            let merged = match agg {
-                Aggregation::Count { column, .. } => {
-                    // Sum all counts
-                    let total: u64 = chunk_results
-                        .iter()
-                        .filter_map(|chunk| chunk.get(agg_idx)?.as_u64())
-                        .sum();
-                    Value::Number(serde_json::Number::from(total))
-                }
-                Aggregation::Sum { .. } => {
-                    // Sum all sums
-                    let total: f64 = chunk_results
-                        .iter()
-                        .filter_map(|chunk| chunk.get(agg_idx)?.as_f64())
-                        .sum();
-                    Value::Number(
-                        serde_json::Number::from_f64(total).unwrap_or(serde_json::Number::from(0)),
-                    )
-                }
-                Aggregation::Min { .. } => {
-                    // Find minimum across all chunks
-                    chunk_results
-                        .iter()
-                        .filter_map(|chunk| chunk.get(agg_idx))
-                        .min_by(|a, b| {
-                            let a_num = a.as_f64().or_else(|| a.as_u64().map(|n| n as f64));
-                            let b_num = b.as_f64().or_else(|| b.as_u64().map(|n| n as f64));
-                            match (a_num, b_num) {
-                                (Some(an), Some(bn)) => {
-                                    an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
-                                }
-                                _ => std::cmp::Ordering::Equal,
-                            }
-                        })
-                        .cloned()
-                        .unwrap_or(Value::Null)
-                }
-                Aggregation::Max { .. } => {
-                    // Find maximum across all chunks
-                    chunk_results
-                        .iter()
-                        .filter_map(|chunk| chunk.get(agg_idx))
-                        .max_by(|a, b| {
-                            let a_num = a.as_f64().or_else(|| a.as_u64().map(|n| n as f64));
-                            let b_num = b.as_f64().or_else(|| b.as_u64().map(|n| n as f64));
-                            match (a_num, b_num) {
-                                (Some(an), Some(bn)) => {
-                                    an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal)
-                                }
-                                _ => std::cmp::Ordering::Equal,
-                            }
-                        })
-                        .cloned()
-                        .unwrap_or(Value::Null)
-                }
-                Aggregation::Avg { .. } => {
-                    // Merge averages: (sum1 + sum2) / (count1 + count2)
-                    // For simplicity, we'll need to track sum and count separately
-                    // This is a simplified version - full implementation would track both
-                    let (total_sum, total_count) = chunk_results
-                        .iter()
-                        .filter_map(|chunk| {
-                            let val = chunk.get(agg_idx)?;
-                            // For parallel AVG, we'd need to track sum and count separately
-                            // This is a simplified merge
-                            val.as_f64().map(|v| (v, 1))
-                        })
-                        .fold((0.0, 0), |(acc_sum, acc_count), (val, _)| {
-                            (acc_sum + val, acc_count + 1)
-                        });
-                    if total_count > 0 {
-                        Value::Number(
-                            serde_json::Number::from_f64(total_sum / total_count as f64)
-                                .unwrap_or(serde_json::Number::from(0)),
-                        )
-                    } else {
-                        Value::Null
-                    }
-                }
-                _ => Value::Null,
-            };
-            final_results.push(merged);
-        }
-
-        Ok(final_results)
-    }
-
-    /// Sequential aggregation fallback
-    fn execute_sequential_aggregation(
-        &self,
-        _rows: &[Row],
-        _aggregations: &[Aggregation],
-        _columns_for_lookup: &[String],
-    ) -> Result<Vec<Value>> {
-        // This would call the existing aggregation logic
-        // For now, return empty (this is a placeholder)
-        Ok(Vec::new())
-    }
-
-    fn aggregation_alias(&self, aggregation: &Aggregation) -> String {
-        match aggregation {
-            Aggregation::Count { alias, .. }
-            | Aggregation::Sum { alias, .. }
-            | Aggregation::Avg { alias, .. }
-            | Aggregation::Min { alias, .. }
-            | Aggregation::Max { alias, .. }
-            | Aggregation::Collect { alias, .. }
-            | Aggregation::PercentileDisc { alias, .. }
-            | Aggregation::PercentileCont { alias, .. }
-            | Aggregation::StDev { alias, .. }
-            | Aggregation::StDevP { alias, .. }
-            | Aggregation::CountStarOptimized { alias, .. } => alias.clone(),
-        }
     }
 }
 
