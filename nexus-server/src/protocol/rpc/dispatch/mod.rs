@@ -15,8 +15,11 @@
 pub mod admin;
 pub mod convert;
 pub mod cypher;
+pub mod database;
 pub mod graph;
+pub mod ingest;
 pub mod knn;
+pub mod schema;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,12 +84,21 @@ pub async fn run(
     }
 
     match cmd.as_str() {
-        "PING" | "HELLO" | "AUTH" | "QUIT" => admin::run(state, cmd.as_str(), &args).await,
+        "PING" | "HELLO" | "AUTH" | "QUIT" | "STATS" | "HEALTH" => {
+            admin::run(state, cmd.as_str(), &args).await
+        }
         "CYPHER" => cypher::run(state, cmd.as_str(), &args).await,
         "CREATE_NODE" | "CREATE_REL" | "UPDATE_NODE" | "DELETE_NODE" | "MATCH_NODES" => {
             graph::run(state, cmd.as_str(), &args).await
         }
         "KNN_SEARCH" | "KNN_TRAVERSE" => knn::run(state, cmd.as_str(), &args).await,
+        "INGEST" => ingest::run(state, cmd.as_str(), &args).await,
+        "LABELS" | "REL_TYPES" | "PROPERTY_KEYS" | "INDEXES" => {
+            schema::run(state, cmd.as_str(), &args).await
+        }
+        "DB_LIST" | "DB_CREATE" | "DB_DROP" | "DB_USE" => {
+            database::run(state, cmd.as_str(), &args).await
+        }
         other => Err(format!("ERR unknown command '{other}'")),
     }
 }

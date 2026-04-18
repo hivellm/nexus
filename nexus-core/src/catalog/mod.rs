@@ -530,6 +530,23 @@ impl Catalog {
         Ok(result)
     }
 
+    /// List all `(label_id, label_name)` pairs known to the catalog.
+    ///
+    /// Mirrors [`list_all_keys`] — reads from LMDB, skips rows that fail to
+    /// decode rather than propagating errors so the caller gets the best-
+    /// effort snapshot even if a single row is corrupted.
+    pub fn list_all_labels(&self) -> Vec<(LabelId, String)> {
+        let Ok(rtxn) = self.env.read_txn() else {
+            return Vec::new();
+        };
+        let Ok(iter) = self.label_id_to_name.iter(&rtxn) else {
+            return Vec::new();
+        };
+        iter.filter_map(|r| r.ok())
+            .map(|(id, name)| (id, name.to_string()))
+            .collect()
+    }
+
     /// Get label name by ID
     pub fn get_label_name(&self, id: LabelId) -> Result<Option<String>> {
         // Try cache first (lock-free)
@@ -647,6 +664,22 @@ impl Catalog {
         wtxn.commit()?;
 
         Ok(result)
+    }
+
+    /// List all `(type_id, type_name)` pairs known to the catalog.
+    ///
+    /// Mirrors [`list_all_keys`] / [`list_all_labels`] — LMDB iteration with
+    /// per-row error tolerance.
+    pub fn list_all_types(&self) -> Vec<(TypeId, String)> {
+        let Ok(rtxn) = self.env.read_txn() else {
+            return Vec::new();
+        };
+        let Ok(iter) = self.type_id_to_name.iter(&rtxn) else {
+            return Vec::new();
+        };
+        iter.filter_map(|r| r.ok())
+            .map(|(id, name)| (id, name.to_string()))
+            .collect()
     }
 
     /// Get type name by ID

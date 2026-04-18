@@ -1,8 +1,8 @@
-//! Admin commands: PING, HELLO, AUTH, QUIT.
+//! Admin commands: PING, HELLO, AUTH, QUIT, STATS, HEALTH.
 //!
-//! All four are always accepted pre-auth (see [`super::PRE_AUTH_COMMANDS`]).
-//! Their job is to get the connection into an authenticated state and
-//! advertise server identity / protocol version.
+//! PING/HELLO/AUTH/QUIT are always accepted pre-auth (see
+//! [`super::PRE_AUTH_COMMANDS`]); STATS and HEALTH require the connection
+//! to be authenticated first.
 
 use crate::protocol::rpc::NexusValue;
 
@@ -24,6 +24,8 @@ pub async fn run(
         "HELLO" => Ok(hello(state)),
         "AUTH" => auth(state, args).await,
         "QUIT" => quit(args),
+        "STATS" => stats(state, args).await,
+        "HEALTH" => health(state, args).await,
         other => Err(format!("ERR unknown admin command '{other}'")),
     }
 }
@@ -155,6 +157,101 @@ fn quit(args: &[NexusValue]) -> Result<NexusValue, String> {
         ));
     }
     Ok(NexusValue::Str("OK".into()))
+}
+
+// ── STATS ────────────────────────────────────────────────────────────────────
+
+/// `STATS` returns a Map of engine counters mirroring the RESP3 `STATS`
+/// response: node/rel counts, catalog sizes, and page cache hit/miss.
+async fn stats(state: &RpcSession, args: &[NexusValue]) -> Result<NexusValue, String> {
+    if !args.is_empty() {
+        return Err(format!(
+            "ERR wrong number of arguments for 'STATS' ({})",
+            args.len()
+        ));
+    }
+    let engine = state.server.engine.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let mut guard = engine.blocking_write();
+        guard.stats()
+    })
+    .await;
+
+    match out {
+        Ok(Ok(s)) => Ok(NexusValue::Map(vec![
+            (
+                NexusValue::Str("nodes".into()),
+                NexusValue::Int(s.nodes as i64),
+            ),
+            (
+                NexusValue::Str("relationships".into()),
+                NexusValue::Int(s.relationships as i64),
+            ),
+            (
+                NexusValue::Str("labels".into()),
+                NexusValue::Int(s.labels as i64),
+            ),
+            (
+                NexusValue::Str("rel_types".into()),
+                NexusValue::Int(s.rel_types as i64),
+            ),
+            (
+                NexusValue::Str("page_cache_hits".into()),
+                NexusValue::Int(s.page_cache_hits as i64),
+            ),
+            (
+                NexusValue::Str("page_cache_misses".into()),
+                NexusValue::Int(s.page_cache_misses as i64),
+            ),
+            (
+                NexusValue::Str("wal_entries".into()),
+                NexusValue::Int(s.wal_entries as i64),
+            ),
+            (
+                NexusValue::Str("active_transactions".into()),
+                NexusValue::Int(s.active_transactions as i64),
+            ),
+        ])),
+        Ok(Err(e)) => Err(format!("ERR STATS failed: {e}")),
+        Err(join) => Err(format!("ERR internal join error: {join}")),
+    }
+}
+
+// ── HEALTH ───────────────────────────────────────────────────────────────────
+
+/// `HEALTH` returns a Map `{state: "healthy"|"degraded"|"unhealthy"}`
+/// rather than a plain string so SDKs can hang additional fields off the
+/// response (last-check timestamp, component breakdown) without changing
+/// the envelope shape.
+async fn health(state: &RpcSession, args: &[NexusValue]) -> Result<NexusValue, String> {
+    if !args.is_empty() {
+        return Err(format!(
+            "ERR wrong number of arguments for 'HEALTH' ({})",
+            args.len()
+        ));
+    }
+    let engine = state.server.engine.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let guard = engine.blocking_read();
+        guard.health_check()
+    })
+    .await;
+
+    match out {
+        Ok(Ok(h)) => {
+            let label = match h.overall {
+                nexus_core::HealthState::Healthy => "healthy",
+                nexus_core::HealthState::Degraded => "degraded",
+                nexus_core::HealthState::Unhealthy => "unhealthy",
+            };
+            Ok(NexusValue::Map(vec![(
+                NexusValue::Str("state".into()),
+                NexusValue::Str(label.into()),
+            )]))
+        }
+        Ok(Err(e)) => Err(format!("ERR HEALTH failed: {e}")),
+        Err(join) => Err(format!("ERR internal join error: {join}")),
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -446,6 +543,68 @@ mod tests {
         // fails on wrong-arity rather than being blocked by NOAUTH.
         let err = top_run(&s, "CYPHER", vec![]).await.unwrap_err();
         assert!(!err.contains("NOAUTH"));
+        assert!(err.contains("wrong number of arguments"));
+    }
+
+    #[tokio::test]
+    async fn stats_returns_counter_map() {
+        let s = session(false);
+        let out = run(&s, "STATS", &[]).await.unwrap();
+        match out {
+            NexusValue::Map(entries) => {
+                for required in [
+                    "nodes",
+                    "relationships",
+                    "labels",
+                    "rel_types",
+                    "page_cache_hits",
+                    "page_cache_misses",
+                    "wal_entries",
+                    "active_transactions",
+                ] {
+                    let found = entries
+                        .iter()
+                        .find(|(k, _)| k.as_str() == Some(required))
+                        .map(|(_, v)| v.as_int().is_some())
+                        .unwrap_or(false);
+                    assert!(found, "missing or non-integer field: {required}");
+                }
+            }
+            other => panic!("expected Map, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stats_rejects_arguments() {
+        let s = session(false);
+        let err = run(&s, "STATS", &[NexusValue::Int(1)]).await.unwrap_err();
+        assert!(err.contains("wrong number of arguments"));
+    }
+
+    #[tokio::test]
+    async fn health_returns_state_map() {
+        let s = session(false);
+        let out = run(&s, "HEALTH", &[]).await.unwrap();
+        match out {
+            NexusValue::Map(entries) => {
+                let state = entries
+                    .iter()
+                    .find_map(|(k, v)| (k.as_str() == Some("state")).then_some(v))
+                    .and_then(|v| v.as_str().map(String::from))
+                    .expect("state field missing");
+                assert!(
+                    ["healthy", "degraded", "unhealthy"].contains(&state.as_str()),
+                    "unexpected state value: {state}"
+                );
+            }
+            other => panic!("expected Map, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn health_rejects_arguments() {
+        let s = session(false);
+        let err = run(&s, "HEALTH", &[NexusValue::Int(1)]).await.unwrap_err();
         assert!(err.contains("wrong number of arguments"));
     }
 

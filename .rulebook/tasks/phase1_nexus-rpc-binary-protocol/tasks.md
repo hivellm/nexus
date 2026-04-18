@@ -36,12 +36,12 @@
 - [x] 5.4 Unit tests: embedding as Bytes decodes to `Vec<f32>` identically to Array<Float>
 
 ## 6. Ingest, schema, database, admin
-- [ ] 6.1 `INGEST` — args `[nodes: Array<Map>, rels: Array<Map>]`, returns per-batch stats
-- [ ] 6.2 `LABELS` / `REL_TYPES` / `PROPERTY_KEYS` / `INDEXES` — listing commands
-- [ ] 6.3 `DB_LIST` / `DB_CREATE` / `DB_DROP` / `DB_USE` — multi-database management
+- [x] 6.1 `INGEST` — args `[nodes: Array<Map>, rels: Array<Map>]`, returns per-batch stats
+- [x] 6.2 `LABELS` / `REL_TYPES` / `PROPERTY_KEYS` / `INDEXES` — listing commands
+- [x] 6.3 `DB_LIST` / `DB_CREATE` / `DB_DROP` / `DB_USE` — multi-database management
 - [x] 6.4 `PING` returns `"PONG"`, `HELLO` returns `{server: "nexus", version, proto: 1}`
 - [x] 6.5 `AUTH` — args `[api_key: Str]` OR `[username: Str, password: Str]`; sets per-connection `authenticated = true`
-- [ ] 6.6 `STATS` / `HEALTH` — read-only observability commands
+- [x] 6.6 `STATS` / `HEALTH` — read-only observability commands
 - [x] 6.7 Reject unauthenticated commands when `auth.required && !authenticated` (except `PING`/`HELLO`/`AUTH`/`QUIT`)
 
 ## 7. TCP server and accept loop
