@@ -84,6 +84,7 @@ See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complet
 - 🔗 **UMICP v0.2.1**: Tool discovery endpoint + native JSON
 - 🤝 **Vectorizer Integration**: Native hybrid search with RRF ranking
 - 🔁 **RESP3 Compatibility**: Additive TCP port (default `15476`) — any RESP3 client (`redis-cli`, `iredis`, Jedis, redis-rb, Redix, ...) speaks a Nexus command vocabulary (`CYPHER`, `NODE.*`, `REL.*`, `KNN.*`, `INGEST.*`, ...). Not Redis emulation — `SET`/`GET` return `-ERR unknown command`. Full reference: [`docs/specs/resp3-nexus-commands.md`](docs/specs/resp3-nexus-commands.md).
+- 🧬 **Native Binary RPC**: Preferred SDK transport on port `15475` — length-prefixed MessagePack framing, multiplexed requests over a single connection, `Array<Float>` or raw `Bytes` embeddings without JSON tax. 15 commands (CYPHER, graph CRUD, KNN, INGEST, schema, multi-db, admin). Full reference: [`docs/specs/rpc-wire-format.md`](docs/specs/rpc-wire-format.md).
 
 ### **Production Features**
 - 🔐 **API Key Auth**: Disabled by default, required for 0.0.0.0 binding

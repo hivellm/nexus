@@ -782,6 +782,35 @@ Full command reference, wire-format notes, RESP2 downgrade matrix, and
 
 ---
 
+## Native Binary RPC
+
+Nexus ships a **length-prefixed MessagePack RPC** on port `15475` as the
+preferred transport for first-party SDKs. It exists to eliminate the
+five costs HTTP + JSON pays on every request: HTTP framing overhead,
+JSON encode/decode on both sides, the impossibility of request
+multiplexing, the lack of a server-initiated push channel, and the
+double-encoding of vector embeddings as ASCII JSON numbers.
+
+- **Enabled by default** (`[rpc].enabled = true`). Override with
+  `NEXUS_RPC_ENABLED=false` on deployments that want to firewall the
+  extra port.
+- **Framing**: `[u32 LE length][rmp-serde body]`, 64 MiB cap per frame
+  (tunable via `rpc.max_frame_bytes`).
+- **Multiplexed**: caller-chosen `Request.id: u32` echoed on the
+  matching `Response`; per-connection semaphore caps in-flight requests
+  (`rpc.max_in_flight_per_conn`, default 1024).
+- **Auth** mirrors `[auth].enabled`; `AUTH <api_key>` or
+  `AUTH <username> <password>` flips the per-connection flag.
+- **Metrics**: `nexus_rpc_*` (connections, commands, duration μs,
+  bytes in/out, slow commands) on the existing `/metrics` endpoint.
+- **Server-push reservation**: request id `u32::MAX` is refused; future
+  streaming Cypher / pubsub will emit push frames with that id.
+
+Full wire-format specification and command reference:
+[`docs/specs/rpc-wire-format.md`](rpc-wire-format.md).
+
+---
+
 ## Client Libraries
 
 ### Rust Client (nexus-protocol)

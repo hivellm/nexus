@@ -67,13 +67,13 @@
 - [x] 9.4 Integration test: a Cypher `RETURN 1` via RPC matches the HTTP response exactly
 
 ## 10. Cargo + lint + coverage
-- [ ] 10.1 Add `rmp-serde` to `nexus-server/Cargo.toml`
-- [ ] 10.2 Add `tokio` features: `net`, `io-util`, `sync`, `macros`, `rt-multi-thread` (check what's missing)
-- [ ] 10.3 `cargo +nightly fmt --all` clean
-- [ ] 10.4 `cargo clippy --workspace -- -D warnings` clean (no `unwrap`/`expect` outside tests)
-- [ ] 10.5 `cargo llvm-cov --package nexus-server --ignore-filename-regex 'examples'` coverage >= 95% on new files
+- [x] 10.1 Add `rmp-serde` to `nexus-server/Cargo.toml`
+- [x] 10.2 Add `tokio` features: `net`, `io-util`, `sync`, `macros`, `rt-multi-thread` (workspace `tokio = { features = ["full"] }` already covers everything)
+- [x] 10.3 `cargo +nightly fmt --all` clean
+- [x] 10.4 `cargo clippy --workspace -- -D warnings` clean (no `unwrap`/`expect` outside tests)
+- [x] 10.5 `cargo llvm-cov --package nexus-server --ignore-filename-regex 'examples'` coverage >= 95% on new files
 
 ## 11. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 11.1 Update or create documentation covering the implementation (`docs/specs/rpc-wire-format.md`, update `docs/specs/api-protocols.md`)
-- [ ] 11.2 Write tests covering the new behavior (unit + integration; min 30 tests total across codec, dispatch, server)
-- [ ] 11.3 Run tests and confirm they pass (`cargo test --workspace --verbose`)
+- [x] 11.1 Update or create documentation covering the implementation (`docs/specs/rpc-wire-format.md`, update `docs/specs/api-protocols.md`)
+- [x] 11.2 Write tests covering the new behavior (unit + integration; min 30 tests total across codec, dispatch, server)
+- [x] 11.3 Run tests and confirm they pass (`cargo test --workspace --verbose`)

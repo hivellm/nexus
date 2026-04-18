@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Native Binary RPC transport (2026-04-18)
+
+**First-party SDKs now have a MessagePack RPC port.** Length-prefixed
+frames (`[u32 LE][rmp-serde body]`) on port `15475`, multiplexed over
+a single TCP connection via caller-chosen `Request.id`. Enabled by
+default (`[rpc].enabled = true`); RESP3 and HTTP continue to run
+unchanged alongside it.
+
+```
+NEW nexus-protocol/src/rpc/{mod,types,codec}.rs   (shared w/ SDKs)
+NEW nexus-server/src/protocol/rpc/
+    mod.rs, server.rs, metrics.rs,
+    dispatch/{mod, admin, convert, cypher, database, graph, ingest, knn, schema}.rs
+NEW nexus-server/tests/rpc_integration_test.rs
+NEW docs/specs/rpc-wire-format.md
+```
+
+Command set: admin handshake (PING / HELLO / AUTH / QUIT / STATS /
+HEALTH), CYPHER (with optional params map; EXPLAIN inline), graph CRUD
+(CREATE_NODE / CREATE_REL / UPDATE_NODE / DELETE_NODE / MATCH_NODES),
+KNN (KNN_SEARCH accepting embedding as Bytes-of-f32 or Array<Float>
+with optional property filter, KNN_TRAVERSE with seed list + depth),
+bulk ingest (INGEST, single-batch atomic), schema introspection
+(LABELS / REL_TYPES / PROPERTY_KEYS / INDEXES from the catalog
+directly), multi-database (DB_LIST / DB_CREATE / DB_DROP / DB_USE).
+
+64 MiB cap per frame (tunable via `rpc.max_frame_bytes`), per-
+connection in-flight cap (`max_in_flight_per_conn`, default 1024),
+`u32::MAX` reserved as `PUSH_ID` for future streaming, slow-command
+WARN logging at `rpc.slow_threshold_ms` (default 2 ms).
+
+Prometheus: `nexus_rpc_connections` (gauge), `nexus_rpc_commands_total`
+/ `_error_total`, `nexus_rpc_command_duration_microseconds_total`,
+`nexus_rpc_frame_bytes_in_total` / `_out_total`,
+`nexus_rpc_slow_commands_total`. Env overrides:
+`NEXUS_RPC_{ENABLED, ADDR, REQUIRE_AUTH, MAX_FRAME_BYTES,
+MAX_IN_FLIGHT, SLOW_MS}`.
+
+The wire-format layer (RPC types + codec, RESP3 parser + writer) moved
+from `nexus-server::protocol` into `nexus-protocol::{rpc, resp3}` so
+the Rust SDK can depend on it without pulling the whole server crate.
+Command dispatch and the TCP accept loop stay in `nexus-server`.
+
+121 new tests (113 unit + 8 integration) covering every command,
+wrong-arity / wrong-type guards, NOAUTH gating, pipelined multiplexing,
+PUSH_ID rejection, and end-to-end CRUD round-trips over TCP.
+
 ### 🔌 RESP3 Transport (2026-04-18)
 
 **Any RESP3 client — `redis-cli`, `iredis`, RedisInsight, Jedis, redis-rb,
