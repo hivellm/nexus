@@ -79,10 +79,25 @@ pub struct IngestResponse {
     pub error: Option<String>,
 }
 
-/// Ingest bulk data
+/// Ingest bulk data.
+///
+/// Uses `serde_json` unconditionally. simd-json dispatch was
+/// benchmarked on this code path (see `benches/simd_json.rs` + ADR
+/// notes in `docs/specs/simd-dispatch.md`) and came out slower for the
+/// ingest schema because `NodeIngest.properties: serde_json::Value`
+/// forces simd-json into DOM-building mode where it loses its
+/// throughput advantage. The `simd::json` primitive is still available
+/// for future typed-schema parse paths where it wins.
 pub async fn ingest_data(
     State(server): State<std::sync::Arc<NexusServer>>,
     Json(request): Json<IngestRequest>,
+) -> Json<IngestResponse> {
+    ingest_data_inner(State(server), request).await
+}
+
+async fn ingest_data_inner(
+    State(server): State<std::sync::Arc<NexusServer>>,
+    request: IngestRequest,
 ) -> Json<IngestResponse> {
     let start_time = std::time::Instant::now();
 
@@ -436,7 +451,7 @@ mod tests {
             use_batching: false,
         };
 
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -456,7 +471,7 @@ mod tests {
             use_batching: false,
         };
 
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -480,7 +495,7 @@ mod tests {
             use_batching: false,
         };
 
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -495,7 +510,7 @@ mod tests {
             use_batching: false,
         };
 
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs - empty request should be handled gracefully
     }
 
@@ -513,7 +528,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -531,7 +546,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -558,7 +573,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -580,7 +595,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -598,7 +613,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -616,7 +631,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -634,7 +649,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -681,7 +696,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -712,7 +727,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -743,7 +758,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 
@@ -766,7 +781,7 @@ mod tests {
         };
 
         let (_temp_dir, server) = create_test_server().await;
-        let _response = ingest_data(State(server), Json(request)).await;
+        let _response = ingest_data_inner(State(server), request).await;
         // Test passes if no panic occurs
     }
 }

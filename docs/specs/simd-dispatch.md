@@ -17,14 +17,16 @@ the conventions below, update this spec first.
 
 ```text
 nexus-core/src/simd/
-├── mod.rs              re-exports: cpu(), CpuFeatures, bitmap, distance,
-│                       reduce, compare
+├── mod.rs              re-exports: cpu(), CpuFeatures, bitmap, compare,
+│                       crc32c, distance, json, reduce, scalar
 ├── dispatch.rs         CpuFeatures + OnceLock<CpuFeatures> probe
 ├── scalar.rs           reference kernels (ground truth)
 ├── distance.rs         safe public API for f32 dot/l2_sq/cosine/normalize
 ├── bitmap.rs           safe public API for popcount/and_popcount
 ├── reduce.rs           safe public API for sum/min/max (i64/f64/f32)
 ├── compare.rs          safe public API for eq/ne/lt/le/gt/ge (i64/f64)
+├── crc32c.rs           hardware CRC32C wrapper (interop)
+├── json.rs             size-threshold JSON dispatch (simd-json vs serde_json)
 ├── x86.rs              #[cfg(target_arch="x86_64")] kernels
 └── aarch64.rs          #[cfg(target_arch="aarch64")] kernels
 ```
@@ -178,6 +180,32 @@ via `_mm_crc32_u64` / ARMv8 `__crc32cd`). Measured on Zen 4:
 beats the single-instruction sequential `_mm_crc32_u64` loop
 (~7 GB/s). On this class of hardware, `crc32fast` is the right choice
 for raw throughput.
+
+### JSON parser benchmark — honest findings
+
+The phase-3 task spec also anticipated a 2–3× speedup from switching
+`/ingest` body parsing above 64 KiB to `simd-json`. Benchmarked on
+Zen 4 with the existing ingest schema:
+
+| Payload size | `serde_json`   | `simd-json`    | Ratio       |
+|--------------|----------------|----------------|-------------|
+| 10 KiB       | 32 µs          | 32 µs          | tie         |
+| 70 KiB       | 213 µs         | 315 µs         | simd 1.48× slower |
+| 1 MiB        | 4.2 ms         | 5.5 ms         | simd 1.32× slower |
+
+`simd-json` is designed around typed, schema-driven deserialisation.
+The `/ingest` schema stores per-node `properties: serde_json::Value`
+— an untyped dynamic JSON tree. That forces `simd-json` into DOM
+construction, which loses the SIMD advantage because the tape walk
+still has to allocate every nested map/array.
+
+Decision: `/ingest` **stays on `serde_json`.** The `simd::json`
+dispatcher is kept as a public primitive for future typed-schema
+parse paths (e.g. Cypher `parameters` maps with strongly-typed
+schemas, or RPC frames that pre-bind their shapes) where the
+measurement will tip in `simd-json`'s favour.
+
+### CRC32C revisited
 
 Decision: **WAL default stays on `crc32fast`.** The dual-format
 infrastructure (magic byte + algo field) is still worth shipping

@@ -65,6 +65,7 @@ chrono.workspace = true
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 crc32fast = "1.4"
 crc32c = "0.6"  # hardware-accelerated CRC32C (Castagnoli) via SSE4.2 / ARMv8 CRC
+simd-json = "0.13"  # SIMD JSON parser (SSE4.2 / AVX2) — used above a size threshold
 tempfile = "3.15"
 crossbeam-channel = "0.5"
 rand.workspace = true
@@ -133,6 +134,10 @@ harness = false
 
 [[bench]]
 name = "simd_crc"
+harness = false
+
+[[bench]]
+name = "simd_json"
 harness = false
 
 [[example]]
