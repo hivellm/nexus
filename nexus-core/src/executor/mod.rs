@@ -27,6 +27,21 @@ pub mod planner;
 /// caller a deterministic failure instead of a silent host-wide crash.
 pub const MAX_INTERMEDIATE_ROWS: usize = 1_000_000;
 
+/// Push `row` into `vec`, returning `Error::OutOfMemory` if doing so would
+/// cross [`MAX_INTERMEDIATE_ROWS`]. Centralising the check in one place
+/// keeps each expand/join site to a single extra line.
+#[inline]
+fn push_with_row_cap<T>(vec: &mut Vec<T>, row: T, op: &'static str) -> Result<()> {
+    if vec.len() >= MAX_INTERMEDIATE_ROWS {
+        return Err(Error::OutOfMemory(format!(
+            "{} would exceed MAX_INTERMEDIATE_ROWS ({}); add LIMIT or narrow the query",
+            op, MAX_INTERMEDIATE_ROWS
+        )));
+    }
+    vec.push(row);
+    Ok(())
+}
+
 /// Executor configuration for controlling execution behavior
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
@@ -3226,7 +3241,7 @@ impl Executor {
                             new_row.insert(rel_var.to_string(), relationship_value);
                         }
 
-                        expanded_rows.push(new_row);
+                        push_with_row_cap(&mut expanded_rows, new_row, "Expand (source-less)")?;
                     }
                 }
             }
@@ -3277,7 +3292,11 @@ impl Executor {
                         if !rel_var.is_empty() {
                             new_row.insert(rel_var.to_string(), Value::Null);
                         }
-                        expanded_rows.push(new_row);
+                        push_with_row_cap(
+                            &mut expanded_rows,
+                            new_row,
+                            "Expand (optional, null source)",
+                        )?;
                     } else {
                         tracing::debug!(
                             "Expand: skipping row {} of {} - source_var '{}' is Null",
@@ -3420,7 +3439,11 @@ impl Executor {
                             if !rel_var.is_empty() {
                                 new_row.insert(rel_var.to_string(), Value::Null);
                             }
-                            expanded_rows.push(new_row);
+                            push_with_row_cap(
+                                &mut expanded_rows,
+                                new_row,
+                                "Expand (optional, no match)",
+                            )?;
                         } else {
                             tracing::debug!(
                                 "Expand: source node_id {} has no relationships matching criteria, skipping",
@@ -3515,7 +3538,7 @@ impl Executor {
                             rel_info.source_id,
                             rel_info.target_id
                         );
-                        expanded_rows.push(new_row);
+                        push_with_row_cap(&mut expanded_rows, new_row, "Expand")?;
                     }
                 }
             }
@@ -8597,7 +8620,11 @@ impl Executor {
                                     );
                                 }
 
-                                expanded_rows.push(new_row);
+                                push_with_row_cap(
+                                    &mut expanded_rows,
+                                    new_row,
+                                    "VarLengthExpand (single path)",
+                                )?;
                             }
                         }
                         continue; // Skip to next source node
@@ -8664,7 +8691,7 @@ impl Executor {
                         new_row.insert(path_var.to_string(), Value::Array(path_nodes_values));
                     }
 
-                    expanded_rows.push(new_row);
+                    push_with_row_cap(&mut expanded_rows, new_row, "VarLengthExpand")?;
                 }
 
                 // Continue expanding if we haven't reached max length
