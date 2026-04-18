@@ -16,6 +16,8 @@ pub struct Config {
     /// `DefaultBodyLimit` layer to keep bulk ingest payloads from
     /// monopolising memory.
     pub max_body_size_bytes: usize,
+    /// Engine-side tunables (page cache, etc.) propagated from YAML.
+    pub engine: nexus_core::EngineConfig,
     /// Root user configuration
     pub root_user: RootUserConfig,
     /// Authentication configuration
@@ -108,11 +110,57 @@ impl Default for Config {
             // ingest payloads, but bounded so a single oversized POST cannot
             // exhaust the server's allocator.
             max_body_size_bytes: 16 * 1024 * 1024,
+            engine: nexus_core::EngineConfig::default(),
             root_user: RootUserConfig::default(),
             auth: AuthConfig::default(),
             multi_database: MultiDatabaseConfig::default(),
         }
     }
+}
+
+// Intermediate structs for parsing config.yml (a subset of its schema).
+// Everything is optional so partial configs work and the YAML file can
+// evolve without breaking deployments.
+
+/// Values that YAML parsing can contribute. All optional; env vars still
+/// win and unset fields fall back to compiled defaults.
+#[derive(Debug, Default, Clone)]
+pub struct YamlOverrides {
+    /// `server.addr`
+    pub addr: Option<String>,
+    /// `server.max_body_size_mb`
+    pub max_body_size_mb: Option<usize>,
+    /// `storage.data_dir`
+    pub data_dir: Option<String>,
+    /// `storage.page_cache.capacity`
+    pub page_cache_capacity: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct YamlRootConfig {
+    server: YamlServerSection,
+    storage: YamlStorageSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct YamlServerSection {
+    addr: Option<String>,
+    max_body_size_mb: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct YamlStorageSection {
+    data_dir: Option<String>,
+    page_cache: YamlPageCacheSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct YamlPageCacheSection {
+    capacity: Option<usize>,
 }
 
 /// Authentication configuration file structure
@@ -153,23 +201,72 @@ impl Config {
         }
     }
 
+    /// Parse a `config.yml`-style file, returning only the fields this
+    /// binary wires up. Missing fields fall back to `None` and are
+    /// substituted later by defaults or env vars.
+    pub fn from_yaml_file(path: impl AsRef<Path>) -> Option<YamlOverrides> {
+        let path = path.as_ref();
+        if !path.exists() {
+            tracing::debug!("YAML config file not found: {:?}", path);
+            return None;
+        }
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_yaml::from_str::<YamlRootConfig>(&content) {
+                Ok(parsed) => {
+                    tracing::info!("Loaded YAML configuration from {:?}", path);
+                    Some(YamlOverrides {
+                        addr: parsed.server.addr,
+                        max_body_size_mb: parsed.server.max_body_size_mb,
+                        data_dir: parsed.storage.data_dir,
+                        page_cache_capacity: parsed.storage.page_cache.capacity,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse YAML config {:?}: {}", path, e);
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to read YAML config {:?}: {}", path, e);
+                None
+            }
+        }
+    }
+
     /// Load configuration from environment variables and config file
-    /// Priority: Environment variables > config file > defaults
+    /// Priority: Environment variables > YAML file > auth.toml > defaults
     #[allow(dead_code)]
     pub fn from_env() -> Self {
-        let addr = std::env::var("NEXUS_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1:15474".to_string())
+        // YAML first so env vars always win.
+        let yaml_path =
+            std::env::var("NEXUS_CONFIG_PATH").unwrap_or_else(|_| "config.yml".to_string());
+        let yaml = Self::from_yaml_file(&yaml_path).unwrap_or_default();
+
+        let addr: SocketAddr = std::env::var("NEXUS_ADDR")
+            .ok()
+            .or(yaml.addr)
+            .unwrap_or_else(|| "127.0.0.1:15474".to_string())
             .parse()
             .expect("Invalid NEXUS_ADDR");
 
-        let data_dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+        let data_dir = std::env::var("NEXUS_DATA_DIR")
+            .ok()
+            .or(yaml.data_dir)
+            .unwrap_or_else(|| "./data".to_string());
 
-        // Max body size: NEXUS_MAX_BODY_SIZE_MB overrides the 16 MiB default.
+        // Max body size: NEXUS_MAX_BODY_SIZE_MB > yaml.server.max_body_size_mb > 16 MiB.
         let max_body_size_bytes = std::env::var("NEXUS_MAX_BODY_SIZE_MB")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
+            .or(yaml.max_body_size_mb)
             .map(|mb| mb * 1024 * 1024)
             .unwrap_or(16 * 1024 * 1024);
+
+        // Engine config. Start from defaults and let YAML override.
+        let mut engine = nexus_core::EngineConfig::default();
+        if let Some(cap) = yaml.page_cache_capacity {
+            engine.page_cache_capacity = cap;
+        }
 
         // Try to load from config file first (will be overridden by env vars)
         let (mut root_user, mut auth) = Self::from_auth_file("config")
@@ -215,6 +312,7 @@ impl Config {
             addr,
             data_dir,
             max_body_size_bytes,
+            engine,
             root_user,
             auth,
             multi_database: MultiDatabaseConfig::default(),
@@ -509,5 +607,53 @@ password = "custom_pass"
         assert_eq!(root_user.password, "custom_pass");
         // Auth should use defaults
         assert!(!auth.enabled);
+    }
+
+    #[test]
+    fn test_from_yaml_file_parses_subset() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("test.yml");
+        std::fs::write(
+            &path,
+            r#"
+server:
+  addr: "0.0.0.0:9999"
+  max_body_size_mb: 7
+  workers: 4           # unrelated field — must be ignored without error
+storage:
+  data_dir: "/custom/data"
+  page_cache:
+    capacity: 2048
+    eviction_policy: "clock"
+"#,
+        )
+        .unwrap();
+
+        let overrides = Config::from_yaml_file(&path).expect("yaml should parse");
+        assert_eq!(overrides.addr.as_deref(), Some("0.0.0.0:9999"));
+        assert_eq!(overrides.max_body_size_mb, Some(7));
+        assert_eq!(overrides.data_dir.as_deref(), Some("/custom/data"));
+        assert_eq!(overrides.page_cache_capacity, Some(2048));
+    }
+
+    #[test]
+    fn test_from_yaml_file_missing_returns_none() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("does-not-exist.yml");
+        assert!(Config::from_yaml_file(&path).is_none());
+    }
+
+    #[test]
+    fn test_from_yaml_file_partial_ok() {
+        // Only page_cache.capacity set — everything else should be None.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("partial.yml");
+        std::fs::write(&path, "storage:\n  page_cache:\n    capacity: 500\n").unwrap();
+
+        let overrides = Config::from_yaml_file(&path).expect("yaml should parse");
+        assert_eq!(overrides.addr, None);
+        assert_eq!(overrides.max_body_size_mb, None);
+        assert_eq!(overrides.data_dir, None);
+        assert_eq!(overrides.page_cache_capacity, Some(500));
     }
 }

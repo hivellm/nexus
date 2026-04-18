@@ -109,15 +109,19 @@ fn main() -> anyhow::Result<()> {
 async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
     // Tracing already initialized in main()
 
-    // Load configuration (from env vars and/or config/auth.toml)
+    // Load configuration (YAML file -> env vars -> defaults, env wins).
     let config = config::Config::from_env();
 
     // Initialize Engine (contains all core components)
-    // Use persistent data directory instead of tempdir
-    let data_dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+    // `config.data_dir` already merges NEXUS_DATA_DIR / YAML / default, so
+    // we use it directly instead of re-reading the env var here.
+    let data_dir = config.data_dir.clone();
     std::fs::create_dir_all(&data_dir)?;
-    let engine = nexus_core::Engine::with_data_dir(&data_dir)?;
-    info!("Using persistent data directory: {}", data_dir);
+    let engine = nexus_core::Engine::with_data_dir_and_config(&data_dir, config.engine.clone())?;
+    info!(
+        "Using persistent data directory: {} (page_cache_capacity={})",
+        data_dir, config.engine.page_cache_capacity
+    );
     let engine_arc = Arc::new(TokioRwLock::new(engine));
 
     // Initialize executor

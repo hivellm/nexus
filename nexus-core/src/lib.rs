@@ -115,6 +115,28 @@ pub struct GraphStatistics {
     pub relationship_type_counts: std::collections::HashMap<String, u64>,
 }
 
+/// Tunable construction parameters for [`Engine`].
+///
+/// Holds the runtime-configurable knobs that used to be hardcoded inside
+/// `Engine::with_data_dir`. Call sites that need to honour a loaded YAML
+/// config should populate this explicitly via
+/// [`Engine::with_data_dir_and_config`]; `Engine::with_data_dir` stays as
+/// a thin wrapper that picks up [`EngineConfig::default`].
+#[derive(Debug, Clone)]
+pub struct EngineConfig {
+    /// Page cache capacity in 8 KB pages. Historical default was 1024
+    /// (8 MB), which is tiny for any real workload but safe on cold start.
+    pub page_cache_capacity: usize,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            page_cache_capacity: 1024,
+        }
+    }
+}
+
 /// Graph database engine
 pub struct Engine {
     /// Storage catalog for label/type/key mappings
@@ -156,9 +178,20 @@ impl Engine {
         Ok(engine)
     }
 
-    /// Create a new engine instance with a specific data directory
-    /// This allows persistent storage instead of temporary directories
+    /// Create a new engine instance with a specific data directory, using
+    /// the default [`EngineConfig`]. This allows persistent storage instead
+    /// of temporary directories.
     pub fn with_data_dir<P: AsRef<std::path::Path>>(data_dir: P) -> Result<Self> {
+        Self::with_data_dir_and_config(data_dir, EngineConfig::default())
+    }
+
+    /// Create a new engine instance with a specific data directory and
+    /// caller-supplied [`EngineConfig`]. Used by callers that load values
+    /// from YAML or CLI flags.
+    pub fn with_data_dir_and_config<P: AsRef<std::path::Path>>(
+        data_dir: P,
+        config: EngineConfig,
+    ) -> Result<Self> {
         let data_dir = data_dir.as_ref();
 
         // Ensure data directory exists
@@ -171,7 +204,7 @@ impl Engine {
         let storage = storage::RecordStore::new(data_dir)?;
 
         // Initialize page cache
-        let page_cache = page_cache::PageCache::new(1024)?; // 1024 pages = 8MB
+        let page_cache = page_cache::PageCache::new(config.page_cache_capacity)?;
 
         // Initialize WAL
         let wal = wal::Wal::new(data_dir.join("wal.log"))?;

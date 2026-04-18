@@ -60,6 +60,7 @@ futures = "0.3"
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml = "0.9"
 toml = "0.8"
 chrono.workspace = true
 uuid = { version = "1.10", features = ["v4"] }
