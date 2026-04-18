@@ -33,6 +33,7 @@ pub mod dispatch;
 pub mod distance;
 pub mod json;
 pub mod reduce;
+pub mod rle;
 pub mod scalar;
 
 #[cfg(target_arch = "aarch64")]

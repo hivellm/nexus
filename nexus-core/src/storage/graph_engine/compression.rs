@@ -5,6 +5,7 @@
 
 use super::format::{AdjacencyEntry, CompressionType};
 use crate::error::{Error, Result};
+use crate::simd::rle as simd_rle;
 use std::collections::HashMap;
 
 /// Compressor for relationship adjacency lists and other graph structures
@@ -373,32 +374,42 @@ impl RelationshipCompressor {
         Ok(result)
     }
 
+    /// Run-length encode an adjacency list.
+    ///
+    /// Output format (byte-identical to the scalar reference):
+    /// - `0xFF marker + u64 rel_id + u16 run_length` for runs ≥ 3
+    /// - `n marker (n < 0x80) + n × u64 rel_id` for up to 127 literals
+    ///
+    /// The hot inner loop (finding the length of a run) is accelerated
+    /// via `simd::rle::find_run_length`, which picks the fastest kernel
+    /// the host CPU supports (AVX-512F → AVX2 → NEON → Scalar). Output
+    /// bytes match the scalar implementation exactly — verified by
+    /// `tests/simd_rle_parity.rs`.
     fn compress_simd_rle(&self, entries: &[AdjacencyEntry]) -> Result<Vec<u8>> {
-        // SIMD-accelerated Run-Length Encoding for repeated values
+        // Collect rel_ids into a contiguous buffer so SIMD loads have
+        // a contiguous u64 slice to scan. AdjacencyEntry is a
+        // single-field wrapper around u64, so this is a pure copy —
+        // no layout translation.
+        let rel_ids: Vec<u64> = entries.iter().map(|e| e.rel_id).collect();
         let mut result = Vec::new();
         let mut i = 0;
 
-        while i < entries.len() {
-            let current_id = entries[i].rel_id;
-            let mut run_length = 1;
-
-            // Count consecutive identical IDs
-            while i + run_length < entries.len() && entries[i + run_length].rel_id == current_id {
-                run_length += 1;
-            }
+        while i < rel_ids.len() {
+            let current_id = rel_ids[i];
+            let run_length = simd_rle::find_run_length(&rel_ids, i);
 
             if run_length >= 3 {
                 // Encode as RLE
-                result.push(0xFF); // RLE marker
+                result.push(0xFF);
                 result.extend_from_slice(&current_id.to_le_bytes());
                 result.extend_from_slice(&(run_length as u16).to_le_bytes());
                 i += run_length;
             } else {
-                // Encode as literals
-                let literal_count = std::cmp::min(127, entries.len() - i);
-                result.push(literal_count as u8); // Literal marker with count
+                // Encode as literals (up to 127 at a time).
+                let literal_count = std::cmp::min(127, rel_ids.len() - i);
+                result.push(literal_count as u8);
                 for j in 0..literal_count {
-                    result.extend_from_slice(&entries[i + j].rel_id.to_le_bytes());
+                    result.extend_from_slice(&rel_ids[i + j].to_le_bytes());
                 }
                 i += literal_count;
             }

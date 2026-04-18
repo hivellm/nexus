@@ -205,6 +205,35 @@ parse paths (e.g. Cypher `parameters` maps with strongly-typed
 schemas, or RPC frames that pre-bind their shapes) where the
 measurement will tip in `simd-json`'s favour.
 
+### RLE find-run-length — gated win
+
+`simd::rle::find_run_length` replaces the misnamed "SIMD-accelerated"
+(actually scalar) inner loop of `compress_simd_rle`. Measured on
+Zen 4 scanning a full slice through the run-length finder:
+
+| Shape    | Size     | Scalar  | Dispatch | Ratio  |
+|----------|----------|---------|----------|--------|
+| uniform  | 1 024    | 195 ns  | 64 ns    | 3.0× faster |
+| uniform  | 16 384   | 3.2 µs  | 1.0 µs   | 3.2× faster |
+| uniform  | 262 144  | 51 µs   | 18.5 µs  | 2.75× faster |
+| grouped  | 1 024    | 331 ns  | 558 ns   | **0.59× — slower** |
+| grouped  | 16 384   | 5.4 µs  | 9.0 µs   | 0.60× — slower |
+| unique   | 16 384   | 8.8 µs  | 72 µs    | 0.12× — 8× slower |
+| unique   | 262 144  | 137 µs  | 1.14 ms  | 0.12× — 8× slower |
+
+The SIMD setup cost (broadcast + load + cmp + movemask + trailing_ones,
+~5–7 cycles) beats scalar only when the run is long enough to
+amortise it over ≥ 4 lanes. `unique` (runs of 1) and `grouped` (average
+run ≈ 8.5) pay the setup for nothing.
+
+**Production use is gated.** `choose_compression_type` only picks
+`CompressionType::SimdRLE` when `repeat_ratio > 0.3`, i.e. more than
+30% of consecutive pairs are equal. That filters out the `unique`
+case entirely and pushes the workload into hub-node-style
+distributions where runs are long — the regime where SIMD measurably
+wins. Byte-identical output is enforced by
+`tests/simd_rle_parity.rs` (7 cases including 256× proptest).
+
 ### CRC32C revisited
 
 Decision: **WAL default stays on `crc32fast`.** The dual-format

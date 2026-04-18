@@ -140,6 +140,10 @@ harness = false
 name = "simd_json"
 harness = false
 
+[[bench]]
+name = "simd_rle"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../examples/hierarchical_call_graph_example.rs"
