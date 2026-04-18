@@ -117,7 +117,7 @@ Three tests in Section 7 are failing with row count mismatches:
 
 ### 4. Database Cleanup Fixes
 
-**File**: `scripts/test-neo4j-nexus-compatibility-200.ps1`
+**File**: `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`
 
 **Change 6**: Improved database cleanup
 - **Location**: `Clear-Databases` function
@@ -298,7 +298,7 @@ When a relationship is created (`create_relationship` in `storage/mod.rs`):
 ## Files Modified
 
 1. `nexus-core/src/executor/mod.rs` - Aggregate fixes, deduplication fixes, debug logging
-2. `scripts/test-neo4j-nexus-compatibility-200.ps1` - Database cleanup improvements
+2. `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` - Database cleanup improvements
 3. `rulebook/tasks/fix-neo4j-compatibility-errors/proposal.md` - Status updates
 4. `rulebook/tasks/fix-neo4j-compatibility-errors/tasks.md` - Task tracking
 
@@ -810,7 +810,7 @@ if needs_cartesian_product {
 
 ### Final Test Results
 
-**Script**: `scripts/test-section7-debug.sh`
+**Script**: `scripts/debug/test-section7-debug.sh`
 
 #### ✅ Test 7.19: Relationship with aggregation
 ```cypher

@@ -22,7 +22,7 @@ chmod +x act
 
 ### On Windows (via WSL)
 
-The PowerShell script `scripts/act-run-workflows.ps1` automatically downloads `act` if needed.
+The PowerShell script `scripts/ci/act-run-workflows.ps1` automatically downloads `act` if needed.
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ The PowerShell script `scripts/act-run-workflows.ps1` automatically downloads `a
 
 ```bash
 # On WSL
-./scripts/act-run-workflows.sh
+./scripts/ci/act-run-workflows.sh
 
 # On PowerShell
 .\scripts\act-run-workflows.ps1
@@ -52,9 +52,9 @@ The PowerShell script `scripts/act-run-workflows.ps1` automatically downloads `a
 
 ```bash
 # On WSL
-./scripts/act-run-workflows.sh rust-tests
-./scripts/act-run-workflows.sh lint
-./scripts/act-run-workflows.sh codespell
+./scripts/ci/act-run-workflows.sh rust-tests
+./scripts/ci/act-run-workflows.sh lint
+./scripts/ci/act-run-workflows.sh codespell
 
 # On PowerShell
 .\scripts\act-run-workflows.ps1 rust-tests
@@ -66,7 +66,7 @@ The PowerShell script `scripts/act-run-workflows.ps1` automatically downloads `a
 
 ```bash
 # On WSL
-./scripts/act-run-workflows.sh all
+./scripts/ci/act-run-workflows.sh all
 
 # On PowerShell
 .\scripts\act-run-workflows.ps1 all
@@ -120,7 +120,7 @@ If you get "Docker not accessible" error:
 
 ```bash
 chmod +x act
-chmod +x scripts/act-run-workflows.sh
+chmod +x scripts/ci/act-run-workflows.sh
 ```
 
 ### Docker cache

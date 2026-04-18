@@ -25,7 +25,10 @@ logs/
 *.store
 *.log
 *.hnsw
+*.mdb
 /data/
+/testdata/
+/memtest-output/
 
 # Build artifacts
 /dist/
@@ -68,3 +71,51 @@ test-*
 secrets
 secrets/
 secrets/*.txt
+
+# Rulebook - ignore runtime data, keep specs and tasks
+/.rulebook/*
+!/.rulebook/specs/
+!/.rulebook/tasks/
+!/.rulebook/tasks/**/*.md
+!/.rulebook/rulebook.json
+
+# Patterns added by @hivellm/rulebook
+# Added at: 2026-04-18T03:07:48.560Z
+
+*$py.class
+*.egg
+*.egg-info/
+*.py[cod]
+.Python
+.cache/
+.eggs/
+.env.*.local
+.installed.cfg
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+ENV/
+Thumbs.db
+__pycache__/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+env/
+lib/
+lib64/
+parts/
+sdist/
+target/
+temp/
+tmp/
+var/
+venv/
+wheels/
+
+CLAUDE.local.md
+.rulebook/backup/
+.rulebook/handoff/_pending.md
+.rulebook/handoff/.urgent

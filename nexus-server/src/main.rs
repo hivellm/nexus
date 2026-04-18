@@ -15,9 +15,17 @@
 //! - GET /stats - Database statistics
 //! - POST /mcp - MCP StreamableHTTP endpoint
 
+// Activate jemalloc as the global allocator when the `memory-profiling`
+// feature is enabled. Combined with `MALLOC_CONF=prof:true,...`, this lets
+// ops dump pprof heap profiles from the running process on demand (see
+// `api::debug`).
+#[cfg(all(feature = "memory-profiling", not(target_env = "msvc")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use axum::{
     Json, Router,
-    extract::Request,
+    extract::{DefaultBodyLimit, Request},
     middleware::Next,
     routing::{any, delete, get, post, put},
 };
@@ -109,15 +117,19 @@ fn main() -> anyhow::Result<()> {
 async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
     // Tracing already initialized in main()
 
-    // Load configuration (from env vars and/or config/auth.toml)
+    // Load configuration (YAML file -> env vars -> defaults, env wins).
     let config = config::Config::from_env();
 
     // Initialize Engine (contains all core components)
-    // Use persistent data directory instead of tempdir
-    let data_dir = std::env::var("NEXUS_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+    // `config.data_dir` already merges NEXUS_DATA_DIR / YAML / default, so
+    // we use it directly instead of re-reading the env var here.
+    let data_dir = config.data_dir.clone();
     std::fs::create_dir_all(&data_dir)?;
-    let engine = nexus_core::Engine::with_data_dir(&data_dir)?;
-    info!("Using persistent data directory: {}", data_dir);
+    let engine = nexus_core::Engine::with_data_dir_and_config(&data_dir, config.engine.clone())?;
+    info!(
+        "Using persistent data directory: {} (page_cache_capacity={})",
+        data_dir, config.engine.page_cache_capacity
+    );
     let engine_arc = Arc::new(TokioRwLock::new(engine));
 
     // Initialize executor
@@ -304,6 +316,11 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         .route("/health", get(api::health::health_check))
         .route("/metrics", get(api::health::metrics))
         .route("/prometheus", get(api::prometheus::prometheus_metrics))
+        // Memory profiling endpoints. They respond 503 if the crate was
+        // built without `--features memory-profiling`, so the routes are
+        // always wired — no conditional routing required.
+        .route("/debug/memory", get(api::debug::memory_stats))
+        .route("/debug/heap/dump", post(api::debug::heap_dump))
         .route("/test", get(|| async { "Test endpoint working" }))
         .route("/cypher-debug", post(|body: String| async move {
             tracing::debug!("Raw body received on /cypher-debug: {}", body);
@@ -677,6 +694,11 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
 
     // Apply middleware layers
     let app = app
+        // Cap request body size. Without this, Axum allows bodies up to its
+        // internal default (2 MB) but we want the value to come from config
+        // so ops can tune it per deployment. A single oversized POST must
+        // not be able to exhaust the server allocator.
+        .layer(DefaultBodyLimit::max(config.max_body_size_bytes))
         // Compression for responses (gzip, deflate, br)
         .layer(CompressionLayer::new())
         // CORS support

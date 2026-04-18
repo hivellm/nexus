@@ -60,6 +60,7 @@ futures = "0.3"
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml = "0.9"
 toml = "0.8"
 chrono.workspace = true
 uuid = { version = "1.10", features = ["v4"] }
@@ -82,6 +83,19 @@ clap = { version = "4.5", features = ["derive"] }
 
 # System monitoring
 sysinfo = "0.32"
+
+# Memory profiling (opt-in). Enables jemalloc as the global allocator with
+# heap profiling hooks so ops can dump pprof-compatible profiles on demand.
+# Only activated via `--features memory-profiling` — default builds pay no
+# allocator switch cost.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"], optional = true }
+# `stats` enables the mallctl stats::* accessors used by /debug/memory.
+tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
+
+[features]
+default = []
+memory-profiling = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

@@ -10,6 +10,22 @@ use nexus_core::executor::Query;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Default cap applied to relationship list resolvers when the client does
+/// not supply an explicit `limit`. Keeps single requests from materialising
+/// arbitrary amounts of data on high-degree nodes.
+const DEFAULT_REL_LIMIT: i32 = 100;
+/// Hard upper bound the server will accept regardless of what the client
+/// asks for. Requests with a larger `limit` get silently clamped.
+const MAX_REL_LIMIT: i32 = 500;
+
+/// Clamp a user-supplied GraphQL `limit` argument into the allowed range.
+#[inline]
+fn clamp_rel_limit(requested: Option<i32>) -> i32 {
+    requested
+        .unwrap_or(DEFAULT_REL_LIMIT)
+        .clamp(1, MAX_REL_LIMIT)
+}
+
 #[Object]
 impl Node {
     /// Get the node ID
@@ -37,19 +53,21 @@ impl Node {
         &self,
         ctx: &Context<'_>,
         rel_type: Option<String>,
+        #[graphql(desc = "Max rels returned (default 100, cap 500)")] limit: Option<i32>,
     ) -> GQLResult<Vec<Relationship>> {
         let server = ctx.data::<Arc<NexusServer>>()?;
         let node_id = self.id.parse::<u64>().map_err(|_| "Invalid node ID")?;
+        let limit = clamp_rel_limit(limit);
 
         let query_str = if let Some(rt) = rel_type {
             format!(
-                "MATCH (n)-[r:{}]->(m) WHERE id(n) = {} RETURN id(r), '{}', id(n), id(m), properties(r)",
-                rt, node_id, rt
+                "MATCH (n)-[r:{}]->(m) WHERE id(n) = {} RETURN id(r), '{}', id(n), id(m), properties(r) LIMIT {}",
+                rt, node_id, rt, limit
             )
         } else {
             format!(
-                "MATCH (n)-[r]->(m) WHERE id(n) = {} RETURN id(r), type(r), id(n), id(m), properties(r)",
-                node_id
+                "MATCH (n)-[r]->(m) WHERE id(n) = {} RETURN id(r), type(r), id(n), id(m), properties(r) LIMIT {}",
+                node_id, limit
             )
         };
 
@@ -91,19 +109,21 @@ impl Node {
         &self,
         ctx: &Context<'_>,
         rel_type: Option<String>,
+        #[graphql(desc = "Max rels returned (default 100, cap 500)")] limit: Option<i32>,
     ) -> GQLResult<Vec<Relationship>> {
         let server = ctx.data::<Arc<NexusServer>>()?;
         let node_id = self.id.parse::<u64>().map_err(|_| "Invalid node ID")?;
+        let limit = clamp_rel_limit(limit);
 
         let query_str = if let Some(rt) = rel_type {
             format!(
-                "MATCH (m)-[r:{}]->(n) WHERE id(n) = {} RETURN id(r), '{}', id(m), id(n), properties(r)",
-                rt, node_id, rt
+                "MATCH (m)-[r:{}]->(n) WHERE id(n) = {} RETURN id(r), '{}', id(m), id(n), properties(r) LIMIT {}",
+                rt, node_id, rt, limit
             )
         } else {
             format!(
-                "MATCH (m)-[r]->(n) WHERE id(n) = {} RETURN id(r), type(r), id(m), id(n), properties(r)",
-                node_id
+                "MATCH (m)-[r]->(n) WHERE id(n) = {} RETURN id(r), type(r), id(m), id(n), properties(r) LIMIT {}",
+                node_id, limit
             )
         };
 
@@ -145,33 +165,35 @@ impl Node {
         &self,
         ctx: &Context<'_>,
         rel_type: Option<String>,
+        #[graphql(desc = "Max rels per direction (default 100, cap 500)")] limit: Option<i32>,
     ) -> GQLResult<Vec<Relationship>> {
         let server = ctx.data::<Arc<NexusServer>>()?;
         let node_id = self.id.parse::<u64>().map_err(|_| "Invalid node ID")?;
+        let limit = clamp_rel_limit(limit);
 
         // Fetch outgoing relationships
         let outgoing_query = if let Some(ref rt) = rel_type {
             format!(
-                "MATCH (n)-[r:{}]->(m) WHERE id(n) = {} RETURN id(r), '{}', id(n), id(m), properties(r)",
-                rt, node_id, rt
+                "MATCH (n)-[r:{}]->(m) WHERE id(n) = {} RETURN id(r), '{}', id(n), id(m), properties(r) LIMIT {}",
+                rt, node_id, rt, limit
             )
         } else {
             format!(
-                "MATCH (n)-[r]->(m) WHERE id(n) = {} RETURN id(r), type(r), id(n), id(m), properties(r)",
-                node_id
+                "MATCH (n)-[r]->(m) WHERE id(n) = {} RETURN id(r), type(r), id(n), id(m), properties(r) LIMIT {}",
+                node_id, limit
             )
         };
 
         // Fetch incoming relationships
         let incoming_query = if let Some(ref rt) = rel_type {
             format!(
-                "MATCH (m)-[r:{}]->(n) WHERE id(n) = {} RETURN id(r), '{}', id(m), id(n), properties(r)",
-                rt, node_id, rt
+                "MATCH (m)-[r:{}]->(n) WHERE id(n) = {} RETURN id(r), '{}', id(m), id(n), properties(r) LIMIT {}",
+                rt, node_id, rt, limit
             )
         } else {
             format!(
-                "MATCH (m)-[r]->(n) WHERE id(n) = {} RETURN id(r), type(r), id(m), id(n), properties(r)",
-                node_id
+                "MATCH (m)-[r]->(n) WHERE id(n) = {} RETURN id(r), type(r), id(m), id(n), properties(r) LIMIT {}",
+                node_id, limit
             )
         };
 

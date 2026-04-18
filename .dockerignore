@@ -5,8 +5,11 @@
 
 # Rust
 target/
-Cargo.lock
 **/*.rs.bk
+# Note: `Cargo.lock` is intentionally NOT ignored — the Dockerfile does
+# `COPY Cargo.toml Cargo.lock ./` before the workspace build, and excluding
+# it makes `docker build` fail with
+# "failed to compute cache key ... /Cargo.lock not found".
 
 # IDE
 .vscode/
@@ -21,9 +24,11 @@ docs/
 !README.md
 
 # Tests
+# Exclude only the top-level integration test directory. The glob patterns
+# **/*_test.rs and **/*_tests.rs wrongly excluded source modules like
+# nexus-core/src/cache/performance_tests.rs and broke `cargo build --workspace`
+# inside the Docker build context.
 tests/
-**/*_test.rs
-**/*_tests.rs
 
 # CI/CD
 .github/

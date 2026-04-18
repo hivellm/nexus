@@ -618,10 +618,20 @@ pub enum CompressionType {
     SimdRLE,
 }
 
-/// File growth constants
-pub const INITIAL_NODE_CAPACITY: usize = 1_000_000; // 1M nodes
-pub const INITIAL_REL_CAPACITY: usize = 5_000_000; // 5M relationships
-pub const FILE_GROWTH_FACTOR: f64 = 2.0;
+/// File growth constants.
+///
+/// The initial capacities determine how much address space the graph_engine
+/// reserves via mmap on first open. Old values (1M nodes / 5M rels) forced
+/// ~220 MB of committed memory on every cold start, dominating the RSS of
+/// an empty database. These conservative defaults keep a fresh instance at
+/// ~22 MB and rely on the existing grow_file_and_remap path for workloads
+/// that exceed them.
+pub const INITIAL_NODE_CAPACITY: usize = 100_000; // 100K nodes (~5.6 MB)
+pub const INITIAL_REL_CAPACITY: usize = 500_000; // 500K relationships (~16 MB)
+/// Remap growth multiplier. Reduced from 2.0 to 1.5 to halve the transient
+/// memory spike during grow_file_and_remap, which briefly holds the old
+/// and new mmap simultaneously.
+pub const FILE_GROWTH_FACTOR: f64 = 1.5;
 pub const MIN_GROWTH_SIZE: u64 = 64 * 1024 * 1024; // 64MB minimum growth
 
 /// Constants for segment alignment (SSD block size)

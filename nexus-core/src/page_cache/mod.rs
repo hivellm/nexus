@@ -276,6 +276,15 @@ impl PageCache {
 
         loop {
             if iterations >= max_iterations {
+                // Observability: a fully-pinned cache is the failure mode
+                // that causes cache growth to stall and RSS to climb without
+                // eviction relief. Log before returning so ops can correlate
+                // memory pressure with the leak.
+                tracing::warn!(
+                    cache_capacity = self.capacity,
+                    pages_tracked = self.pages.len(),
+                    "page_cache: eviction blocked — all pages pinned"
+                );
                 return Err(Error::page_cache("All pages are pinned, cannot evict"));
             }
 

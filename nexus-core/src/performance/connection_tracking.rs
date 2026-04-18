@@ -196,6 +196,44 @@ impl ConnectionTracker {
             }
         });
     }
+
+    /// Evict connections whose `last_activity` is older than `max_idle_seconds`.
+    ///
+    /// Counterpart to `cleanup_old_queries`: if a client disconnects without
+    /// calling `unregister_connection`, its entry would otherwise live in the
+    /// map forever. Queries associated with the evicted connections are also
+    /// dropped to keep both maps in sync.
+    pub fn cleanup_stale_connections(&self, max_idle_seconds: u64) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let stale_ids: Vec<String> = {
+            let connections = self.connections.read().unwrap();
+            connections
+                .iter()
+                .filter_map(|(id, conn)| {
+                    now.checked_sub(conn.last_activity)
+                        .filter(|idle| *idle > max_idle_seconds)
+                        .map(|_| id.clone())
+                })
+                .collect()
+        };
+
+        if stale_ids.is_empty() {
+            return;
+        }
+
+        let mut connections = self.connections.write().unwrap();
+        for id in &stale_ids {
+            connections.remove(id);
+        }
+        drop(connections);
+
+        let mut queries = self.queries.write().unwrap();
+        queries.retain(|_, q| !stale_ids.contains(&q.connection_id));
+    }
 }
 
 impl Default for ConnectionTracker {
@@ -254,5 +292,26 @@ mod tests {
         assert_eq!(connections.len(), 0);
         let queries = tracker.get_running_queries();
         assert_eq!(queries.len(), 0); // Queries should be removed too
+    }
+
+    #[test]
+    fn test_cleanup_stale_connections() {
+        let tracker = ConnectionTracker::new();
+        let conn_id = tracker.register_connection(None, "127.0.0.1:12345".to_string());
+        tracker.register_query(conn_id.clone(), "MATCH (n) RETURN n".to_string());
+
+        // Fast-forward the recorded last_activity into the distant past so the
+        // connection is considered idle past any reasonable threshold.
+        {
+            let mut conns = tracker.connections.write().unwrap();
+            let entry = conns.get_mut(&conn_id).unwrap();
+            entry.last_activity = 0;
+        }
+
+        // max_idle = 10s; the doctored connection has idle > now, so it goes.
+        tracker.cleanup_stale_connections(10);
+
+        assert_eq!(tracker.get_connections().len(), 0);
+        assert_eq!(tracker.get_running_queries().len(), 0);
     }
 }
