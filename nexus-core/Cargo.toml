@@ -122,6 +122,14 @@ harness = false
 name = "simd_popcount"
 harness = false
 
+[[bench]]
+name = "simd_reduce"
+harness = false
+
+[[bench]]
+name = "simd_compare"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../examples/hierarchical_call_graph_example.rs"
