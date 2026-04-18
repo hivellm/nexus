@@ -1205,26 +1205,35 @@ This replaces an older pattern that kept every subsystem in its own
 `OnceLock<Arc<_>>` per API file (`api::cypher::EXECUTOR`,
 `api::data::ENGINE`, …), which broke test isolation — two tests that
 each called `init_engine` silently collided on the same process-wide
-singleton. The migration is sliced into `phase2a`–`phase2e`; phase2a
-landed cypher + data, phase2b landed schema + stats + knn, phase2c
-landed the performance-monitoring axis (query statistics, plan cache,
-DBMS procedures, MCP tool statistics, MCP tool cache), and phase2d
-lands graph correlation + comparison + UMICP: the
-`GraphCorrelationManager` (shared correlation-graph builder), the two
-comparison `Graph` instances, and the `GraphUmicpHandler` (JSON-RPC
-dispatcher for `graph.*` methods) now hang off `NexusServer`. `main.rs`
-no longer provisions temp dirs or calls `init_graphs` /
-`init_manager` / `init_umicp_handler`; those helpers and their
-`OnceLock`s are gone. Default comparison graphs are built inside
-`NexusServer::new` via the private `build_default_comparison_graphs`
-helper, which roots each graph at its own fresh temp dir and falls
-back to `std::env::temp_dir()` if `tempfile::tempdir()` fails. To add
-a new dimension: add an `Arc<_>` field to `NexusServer`, build it
-inside `NexusServer::new` with whatever defaults apply, and read it
-from handlers via `server.<field>` — do not reach for a `OnceLock`.
-The final phase2e slice migrates health + prometheus and adds a
-`tests/no_oncelock_globals.rs` guard that fails if the anti-pattern
-comes back.
+singleton. The migration was sliced into `phase2a`–`phase2e` and is
+now **complete**:
+
+- **phase2a** — cypher + data
+- **phase2b** — schema + stats + knn
+- **phase2c** — performance monitoring: query statistics, plan cache,
+  DBMS procedures, MCP tool statistics, MCP tool cache
+- **phase2d** — graph correlation + comparison + UMICP: the
+  `GraphCorrelationManager`, the two comparison `Graph` instances, and
+  the `GraphUmicpHandler` (JSON-RPC dispatcher for `graph.*` methods).
+  Default comparison graphs are built inside `NexusServer::new` via
+  the private `build_default_comparison_graphs` helper.
+- **phase2e** — observability: the per-server `start_time: Instant`
+  and the `Arc<PrometheusMetrics>` counter pack. `api::health::init` +
+  `api::prometheus::init` are gone; handlers read uptime off
+  `server.start_time` and counters off `server.metrics`. The cypher
+  execute path threads the same `&NexusServer` into
+  `record_prometheus_metrics`.
+
+**Rule for future subsystems**: add an `Arc<_>` field to `NexusServer`,
+build it inside `NexusServer::new` with whatever defaults apply, and
+read it from handlers via `server.<field>`. Do not reach for a
+`OnceLock`. The anti-regression guard at
+[`nexus-server/tests/no_oncelock_globals.rs`](../nexus-server/tests/no_oncelock_globals.rs)
+greps `nexus-server/src/api/` on every `cargo test` run and fails if a
+`static <NAME>: OnceLock<…>` declaration is reintroduced. Genuine
+process-wide singletons (e.g. RESP3 / RPC listener counters shared
+across accept threads) can opt into the allow-list at the top of that
+file with an explanatory comment.
 
 ## References
 

@@ -300,11 +300,10 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // Create MCP router with StreamableHTTP transport
     let mcp_router = create_mcp_router(nexus_server.clone()).await?;
 
-    // Initialize health check system
-    api::health::init();
-
-    // Initialize Prometheus metrics
-    api::prometheus::init();
+    // Health + Prometheus now read `server.start_time` and
+    // `server.metrics` via State<Arc<NexusServer>> (phase2e); the
+    // `api::health::init` + `api::prometheus::init` bootstrap pair
+    // that used to live here is gone.
 
     // The comparison graphs + correlation manager + UMICP handler are
     // owned by NexusServer::new (phase2d), so the `init_graphs` /

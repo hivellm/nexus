@@ -304,15 +304,20 @@ pub struct CypherResponse {
     pub error: Option<String>,
 }
 
-/// Record Prometheus metrics for query execution
-fn record_prometheus_metrics(execution_time_ms: u64, success: bool, cache_hit: bool) {
-    if let Some(metrics) = crate::api::prometheus::METRICS.get() {
-        metrics.record_query(success, execution_time_ms);
-        if cache_hit {
-            metrics.record_cache_hit();
-        } else {
-            metrics.record_cache_miss();
-        }
+/// Record Prometheus metrics for query execution against the server's
+/// Prometheus counter pack. The handler always has `Arc<NexusServer>`
+/// in scope, so there is no global fallback.
+fn record_prometheus_metrics(
+    server: &NexusServer,
+    execution_time_ms: u64,
+    success: bool,
+    cache_hit: bool,
+) {
+    server.metrics.record_query(success, execution_time_ms);
+    if cache_hit {
+        server.metrics.record_cache_hit();
+    } else {
+        server.metrics.record_cache_miss();
     }
 }
 

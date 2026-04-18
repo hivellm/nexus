@@ -1,10 +1,23 @@
 //! Prometheus metrics endpoint
 //!
-//! Provides Prometheus-compatible metrics for monitoring and observability
+//! Provides Prometheus-compatible metrics for monitoring and observability.
+//!
+//! # phase2e
+//!
+//! The process-wide `METRICS: OnceLock<PrometheusMetrics>` is gone.
+//! The counter pack lives on `NexusServer::metrics` and every handler
+//! reads it via the `State<Arc<NexusServer>>` extractor. Process-wide
+//! counters that are *genuinely* shared across subsystems (RESP3
+//! listener, RPC listener, audit-log failure total) keep their own
+//! atomic counters in their own modules and are snapshotted at render
+//! time.
 
+use axum::extract::State;
 use axum::response::IntoResponse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::NexusServer;
 
 /// Prometheus metrics collector
 pub struct PrometheusMetrics {
@@ -233,23 +246,10 @@ nexus_rpc_slow_commands_total {rpc_slow}
     }
 }
 
-/// Global metrics instance
-pub static METRICS: std::sync::OnceLock<PrometheusMetrics> = std::sync::OnceLock::new();
-
-/// Initialize Prometheus metrics
-pub fn init() {
-    let _ = METRICS.set(PrometheusMetrics::new());
-}
-
-/// Get metrics instance
-pub fn get_metrics() -> &'static PrometheusMetrics {
-    METRICS.get().expect("Prometheus metrics not initialized")
-}
-
-/// Prometheus metrics endpoint handler
-pub async fn prometheus_metrics() -> impl IntoResponse {
-    let metrics = get_metrics();
-    let formatted = metrics.format_prometheus();
+/// Prometheus metrics endpoint handler. Reads the counter pack the
+/// server owns via `NexusServer::metrics`.
+pub async fn prometheus_metrics(State(server): State<Arc<NexusServer>>) -> impl IntoResponse {
+    let formatted = server.metrics.format_prometheus();
 
     (
         axum::http::StatusCode::OK,
@@ -303,5 +303,100 @@ mod tests {
             formatted.contains("Alarm when this counter moves"),
             "HELP text must steer ops toward the right alert action",
         );
+    }
+
+    // ── phase2e: isolation guard ─────────────────────────────────────
+    //
+    // Two NexusServers in the same process must keep independent
+    // Prometheus counter packs. The previous OnceLock-based METRICS
+    // singleton made this silently impossible; every handler saw
+    // whichever server happened to call `init()` first.
+
+    use parking_lot::RwLock as PlRwLock;
+    use std::sync::atomic::Ordering;
+    use tokio::sync::RwLock as TokioRwLock;
+
+    fn build_test_server() -> Arc<crate::NexusServer> {
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(crate::NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn test_two_servers_keep_independent_prometheus_counters() {
+        let server_a = build_test_server();
+        let server_b = build_test_server();
+
+        // Bump every counter on server A.
+        server_a.metrics.record_query(true, 42);
+        server_a.metrics.record_query(false, 100);
+        server_a.metrics.record_cache_hit();
+        server_a.metrics.record_cache_miss();
+        server_a.metrics.increment_connections();
+
+        // Server A observes the updates.
+        assert_eq!(server_a.metrics.total_queries.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            server_a.metrics.successful_queries.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(server_a.metrics.failed_queries.load(Ordering::Relaxed), 1);
+        assert_eq!(server_a.metrics.cache_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(server_a.metrics.cache_misses.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            server_a.metrics.active_connections.load(Ordering::Relaxed),
+            1
+        );
+
+        // Server B must still be pristine — no shared state.
+        assert_eq!(server_b.metrics.total_queries.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            server_b.metrics.successful_queries.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(server_b.metrics.failed_queries.load(Ordering::Relaxed), 0);
+        assert_eq!(server_b.metrics.cache_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(server_b.metrics.cache_misses.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            server_b.metrics.active_connections.load(Ordering::Relaxed),
+            0
+        );
+
+        // Arc identities differ too.
+        assert!(!Arc::ptr_eq(&server_a.metrics, &server_b.metrics));
     }
 }

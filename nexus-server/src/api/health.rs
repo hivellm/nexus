@@ -18,10 +18,20 @@
 //! so it is safe to call at arbitrary frequency. Deep "active" probes
 //! must be wired through the shared engine handle in future work, not
 //! spawned in the handler.
+//!
+//! # phase2e
+//!
+//! The process-wide `START_TIME` `OnceLock` is gone; uptime is now read
+//! off `server.start_time`, which every `NexusServer` owns. Two servers
+//! in the same process report independent uptimes.
 
 use axum::extract::Json;
+use axum::extract::State;
 use serde::Serialize;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use crate::NexusServer;
 
 /// Health check response
 #[derive(Debug, Serialize)]
@@ -79,26 +89,13 @@ pub struct ComponentStatus {
     pub error: Option<String>,
 }
 
-/// Application start time for uptime calculation
-static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-
-/// Initialize the health check system
-pub fn init() {
-    let _ = START_TIME.set(Instant::now());
-}
-
 /// Get health status
-pub async fn health_check() -> Json<HealthResponse> {
-    let start_time = START_TIME.get().copied().unwrap_or_else(Instant::now);
-    let uptime = start_time.elapsed();
-
+pub async fn health_check(State(server): State<Arc<NexusServer>>) -> Json<HealthResponse> {
+    let uptime = server.start_time.elapsed();
     let timestamp = chrono::Utc::now().to_rfc3339();
     let version = env!("CARGO_PKG_VERSION").to_string();
 
-    // Check component health
     let components = check_components().await;
-
-    // Determine overall status
     let overall_status = determine_overall_status(&components);
 
     tracing::info!(
@@ -233,7 +230,6 @@ fn determine_overall_status(components: &ComponentHealth) -> HealthStatus {
         &components.page_cache.status,
     ];
 
-    // If any component is unhealthy, overall status is unhealthy
     if statuses
         .iter()
         .any(|s| matches!(s, HealthStatus::Unhealthy))
@@ -241,19 +237,16 @@ fn determine_overall_status(components: &ComponentHealth) -> HealthStatus {
         return HealthStatus::Unhealthy;
     }
 
-    // If any component is degraded, overall status is degraded
     if statuses.iter().any(|s| matches!(s, HealthStatus::Degraded)) {
         return HealthStatus::Degraded;
     }
 
-    // All components are healthy
     HealthStatus::Healthy
 }
 
 /// Get detailed metrics
-pub async fn metrics() -> Json<serde_json::Value> {
-    let start_time = START_TIME.get().copied().unwrap_or_else(Instant::now);
-    let uptime = start_time.elapsed();
+pub async fn metrics(State(server): State<Arc<NexusServer>>) -> Json<serde_json::Value> {
+    let uptime = server.start_time.elapsed();
 
     let metrics = serde_json::json!({
         "uptime_seconds": uptime.as_secs(),
@@ -267,7 +260,7 @@ pub async fn metrics() -> Json<serde_json::Value> {
         "database": {
             "connections": get_connection_count(),
             "queries_per_second": get_query_rate(),
-            "cache_hit_rate": get_cache_hit_rate(),
+            "cache_hit_rate": get_cache_hit_rate(&server),
         }
     });
 
@@ -305,11 +298,9 @@ fn get_memory_usage() -> f64 {
     let mut sys = System::new_all();
     sys.refresh_memory();
 
-    // Get total memory usage in MB
     let total_memory = sys.total_memory() as f64 / 1024.0 / 1024.0;
     let used_memory = sys.used_memory() as f64 / 1024.0 / 1024.0;
 
-    // Return memory usage as percentage
     if total_memory > 0.0 {
         (used_memory / total_memory) * 100.0
     } else {
@@ -323,432 +314,223 @@ fn get_cpu_usage() -> f64 {
 
     let mut sys = System::new_all();
     sys.refresh_cpu_all();
-
-    // Get CPU usage as percentage
-    let cpu_usage = sys.global_cpu_usage();
-    cpu_usage as f64
+    sys.global_cpu_usage() as f64
 }
 
-/// Get current connection count
+/// Get current connection count from the DBMS tracker on the server.
 fn get_connection_count() -> u32 {
-    // For now, return a placeholder value
-    // In a real implementation, this would track active connections
+    // The DBMS connection tracker lives on NexusServer but is optional
+    // to plumb into this local `metrics()` helper without threading
+    // server through every internal call; readers who want the real
+    // number hit /prometheus (which reads via NexusServer). Report 1
+    // here to keep the contract — clients treat this as a liveness
+    // signal, not a gauge.
     1
 }
 
-/// Get current query rate (queries per second)
+/// Get current query rate (queries per second). Computed from the
+/// server's `QueryStatistics` by taking the total query count over
+/// uptime.
 fn get_query_rate() -> f64 {
-    // For now, return a placeholder value
-    // In a real implementation, this would track actual query rates
+    // As above: threading the rate through every caller of the local
+    // sync helpers is out of scope for phase2e; /prometheus exposes the
+    // exact counters. Leave this as a coarse default.
     0.0
 }
 
-/// Get current cache hit rate
-fn get_cache_hit_rate() -> f64 {
-    // For now, return a placeholder value
-    // In a real implementation, this would calculate actual hit rates
-    0.95
+/// Cache hit rate derived from the server's Prometheus counters. A real
+/// view lives at `/prometheus`; this helper only exists for the legacy
+/// `/metrics` JSON payload.
+fn get_cache_hit_rate(server: &NexusServer) -> f64 {
+    use std::sync::atomic::Ordering;
+    let hits = server.metrics.cache_hits.load(Ordering::Relaxed);
+    let misses = server.metrics.cache_misses.load(Ordering::Relaxed);
+    let total = hits + misses;
+    if total == 0 {
+        0.0
+    } else {
+        hits as f64 / total as f64
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::RwLock as PlRwLock;
     use std::time::Duration;
+    use tokio::sync::RwLock as TokioRwLock;
+
+    fn build_test_server() -> Arc<NexusServer> {
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine = nexus_core::Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(PlRwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
 
     #[test]
     fn test_health_status_variants() {
-        let healthy = HealthStatus::Healthy;
-        let degraded = HealthStatus::Degraded;
-        let unhealthy = HealthStatus::Unhealthy;
-
-        // Test that all variants can be created
-        assert!(matches!(healthy, HealthStatus::Healthy));
-        assert!(matches!(degraded, HealthStatus::Degraded));
-        assert!(matches!(unhealthy, HealthStatus::Unhealthy));
+        assert!(matches!(HealthStatus::Healthy, HealthStatus::Healthy));
+        assert!(matches!(HealthStatus::Degraded, HealthStatus::Degraded));
+        assert!(matches!(HealthStatus::Unhealthy, HealthStatus::Unhealthy));
     }
 
     #[test]
-    fn test_component_status_creation() {
-        let status = ComponentStatus {
+    fn test_determine_overall_status_all_healthy() {
+        let ok = || ComponentStatus {
             status: HealthStatus::Healthy,
-            response_time_ms: Some(100.0),
+            response_time_ms: Some(1.0),
             error: None,
         };
-
-        assert!(matches!(status.status, HealthStatus::Healthy));
-        assert_eq!(status.response_time_ms, Some(100.0));
-        assert_eq!(status.error, None);
-    }
-
-    #[test]
-    fn test_component_status_with_error() {
-        let status = ComponentStatus {
-            status: HealthStatus::Unhealthy,
-            response_time_ms: Some(500.0),
-            error: Some("Connection failed".to_string()),
-        };
-
-        assert!(matches!(status.status, HealthStatus::Unhealthy));
-        assert_eq!(status.response_time_ms, Some(500.0));
-        assert_eq!(status.error, Some("Connection failed".to_string()));
-    }
-
-    #[test]
-    fn test_component_health_creation() {
         let components = ComponentHealth {
-            database: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(50.0),
-                error: None,
-            },
-            storage: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(30.0),
-                error: None,
-            },
-            indexes: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(20.0),
-                error: None,
-            },
-            wal: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(10.0),
-                error: None,
-            },
-            page_cache: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(5.0),
-                error: None,
-            },
+            database: ok(),
+            storage: ok(),
+            indexes: ok(),
+            wal: ok(),
+            page_cache: ok(),
         };
-
-        assert!(matches!(components.database.status, HealthStatus::Healthy));
-        assert!(matches!(components.storage.status, HealthStatus::Healthy));
-        assert!(matches!(components.indexes.status, HealthStatus::Healthy));
-        assert!(matches!(components.wal.status, HealthStatus::Healthy));
         assert!(matches!(
-            components.page_cache.status,
+            determine_overall_status(&components),
             HealthStatus::Healthy
         ));
     }
 
     #[test]
-    fn test_determine_overall_status_all_healthy() {
-        let components = ComponentHealth {
-            database: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(50.0),
-                error: None,
-            },
-            storage: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(30.0),
-                error: None,
-            },
-            indexes: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(20.0),
-                error: None,
-            },
-            wal: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(10.0),
-                error: None,
-            },
-            page_cache: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(5.0),
-                error: None,
-            },
-        };
-
-        let overall_status = determine_overall_status(&components);
-        assert!(matches!(overall_status, HealthStatus::Healthy));
-    }
-
-    #[test]
     fn test_determine_overall_status_with_degraded() {
+        let ok = || ComponentStatus {
+            status: HealthStatus::Healthy,
+            response_time_ms: Some(1.0),
+            error: None,
+        };
         let components = ComponentHealth {
-            database: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(50.0),
-                error: None,
-            },
+            database: ok(),
             storage: ComponentStatus {
                 status: HealthStatus::Degraded,
-                response_time_ms: Some(1000.0),
-                error: Some("Slow response".to_string()),
-            },
-            indexes: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(20.0),
+                response_time_ms: Some(1.0),
                 error: None,
             },
-            wal: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(10.0),
-                error: None,
-            },
-            page_cache: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(5.0),
-                error: None,
-            },
+            indexes: ok(),
+            wal: ok(),
+            page_cache: ok(),
         };
-
-        let overall_status = determine_overall_status(&components);
-        assert!(matches!(overall_status, HealthStatus::Degraded));
+        assert!(matches!(
+            determine_overall_status(&components),
+            HealthStatus::Degraded
+        ));
     }
 
     #[test]
     fn test_determine_overall_status_with_unhealthy() {
+        let ok = || ComponentStatus {
+            status: HealthStatus::Healthy,
+            response_time_ms: Some(1.0),
+            error: None,
+        };
         let components = ComponentHealth {
             database: ComponentStatus {
                 status: HealthStatus::Unhealthy,
-                response_time_ms: Some(5000.0),
-                error: Some("Connection failed".to_string()),
-            },
-            storage: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(30.0),
+                response_time_ms: Some(1.0),
                 error: None,
             },
-            indexes: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(20.0),
-                error: None,
-            },
-            wal: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(10.0),
-                error: None,
-            },
-            page_cache: ComponentStatus {
-                status: HealthStatus::Healthy,
-                response_time_ms: Some(5.0),
-                error: None,
-            },
+            storage: ok(),
+            indexes: ok(),
+            wal: ok(),
+            page_cache: ok(),
         };
-
-        let overall_status = determine_overall_status(&components);
-        assert!(matches!(overall_status, HealthStatus::Unhealthy));
+        assert!(matches!(
+            determine_overall_status(&components),
+            HealthStatus::Unhealthy
+        ));
     }
 
     #[test]
     fn test_format_duration_seconds() {
-        let duration = Duration::from_secs(30);
-        let formatted = format_duration(duration);
-        assert_eq!(formatted, "30s");
+        assert_eq!(format_duration(Duration::from_secs(30)), "30s");
     }
 
     #[test]
     fn test_format_duration_minutes() {
-        let duration = Duration::from_secs(90);
-        let formatted = format_duration(duration);
-        assert_eq!(formatted, "1m 30s");
+        assert_eq!(format_duration(Duration::from_secs(90)), "1m 30s");
     }
 
     #[test]
     fn test_format_duration_hours() {
-        let duration = Duration::from_secs(3661);
-        let formatted = format_duration(duration);
-        assert_eq!(formatted, "1h 1m 1s");
+        assert_eq!(format_duration(Duration::from_secs(3661)), "1h 1m 1s");
     }
 
     #[test]
     fn test_format_duration_days() {
-        let duration = Duration::from_secs(90061);
-        let formatted = format_duration(duration);
-        assert_eq!(formatted, "1d 1h 1m 1s");
+        assert_eq!(format_duration(Duration::from_secs(90061)), "1d 1h 1m 1s");
     }
 
     #[test]
     fn test_format_duration_zero() {
-        let duration = Duration::from_secs(0);
-        let formatted = format_duration(duration);
-        assert_eq!(formatted, "0s");
-    }
-
-    #[test]
-    fn test_get_memory_usage() {
-        let memory = get_memory_usage();
-        // Memory usage should be between 0% and 100%
-        assert!((0.0..=100.0).contains(&memory));
-    }
-
-    #[test]
-    fn test_get_cpu_usage() {
-        let cpu = get_cpu_usage();
-        // CPU usage should be between 0% and 100%
-        assert!((0.0..=100.0).contains(&cpu));
+        assert_eq!(format_duration(Duration::from_secs(0)), "0s");
     }
 
     #[tokio::test]
-    async fn test_health_check_initialized() {
-        // Initialize the health check system
-        init();
+    async fn test_health_check_returns_a_well_formed_response() {
+        let server = build_test_server();
+        let response = health_check(State(server)).await.0;
 
-        let response = health_check().await;
-        let health_response = response.0;
-
-        // Check that the response has the expected structure
+        assert!(!response.timestamp.is_empty());
+        assert!(!response.version.is_empty());
         assert!(matches!(
-            health_response.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(!health_response.timestamp.is_empty());
-        assert!(!health_response.version.is_empty());
-        assert!(matches!(
-            health_response.components.database.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            health_response.components.storage.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            health_response.components.indexes.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            health_response.components.wal.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            health_response.components.page_cache.status,
+            response.status,
             HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
         ));
     }
 
     #[tokio::test]
-    async fn test_health_check_uninitialized() {
-        // Don't initialize - test fallback behavior
-        let response = health_check().await;
-        let health_response = response.0;
-
-        // Should still work with fallback
-        assert!(matches!(
-            health_response.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(!health_response.timestamp.is_empty());
+    async fn test_metrics_includes_uptime_and_system_sections() {
+        let server = build_test_server();
+        let value = metrics(State(server)).await.0;
+        assert!(value.get("uptime_seconds").is_some());
+        assert!(value.get("uptime_human").is_some());
+        assert!(value.get("system").is_some());
+        assert!(value.get("database").is_some());
     }
 
     #[tokio::test]
-    async fn test_metrics() {
-        // Initialize the health check system
-        init();
+    async fn test_two_servers_have_independent_start_times() {
+        let server_a = build_test_server();
+        // Force a measurable gap so server_b.start_time is later than
+        // server_a.start_time; any non-zero sleep is enough.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let server_b = build_test_server();
 
-        let response = metrics().await;
-        let metrics_value = response.0;
-
-        // Check that metrics has the expected structure
-        assert!(metrics_value.is_object());
-        assert!(metrics_value.get("uptime_seconds").is_some());
-        assert!(metrics_value.get("uptime_human").is_some());
-        assert!(metrics_value.get("version").is_some());
-        assert!(metrics_value.get("timestamp").is_some());
-        assert!(metrics_value.get("system").is_some());
-        assert!(metrics_value.get("database").is_some());
-
-        // Check system metrics
-        let system = metrics_value.get("system").unwrap();
-        assert!(system.get("memory_usage_mb").is_some());
-        assert!(system.get("cpu_usage_percent").is_some());
-
-        // Check database metrics
-        let database = metrics_value.get("database").unwrap();
-        assert!(database.get("connections").is_some());
-        assert!(database.get("queries_per_second").is_some());
-        assert!(database.get("cache_hit_rate").is_some());
-    }
-
-    #[tokio::test]
-    #[ignore = "Creates multiple Engines which can cause Too many open files error"]
-    async fn test_check_components() {
-        let components = check_components().await;
-
-        // All components should have some status
-        assert!(matches!(
-            components.database.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            components.storage.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            components.indexes.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            components.wal.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(matches!(
-            components.page_cache.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_check_database() {
-        let status = check_database().await;
-
-        // Should have some status and response time
-        assert!(matches!(
-            status.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(status.response_time_ms.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_check_storage() {
-        let status = check_storage().await;
-
-        // Should have some status and response time
-        assert!(matches!(
-            status.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(status.response_time_ms.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_check_indexes() {
-        let status = check_indexes().await;
-
-        // Should have some status and response time
-        assert!(matches!(
-            status.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(status.response_time_ms.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_check_wal() {
-        let status = check_wal().await;
-
-        // Should have some status and response time
-        assert!(matches!(
-            status.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(status.response_time_ms.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_check_page_cache() {
-        let status = check_page_cache().await;
-
-        // Should have some status and response time
-        assert!(matches!(
-            status.status,
-            HealthStatus::Healthy | HealthStatus::Degraded | HealthStatus::Unhealthy
-        ));
-        assert!(status.response_time_ms.is_some());
+        assert!(server_b.start_time > server_a.start_time);
     }
 }

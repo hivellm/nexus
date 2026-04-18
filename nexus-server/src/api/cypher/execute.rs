@@ -1252,7 +1252,7 @@ pub async fn execute_cypher(
 
             // Record Prometheus metrics
             let cache_hit = cache_hits > 0;
-            record_prometheus_metrics(execution_time_ms, true, cache_hit);
+            record_prometheus_metrics(&server, execution_time_ms, true, cache_hit);
 
             // Mark query as completed
             mark_query_completed(&server, &query_id);
@@ -1292,7 +1292,7 @@ pub async fn execute_cypher(
 
             // Record Prometheus metrics
             let cache_hit = cache_hits > 0;
-            record_prometheus_metrics(execution_time_ms, false, cache_hit);
+            record_prometheus_metrics(&server, execution_time_ms, false, cache_hit);
 
             // Mark query as completed
             mark_query_completed(&server, &query_id);

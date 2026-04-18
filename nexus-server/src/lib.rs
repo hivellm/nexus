@@ -17,6 +17,7 @@
 
 use parking_lot::RwLock;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::RwLock as TokioRwLock;
 
 pub mod api;
@@ -81,6 +82,17 @@ pub struct NexusServer {
     /// style requests (`graph.generate`, `graph.analyze`, ...) onto the
     /// shared correlation subsystem.
     pub umicp_handler: Arc<crate::api::graph_correlation_umicp::GraphUmicpHandler>,
+
+    // ── Observability (phase2e) ─────────────────────────────────────────
+    /// Wall-clock instant the server was constructed. Used by
+    /// `api::health::health_check` and `api::health::metrics` to report
+    /// `uptime_seconds`. Scoped to a single `NexusServer` instance so
+    /// two servers in the same process report independent uptimes.
+    pub start_time: Instant,
+    /// Prometheus counter pack read by `GET /prometheus`. The cypher
+    /// execute path records query successes / failures + cache hits /
+    /// misses on this handle.
+    pub metrics: Arc<crate::api::prometheus::PrometheusMetrics>,
 }
 
 impl NexusServer {
@@ -128,6 +140,14 @@ impl NexusServer {
         ));
         let umicp_handler = Arc::new(crate::api::graph_correlation_umicp::GraphUmicpHandler::new());
 
+        // Observability (phase2e): capture start time and a fresh
+        // Prometheus counter pack per server instance. Process-wide
+        // counters that are intentionally shared (RESP3 / RPC listener
+        // stats) still live in their own modules; only the per-query
+        // counters move here.
+        let start_time = Instant::now();
+        let metrics = Arc::new(crate::api::prometheus::PrometheusMetrics::new());
+
         // Periodic sweeper for the DBMS connection / query trackers.
         //
         // The Cypher handler calls `register_connection` on every request
@@ -171,6 +191,8 @@ impl NexusServer {
             graph_a,
             graph_b,
             umicp_handler,
+            start_time,
+            metrics,
         }
     }
 

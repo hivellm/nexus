@@ -8,16 +8,11 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
+| ⬚ | phase2_cli-default-rpc-transport | 0/5 | cli default rpc transport |
 | ⬚ | phase2_deduplicate-catalog-backends | 0/8 | deduplicate catalog backends |
 | ⬚ | phase2_propagate-serde-errors-in-executor | 0/8 | propagate serde errors in executor |
 | ⬚ | phase2_sdk-rpc-transport-default | 0/72 | sdk rpc transport default |
 | ⬚ | phase2_simd-executor-filter-aggregate | 38/86 | simd executor filter aggregate |
-
-## phase2d
-
-| Status | Task | Progress | Description |
-|--------|------|----------|-------------|
-| ⬚ | phase2d_consolidate-oncelock-graph-subsystems | 0/10 | consolidate oncelock graph subsystems |
 
 ## phase2e
 
