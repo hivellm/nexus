@@ -2,12 +2,10 @@
 # Mirrors production-ish defaults but with tighter caps so memory regressions
 # become visible under `mem_limit=512m` in docker-compose.memtest.yml.
 #
-# NOTE: As of the branch-start state, nexus-server/src/config.rs::Config::from_env
-# only reads a small subset of env vars (NEXUS_ADDR, NEXUS_DATA_DIR, auth flags).
-# Storage/cache/WAL/MVCC values are hardcoded in Rust. This YAML therefore
-# documents the INTENT — Phase 1 changes the Rust defaults to match, and a
-# later task can add full YAML loading. Mounted into the container for
-# forward-compatibility.
+# `Config::from_yaml_file` now reads `server.{addr, max_body_size_mb}` and
+# `storage.{data_dir, page_cache.capacity}` from this file; other subtrees
+# still fall through to compiled defaults and are listed here for forward
+# compatibility.
 
 server:
   addr: "0.0.0.0:15474"

@@ -35,9 +35,13 @@ Runtime overrides currently read by the server (`nexus-server/src/config.rs`):
 | ----------------------------- | ----------------- | ---------------------------------------------- |
 | `NEXUS_ADDR`                  | `127.0.0.1:15474` | Bind address                                   |
 | `NEXUS_DATA_DIR`              | `./data`          | Storage root                                   |
+| `NEXUS_CONFIG_PATH`           | `config.yml`      | YAML file consulted before compiled defaults   |
 | `NEXUS_MAX_BODY_SIZE_MB`      | `16`              | HTTP body ceiling in MB (applied as a layer)   |
 | `NEXUS_AUTH_ENABLED`          | `false`           | Toggle authentication                          |
 | `NEXUS_ROOT_USERNAME` / `…_PASSWORD` / `…_PASSWORD_FILE` | — | Root user bootstrap |
+
+Priority order is env var → YAML file → compiled default, with env vars
+always winning. See `nexus-server/src/config.rs::Config::from_env`.
 
 ## Memtest harness
 
@@ -61,10 +65,13 @@ rels), KNN (10k vectors × 128-dim + 1k queries), and GraphQL N+1.
 
 These were scoped out of this pass and deserve their own work:
 
-1. **YAML config loading.** `config.yml` / `config.example.yml` document
-   storage/cache/WAL/MVCC values that `Config::from_env` does not read.
-   The code defaults were tightened; wiring full YAML loading is a
-   separate task.
+1. **YAML config loading — partial.** `Config::from_yaml_file` now reads
+   `server.{addr, max_body_size_mb}` and `storage.{data_dir,
+   page_cache.capacity}` from `config.yml` (path overridable via
+   `NEXUS_CONFIG_PATH`). Remaining subtrees — `storage.wal`,
+   `storage.mvcc`, `storage.knn`, `authentication`, `vectorizer`,
+   `metrics` — still fall through to compiled defaults and need
+   equivalent wiring.
 2. **WAL auto-checkpoint on size threshold.** `max_wal_size_mb` is
    documented in the YAML but no code path triggers `checkpoint()` when
    the file exceeds the threshold. Callers must still drive checkpoints

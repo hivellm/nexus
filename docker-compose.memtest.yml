@@ -21,11 +21,11 @@ services:
       - nexus-memtest-data:/app/data
       - ./config/memtest.yml:/app/config/memtest.yml:ro
     environment:
-      # Server currently loads only a limited set of env vars (see
-      # nexus-server/src/config.rs::Config::from_env). Storage/cache sizes
-      # are hardcoded in Rust — config/memtest.yml documents the target,
-      # but takes effect only after Phase 1 changes the compiled defaults.
+      # Priority: env vars > config.yml > compiled defaults. The YAML
+      # path below is the subset currently honoured by
+      # Config::from_yaml_file (server + storage.{data_dir, page_cache}).
       - RUST_LOG=info,nexus_core=info,nexus_server=info
+      - NEXUS_CONFIG_PATH=/app/config/memtest.yml
       - NEXUS_ADDR=0.0.0.0:15474
       - NEXUS_DATA_DIR=/app/data
       - NEXUS_AUTH_ENABLED=false
