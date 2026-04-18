@@ -83,6 +83,7 @@ See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complet
 - 🔌 **MCP Protocol**: 19+ focused tools for AI integrations
 - 🔗 **UMICP v0.2.1**: Tool discovery endpoint + native JSON
 - 🤝 **Vectorizer Integration**: Native hybrid search with RRF ranking
+- 🔁 **RESP3 Compatibility**: Additive TCP port (default `15476`) — any RESP3 client (`redis-cli`, `iredis`, Jedis, redis-rb, Redix, ...) speaks a Nexus command vocabulary (`CYPHER`, `NODE.*`, `REL.*`, `KNN.*`, `INGEST.*`, ...). Not Redis emulation — `SET`/`GET` return `-ERR unknown command`. Full reference: [`docs/specs/resp3-nexus-commands.md`](docs/specs/resp3-nexus-commands.md).
 
 ### **Production Features**
 - 🔐 **API Key Auth**: Disabled by default, required for 0.0.0.0 binding
@@ -565,6 +566,44 @@ curl -X POST http://localhost:15474/cypher \
 - **1,000 requests/minute** per API key
 - **10,000 requests/hour** per API key
 - Returns `429 Too Many Requests` when exceeded
+
+### **Audit logging**
+
+All authentication failures are logged to `./logs/audit/audit-YYYY-MM-DD.log`.
+If the audit sink itself fails (disk full, fsync error), Nexus applies a
+**fail-open + metric** policy — the original HTTP status is preserved
+(401/429/500/200 all keep their semantics) and operators alarm on
+`nexus_audit_log_failures_total` via `/prometheus`:
+
+```promql
+increase(nexus_audit_log_failures_total[5m]) > 0
+```
+
+Converting audit failures into 500s would give an attacker who can cause IO
+pressure a lever to mass-reject legitimate traffic. Full rationale:
+[`docs/SECURITY_AUDIT.md §5`](docs/SECURITY_AUDIT.md).
+
+### **RESP3 debug port**
+
+For quick operator queries from any RESP3 client (`redis-cli` is the
+canonical case), opt into the additive TCP listener:
+
+```bash
+# Loopback-only by default; disabled unless explicitly enabled.
+NEXUS_RESP3_ENABLED=true ./nexus-server
+
+# In another terminal:
+redis-cli -p 15476
+127.0.0.1:15476> HELLO 3 AUTH root root
+127.0.0.1:15476> CYPHER "MATCH (n) RETURN count(n) AS c"
+127.0.0.1:15476> STATS
+```
+
+The listener speaks a Nexus command vocabulary (`CYPHER`, `NODE.*`, `REL.*`,
+`KNN.*`, `INGEST.*`, `INDEX.*`, `DB.*`, ...). It is **not** Redis
+emulation — `SET key value` returns
+`-ERR unknown command 'SET' (Nexus is a graph DB, see HELP)`. Full
+reference: [`docs/specs/resp3-nexus-commands.md`](docs/specs/resp3-nexus-commands.md).
 
 ## 🔗 **Integrations**
 

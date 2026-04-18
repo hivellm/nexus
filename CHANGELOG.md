@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔌 RESP3 Transport (2026-04-18)
+
+**Any RESP3 client — `redis-cli`, `iredis`, RedisInsight, Jedis, redis-rb,
+Redix — can now talk to Nexus using a Nexus command vocabulary.** The port
+is additive (HTTP, MCP, UMICP all keep running), disabled by default, and
+loopback-only out of the box so a plaintext debug port never accidentally
+escapes a dev machine.
+
+```
+NEW nexus-server/src/protocol/resp3/
+  mod.rs, parser.rs, writer.rs, server.rs
+  command/{mod, admin, cypher, graph, knn, schema}.rs
+NEW nexus-server/tests/resp3_integration_test.rs
+NEW docs/specs/resp3-nexus-commands.md
+```
+
+**25+ commands** implemented in the Nexus vocabulary:
+
+- Admin: `PING`, `HELLO [2|3] [AUTH user pass]`, `AUTH <api-key|user pass>`,
+  `QUIT`, `HELP`, `COMMAND`.
+- Cypher: `CYPHER`, `CYPHER.WITH`, `CYPHER.EXPLAIN`.
+- Graph CRUD: `NODE.CREATE/GET/UPDATE/DELETE/MATCH`, `REL.CREATE/GET/DELETE`.
+- KNN / ingest: `KNN.SEARCH`, `KNN.TRAVERSE`, `INGEST.NODES`, `INGEST.RELS`.
+- Schema / databases: `INDEX.CREATE/DROP/LIST`, `DB.LIST/CREATE/DROP/USE`,
+  `LABELS`, `REL_TYPES`, `PROPERTY_KEYS`, `STATS`, `HEALTH`.
+
+**Wire format**: all 12 RESP3 type prefixes (`+`, `-`, `:`, `$`, `*`, `_`,
+`,`, `#`, `=`, `~`, `%`, `|`, `(`) supported on both parse and write, with
+automatic RESP2 degradation (Null → `$-1`, Map → flat array, Boolean →
+`:0`/`:1`, Verbatim → BulkString) when the peer negotiates `HELLO 2`.
+`redis-cli`-style inline commands (`PING\r\n`) tokenised with quote and
+escape support, so plain `telnet` sessions work too.
+
+**Explicitly not Redis emulation.** `SET key value` returns
+`-ERR unknown command 'SET' (Nexus is a graph DB, see HELP)`. No KV
+semantics.
+
+**Auth**: `HELLO 3 AUTH <user> <pass>` negotiates protocol + auth in one
+round-trip. Pre-auth commands (`PING`/`HELLO`/`AUTH`/`QUIT`/`HELP`/`COMMAND`)
+always run; everything else bounces with `-NOAUTH Authentication required.`
+when the listener was configured with `require_auth = true` and the
+session hasn't authenticated.
+
+**Concurrency**: every handler that touches `Engine` or `DatabaseManager`
+acquires the `parking_lot::RwLock` inside `tokio::task::spawn_blocking` —
+same policy as the HTTP handlers (see `docs/performance/CONCURRENCY.md`).
+A tokio worker thread is never pinned on a graph-engine lock.
+
+**Metrics** (exported at `GET /prometheus`):
+- `nexus_resp3_connections` (gauge)
+- `nexus_resp3_commands_total` (counter)
+- `nexus_resp3_commands_error_total` (counter)
+- `nexus_resp3_command_duration_microseconds_total` (counter — divide by
+  `commands_total` for an average)
+- `nexus_resp3_bytes_read_total` / `nexus_resp3_bytes_written_total`
+
+**Config**: `[resp3]` section in `config.yml` with `enabled`, `addr`,
+`require_auth`. Env overrides `NEXUS_RESP3_{ENABLED,ADDR,REQUIRE_AUTH}`.
+Default port `15476` (HTTP stays on `15474`).
+
+**Testing**: 77 new tests green (69 in-crate unit + 8 raw-TCP integration).
+
+### 🛡️ Audit-log Failure Propagation (2026-04-18)
+
+**Eight `let _ = audit_logger.log_*(...).await` sites were silently
+swallowing audit-log write failures.** All now go through a new helper
+`nexus_core::auth::record_audit_log_failure(context, err)` that bumps a
+process-global `AtomicU64` counter and emits a
+`tracing::error!(target = "audit_log", context, error)` event.
+
+**Policy: fail-open with metric.** The originating request keeps its
+original HTTP status (401/429/500/200) — we do NOT convert audit-sink
+failures into 500s, because doing so hands an attacker who can cause IO
+pressure (disk fill, permission flap) a lever to mass-reject legitimate
+traffic. Operators alarm on the Prometheus counter instead:
+
+```promql
+increase(nexus_audit_log_failures_total[5m]) > 0
+```
+
+**Call sites patched**:
+- `nexus-core/src/auth/middleware.rs` × 4 (missing/invalid/errored API
+  key, rate-limit exceeded).
+- `nexus-server/src/api/cypher/execute.rs` × 4 (SET-property + SET-label
+  success/failure on the Cypher write path).
+
+**Metric**: `nexus_audit_log_failures_total` exported at `GET /prometheus`
+with HELP text pointing operators at the alert template.
+
+**Docs**: [docs/SECURITY_AUDIT.md §5](docs/SECURITY_AUDIT.md) documents the
+full policy (behaviour, rationale, alarm template, code-location
+inventory, "not fail-closed" guard). [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
+cross-links from its audit section.
+
+### ⚡ Async Lock Migration — `DatabaseManager` off tokio workers (2026-04-18)
+
+**14 async HTTP handlers acquired `Arc<parking_lot::RwLock<DatabaseManager>>`
+directly inside `async fn`, pinning a tokio worker for the whole lock-held
+window.** Under concurrent load this starved the runtime — observed during
+the `fix/memory-leak-v1` debug session as the container dropping requests
+well before hitting any memory limit.
+
+**Fix**: wrap every async-context lock acquisition in
+`tokio::task::spawn_blocking` so the read/write runs on the blocking
+pool while tokio workers stay free. The lock type stays
+`parking_lot::RwLock` because it is shared with sync Cypher execution in
+`nexus-core/src/executor/shared.rs` — migrating the type would ripple into
+~20 files and force every sync caller onto `.blocking_read()` (which
+panics if ever reached from an async context). The `spawn_blocking`
+approach fixes the starvation at the source with a fraction of the blast
+radius.
+
+**Touched call sites (14 total)**:
+- `nexus-server/src/api/database.rs` — 6 handlers
+  (`create`/`drop`/`list`/`get`/`get_session`/`switch_session`).
+- `nexus-server/src/api/cypher/commands.rs` — 4 admin-Cypher sites
+  (`UseDatabase`/`ShowDatabases`/`CreateDatabase`/`DropDatabase`).
+
+**Enforcement**: `nexus-server/Cargo.toml` sets
+`clippy::await_holding_lock = "deny"` so any future regression fails CI.
+
+**Regression test**:
+`test_concurrent_list_databases_does_not_starve_runtime` fires 32
+concurrent `list_databases` calls on a 2-worker tokio runtime and asserts
+all 32 return `200 OK` inside a 30 s pathological timeout. Runs in 0.15 s
+post-migration.
+
+**Docs**: [docs/performance/CONCURRENCY.md](docs/performance/CONCURRENCY.md)
+documents the lock model end-to-end — primitives, the `DatabaseManager`
+rule, clippy enforcement, migration-vs-wrap tradeoff, and which
+`tokio::sync` locks legitimately stay.
+
 ### 🧱 Neo4j Compatibility Test Split (Tier 3.2) (2026-04-18)
 
 **`nexus-core/tests/neo4j_compatibility_test.rs` was 2,103 LOC in a single
