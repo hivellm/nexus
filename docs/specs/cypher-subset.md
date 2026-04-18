@@ -452,6 +452,15 @@ RETURN num * 2 AS doubled
 UNWIND $names AS name
 WHERE name STARTS WITH 'A'
 RETURN name
+
+-- Bulk ingest: one CREATE per unwound row. The planner resolves property
+-- expressions like `{id: id}` against the current row's UNWIND binding.
+UNWIND range(0, 9) AS id
+CREATE (n:Item {id: id})
+
+-- UNWIND a list literal into a CREATE iteration
+UNWIND ['alpha', 'beta', 'gamma'] AS name
+CREATE (n:Listed {name: name})
 ```
 
 ### UNION / UNION ALL

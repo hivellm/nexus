@@ -360,3 +360,69 @@ fn test_unwind_with_null_in_list() {
     assert_eq!(rows[1][0], 3);
     assert_eq!(rows[2][0], 5);
 }
+
+// --- Regression tests for phase1_unwind-create-no-op-bug ----------------------
+//
+// `UNWIND <list> AS x CREATE (n:Label {x: x})` was silently creating zero nodes
+// because the CREATE operator's wrapping check in `executor/mod.rs` filtered
+// result_set rows by "has node variables" and fell back to an empty
+// `materialize_rows_from_variables` when the rows carried only scalar bindings.
+// These tests drive the canonical UNWIND+CREATE patterns end-to-end and assert
+// that every row produces exactly one created node.
+
+#[test]
+fn test_unwind_create_range_creates_every_row() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    execute_query(
+        &mut engine,
+        "UNWIND range(0, 9) AS id CREATE (n:Probe {id: id})",
+    )
+    .unwrap();
+
+    let result = execute_query(&mut engine, "MATCH (n:Probe) RETURN count(n) AS c").unwrap();
+    let count = result_to_json(&result)["rows"][0][0].as_i64().unwrap();
+    assert_eq!(
+        count, 10,
+        "expected UNWIND range(0,9) CREATE to produce 10 nodes, got {count}"
+    );
+}
+
+#[test]
+fn test_unwind_create_list_literal_creates_every_element() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    execute_query(
+        &mut engine,
+        "UNWIND ['alpha', 'beta', 'gamma'] AS name CREATE (n:Listed {name: name})",
+    )
+    .unwrap();
+
+    let result = execute_query(&mut engine, "MATCH (n:Listed) RETURN count(n) AS c").unwrap();
+    let count = result_to_json(&result)["rows"][0][0].as_i64().unwrap();
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn test_unwind_create_matches_iteration_count() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    // Run the idiomatic bulk-create pattern twice to confirm successive
+    // UNWIND iterations keep accumulating nodes instead of silently
+    // short-circuiting (the regression was "second run reports success
+    // but creates nothing").
+    execute_query(
+        &mut engine,
+        "UNWIND range(1, 3) AS idx CREATE (x:Tagged {idx: idx})",
+    )
+    .unwrap();
+    execute_query(
+        &mut engine,
+        "UNWIND range(1, 2) AS idx CREATE (x:Tagged {idx: idx})",
+    )
+    .unwrap();
+
+    let result = execute_query(&mut engine, "MATCH (x:Tagged) RETURN count(x) AS c").unwrap();
+    let count = result_to_json(&result)["rows"][0][0].as_i64().unwrap();
+    assert_eq!(count, 5, "expected 3 + 2 = 5 Tagged nodes, got {count}");
+}

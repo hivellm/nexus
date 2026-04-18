@@ -698,6 +698,12 @@ impl Executor {
         let mut tx_mgr = self.transaction_manager().lock();
         let mut tx = tx_mgr.begin_write()?;
 
+        // Track (node_id, label_ids) for every node we actually create so the
+        // label-bitmap index can be updated in a single pass after the
+        // transaction commits (MATCH queries depend on this index; without
+        // the update UNWIND + CREATE creates nodes the planner can't find).
+        let mut created_nodes_with_labels: Vec<(u64, Vec<u32>)> = Vec::new();
+
         // For each row in the MATCH result, create the pattern
         // PERFORMANCE OPTIMIZATION: Pre-calculate expected capacity for node_ids
         let expected_vars = pattern
@@ -758,16 +764,17 @@ impl Executor {
                         if let Some(var) = &node.variable {
                             if !node_ids.contains_key(var) {
                                 // Create new node (not from MATCH)
-                                let labels: Vec<u64> = node
+                                let label_ids: Vec<u32> = node
                                     .labels
                                     .iter()
                                     .filter_map(|l| self.catalog().get_or_create_label(l).ok())
-                                    .map(|id| id as u64)
                                     .collect();
 
                                 let mut label_bits = 0u64;
-                                for label_id in labels {
-                                    label_bits |= 1u64 << label_id;
+                                for label_id in &label_ids {
+                                    if *label_id < 64 {
+                                        label_bits |= 1u64 << label_id;
+                                    }
                                 }
 
                                 // Extract properties
@@ -791,6 +798,9 @@ impl Executor {
                                 let node_id = self
                                     .store_mut()
                                     .create_node_with_label_bits(&mut tx, label_bits, properties)?;
+                                if !label_ids.is_empty() {
+                                    created_nodes_with_labels.push((node_id, label_ids.clone()));
+                                }
                                 node_ids.insert(var.clone(), node_id);
                             }
 
@@ -923,6 +933,23 @@ impl Executor {
 
         // Commit transaction
         tx_mgr.commit(&mut tx)?;
+        drop(tx_mgr);
+
+        // Register the created nodes in the label-bitmap index so subsequent
+        // MATCH queries can find them. The engine's `create_node` path does
+        // this automatically, but the Cypher CREATE path goes through the
+        // storage layer directly and must maintain the index itself.
+        if !created_nodes_with_labels.is_empty() {
+            for (node_id, label_ids) in &created_nodes_with_labels {
+                if let Err(e) = self.label_index_mut().add_node(*node_id, label_ids) {
+                    tracing::warn!(
+                        node_id = *node_id,
+                        error = %e,
+                        "execute_create_with_context: failed to update label index",
+                    );
+                }
+            }
+        }
 
         // PERFORMANCE OPTIMIZATION: Use async flush instead of sync flush
         // The sync flush was costing ~15-20ms per relationship creation

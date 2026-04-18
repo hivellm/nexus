@@ -579,8 +579,26 @@ impl Executor {
 
                         if has_node_variables {
                             rows
+                        } else if context.variables.is_empty() {
+                            // No node variables on the rows AND no
+                            // pre-existing bindings in context — the rows
+                            // came from UNWIND / WITH / a plain
+                            // projection, so every row is a distinct
+                            // iteration of CREATE. Pass them through;
+                            // `execute_create_with_context` walks per row
+                            // and resolves property expressions (like
+                            // `{id: id}` referencing the UNWIND variable)
+                            // against the row bindings.
+                            tracing::debug!(
+                                "CREATE operator: using {} scalar rows from result_set (UNWIND / WITH projection)",
+                                rows.len()
+                            );
+                            rows
                         } else {
-                            // result_set.rows only contains aggregation results, use context.variables
+                            // result_set.rows only contains aggregation
+                            // or projection scalars; context.variables is
+                            // the real binding source (e.g. MATCH (n)
+                            // RETURN count(*) CREATE ...).
                             tracing::debug!(
                                 "CREATE operator: result_set.rows has no node variables, materializing from variables"
                             );

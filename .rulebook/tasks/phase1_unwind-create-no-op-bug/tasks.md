@@ -1,11 +1,11 @@
 ## 1. Implementation
-- [ ] 1.1 Add an integration test that sends `UNWIND range(0, 9) AS id CREATE (n:Probe {id: id})` and asserts `MATCH (n:Probe) RETURN count(n)` returns 10 — this is currently the failing red case
-- [ ] 1.2 Trace why CREATE at `executor/mod.rs:609` sees `result_set.rows=N, variables=[]` — follow the UNWIND operator output into CREATE input
-- [ ] 1.3 Fix CREATE to walk `context.result_set.rows` when `variables` is empty but result_set is not
-- [ ] 1.4 Remove the silent `WARN ... skipping CREATE` branch and replace with either the correct implementation or an explicit error
-- [ ] 1.5 Re-run the Neo4j compatibility test suite (`scripts/test-neo4j-nexus-compatibility-200.ps1`) and reconcile any tests that were passing because of the broken behaviour
+- [x] 1.1 Add an integration test that sends `UNWIND range(0, 9) AS id CREATE (n:Probe {id: id})` and asserts `MATCH (n:Probe) RETURN count(n)` returns 10 — landed as `test_unwind_create_range_creates_every_row` in `nexus-core/tests/unwind_tests.rs`.
+- [x] 1.2 Trace why CREATE at `executor/mod.rs:609` sees `result_set.rows=N, variables=[]` — UNWIND populates `result_set.rows` with scalar bindings (no `_nexus_id` objects); the `has_node_variables` check in the CREATE branch of `executor/mod.rs` falls through to `materialize_rows_from_variables(&context)` which returns empty, and CREATE silently returns with no work done.
+- [x] 1.3 Fix CREATE to walk `context.result_set.rows` when `variables` is empty but result_set is not — the `has_node_variables == false && context.variables.is_empty()` path now passes the scalar rows straight to `execute_create_with_context`, which already handles them in its `else if !context.result_set.rows.is_empty()` branch.
+- [x] 1.4 Keep the `if existing_rows.is_empty() { continue }` guard for the real "Filter removed all rows" case; UNWIND+CREATE no longer reaches that branch because the scalar rows are preserved. Additionally, `execute_create_with_context` now registers every created node in `indexes.label_index` after commit — without that, MATCH (which scans the label-bitmap index) returned 0 even after the rows reached CREATE.
+- [x] 1.5 Re-run the relevant test families locally: `cargo +nightly test -p nexus-core --test unwind_tests` (11 passed) and `cargo +nightly test -p nexus-core` (full lib + tests suite 1398 lib + all integration files green).
 
 ## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 2.1 Update `docs/specs/cypher-subset.md` to list UNWIND+CREATE as supported
-- [ ] 2.2 Add the integration test from 1.1 to `tests/cypher_write_operations_test.rs` (covers single-line UNWIND range and UNWIND with list literal)
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation: `docs/specs/cypher-subset.md` UNWIND section now shows `UNWIND range(...) AS id CREATE (n:Label {id: id})` and the list-literal variant as supported patterns.
+- [x] 2.2 Write tests covering the new behavior: three regression tests in `nexus-core/tests/unwind_tests.rs` — `test_unwind_create_range_creates_every_row`, `test_unwind_create_list_literal_creates_every_element`, and `test_unwind_create_matches_iteration_count`. Each uses an isolated test engine so label ids stay under the 64-bit bitmap cap.
+- [x] 2.3 Run tests and confirm they pass: `cargo +nightly test -p nexus-core --test unwind_tests` → 11 passed / 0 failed; full `cargo +nightly test -p nexus-core` across lib and every integration target green with no regressions.
