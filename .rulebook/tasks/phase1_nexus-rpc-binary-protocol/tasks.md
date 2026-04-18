@@ -1,13 +1,13 @@
 ## 1. Wire types and codec
-- [ ] 1.1 Create `nexus-server/src/protocol/mod.rs` with `pub mod envelope; pub mod nexus_rpc;`
-- [ ] 1.2 Define `NexusValue`, `Request`, `Response` in `nexus_rpc/types.rs` (mirror `synap_rpc/types.rs`)
-- [ ] 1.3 Add `From` impls for String, &str, i64, bool, Vec<u8>, f64 on `NexusValue`
-- [ ] 1.4 Add `as_str` / `as_bytes` / `as_int` / `as_float` / `is_null` helpers on `NexusValue`
-- [ ] 1.5 Implement `encode_frame` / `decode_frame` in `nexus_rpc/codec.rs` (4-byte LE len prefix + rmp-serde body)
-- [ ] 1.6 Implement async `read_request` / `read_response` / `write_request` / `write_response` helpers
-- [ ] 1.7 Unit tests: roundtrip all `NexusValue` variants through rmp-serde
-- [ ] 1.8 Unit tests: partial-header and partial-body decode returns `Ok(None)`
-- [ ] 1.9 Unit tests: frames exceeding `max_frame_bytes` reject with a specific error
+- [x] 1.1 Create `nexus-server/src/protocol/mod.rs` with `pub mod envelope; pub mod nexus_rpc;`
+- [x] 1.2 Define `NexusValue`, `Request`, `Response` in `nexus_rpc/types.rs` (mirror `synap_rpc/types.rs`)
+- [x] 1.3 Add `From` impls for String, &str, i64, bool, Vec<u8>, f64 on `NexusValue`
+- [x] 1.4 Add `as_str` / `as_bytes` / `as_int` / `as_float` / `is_null` helpers on `NexusValue`
+- [x] 1.5 Implement `encode_frame` / `decode_frame` in `nexus_rpc/codec.rs` (4-byte LE len prefix + rmp-serde body)
+- [x] 1.6 Implement async `read_request` / `read_response` / `write_request` / `write_response` helpers
+- [x] 1.7 Unit tests: roundtrip all `NexusValue` variants through rmp-serde
+- [x] 1.8 Unit tests: partial-header and partial-body decode returns `Ok(None)`
+- [x] 1.9 Unit tests: frames exceeding `max_frame_bytes` reject with a specific error
 
 ## 2. Dispatcher scaffolding
 - [ ] 2.1 Create `nexus_rpc/dispatch/mod.rs` with `dispatch(state, req) -> Response` and sub-modules

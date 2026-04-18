@@ -5,4 +5,5 @@
 //! operators and long-tail SDKs can pick the encoding that matches their
 //! ecosystem. See `docs/specs/api-protocols.md` for the full matrix.
 
+pub mod nexus_rpc;
 pub mod resp3;
