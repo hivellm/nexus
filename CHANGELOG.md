@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚡ SIMD Runtime-Dispatched Kernels + Parser O(N²) Fix (2026-04-18)
+
+**New `nexus-core::simd` module — always compiled, runtime-dispatched,
+no Cargo feature flags. Kernels span distance (f32 dot / l2_sq / cosine
+/ normalize), bitmap popcount, numeric reductions (sum / min / max i64
+/ f64 / f32), compare (eq / ne / lt / le / gt / ge i64 / f64), RLE run
+scanning, CRC32C, and a size-threshold JSON dispatcher.**
+
+Per ADR-003, every kernel ships as scalar reference + SSE4.2 + AVX2 +
+AVX-512F + NEON with proptest parity (>= 40 cases, 256–1024 inputs
+each). Selection is cached in `OnceLock<unsafe fn>` on first call;
+`NEXUS_SIMD_DISABLE=1` env var forces scalar runtime-wide for
+emergency rollback.
+
+**Measured on Ryzen 9 7950X3D (Zen 4, AVX-512F + VPOPCNTQ):**
+
+| Op                  | Scale       | Scalar   | Dispatch  | Speedup  |
+|---------------------|-------------|----------|-----------|----------|
+| `dot_f32`           | dim=768     | 438 ns   | 34.5 ns   | 12.7×    |
+| `dot_f32`           | dim=1024    | 580 ns   | 50.8 ns   | 11.4×    |
+| `dot_f32`           | dim=1536    | 893 ns   | 70.3 ns   | 12.7×    |
+| `l2_sq_f32`         | dim=512     | 285 ns   | 21.0 ns   | 13.5×    |
+| `popcount_u64`      | 4096 words  | 1.52 µs  | 136 ns    | ≈11×     |
+| `sum_f64`           | n=262 144   | 150 µs   | 19 µs     | 7.9×     |
+| `sum_f32`           | n=262 144   | 152 µs   | 9.5 µs    | 15.9×    |
+| `lt_i64`            | n=262 144   | 110 µs   | 25 µs     | 4.4×     |
+| `eq_i64`            | n=262 144   | 69 µs    | 24 µs     | 2.9×     |
+| `find_run_length`   | uniform 16k | 3.2 µs   | 1.0 µs    | 3.2×     |
+| **Cypher parse**    | **31.5 KiB**| **≈1 s** | **3.7 ms**| **≈290×**|
+
+Cypher parse speedup is the non-SIMD O(N²) → O(N) fix uncovered while
+auditing phase-3 §8–9: `self.input.chars().nth(self.pos)` (O(n) per
+call) replaced with `self.input[self.pos..].chars().next()` (O(1)) in
+`peek_char`, `consume_char`, `peek_keyword`, `peek_keyword_at`,
+`skip_whitespace`, `peek_char_at`. Cost-per-byte now flat at
+92–117 ns/byte across three orders of magnitude — linear scaling
+confirmed.
+
+**Production call sites wired to SIMD:**
+
+- `index::KnnIndex` — `DistSimdCosine` / `DistSimdL2` implement
+  `hnsw_rs::dist::Distance<f32>` via `simd::distance::cosine_f32` /
+  `l2_sq_f32`. Every HNSW insert and query distance flows through
+  AVX-512 / AVX2 / NEON on supported hardware.
+- `index::KnnIndex::normalize_vector` — delegates to
+  `simd::distance::normalize_f32`.
+- `graph::algorithms::traversal::{cosine_similarity, jaccard_similarity}`
+  — refactored from full-universe f64 fold to packed `Vec<u64>`
+  bitmaps + `simd::bitmap::{popcount_u64, and_popcount_u64}`.
+- `storage::graph_engine::compression::compress_simd_rle` — inner
+  run-length scan replaced with `simd::rle::find_run_length` (was
+  misnamed "SIMD-accelerated", now actually SIMD).
+- `wal::Wal::append` / `recover` — dual-format (v1/v2) frames with
+  pluggable `ChecksumAlgo` field; reads both, writes default to
+  `Crc32Fast` (benchmark showed 3-way parallel PCLMUL in `crc32fast`
+  beats sequential `_mm_crc32_u64` on modern x86; CRC32C primitive
+  kept available via `append_with_algo(entry, Crc32C)`).
+- `executor::parser::{tokens, expressions}` — O(N²) tokenizer fix.
+
+**New files (all under `nexus-core/src/simd/`):** `mod.rs`, `dispatch.rs`,
+`scalar.rs`, `distance.rs`, `bitmap.rs`, `reduce.rs`, `compare.rs`,
+`rle.rs`, `crc32c.rs`, `json.rs`, `x86.rs`, `aarch64.rs`.
+
+**New benches (under `nexus-core/benches/`):** `simd_distance.rs`,
+`simd_popcount.rs`, `simd_reduce.rs`, `simd_compare.rs`, `simd_rle.rs`,
+`simd_crc.rs`, `simd_json.rs`, `parser_tokenize.rs`.
+
+**New proptest parity suites (under `nexus-core/tests/`):**
+`simd_scalar_properties.rs`, `simd_distance_parity.rs`,
+`simd_bitmap_parity.rs`, `simd_reduce_parity.rs`,
+`simd_compare_parity.rs`, `simd_rle_parity.rs`, `simd_json_parity.rs`.
+
+**New spec:** `docs/specs/simd-dispatch.md` — CpuFeatures probe,
+cascade rules, tolerances, per-kernel tier tables, measured
+benchmark numbers, phase-3 per-item status including honest writeups
+of the three items that did not deliver as the task spec anticipated
+(CRC32C hardware, simd-json on Value-field payloads, record codec
+batch — the last already LLVM-auto-vectorised).
+
+**ADRs:** ADR-001 (RPC wire format), ADR-002 (SDK default transport),
+ADR-003 (SIMD dispatch — runtime detection, no feature flags, tiered
+fallback with proptest parity).
+
+**Rollout safety:**
+
+- `NEXUS_SIMD_DISABLE=1` — scalar fallback for every dispatched op.
+- `NEXUS_SIMD_JSON_DISABLE=1` — forces serde_json in the
+  `simd::json` dispatcher.
+- Single `tracing::info!` on first `cpu()` call reports the
+  selected tier + all flag values.
+
+**Verification across all SIMD commits:**
+
+- `cargo +nightly fmt --all` — clean (pre-commit hook enforces).
+- `cargo +nightly clippy -p nexus-core --tests --benches -- -D warnings`
+  — clean.
+- `cargo +nightly test -p nexus-core` — 2566 passed, 0 failed.
+- 300/300 Neo4j compatibility suite unaffected (no wire format change).
+
 ### 🧱 Oversized-Module Split — Tier 1 + Tier 2 (2026-04-18)
 
 **Eight critical files > 1,500 LOC split into focused sub-modules. No

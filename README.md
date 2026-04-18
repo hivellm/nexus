@@ -30,6 +30,8 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
 - ✅ **Official SDKs** - Rust, Python, TypeScript, Go, C#, n8n (30+ tests each)
 - ✅ **Memory Hardened** - Input hardcaps, capped caches, cleanup paths, Docker memtest harness (see [docs/performance/MEMORY_TUNING.md](docs/performance/MEMORY_TUNING.md))
+- ✅ **SIMD kernels (AVX-512 / AVX2 / NEON)** - Runtime-dispatched `nexus-core::simd` module for KNN distance, bitmap popcount, numeric sum/min/max, compare, RLE scan, CRC32C primitive. Up to **12.7× KNN dot @ dim=768** on Zen 4 with proptest-enforced parity against scalar. Spec: [docs/specs/simd-dispatch.md](docs/specs/simd-dispatch.md).
+- ✅ **Linear-time Cypher parser** - O(N²) → O(N) fix in `peek_char`/`consume_char`; **~290× faster parse on 32 KiB queries**.
 - ✅ **2954+ Tests Passing** - 100% success rate, 70%+ coverage
 - ⚠️ **Known Limitations**: Constraints (UNIQUE, EXISTS), Advanced indexes (FULL-TEXT, POINT)
 
@@ -58,7 +60,9 @@ See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complet
 - 🎯 **Code Analysis**: Call graphs, dependency graphs, data flow graphs for LLM assistance
 
 ### **Performance Optimizations** 🔥
-- ⚡ **Vectorized Query Execution** - SIMD-accelerated (40%+ faster WHERE filtering, ≤3.0ms)
+- ⚡ **Runtime-dispatched SIMD kernels** — AVX-512 / AVX2 / SSE4.2 / NEON selected at startup per op; **12.7× KNN dot @ dim=768**, **7.9× SUM f64 @ 262K rows**, **3.0× RLE compaction on long runs**, all with proptest-enforced bit-parity vs scalar
+- 📐 **Linear-time Cypher parser** — O(N²) → O(N) fix (was `chars().nth(pos)` per peek, now `input[pos..].chars().next()`); **~290× faster parse on 32 KiB queries** (~3.7 ms vs ~1 s extrapolated)
+- 🔐 **Hardware-CRC32C primitive** — `simd::crc32c` exposes `_mm_crc32_u64` / ARMv8 `__crc32cd`; WAL dual-format (v1/v2 frames) with pluggable `ChecksumAlgo` for future swap without breaking old files
 - 🎯 **JIT Query Compilation** - Real-time Cypher-to-native code (50%+ improvement)
 - 🔗 **Advanced Join Algorithms** - Hash/merge joins with bloom filters (60%+ improvement, ≤4.0ms)
 - 🏗️ **Custom Storage Engine** - Relationship-centric layout (31,075x improvement)
@@ -66,6 +70,13 @@ See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complet
 - 🗜️ **Compression Suite** - LZ4, Zstd, SIMD RLE (30-80% space reduction)
 - ⚙️ **Concurrent Execution** - Thread pool, lock-free structures, NUMA-aware
 - 📊 **Query Result Caching** - Adaptive TTL with dependency-based invalidation
+
+> **SIMD rollout safety**: set `NEXUS_SIMD_DISABLE=1` to force scalar
+> dispatch across every op (emergency rollback, no rebuild). Kernel
+> selection is logged once at startup; per-op tiers are queryable via
+> `simd::distance::kernel_tiers()` / `bitmap::kernel_tiers()` /
+> `reduce::kernel_tiers()` / `compare::kernel_tiers()`. Full spec:
+> [`docs/specs/simd-dispatch.md`](docs/specs/simd-dispatch.md).
 
 ### **Integration & Protocols**
 - 🌐 **StreamableHTTP**: Default protocol with SSE streaming
