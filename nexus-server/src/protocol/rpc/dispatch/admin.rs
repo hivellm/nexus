@@ -442,11 +442,11 @@ mod tests {
         use super::super::run as top_run;
         let s = session(true);
         s.mark_authenticated();
-        // CYPHER handler is not implemented yet, so we should get the
-        // `unknown command` path rather than `NOAUTH`.
+        // After auth, CYPHER reaches its real handler; with no args it
+        // fails on wrong-arity rather than being blocked by NOAUTH.
         let err = top_run(&s, "CYPHER", vec![]).await.unwrap_err();
         assert!(!err.contains("NOAUTH"));
-        assert!(err.contains("unknown command 'CYPHER'"));
+        assert!(err.contains("wrong number of arguments"));
     }
 
     #[tokio::test]

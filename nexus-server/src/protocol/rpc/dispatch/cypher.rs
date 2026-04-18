@@ -31,6 +31,7 @@ use nexus_core::executor::Query;
 
 use crate::protocol::rpc::NexusValue;
 
+use super::convert::{json_to_nexus, nexus_to_json};
 use super::{RpcSession, arg_map, arg_str};
 
 /// Dispatch the CYPHER command. Uppercasing and auth gating have already
@@ -126,75 +127,6 @@ fn params_from_map(
         out.insert(key.to_owned(), nexus_to_json(v.clone())?);
     }
     Ok(out)
-}
-
-/// Convert a [`NexusValue`] into the corresponding `serde_json::Value`.
-///
-/// Bytes are interpreted as UTF-8 text; non-UTF-8 bytes are rejected so a
-/// parameter can never silently turn into an encoding-dependent string.
-fn nexus_to_json(value: NexusValue) -> Result<serde_json::Value, String> {
-    match value {
-        NexusValue::Null => Ok(serde_json::Value::Null),
-        NexusValue::Bool(b) => Ok(serde_json::Value::Bool(b)),
-        NexusValue::Int(i) => Ok(serde_json::Value::Number(i.into())),
-        NexusValue::Float(f) => {
-            let n = serde_json::Number::from_f64(f).ok_or_else(|| {
-                "ERR non-finite Float parameters cannot be represented in JSON".to_string()
-            })?;
-            Ok(serde_json::Value::Number(n))
-        }
-        NexusValue::Bytes(b) => {
-            let s = String::from_utf8(b)
-                .map_err(|_| "ERR Bytes parameter must be valid UTF-8".to_string())?;
-            Ok(serde_json::Value::String(s))
-        }
-        NexusValue::Str(s) => Ok(serde_json::Value::String(s)),
-        NexusValue::Array(items) => items
-            .into_iter()
-            .map(nexus_to_json)
-            .collect::<Result<Vec<_>, _>>()
-            .map(serde_json::Value::Array),
-        NexusValue::Map(pairs) => {
-            let mut map = serde_json::Map::with_capacity(pairs.len());
-            for (k, v) in pairs {
-                let key = k
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| "ERR nested parameter map keys must be strings".to_string())?;
-                map.insert(key, nexus_to_json(v)?);
-            }
-            Ok(serde_json::Value::Object(map))
-        }
-    }
-}
-
-/// Convert a `serde_json::Value` (as returned inside `ResultSet` rows) into
-/// the matching [`NexusValue`]. Integer fits become `Int`; the rest of the
-/// variants map 1:1.
-fn json_to_nexus(value: serde_json::Value) -> NexusValue {
-    match value {
-        serde_json::Value::Null => NexusValue::Null,
-        serde_json::Value::Bool(b) => NexusValue::Bool(b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                NexusValue::Int(i)
-            } else if let Some(f) = n.as_f64() {
-                NexusValue::Float(f)
-            } else {
-                // u64 > i64::MAX — preserve precision as a string.
-                NexusValue::Str(n.to_string())
-            }
-        }
-        serde_json::Value::String(s) => NexusValue::Str(s),
-        serde_json::Value::Array(items) => {
-            NexusValue::Array(items.into_iter().map(json_to_nexus).collect())
-        }
-        serde_json::Value::Object(obj) => NexusValue::Map(
-            obj.into_iter()
-                .map(|(k, v)| (NexusValue::Str(k), json_to_nexus(v)))
-                .collect(),
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -430,88 +362,6 @@ mod tests {
             Ok(NexusValue::Map(_)) => {}
             Err(msg) => assert!(msg.contains("Cypher error") || msg.contains("ERR")),
             Ok(other) => panic!("unexpected success shape: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn nexus_to_json_covers_all_scalar_variants() {
-        assert_eq!(
-            nexus_to_json(NexusValue::Null).unwrap(),
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            nexus_to_json(NexusValue::Bool(true)).unwrap(),
-            serde_json::Value::Bool(true)
-        );
-        assert_eq!(
-            nexus_to_json(NexusValue::Int(-7)).unwrap(),
-            serde_json::json!(-7)
-        );
-        assert_eq!(
-            nexus_to_json(NexusValue::Float(1.5)).unwrap(),
-            serde_json::json!(1.5)
-        );
-        assert_eq!(
-            nexus_to_json(NexusValue::Str("x".into())).unwrap(),
-            serde_json::json!("x")
-        );
-        assert_eq!(
-            nexus_to_json(NexusValue::Bytes(b"abc".to_vec())).unwrap(),
-            serde_json::json!("abc")
-        );
-    }
-
-    #[test]
-    fn nexus_to_json_rejects_non_finite_float() {
-        let err = nexus_to_json(NexusValue::Float(f64::NAN)).unwrap_err();
-        assert!(err.contains("non-finite"));
-        let err = nexus_to_json(NexusValue::Float(f64::INFINITY)).unwrap_err();
-        assert!(err.contains("non-finite"));
-    }
-
-    #[test]
-    fn nexus_to_json_rejects_non_utf8_bytes() {
-        let err = nexus_to_json(NexusValue::Bytes(vec![0xFF, 0xFE])).unwrap_err();
-        assert!(err.contains("UTF-8"));
-    }
-
-    #[test]
-    fn nexus_to_json_preserves_nested_structures() {
-        let v = NexusValue::Map(vec![(
-            NexusValue::Str("a".into()),
-            NexusValue::Array(vec![NexusValue::Int(1), NexusValue::Int(2)]),
-        )]);
-        let out = nexus_to_json(v).unwrap();
-        assert_eq!(out, serde_json::json!({ "a": [1, 2] }));
-    }
-
-    #[test]
-    fn json_to_nexus_covers_all_variants() {
-        assert_eq!(json_to_nexus(serde_json::Value::Null), NexusValue::Null);
-        assert_eq!(
-            json_to_nexus(serde_json::json!(true)),
-            NexusValue::Bool(true)
-        );
-        assert_eq!(json_to_nexus(serde_json::json!(-3)), NexusValue::Int(-3));
-        assert_eq!(
-            json_to_nexus(serde_json::json!(2.5)),
-            NexusValue::Float(2.5)
-        );
-        assert_eq!(
-            json_to_nexus(serde_json::json!("s")),
-            NexusValue::Str("s".into())
-        );
-        assert_eq!(
-            json_to_nexus(serde_json::json!([1, 2])),
-            NexusValue::Array(vec![NexusValue::Int(1), NexusValue::Int(2)])
-        );
-        match json_to_nexus(serde_json::json!({ "k": 1 })) {
-            NexusValue::Map(pairs) => {
-                assert_eq!(pairs.len(), 1);
-                assert_eq!(pairs[0].0.as_str(), Some("k"));
-                assert_eq!(pairs[0].1.as_int(), Some(1));
-            }
-            other => panic!("expected Map, got {other:?}"),
         }
     }
 }

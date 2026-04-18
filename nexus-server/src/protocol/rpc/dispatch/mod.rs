@@ -13,7 +13,9 @@
 //! accept loop shares with handlers (auth flag, connection id).
 
 pub mod admin;
+pub mod convert;
 pub mod cypher;
+pub mod graph;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,6 +82,9 @@ pub async fn run(
     match cmd.as_str() {
         "PING" | "HELLO" | "AUTH" | "QUIT" => admin::run(state, cmd.as_str(), &args).await,
         "CYPHER" => cypher::run(state, cmd.as_str(), &args).await,
+        "CREATE_NODE" | "CREATE_REL" | "UPDATE_NODE" | "DELETE_NODE" | "MATCH_NODES" => {
+            graph::run(state, cmd.as_str(), &args).await
+        }
         other => Err(format!("ERR unknown command '{other}'")),
     }
 }

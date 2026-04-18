@@ -22,12 +22,12 @@
 - [x] 3.5 Unit tests: `CYPHER "RETURN 1"` returns `rows = [[1]]` via RPC
 
 ## 4. Graph CRUD dispatch
-- [ ] 4.1 `CREATE_NODE` — args `[labels: Array<Str>, props: Map]`, returns node id
-- [ ] 4.2 `CREATE_REL` — args `[src: Int, dst: Int, type: Str, props: Map]`, returns rel id
-- [ ] 4.3 `UPDATE_NODE` — args `[id: Int, props: Map]`, returns node
-- [ ] 4.4 `DELETE_NODE` — args `[id: Int, detach: Bool]`, returns success
-- [ ] 4.5 `MATCH_NODES` — args `[label: Str, props: Map, limit: Int]`, returns rows
-- [ ] 4.6 Unit tests: full CRUD round-trip against an in-memory engine
+- [x] 4.1 `CREATE_NODE` — args `[labels: Array<Str>, props: Map]`, returns node id
+- [x] 4.2 `CREATE_REL` — args `[src: Int, dst: Int, type: Str, props: Map]`, returns rel id
+- [x] 4.3 `UPDATE_NODE` — args `[id: Int, props: Map]`, returns node
+- [x] 4.4 `DELETE_NODE` — args `[id: Int, detach: Bool]`, returns success
+- [x] 4.5 `MATCH_NODES` — args `[label: Str, props: Map, limit: Int]`, returns rows
+- [x] 4.6 Unit tests: full CRUD round-trip against an in-memory engine
 
 ## 5. KNN dispatch
 - [ ] 5.1 `KNN_SEARCH` — args `[label: Str, embedding: Bytes|Array<Float>, k: Int, filter: Map?]`
