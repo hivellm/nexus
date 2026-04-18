@@ -29,6 +29,7 @@
 pub mod bitmap;
 pub mod dispatch;
 pub mod distance;
+pub mod reduce;
 pub mod scalar;
 
 #[cfg(target_arch = "aarch64")]

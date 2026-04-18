@@ -100,3 +100,203 @@ pub unsafe fn normalize_f32_neon(v: &mut [f32]) -> f32 {
     }
     norm
 }
+
+// ── reductions ───────────────────────────────────────────────────────────────
+
+/// # Safety
+/// Host must advertise `neon`.
+#[target_feature(enable = "neon")]
+pub unsafe fn sum_i64_neon(values: &[i64]) -> i64 {
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let mut acc = vdupq_n_s64(0);
+    let chunks = len / 2;
+    for i in 0..chunks {
+        acc = vaddq_s64(acc, vld1q_s64(ptr.add(i * 2)));
+    }
+    let mut result = vgetq_lane_s64::<0>(acc).wrapping_add(vgetq_lane_s64::<1>(acc));
+    for i in (chunks * 2)..len {
+        result = result.wrapping_add(values[i]);
+    }
+    result
+}
+
+/// # Safety
+/// Host must advertise `neon`.
+#[target_feature(enable = "neon")]
+pub unsafe fn sum_f64_neon(values: &[f64]) -> f64 {
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let mut acc = vdupq_n_f64(0.0);
+    let chunks = len / 2;
+    for i in 0..chunks {
+        acc = vaddq_f64(acc, vld1q_f64(ptr.add(i * 2)));
+    }
+    let mut result = vaddvq_f64(acc);
+    for i in (chunks * 2)..len {
+        result += values[i];
+    }
+    result
+}
+
+/// # Safety
+/// Host must advertise `neon`.
+#[target_feature(enable = "neon")]
+pub unsafe fn sum_f32_neon(values: &[f32]) -> f32 {
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let mut acc = vdupq_n_f32(0.0);
+    let chunks = len / 4;
+    for i in 0..chunks {
+        acc = vaddq_f32(acc, vld1q_f32(ptr.add(i * 4)));
+    }
+    let mut result = vaddvq_f32(acc);
+    for i in (chunks * 4)..len {
+        result += values[i];
+    }
+    result
+}
+
+/// # Safety
+/// Host must advertise `neon`.
+#[target_feature(enable = "neon")]
+pub unsafe fn min_f64_neon(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let pos_inf = vdupq_n_f64(f64::INFINITY);
+    let mut acc = pos_inf;
+    let mut saw_real = false;
+    let chunks = len / 2;
+    for i in 0..chunks {
+        let v = vld1q_f64(ptr.add(i * 2));
+        // NaN-safe replacement: where v != v, substitute +inf.
+        let nan_mask = vceqq_f64(v, v); // true where NOT NaN
+        let v_safe = vbslq_f64(nan_mask, v, pos_inf);
+        acc = vminq_f64(acc, v_safe);
+        // vmaxvq_u32 over the mask tells us if any lane was a real value.
+        let cast = vreinterpretq_u32_u64(nan_mask);
+        if vmaxvq_u32(cast) != 0 {
+            saw_real = true;
+        }
+    }
+    let mut result = vminvq_f64(acc);
+    for i in (chunks * 2)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v < result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+    if saw_real { Some(result) } else { None }
+}
+
+/// # Safety
+/// Host must advertise `neon`.
+#[target_feature(enable = "neon")]
+pub unsafe fn max_f64_neon(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let neg_inf = vdupq_n_f64(f64::NEG_INFINITY);
+    let mut acc = neg_inf;
+    let mut saw_real = false;
+    let chunks = len / 2;
+    for i in 0..chunks {
+        let v = vld1q_f64(ptr.add(i * 2));
+        let nan_mask = vceqq_f64(v, v);
+        let v_safe = vbslq_f64(nan_mask, v, neg_inf);
+        acc = vmaxq_f64(acc, v_safe);
+        let cast = vreinterpretq_u32_u64(nan_mask);
+        if vmaxvq_u32(cast) != 0 {
+            saw_real = true;
+        }
+    }
+    let mut result = vmaxvq_f64(acc);
+    for i in (chunks * 2)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v > result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+    if saw_real { Some(result) } else { None }
+}
+
+/// # Safety
+/// Host must advertise `neon`.
+#[target_feature(enable = "neon")]
+pub unsafe fn min_f32_neon(values: &[f32]) -> Option<f32> {
+    if values.is_empty() {
+        return None;
+    }
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let pos_inf = vdupq_n_f32(f32::INFINITY);
+    let mut acc = pos_inf;
+    let mut saw_real = false;
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = vld1q_f32(ptr.add(i * 4));
+        let nan_mask = vceqq_f32(v, v); // true where NOT NaN
+        let v_safe = vbslq_f32(nan_mask, v, pos_inf);
+        acc = vminq_f32(acc, v_safe);
+        if vmaxvq_u32(nan_mask) != 0 {
+            saw_real = true;
+        }
+    }
+    let mut result = vminvq_f32(acc);
+    for i in (chunks * 4)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v < result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+    if saw_real { Some(result) } else { None }
+}
+
+/// # Safety
+/// Host must advertise `neon`.
+#[target_feature(enable = "neon")]
+pub unsafe fn max_f32_neon(values: &[f32]) -> Option<f32> {
+    if values.is_empty() {
+        return None;
+    }
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let neg_inf = vdupq_n_f32(f32::NEG_INFINITY);
+    let mut acc = neg_inf;
+    let mut saw_real = false;
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = vld1q_f32(ptr.add(i * 4));
+        let nan_mask = vceqq_f32(v, v);
+        let v_safe = vbslq_f32(nan_mask, v, neg_inf);
+        acc = vmaxq_f32(acc, v_safe);
+        if vmaxvq_u32(nan_mask) != 0 {
+            saw_real = true;
+        }
+    }
+    let mut result = vmaxvq_f32(acc);
+    for i in (chunks * 4)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v > result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+    if saw_real { Some(result) } else { None }
+}

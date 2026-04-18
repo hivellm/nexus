@@ -76,6 +76,141 @@ pub fn normalize_f32(v: &mut [f32]) -> f32 {
     norm
 }
 
+// ── reductions over numeric columns ───────────────────────────────────────────
+//
+// Executor-side aggregates (SUM/MIN/MAX/AVG/COUNT) land as batch
+// reductions in `simd::reduce`. The scalar implementations below are
+// the ground truth every SIMD kernel is tested against.
+//
+// NaN semantics for min/max (f64, f32): a NaN operand is ignored —
+// the returned value is always the min/max of the non-NaN inputs.
+// An all-NaN or empty slice returns `None`.
+
+/// Sum of all `i64` elements. Wrapping addition matches Cypher integer
+/// semantics (no overflow errors in the aggregate path).
+#[inline(always)]
+pub fn sum_i64(values: &[i64]) -> i64 {
+    let mut acc: i64 = 0;
+    for &v in values {
+        acc = acc.wrapping_add(v);
+    }
+    acc
+}
+
+/// Sum of all `f64` elements.
+#[inline(always)]
+pub fn sum_f64(values: &[f64]) -> f64 {
+    let mut acc = 0.0_f64;
+    for &v in values {
+        acc += v;
+    }
+    acc
+}
+
+/// Sum of all `f32` elements, promoting to f64 internally to match the
+/// precision the executor currently delivers for numeric aggregates.
+#[inline(always)]
+pub fn sum_f32(values: &[f32]) -> f32 {
+    let mut acc = 0.0_f32;
+    for &v in values {
+        acc += v;
+    }
+    acc
+}
+
+/// Minimum `i64` value, or `None` if the slice is empty.
+#[inline(always)]
+pub fn min_i64(values: &[i64]) -> Option<i64> {
+    let mut iter = values.iter().copied();
+    let first = iter.next()?;
+    let mut acc = first;
+    for v in iter {
+        if v < acc {
+            acc = v;
+        }
+    }
+    Some(acc)
+}
+
+/// Maximum `i64` value, or `None` if the slice is empty.
+#[inline(always)]
+pub fn max_i64(values: &[i64]) -> Option<i64> {
+    let mut iter = values.iter().copied();
+    let first = iter.next()?;
+    let mut acc = first;
+    for v in iter {
+        if v > acc {
+            acc = v;
+        }
+    }
+    Some(acc)
+}
+
+/// Minimum `f64` value. `NaN` operands are ignored; an empty or
+/// all-NaN slice returns `None`.
+#[inline(always)]
+pub fn min_f64(values: &[f64]) -> Option<f64> {
+    let mut acc: Option<f64> = None;
+    for &v in values {
+        if v.is_nan() {
+            continue;
+        }
+        acc = Some(match acc {
+            Some(a) if a <= v => a,
+            _ => v,
+        });
+    }
+    acc
+}
+
+/// Maximum `f64` value. `NaN` operands are ignored.
+#[inline(always)]
+pub fn max_f64(values: &[f64]) -> Option<f64> {
+    let mut acc: Option<f64> = None;
+    for &v in values {
+        if v.is_nan() {
+            continue;
+        }
+        acc = Some(match acc {
+            Some(a) if a >= v => a,
+            _ => v,
+        });
+    }
+    acc
+}
+
+/// Minimum `f32` value. `NaN` operands are ignored.
+#[inline(always)]
+pub fn min_f32(values: &[f32]) -> Option<f32> {
+    let mut acc: Option<f32> = None;
+    for &v in values {
+        if v.is_nan() {
+            continue;
+        }
+        acc = Some(match acc {
+            Some(a) if a <= v => a,
+            _ => v,
+        });
+    }
+    acc
+}
+
+/// Maximum `f32` value. `NaN` operands are ignored.
+#[inline(always)]
+pub fn max_f32(values: &[f32]) -> Option<f32> {
+    let mut acc: Option<f32> = None;
+    for &v in values {
+        if v.is_nan() {
+            continue;
+        }
+        acc = Some(match acc {
+            Some(a) if a >= v => a,
+            _ => v,
+        });
+    }
+    acc
+}
+
 // ── bitmap kernels ────────────────────────────────────────────────────────────
 
 /// Population count over a slice of `u64` words.
@@ -149,6 +284,45 @@ mod tests {
         let norm = normalize_f32(&mut v);
         assert_eq!(norm, 0.0);
         assert!(v.iter().all(|x| *x == 0.0));
+    }
+
+    #[test]
+    fn sum_i64_matches_iter_sum() {
+        let values = [1_i64, 2, 3, 4, 5, -10, 100];
+        assert_eq!(sum_i64(&values), 105);
+    }
+
+    #[test]
+    fn sum_f64_matches_iter_sum() {
+        let values = [1.5_f64, 2.5, -3.0];
+        assert!((sum_f64(&values) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn min_i64_returns_none_for_empty() {
+        assert_eq!(min_i64(&[]), None);
+        assert_eq!(max_i64(&[]), None);
+    }
+
+    #[test]
+    fn min_max_i64_handle_extremes() {
+        let values = [i64::MIN, -1, 0, 1, i64::MAX];
+        assert_eq!(min_i64(&values), Some(i64::MIN));
+        assert_eq!(max_i64(&values), Some(i64::MAX));
+    }
+
+    #[test]
+    fn min_max_f64_ignore_nan() {
+        let values = [f64::NAN, 1.5, f64::NAN, -2.5, 3.0];
+        assert_eq!(min_f64(&values), Some(-2.5));
+        assert_eq!(max_f64(&values), Some(3.0));
+    }
+
+    #[test]
+    fn min_max_f64_all_nan_returns_none() {
+        let values = [f64::NAN, f64::NAN];
+        assert_eq!(min_f64(&values), None);
+        assert_eq!(max_f64(&values), None);
     }
 
     #[test]

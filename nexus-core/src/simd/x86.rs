@@ -360,3 +360,531 @@ pub unsafe fn normalize_f32_avx512(v: &mut [f32]) -> f32 {
     }
     norm
 }
+
+// ── i64 / f64 / f32 reductions — sum ──────────────────────────────────────────
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn sum_i64_avx2(values: &[i64]) -> i64 {
+    let len = values.len();
+    let base_ptr = values.as_ptr();
+    let mut acc0 = _mm256_setzero_si256();
+    let mut acc1 = _mm256_setzero_si256();
+
+    // Unroll 2: 8 × i64 per iteration.
+    let unroll = len / 8;
+    for i in 0..unroll {
+        let p = base_ptr.add(i * 8) as *const __m256i;
+        acc0 = _mm256_add_epi64(acc0, _mm256_loadu_si256(p));
+        acc1 = _mm256_add_epi64(acc1, _mm256_loadu_si256(p.add(1)));
+    }
+    let mut acc = _mm256_add_epi64(acc0, acc1);
+
+    // 4 × i64 single-lane remainder.
+    let mut i = unroll * 8;
+    while i + 4 <= len {
+        acc = _mm256_add_epi64(acc, _mm256_loadu_si256(base_ptr.add(i) as *const __m256i));
+        i += 4;
+    }
+    // Horizontal reduce 4 × i64.
+    let low = _mm256_castsi256_si128(acc);
+    let high = _mm256_extracti128_si256::<1>(acc);
+    let sum128 = _mm_add_epi64(low, high);
+    let shifted = _mm_shuffle_epi32::<0b11_10>(sum128);
+    let total = _mm_add_epi64(sum128, shifted);
+    let mut result = _mm_cvtsi128_si64(total);
+    while i < len {
+        result = result.wrapping_add(values[i]);
+        i += 1;
+    }
+    result
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn sum_i64_avx512(values: &[i64]) -> i64 {
+    let len = values.len();
+    let ptr = values.as_ptr() as *const __m512i;
+    let mut acc = _mm512_setzero_si512();
+    let chunks = len / 8;
+    for i in 0..chunks {
+        acc = _mm512_add_epi64(acc, _mm512_loadu_si512(ptr.add(i)));
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let mask: __mmask8 = (1u8 << tail) - 1;
+        let loaded = _mm512_maskz_loadu_epi64(mask, values.as_ptr().add(chunks * 8));
+        acc = _mm512_add_epi64(acc, loaded);
+    }
+    _mm512_reduce_add_epi64(acc)
+}
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn sum_f64_avx2(values: &[f64]) -> f64 {
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let mut acc0 = _mm256_setzero_pd();
+    let mut acc1 = _mm256_setzero_pd();
+    let mut acc2 = _mm256_setzero_pd();
+    let mut acc3 = _mm256_setzero_pd();
+    let unroll = len / 16;
+    for i in 0..unroll {
+        let base = i * 16;
+        acc0 = _mm256_add_pd(acc0, _mm256_loadu_pd(ptr.add(base)));
+        acc1 = _mm256_add_pd(acc1, _mm256_loadu_pd(ptr.add(base + 4)));
+        acc2 = _mm256_add_pd(acc2, _mm256_loadu_pd(ptr.add(base + 8)));
+        acc3 = _mm256_add_pd(acc3, _mm256_loadu_pd(ptr.add(base + 12)));
+    }
+    let mut acc = _mm256_add_pd(_mm256_add_pd(acc0, acc1), _mm256_add_pd(acc2, acc3));
+    let mut i = unroll * 16;
+    while i + 4 <= len {
+        acc = _mm256_add_pd(acc, _mm256_loadu_pd(ptr.add(i)));
+        i += 4;
+    }
+    // Horizontal reduce.
+    let low = _mm256_castpd256_pd128(acc);
+    let high = _mm256_extractf128_pd::<1>(acc);
+    let sum128 = _mm_add_pd(low, high);
+    let shifted = _mm_unpackhi_pd(sum128, sum128);
+    let sum = _mm_add_sd(sum128, shifted);
+    let mut result = _mm_cvtsd_f64(sum);
+    while i < len {
+        result += values[i];
+        i += 1;
+    }
+    result
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn sum_f64_avx512(values: &[f64]) -> f64 {
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let mut acc = _mm512_setzero_pd();
+    let chunks = len / 8;
+    for i in 0..chunks {
+        acc = _mm512_add_pd(acc, _mm512_loadu_pd(ptr.add(i * 8)));
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let mask: __mmask8 = (1u8 << tail) - 1;
+        let loaded = _mm512_maskz_loadu_pd(mask, ptr.add(chunks * 8));
+        acc = _mm512_add_pd(acc, loaded);
+    }
+    _mm512_reduce_add_pd(acc)
+}
+
+/// # Safety
+/// Host must advertise `avx2` and `fma`.
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn sum_f32_avx2(values: &[f32]) -> f32 {
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
+    let unroll = len / 32;
+    for i in 0..unroll {
+        let base = i * 32;
+        acc0 = _mm256_add_ps(acc0, _mm256_loadu_ps(ptr.add(base)));
+        acc1 = _mm256_add_ps(acc1, _mm256_loadu_ps(ptr.add(base + 8)));
+        acc2 = _mm256_add_ps(acc2, _mm256_loadu_ps(ptr.add(base + 16)));
+        acc3 = _mm256_add_ps(acc3, _mm256_loadu_ps(ptr.add(base + 24)));
+    }
+    let mut acc = _mm256_add_ps(_mm256_add_ps(acc0, acc1), _mm256_add_ps(acc2, acc3));
+    let mut i = unroll * 32;
+    while i + 8 <= len {
+        acc = _mm256_add_ps(acc, _mm256_loadu_ps(ptr.add(i)));
+        i += 8;
+    }
+    let low = _mm256_castps256_ps128(acc);
+    let high = _mm256_extractf128_ps::<1>(acc);
+    let sum128 = _mm_add_ps(low, high);
+    let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
+    let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps::<0b01>(sum64, sum64));
+    let mut result = _mm_cvtss_f32(sum32);
+    while i < len {
+        result += values[i];
+        i += 1;
+    }
+    result
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn sum_f32_avx512(values: &[f32]) -> f32 {
+    let len = values.len();
+    let ptr = values.as_ptr();
+    let mut acc = _mm512_setzero_ps();
+    let chunks = len / 16;
+    for i in 0..chunks {
+        acc = _mm512_add_ps(acc, _mm512_loadu_ps(ptr.add(i * 16)));
+    }
+    let tail = len - chunks * 16;
+    if tail > 0 {
+        let mask: __mmask16 = (1u16 << tail) - 1;
+        let loaded = _mm512_maskz_loadu_ps(mask, ptr.add(chunks * 16));
+        acc = _mm512_add_ps(acc, loaded);
+    }
+    _mm512_reduce_add_ps(acc)
+}
+
+// ── min / max reductions — f64, f32, NaN-skipping ─────────────────────────────
+//
+// Scalar reference skips NaN operands; an empty or all-NaN slice
+// returns None. SIMD paths replace NaN lanes with the "neutral" end
+// of the domain (+inf for min, -inf for max) before reducing, and
+// track whether any real value was seen via a mask/accumulator.
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn min_f64_avx2(values: &[f64]) -> Option<f64> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let pos_inf = _mm256_set1_pd(f64::INFINITY);
+    let mut acc = pos_inf;
+    let mut saw_real = false;
+
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_pd(ptr.add(i * 4));
+        // NaN test: v != v → mask bits set for NaN lanes.
+        let nan_mask = _mm256_cmp_pd::<_CMP_UNORD_Q>(v, v);
+        let safe = _mm256_blendv_pd(v, pos_inf, nan_mask);
+        acc = _mm256_min_pd(acc, safe);
+        let real_mask = _mm256_andnot_pd(nan_mask, _mm256_cmp_pd::<_CMP_EQ_OQ>(v, v));
+        if _mm256_movemask_pd(real_mask) != 0 {
+            saw_real = true;
+        }
+    }
+
+    // Horizontal reduce the 4 × f64 accumulator.
+    let low = _mm256_castpd256_pd128(acc);
+    let high = _mm256_extractf128_pd::<1>(acc);
+    let min128 = _mm_min_pd(low, high);
+    let shifted = _mm_unpackhi_pd(min128, min128);
+    let reduced = _mm_min_sd(min128, shifted);
+    let mut result = _mm_cvtsd_f64(reduced);
+
+    for i in (chunks * 4)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v < result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+
+    if saw_real { Some(result) } else { None }
+}
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn max_f64_avx2(values: &[f64]) -> Option<f64> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let neg_inf = _mm256_set1_pd(f64::NEG_INFINITY);
+    let mut acc = neg_inf;
+    let mut saw_real = false;
+
+    let chunks = len / 4;
+    for i in 0..chunks {
+        let v = _mm256_loadu_pd(ptr.add(i * 4));
+        let nan_mask = _mm256_cmp_pd::<_CMP_UNORD_Q>(v, v);
+        let safe = _mm256_blendv_pd(v, neg_inf, nan_mask);
+        acc = _mm256_max_pd(acc, safe);
+        let real_mask = _mm256_andnot_pd(nan_mask, _mm256_cmp_pd::<_CMP_EQ_OQ>(v, v));
+        if _mm256_movemask_pd(real_mask) != 0 {
+            saw_real = true;
+        }
+    }
+
+    let low = _mm256_castpd256_pd128(acc);
+    let high = _mm256_extractf128_pd::<1>(acc);
+    let max128 = _mm_max_pd(low, high);
+    let shifted = _mm_unpackhi_pd(max128, max128);
+    let reduced = _mm_max_sd(max128, shifted);
+    let mut result = _mm_cvtsd_f64(reduced);
+
+    for i in (chunks * 4)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v > result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+
+    if saw_real { Some(result) } else { None }
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn min_f64_avx512(values: &[f64]) -> Option<f64> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let pos_inf = _mm512_set1_pd(f64::INFINITY);
+    let mut acc = pos_inf;
+    let mut saw_real: __mmask8 = 0;
+
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_pd(ptr.add(i * 8));
+        let nan_mask = _mm512_cmp_pd_mask::<_CMP_UNORD_Q>(v, v);
+        // mask_blend(mask, a, b): lane of b if mask bit 1, lane of a if 0.
+        let safe = _mm512_mask_blend_pd(nan_mask, v, pos_inf);
+        acc = _mm512_min_pd(acc, safe);
+        saw_real |= !nan_mask;
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_pd(load_mask, ptr.add(chunks * 8));
+        let nan_mask = _mm512_cmp_pd_mask::<_CMP_UNORD_Q>(v, v);
+        // NaN outside `load_mask` would also register; clamp to the
+        // loaded lanes via bit-and so tail lanes that were zeroed by
+        // maskz_load (and therefore pass NaN test as equal) don't
+        // poison `saw_real`.
+        let real_mask = load_mask & !nan_mask;
+        // Replace NaN lanes AND out-of-range lanes with +inf before
+        // reducing so the accumulator is not disturbed.
+        let safe = _mm512_mask_blend_pd(!real_mask, v, pos_inf);
+        acc = _mm512_min_pd(acc, safe);
+        saw_real |= real_mask;
+    }
+
+    if saw_real == 0 {
+        return None;
+    }
+    Some(_mm512_reduce_min_pd(acc))
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn max_f64_avx512(values: &[f64]) -> Option<f64> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let neg_inf = _mm512_set1_pd(f64::NEG_INFINITY);
+    let mut acc = neg_inf;
+    let mut saw_real: __mmask8 = 0;
+
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm512_loadu_pd(ptr.add(i * 8));
+        let nan_mask = _mm512_cmp_pd_mask::<_CMP_UNORD_Q>(v, v);
+        let safe = _mm512_mask_blend_pd(nan_mask, v, neg_inf);
+        acc = _mm512_max_pd(acc, safe);
+        saw_real |= !nan_mask;
+    }
+    let tail = len - chunks * 8;
+    if tail > 0 {
+        let load_mask: __mmask8 = (1u8 << tail) - 1;
+        let v = _mm512_maskz_loadu_pd(load_mask, ptr.add(chunks * 8));
+        let nan_mask = _mm512_cmp_pd_mask::<_CMP_UNORD_Q>(v, v);
+        let real_mask = load_mask & !nan_mask;
+        let safe = _mm512_mask_blend_pd(!real_mask, v, neg_inf);
+        acc = _mm512_max_pd(acc, safe);
+        saw_real |= real_mask;
+    }
+
+    if saw_real == 0 {
+        return None;
+    }
+    Some(_mm512_reduce_max_pd(acc))
+}
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn min_f32_avx2(values: &[f32]) -> Option<f32> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let pos_inf = _mm256_set1_ps(f32::INFINITY);
+    let mut acc = pos_inf;
+    let mut saw_real = false;
+
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm256_loadu_ps(ptr.add(i * 8));
+        let nan_mask = _mm256_cmp_ps::<_CMP_UNORD_Q>(v, v);
+        let safe = _mm256_blendv_ps(v, pos_inf, nan_mask);
+        acc = _mm256_min_ps(acc, safe);
+        let real_mask = _mm256_andnot_ps(nan_mask, _mm256_cmp_ps::<_CMP_EQ_OQ>(v, v));
+        if _mm256_movemask_ps(real_mask) != 0 {
+            saw_real = true;
+        }
+    }
+
+    // Horizontal min of 8 × f32.
+    let low = _mm256_castps256_ps128(acc);
+    let high = _mm256_extractf128_ps::<1>(acc);
+    let min128 = _mm_min_ps(low, high);
+    let shuffled1 = _mm_movehl_ps(min128, min128);
+    let min64 = _mm_min_ps(min128, shuffled1);
+    let shuffled2 = _mm_shuffle_ps::<0b01>(min64, min64);
+    let min32 = _mm_min_ss(min64, shuffled2);
+    let mut result = _mm_cvtss_f32(min32);
+
+    for i in (chunks * 8)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v < result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+
+    if saw_real { Some(result) } else { None }
+}
+
+/// # Safety
+/// Host must advertise `avx2`.
+#[target_feature(enable = "avx2")]
+pub unsafe fn max_f32_avx2(values: &[f32]) -> Option<f32> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let neg_inf = _mm256_set1_ps(f32::NEG_INFINITY);
+    let mut acc = neg_inf;
+    let mut saw_real = false;
+
+    let chunks = len / 8;
+    for i in 0..chunks {
+        let v = _mm256_loadu_ps(ptr.add(i * 8));
+        let nan_mask = _mm256_cmp_ps::<_CMP_UNORD_Q>(v, v);
+        let safe = _mm256_blendv_ps(v, neg_inf, nan_mask);
+        acc = _mm256_max_ps(acc, safe);
+        let real_mask = _mm256_andnot_ps(nan_mask, _mm256_cmp_ps::<_CMP_EQ_OQ>(v, v));
+        if _mm256_movemask_ps(real_mask) != 0 {
+            saw_real = true;
+        }
+    }
+
+    let low = _mm256_castps256_ps128(acc);
+    let high = _mm256_extractf128_ps::<1>(acc);
+    let max128 = _mm_max_ps(low, high);
+    let shuffled1 = _mm_movehl_ps(max128, max128);
+    let max64 = _mm_max_ps(max128, shuffled1);
+    let shuffled2 = _mm_shuffle_ps::<0b01>(max64, max64);
+    let max32 = _mm_max_ss(max64, shuffled2);
+    let mut result = _mm_cvtss_f32(max32);
+
+    for i in (chunks * 8)..len {
+        let v = values[i];
+        if !v.is_nan() {
+            if !saw_real || v > result {
+                result = v;
+            }
+            saw_real = true;
+        }
+    }
+
+    if saw_real { Some(result) } else { None }
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn min_f32_avx512(values: &[f32]) -> Option<f32> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let pos_inf = _mm512_set1_ps(f32::INFINITY);
+    let mut acc = pos_inf;
+    let mut saw_real: __mmask16 = 0;
+
+    let chunks = len / 16;
+    for i in 0..chunks {
+        let v = _mm512_loadu_ps(ptr.add(i * 16));
+        let nan_mask = _mm512_cmp_ps_mask::<_CMP_UNORD_Q>(v, v);
+        let safe = _mm512_mask_blend_ps(nan_mask, v, pos_inf);
+        acc = _mm512_min_ps(acc, safe);
+        saw_real |= !nan_mask;
+    }
+    let tail = len - chunks * 16;
+    if tail > 0 {
+        let load_mask: __mmask16 = (1u16 << tail) - 1;
+        let v = _mm512_maskz_loadu_ps(load_mask, ptr.add(chunks * 16));
+        let nan_mask = _mm512_cmp_ps_mask::<_CMP_UNORD_Q>(v, v);
+        let real_mask = load_mask & !nan_mask;
+        let safe = _mm512_mask_blend_ps(!real_mask, v, pos_inf);
+        acc = _mm512_min_ps(acc, safe);
+        saw_real |= real_mask;
+    }
+
+    if saw_real == 0 {
+        return None;
+    }
+    Some(_mm512_reduce_min_ps(acc))
+}
+
+/// # Safety
+/// Host must advertise `avx512f`.
+#[target_feature(enable = "avx512f")]
+pub unsafe fn max_f32_avx512(values: &[f32]) -> Option<f32> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let ptr = values.as_ptr();
+    let neg_inf = _mm512_set1_ps(f32::NEG_INFINITY);
+    let mut acc = neg_inf;
+    let mut saw_real: __mmask16 = 0;
+
+    let chunks = len / 16;
+    for i in 0..chunks {
+        let v = _mm512_loadu_ps(ptr.add(i * 16));
+        let nan_mask = _mm512_cmp_ps_mask::<_CMP_UNORD_Q>(v, v);
+        let safe = _mm512_mask_blend_ps(nan_mask, v, neg_inf);
+        acc = _mm512_max_ps(acc, safe);
+        saw_real |= !nan_mask;
+    }
+    let tail = len - chunks * 16;
+    if tail > 0 {
+        let load_mask: __mmask16 = (1u16 << tail) - 1;
+        let v = _mm512_maskz_loadu_ps(load_mask, ptr.add(chunks * 16));
+        let nan_mask = _mm512_cmp_ps_mask::<_CMP_UNORD_Q>(v, v);
+        let real_mask = load_mask & !nan_mask;
+        let safe = _mm512_mask_blend_ps(!real_mask, v, neg_inf);
+        acc = _mm512_max_ps(acc, safe);
+        saw_real |= real_mask;
+    }
+
+    if saw_real == 0 {
+        return None;
+    }
+    Some(_mm512_reduce_max_ps(acc))
+}
