@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧱 Oversized-Module Split — Tier 1 + Tier 2 (2026-04-18)
+
+**Eight critical files > 1,500 LOC split into focused sub-modules. No
+behaviour change: 1,346 nexus-core unit tests and 2,954 workspace tests
+continue to pass; every public API preserved via `pub use` re-exports.**
+
+17 atomic commits, each quality-gated (`cargo check`, `clippy -D warnings`,
+`cargo fmt`, tests). Aggregate input-vs-output:
+
+| File | Before (LOC) | Façade after (LOC) | Reduction |
+|---|---|---|---|
+| `nexus-core/src/executor/mod.rs` | 15,260 | 1,139 | -92.5% |
+| `nexus-core/src/executor/parser.rs` | 6,882 | 35 + 5 subfiles | -99.5% |
+| `nexus-core/src/lib.rs` | 5,564 | 104 | -98.1% |
+| `nexus-core/src/graph/correlation/mod.rs` | 4,638 | 2,313 | -50.1% |
+| `nexus-core/src/executor/planner.rs` | 4,254 | 393 | -90.8% |
+| `nexus-core/src/graph/correlation/data_flow.rs` | 3,004 | 1,625 | -45.9% |
+| `nexus-server/src/api/cypher.rs` | 2,965 | 518 | -82.5% |
+| `nexus-core/src/graph/algorithms.rs` | 2,560 | 220 | -91.4% |
+
+**New sub-modules created**:
+
+- `executor/{types, shared, context, engine}` + `executor/eval/{arithmetic,
+  helpers, predicate, projection, temporal}` + `executor/operators/{admin,
+  aggregate, create, dispatch, expand, filter, join, path, procedures,
+  project, scan, union, unwind}`.
+- `executor/parser/{ast, clauses, expressions, tokens, tests}`.
+- `executor/planner/{mod, queries, tests}`.
+- `engine/{mod, tests}` (moved out of `lib.rs`).
+- `graph/correlation/{query_executor, vectorizer_extractor, tests}`.
+- `graph/correlation/data_flow/{mod, layout, tests}`.
+- `graph/algorithms/{mod, traversal, tests}`.
+- `nexus-server/src/api/cypher/{mod, execute, commands, tests}`.
+
+**Benefits**:
+- Faster incremental builds — `rustc` re-checks far less code per touch.
+- Parallelisable PRs — feature work on `executor/operators/filter.rs`
+  no longer collides with `executor/operators/join.rs`.
+- Reviewable diffs — each module change is scoped to one responsibility.
+
+### 🛡️ Memory-Leak Hardening (2026-04-18)
+
+**Defensive limits + cleanup paths against unbounded memory growth.**
+
+Input validation and capped allocations across the full request lifecycle,
+plus a Docker-based memtest harness for regression detection.
+
+- **Executor hardcaps** — `MAX_INTERMEDIATE_ROWS` enforced in label
+  scans, all-nodes scans, expand paths, and variable-length path
+  expansion. Exceeding the cap returns `Error::OutOfMemory` deterministically.
+- **HTTP body size limit** — configurable `nexus-server` request body cap
+  prevents memory exhaustion via oversized Cypher payloads.
+- **HNSW `max_elements`** — now configurable per index, avoiding the
+  previous default over-allocation.
+- **GraphQL list resolvers** — relationship-list fields now require a
+  `limit` argument.
+- **Metric collector** — capped unique-key cardinality in `MetricCollector`
+  prevents metric label explosion in long-running servers.
+- **Cache tuning** — tighter defaults for the vectorizer cache and
+  intelligent query cache.
+- **Connection cleanup** — `ConnectionTracker::cleanup_stale_connections`
+  sweeps abandoned connection state periodically.
+- **Page cache observability** — eviction stall events logged before
+  returning errors so memory pressure is diagnosable.
+- **Initial mmap** — shrunk `graph_engine` startup allocation to reduce
+  RSS footprint on idle.
+- **Memtest harness** — `scripts/memtest/` (Dockerfile.memtest,
+  docker-compose.memtest.yml, run-all.sh, profile.sh, measure.sh) with
+  a hard memory cap so leaks surface as `OOMKilled` instead of thrashing
+  the host. `MALLOC_CONF` wired for jemalloc heap profiling via `jeprof`.
+
+Tuning and troubleshooting guidance in `docs/performance/MEMORY_TUNING.md`.
+
 ### ✅ Neo4j Compatibility Test Results - 100% Pass Rate (2025-12-01)
 
 **Latest compatibility test run: 299/300 tests passing (0 failed, 1 skipped)**

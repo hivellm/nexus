@@ -5,8 +5,8 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v0.12.0%20%7C%2097.99%25%20Compatibility-success.svg)
-![Tests](https://img.shields.io/badge/tests-2949%2B%20passing-success.svg)
+![Status](https://img.shields.io/badge/status-v0.12.0%20%7C%2099.67%25%20Compatibility-success.svg)
+![Tests](https://img.shields.io/badge/tests-2954%2B%20passing-success.svg)
 ![Coverage](https://img.shields.io/badge/coverage-70.39%25-yellow.svg)
 
 [Features](#-key-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -24,12 +24,13 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 **Production Ready!** 🚀
 
 - ✅ **~55% openCypher Compatibility** - Core clauses (MATCH, CREATE, MERGE, SET, DELETE, REMOVE, WHERE, RETURN, ORDER BY, LIMIT, SKIP, UNION, WITH, UNWIND, FOREACH) and ~60 functions
-- ✅ **97.99% Compatibility Tests** - 293/300 Neo4j compatibility tests passing + 2949+ unit tests (see [CHANGELOG.md](CHANGELOG.md) for details)
+- ✅ **99.67% Compatibility Tests** - 299/300 Neo4j compatibility tests passing + 2954+ unit tests (see [CHANGELOG.md](CHANGELOG.md) for details)
 - ✅ **19 GDS Procedures** - PageRank (standard, weighted, parallel), betweenness, eigenvector, Dijkstra, A*, Yen's k-paths, Louvain, label propagation, triangle count, clustering coefficients
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
 - ✅ **Official SDKs** - Rust, Python, TypeScript, Go, C#, n8n (30+ tests each)
-- ✅ **2949+ Tests Passing** - 100% success rate, 70%+ coverage
+- ✅ **Memory Hardened** - Input hardcaps, capped caches, cleanup paths, Docker memtest harness (see [docs/performance/MEMORY_TUNING.md](docs/performance/MEMORY_TUNING.md))
+- ✅ **2954+ Tests Passing** - 100% success rate, 70%+ coverage
 - ⚠️ **Known Limitations**: Constraints (UNIQUE, EXISTS), Advanced indexes (FULL-TEXT, POINT)
 
 See [Neo4j Compatibility Report](docs/NEO4J_COMPATIBILITY_REPORT.md) for complete details.
