@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧱 Engine Module Split (Tier 1.5) (2026-04-18)
+
+**`nexus-core/src/engine/mod.rs` was 4,636 LOC — the largest remaining
+source file in the tree after the Tier 1 + Tier 2 splits. Carved out
+into five focused submodules in four atomic commits.**
+
+```
+engine/mod.rs         4,636 → 3,624 LOC   (−1012, −21.8%)
+engine/config.rs      NEW → 45 LOC        — GraphStatistics, EngineConfig
+engine/stats.rs       NEW → 39 LOC        — EngineStats, HealthStatus, HealthState
+engine/clustering.rs  NEW → 135 LOC       — cluster_nodes + 5 wrappers + convert_to_simple_graph
+engine/maintenance.rs NEW → 193 LOC       — knn_search, export_to_json, get_graph_statistics,
+                                              clear_all_data, validate_graph, graph_health_check,
+                                              health_check
+engine/crud.rs        NEW → 651 LOC       — create/get/update/delete nodes + relationships +
+                                              index_node_properties + apply_pending_index_updates +
+                                              NodeWriteState (Cypher write-pass staging)
+```
+
+Pure refactor — public API surface unchanged (every method still
+resolves as `Engine::*` via Rust's multi-file `impl` blocks), all
+2,567 nexus-core tests green across every split commit, pre-commit
+hooks (fmt + clippy deny-warnings) enforced on each step.
+
+mod.rs remains the largest file in the tree; the residual ~2,400 LOC
+are the Cypher execution core (33 private helpers with shared state
+needing a deeper reshape than a pure file split). Tracked under
+`phase1_split-oversized-modules` Tier 3 for a follow-up.
+
 ### ⚡ SIMD Runtime-Dispatched Kernels + Parser O(N²) Fix (2026-04-18)
 
 **New `nexus-core::simd` module — always compiled, runtime-dispatched,

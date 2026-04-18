@@ -3,6 +3,7 @@
 - [x] 1.2 Split `nexus-core/src/executor/parser.rs` (6,882 LOC) into `parser/{ast, clauses, expressions, tokens, tests}.rs` — façade 35 LOC + 5 subfiles (-99.5%)
 - [x] 1.3 Split `nexus-core/src/lib.rs` (5,564 LOC) — extract `types.rs`, `error.rs`, `config.rs`, `engine/{mod,tests}` — lib.rs now 105 LOC (-98.1%)
 - [x] 1.4 Split `nexus-core/src/graph/correlation/mod.rs` (4,638 LOC) into `correlation/{query_executor, vectorizer_extractor, tests}.rs` + sibling submodules — mod.rs now 2,313 LOC (-50.1%)
+- [x] 1.5 Split `nexus-core/src/engine/mod.rs` (4,636 LOC) into `engine/{config, stats, clustering, maintenance, crud}.rs` — mod.rs now 3,624 LOC (-21.8%); 5 new files (45+39+135+193+651 LOC). The remaining Cypher-execution core (~2,400 LOC of 33 cross-referencing private helpers) is tracked separately under Tier 3 as it needs a deeper state-reshape rather than a pure file split.
 
 ## 2. Tier 2 — High priority (~12k LOC)
 - [x] 2.1 Split `nexus-core/src/executor/planner.rs` (4,254 LOC) into `planner/{mod, queries, tests}.rs` — façade 393 LOC (-90.8%)
