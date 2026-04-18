@@ -150,6 +150,66 @@ fn generate_secret(&self) -> String {
 - Consider remote log shipping for disaster recovery
 - Current implementation is secure for single-server deployments
 
+### Audit-log failure policy (fail-open)
+
+When an audit-log *write* itself returns `Err` (disk full, fsync failure,
+rotated-file handle gone, serde error, etc.), Nexus applies a **fail-open
+with metric** policy:
+
+1. The originating request is **served with its original response status**
+   — a failed authentication still returns `401`, a rate-limit rejection
+   still returns `429`, and a successful write is still reported as
+   successful. We never convert an auth/write failure into a `500` just
+   because the audit sink broke.
+2. A process-global counter `audit_log_failures_total` is incremented
+   (`nexus_core::auth::audit_log_failures_total()`).
+3. A structured `tracing::error!(target = "audit_log", context, error)`
+   event is emitted with a short static `context` tag identifying which
+   call site dropped the event (`missing_api_key`, `invalid_api_key`,
+   `verify_api_key_error`, `rate_limit_exceeded`, `set_property_success`,
+   `set_property_failure`, `set_label_success`, `set_label_failure`).
+4. The counter is exported at `GET /prometheus` as
+   `nexus_audit_log_failures_total` (HELP text reminds operators to
+   alarm when it moves).
+
+**Rationale**: converting every audit-sink glitch into a `500` gives an
+attacker who can cause I/O pressure (disk fill, permission flap) a lever
+to mass-reject legitimate traffic. The fail-open path keeps the user-
+visible contract stable while exposing the condition to operators via
+Prometheus, so alarms fire and an on-call engineer can investigate
+without the primary data plane being knocked over.
+
+**Operator alert template** (PromQL):
+
+```promql
+increase(nexus_audit_log_failures_total[5m]) > 0
+```
+
+If this alert fires repeatedly, audit events are being dropped — escalate
+to platform/security and inspect the audit-log volume (disk space,
+permissions, rotation lock files).
+
+**Not fail-closed**: this policy deliberately does NOT reject the request
+when the audit sink fails. A future compliance regime that requires
+fail-closed on an authenticated *success* path (e.g. "block writes when
+audit is down") should be handled by a new policy guard specifically at
+the success-path audit call site, not by changing the fail-open default.
+
+**Code locations**:
+- Policy helper: `nexus-core/src/auth/middleware.rs`
+  (`record_audit_log_failure`, `audit_log_failures_total`)
+- Call sites (auth): `nexus-core/src/auth/middleware.rs`
+  — missing/invalid/errored API key, rate-limit exceeded.
+- Call sites (writes): `nexus-server/src/api/cypher/execute.rs`
+  — `SET`-property and `SET`-label success/failure events.
+- Metric export: `nexus-server/src/api/prometheus.rs`
+  (`nexus_audit_log_failures_total`).
+
+**Regression tests**:
+- `auth::middleware::tests::audit_log_failure_counter_bumps_once_per_call`
+- `auth::middleware::tests::record_audit_log_failure_does_not_panic_on_any_display_impl`
+- `api::prometheus::tests::audit_log_failures_metric_is_exported`
+
 ## 6. Permission System
 
 ### Implementation Review

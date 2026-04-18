@@ -11,10 +11,69 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
+
+/// Monotonic counter of audit-log write failures observed by the auth
+/// middleware. Exposed via [`audit_log_failures_total`] so `nexus-server`
+/// can surface it in the Prometheus `/prometheus` endpoint.
+///
+/// This is the "fail-open" half of the audit-log failure policy documented
+/// in `docs/SECURITY_AUDIT.md`: when `AuditLogger::log_authentication_failed`
+/// returns `Err`, the middleware still returns the original 401/429/500 to
+/// the caller (we never convert an auth failure into a 500 just because the
+/// audit sink broke) but bumps this counter and emits a `tracing::error!` so
+/// operators can alarm on the condition.
+static AUDIT_LOG_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// Read the current audit-log failure count. Exposed for the Prometheus
+/// endpoint and for tests.
+pub fn audit_log_failures_total() -> u64 {
+    AUDIT_LOG_FAILURES.load(Ordering::Relaxed)
+}
+
+/// Record that a single audit-log write failed. Bumps the
+/// [`audit_log_failures_total`] counter and emits a `tracing::error!` with
+/// the underlying error.
+///
+/// Use this helper whenever an audit-log write returns `Err` on a code path
+/// that **must not** fail the request as a result (the fail-open half of
+/// the policy in `docs/SECURITY_AUDIT.md`). The typical pattern is:
+///
+/// ```ignore
+/// if let Err(e) = audit_logger.log_write_operation(params).await {
+///     nexus_core::auth::record_audit_log_failure("set_property", &e);
+/// }
+/// ```
+///
+/// `context` is a short static tag identifying *which* call site produced
+/// the failure — this lets operators correlate counter movement with a
+/// specific audit event class without exposing per-request data.
+pub fn record_audit_log_failure(context: &'static str, err: &dyn std::fmt::Display) {
+    AUDIT_LOG_FAILURES.fetch_add(1, Ordering::Relaxed);
+    tracing::error!(
+        target: "audit_log",
+        context,
+        error = %err,
+        "audit log write failed — the originating request was still served \
+         with its original response status, but the event was not persisted \
+         to the audit log (see docs/SECURITY_AUDIT.md)"
+    );
+}
+
+#[doc(hidden)]
+/// Test-only helper that lets unit tests reset the global counter between
+/// cases. NOT part of the public API — gated behind `#[cfg(test)]` so it
+/// cannot be called from non-test builds.
+#[cfg(test)]
+pub(crate) fn reset_audit_log_failures_for_test() {
+    AUDIT_LOG_FAILURES.store(0, Ordering::Relaxed);
+}
 
 /// Authentication context for the current request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,9 +395,12 @@ pub async fn auth_middleware_handler(
                     .and_then(|h| h.to_str().ok())
                     .map(|s| s.to_string());
 
-                let _ = audit_logger
+                if let Err(e) = audit_logger
                     .log_authentication_failed(None, "No API key provided".to_string(), ip_address)
-                    .await;
+                    .await
+                {
+                    record_audit_log_failure("missing_api_key", &e);
+                }
             }
 
             return Err((
@@ -364,13 +426,16 @@ pub async fn auth_middleware_handler(
                 // Try to extract username from API key if possible (for logging)
                 let username = None; // API keys don't have usernames directly
 
-                let _ = audit_logger
+                if let Err(e) = audit_logger
                     .log_authentication_failed(
                         username,
                         "Invalid or expired API key".to_string(),
                         ip_address,
                     )
-                    .await;
+                    .await
+                {
+                    record_audit_log_failure("invalid_api_key", &e);
+                }
             }
 
             return Err((
@@ -388,13 +453,16 @@ pub async fn auth_middleware_handler(
                     .and_then(|h| h.to_str().ok())
                     .map(|s| s.to_string());
 
-                let _ = audit_logger
+                if let Err(audit_err) = audit_logger
                     .log_authentication_failed(
                         None,
                         format!("Authentication error: {}", e),
                         ip_address,
                     )
-                    .await;
+                    .await
+                {
+                    record_audit_log_failure("verify_api_key_error", &audit_err);
+                }
             }
 
             return Err((
@@ -427,13 +495,16 @@ pub async fn auth_middleware_handler(
                     .and_then(|h| h.to_str().ok())
                     .map(|s| s.to_string());
 
-                let _ = audit_logger
+                if let Err(e) = audit_logger
                     .log_authentication_failed(
                         None,
                         format!("Rate limit exceeded for API key {}", api_key.id),
                         ip_address,
                     )
-                    .await;
+                    .await
+                {
+                    record_audit_log_failure("rate_limit_exceeded", &e);
+                }
             }
 
             return Err((
@@ -938,5 +1009,63 @@ mod tests {
         // Entries should be cleaned up, new requests should work
         let result = rate_limiter.check_rate_limit("key1").await;
         assert!(result.allowed);
+    }
+
+    // --------------------------------------------------------------------
+    // Audit-log fail-open policy — regression tests.
+    //
+    // These tests run serially because `AUDIT_LOG_FAILURES` is a process-
+    // global counter (serde::Serialize isn't required here; we're asserting
+    // on the counter delta). Each test resets the counter via
+    // `reset_audit_log_failures_for_test()` before asserting, which is the
+    // idiomatic pattern for process-global observability counters.
+    // --------------------------------------------------------------------
+
+    #[test]
+    fn audit_log_failure_counter_bumps_once_per_call() {
+        super::reset_audit_log_failures_for_test();
+        assert_eq!(
+            super::audit_log_failures_total(),
+            0,
+            "counter must start at zero after reset"
+        );
+
+        let err = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
+        super::record_audit_log_failure("test_site", &err);
+        super::record_audit_log_failure("test_site", &err);
+        super::record_audit_log_failure("other_site", &err);
+
+        assert_eq!(
+            super::audit_log_failures_total(),
+            3,
+            "three calls to record_audit_log_failure should yield 3 increments",
+        );
+    }
+
+    // Proves the core fail-open guarantee: an audit-log write that returns
+    // Err must NEVER panic, swallow the error silently, or otherwise
+    // interrupt the calling flow. The observable side effect is exactly
+    // the counter bump + the tracing::error! (the tracing event is
+    // asserted by construction of `record_audit_log_failure`).
+    #[test]
+    fn record_audit_log_failure_does_not_panic_on_any_display_impl() {
+        super::reset_audit_log_failures_for_test();
+
+        // Exotic error types the AuditLogger might actually return.
+        struct CustomErr(&'static str);
+        impl std::fmt::Display for CustomErr {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "custom: {}", self.0)
+            }
+        }
+
+        super::record_audit_log_failure("anyhow_like", &anyhow::anyhow!("boom"));
+        super::record_audit_log_failure(
+            "io_error",
+            &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no"),
+        );
+        super::record_audit_log_failure("custom", &CustomErr("xyz"));
+
+        assert_eq!(super::audit_log_failures_total(), 3);
     }
 }

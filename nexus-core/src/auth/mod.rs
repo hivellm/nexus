@@ -25,7 +25,9 @@ pub use chatroom_permissions::{
 };
 pub use database_permissions::{DatabaseACL, DatabasePermission, check_database_access};
 pub use jwt::{JwtConfig, JwtManager, TokenPair};
-pub use middleware::{AuthContext, AuthError, AuthMiddleware};
+pub use middleware::{
+    AuthContext, AuthError, AuthMiddleware, audit_log_failures_total, record_audit_log_failure,
+};
 pub use password::{hash_password, verify_password};
 pub use permissions::{Permission, PermissionSet};
 pub use queue_permissions::{

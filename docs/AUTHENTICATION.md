@@ -473,6 +473,24 @@ let audit_config = AuditConfig {
 };
 ```
 
+### Audit-log failure handling (fail-open)
+
+If an audit-log *write* itself fails (disk full, fsync failure, etc.),
+Nexus preserves the user-visible response status and exposes the
+condition via the `nexus_audit_log_failures_total` Prometheus counter
+plus a `tracing::error!(target = "audit_log")` event. The HTTP response
+is **not** converted to `500` because doing so would hand an attacker
+who can cause I/O pressure a lever to mass-reject legitimate traffic.
+
+Alarm on the counter:
+
+```promql
+increase(nexus_audit_log_failures_total[5m]) > 0
+```
+
+Full rationale, call-site inventory, and regression-test pointers live in
+`docs/SECURITY_AUDIT.md §5 "Audit-log failure policy (fail-open)"`.
+
 ## Security Best Practices
 
 ### 1. Change Default Root Password

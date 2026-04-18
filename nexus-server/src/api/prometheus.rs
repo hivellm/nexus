@@ -85,6 +85,12 @@ impl PrometheusMetrics {
         let cache_hits = self.cache_hits.load(Ordering::Relaxed);
         let cache_misses = self.cache_misses.load(Ordering::Relaxed);
         let active_conns = self.active_connections.load(Ordering::Relaxed);
+        // Pulled directly from the static counter inside
+        // `nexus_core::auth::middleware` — bumped every time an audit-log
+        // write fails on a failed-auth path. Fail-open policy (see
+        // docs/SECURITY_AUDIT.md): the request still returns 401/429/500,
+        // but ops can alarm on this counter.
+        let audit_log_failures = nexus_core::auth::audit_log_failures_total();
 
         let avg_time = if total > 0 {
             total_time as f64 / total as f64
@@ -135,6 +141,10 @@ nexus_cache_hit_rate {cache_hit_rate}
 # HELP nexus_active_connections Current number of active connections
 # TYPE nexus_active_connections gauge
 nexus_active_connections {active_conns}
+
+# HELP nexus_audit_log_failures_total Audit-log write failures observed by the auth middleware (fail-open: request still returned original auth error, but the event was not persisted). Alarm when this counter moves. See docs/SECURITY_AUDIT.md.
+# TYPE nexus_audit_log_failures_total counter
+nexus_audit_log_failures_total {audit_log_failures}
 "#,
             total = total,
             successful = successful,
@@ -144,7 +154,8 @@ nexus_active_connections {active_conns}
             cache_hits = cache_hits,
             cache_misses = cache_misses,
             cache_hit_rate = cache_hit_rate,
-            active_conns = active_conns
+            active_conns = active_conns,
+            audit_log_failures = audit_log_failures
         )
     }
 }
@@ -196,5 +207,28 @@ mod tests {
         assert!(formatted.contains("nexus_queries_failed 1"));
         assert!(formatted.contains("nexus_cache_hits_total 1"));
         assert!(formatted.contains("nexus_cache_misses_total 1"));
+    }
+
+    // Confirms the new audit-log failure counter is exported with the
+    // stable `nexus_audit_log_failures_total` name + HELP/TYPE metadata so
+    // operators can reliably scrape and alarm on it (see
+    // docs/SECURITY_AUDIT.md).
+    #[test]
+    fn audit_log_failures_metric_is_exported() {
+        let metrics = PrometheusMetrics::new();
+        let formatted = metrics.format_prometheus();
+
+        assert!(
+            formatted.contains("# TYPE nexus_audit_log_failures_total counter"),
+            "metric must be advertised as a Prometheus counter so PromQL rate() works",
+        );
+        assert!(
+            formatted.contains("nexus_audit_log_failures_total "),
+            "counter value line must be present in the exported metrics",
+        );
+        assert!(
+            formatted.contains("Alarm when this counter moves"),
+            "HELP text must steer ops toward the right alert action",
+        );
     }
 }

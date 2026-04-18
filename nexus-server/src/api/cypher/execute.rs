@@ -628,20 +628,29 @@ pub async fn execute_cypher(
                                                 // Log failed SET operation
                                                 let (user_id, username, api_key_id) =
                                                     get_actor_info();
-                                                let _ = server.audit_logger.log_write_operation(
-                                                    nexus_core::auth::WriteOperationParams {
-                                                        actor_user_id: user_id,
-                                                        actor_username: username,
-                                                        api_key_id,
-                                                        operation_type: "SET".to_string(),
-                                                        entity_type: "PROPERTY".to_string(),
-                                                        entity_id: Some(node_id.to_string()),
-                                                        cypher_query: Some(request.query.clone()),
-                                                        result: nexus_core::auth::AuditResult::Failure {
-                                                            error: format!("Failed to update node {}: {}", node_id, e),
+                                                if let Err(audit_err) = server
+                                                    .audit_logger
+                                                    .log_write_operation(
+                                                        nexus_core::auth::WriteOperationParams {
+                                                            actor_user_id: user_id,
+                                                            actor_username: username,
+                                                            api_key_id,
+                                                            operation_type: "SET".to_string(),
+                                                            entity_type: "PROPERTY".to_string(),
+                                                            entity_id: Some(node_id.to_string()),
+                                                            cypher_query: Some(request.query.clone()),
+                                                            result: nexus_core::auth::AuditResult::Failure {
+                                                                error: format!("Failed to update node {}: {}", node_id, e),
+                                                            },
                                                         },
-                                                    },
-                                                ).await;
+                                                    )
+                                                    .await
+                                                {
+                                                    nexus_core::auth::record_audit_log_failure(
+                                                        "set_property_failure",
+                                                        &audit_err,
+                                                    );
+                                                }
                                             } else {
                                                 tracing::info!(
                                                     "SET {}.{} on node {}",
@@ -653,18 +662,27 @@ pub async fn execute_cypher(
                                                 // Log successful SET operation
                                                 let (user_id, username, api_key_id) =
                                                     get_actor_info();
-                                                let _ = server.audit_logger.log_write_operation(
-                                                    nexus_core::auth::WriteOperationParams {
-                                                        actor_user_id: user_id,
-                                                        actor_username: username,
-                                                        api_key_id,
-                                                        operation_type: "SET".to_string(),
-                                                        entity_type: "PROPERTY".to_string(),
-                                                        entity_id: Some(node_id.to_string()),
-                                                        cypher_query: Some(request.query.clone()),
-                                                        result: nexus_core::auth::AuditResult::Success,
-                                                    },
-                                                ).await;
+                                                if let Err(audit_err) = server
+                                                    .audit_logger
+                                                    .log_write_operation(
+                                                        nexus_core::auth::WriteOperationParams {
+                                                            actor_user_id: user_id,
+                                                            actor_username: username,
+                                                            api_key_id,
+                                                            operation_type: "SET".to_string(),
+                                                            entity_type: "PROPERTY".to_string(),
+                                                            entity_id: Some(node_id.to_string()),
+                                                            cypher_query: Some(request.query.clone()),
+                                                            result: nexus_core::auth::AuditResult::Success,
+                                                        },
+                                                    )
+                                                    .await
+                                                {
+                                                    nexus_core::auth::record_audit_log_failure(
+                                                        "set_property_success",
+                                                        &audit_err,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -712,20 +730,29 @@ pub async fn execute_cypher(
                                                 // Log failed SET operation
                                                 let (user_id, username, api_key_id) =
                                                     get_actor_info();
-                                                let _ = server.audit_logger.log_write_operation(
-                                                    nexus_core::auth::WriteOperationParams {
-                                                        actor_user_id: user_id,
-                                                        actor_username: username,
-                                                        api_key_id,
-                                                        operation_type: "SET".to_string(),
-                                                        entity_type: "LABEL".to_string(),
-                                                        entity_id: Some(node_id.to_string()),
-                                                        cypher_query: Some(request.query.clone()),
-                                                        result: nexus_core::auth::AuditResult::Failure {
-                                                            error: format!("Failed to update node {} with label {}: {}", node_id, label, e),
+                                                if let Err(audit_err) = server
+                                                    .audit_logger
+                                                    .log_write_operation(
+                                                        nexus_core::auth::WriteOperationParams {
+                                                            actor_user_id: user_id,
+                                                            actor_username: username,
+                                                            api_key_id,
+                                                            operation_type: "SET".to_string(),
+                                                            entity_type: "LABEL".to_string(),
+                                                            entity_id: Some(node_id.to_string()),
+                                                            cypher_query: Some(request.query.clone()),
+                                                            result: nexus_core::auth::AuditResult::Failure {
+                                                                error: format!("Failed to update node {} with label {}: {}", node_id, label, e),
+                                                            },
                                                         },
-                                                    },
-                                                ).await;
+                                                    )
+                                                    .await
+                                                {
+                                                    nexus_core::auth::record_audit_log_failure(
+                                                        "set_label_failure",
+                                                        &audit_err,
+                                                    );
+                                                }
                                             } else {
                                                 tracing::info!(
                                                     "SET {}:{} on node {}",
@@ -737,18 +764,27 @@ pub async fn execute_cypher(
                                                 // Log successful SET operation
                                                 let (user_id, username, api_key_id) =
                                                     get_actor_info();
-                                                let _ = server.audit_logger.log_write_operation(
-                                                    nexus_core::auth::WriteOperationParams {
-                                                        actor_user_id: user_id,
-                                                        actor_username: username,
-                                                        api_key_id,
-                                                        operation_type: "SET".to_string(),
-                                                        entity_type: "LABEL".to_string(),
-                                                        entity_id: Some(node_id.to_string()),
-                                                        cypher_query: Some(request.query.clone()),
-                                                        result: nexus_core::auth::AuditResult::Success,
-                                                    },
-                                                ).await;
+                                                if let Err(audit_err) = server
+                                                    .audit_logger
+                                                    .log_write_operation(
+                                                        nexus_core::auth::WriteOperationParams {
+                                                            actor_user_id: user_id,
+                                                            actor_username: username,
+                                                            api_key_id,
+                                                            operation_type: "SET".to_string(),
+                                                            entity_type: "LABEL".to_string(),
+                                                            entity_id: Some(node_id.to_string()),
+                                                            cypher_query: Some(request.query.clone()),
+                                                            result: nexus_core::auth::AuditResult::Success,
+                                                        },
+                                                    )
+                                                    .await
+                                                {
+                                                    nexus_core::auth::record_audit_log_failure(
+                                                        "set_label_success",
+                                                        &audit_err,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
