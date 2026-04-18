@@ -10,9 +10,9 @@
 - [x] 1.9 Unit tests: frames exceeding `max_frame_bytes` reject with a specific error
 
 ## 2. Dispatcher scaffolding
-- [ ] 2.1 Create `rpc/dispatch/mod.rs` with `dispatch(state, req) -> Response` and sub-modules
-- [ ] 2.2 Implement argument helpers: `arg_str`, `arg_bytes`, `arg_int`, `arg_float`, `arg_map`, `arg_array`
-- [ ] 2.3 Top-level `run(state, cmd, args)` matches on uppercased command and routes to sub-modules
+- [x] 2.1 Create `rpc/dispatch/mod.rs` with `dispatch(state, req) -> Response` and sub-modules
+- [x] 2.2 Implement argument helpers: `arg_str`, `arg_bytes`, `arg_int`, `arg_float`, `arg_map`, `arg_array`
+- [x] 2.3 Top-level `run(state, cmd, args)` matches on uppercased command and routes to sub-modules
 
 ## 3. Cypher dispatch
 - [ ] 3.1 Implement `CYPHER` command in `dispatch/cypher.rs`: args = `[query: Str, params: Map?]`
@@ -39,10 +39,10 @@
 - [ ] 6.1 `INGEST` — args `[nodes: Array<Map>, rels: Array<Map>]`, returns per-batch stats
 - [ ] 6.2 `LABELS` / `REL_TYPES` / `PROPERTY_KEYS` / `INDEXES` — listing commands
 - [ ] 6.3 `DB_LIST` / `DB_CREATE` / `DB_DROP` / `DB_USE` — multi-database management
-- [ ] 6.4 `PING` returns `"PONG"`, `HELLO` returns `{server: "nexus", version, proto: 1}`
-- [ ] 6.5 `AUTH` — args `[api_key: Str]` OR `[username: Str, password: Str]`; sets per-connection `authenticated = true`
+- [x] 6.4 `PING` returns `"PONG"`, `HELLO` returns `{server: "nexus", version, proto: 1}`
+- [x] 6.5 `AUTH` — args `[api_key: Str]` OR `[username: Str, password: Str]`; sets per-connection `authenticated = true`
 - [ ] 6.6 `STATS` / `HEALTH` — read-only observability commands
-- [ ] 6.7 Reject unauthenticated commands when `auth.required && !authenticated` (except `PING`/`HELLO`/`AUTH`/`QUIT`)
+- [x] 6.7 Reject unauthenticated commands when `auth.required && !authenticated` (except `PING`/`HELLO`/`AUTH`/`QUIT`)
 
 ## 7. TCP server and accept loop
 - [ ] 7.1 Implement `spawn_rpc_listener(state, addr)` in `rpc/server.rs` (copy Synap's shape)

@@ -4,10 +4,11 @@
 //! SDK can depend on them without dragging in the whole server. This
 //! module hosts only server-specific pieces:
 //!
-//! - [`server`] — TCP accept loop, per-connection read/write tasks.
 //! - [`dispatch`] — command routing onto the shared `NexusServer` state.
-//!
-//! Both are added in later phases of `phase1_nexus-rpc-binary-protocol`.
+//! - `server` — TCP accept loop, per-connection read/write tasks (added
+//!   in Phase 7 of `phase1_nexus-rpc-binary-protocol`).
+
+pub mod dispatch;
 
 // Re-export the shared wire surface for ergonomic intra-server use so
 // handlers can write `use crate::protocol::rpc::NexusValue;` instead of
