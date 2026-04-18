@@ -13,7 +13,7 @@
 
 ## 3. Tier 3 — Medium priority (~11k LOC)
 - [x] 3.1 Split `nexus-core/tests/regression_extended.rs` (2,184 LOC) into `regression_extended_{create,match,relationships,functions,union,engine,simple}.rs` — 7 files, 140-583 LOC each; 118 tests all passing
-- [ ] 3.2 Split `nexus-core/tests/neo4j_compatibility_test.rs` (2,103 LOC) by Neo4j section
+- [x] 3.2 Split `nexus-core/tests/neo4j_compatibility_test.rs` (2,103 LOC) into `neo4j_compatibility_{core,extended,additional}_test.rs` — 3 files (317/1063/825 LOC); 109 tests all passing
 - [ ] 3.3 Split `tests/integration_test.rs` (2,090 LOC) into `integration/{crud,transactions,indexes}.rs`
 - [ ] 3.4 Split `nexus-core/src/graph/correlation/pattern_recognition.rs` (2,008 LOC) into `patterns/{detector,rules,matcher}.rs`
 - [ ] 3.5 Split `nexus-server/src/api/streaming.rs` (1,726 LOC) into `streaming/{sse,websocket,chunking}.rs`

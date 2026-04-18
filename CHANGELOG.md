@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧱 Neo4j Compatibility Test Split (Tier 3.2) (2026-04-18)
+
+**`nexus-core/tests/neo4j_compatibility_test.rs` was 2,103 LOC in a single
+`#[serial]`-gated integration binary. The whole file ran end-to-end on every
+test invocation even though only one section had changed. Split by semantic
+section into three independent binaries.**
+
+```
+neo4j_compatibility_test.rs                 2,103 LOC → removed
+neo4j_compatibility_core_test.rs            NEW →  317 LOC — 7 fixture-driven tests
+                                            (multi-label MATCH, UNION, bidirectional
+                                             relationships, property access). Hosts
+                                             the shared `setup_test_data` fixture.
+neo4j_compatibility_extended_test.rs        NEW → 1,063 LOC — 34 tests covering
+                                             UNION variants, labels()/keys()/type(),
+                                             DISTINCT, ORDER BY with UNION, multi-label
+                                             aggregations + the count(*) suite (8 tests).
+neo4j_compatibility_additional_test.rs      NEW →  825 LOC — 68 numbered
+                                             `neo4j_compat_*` / `neo4j_test_*`
+                                             micro-scenarios (count/labels/keys/id/type
+                                             / LIMIT / DISTINCT / property types).
+```
+
+Pure refactor — every test body is byte-identical to the original, `#[serial]`
+gating preserved, same helper `execute_query` function duplicated in each
+file. `setup_test_data` lives only in `core_test.rs` (the only caller).
+
+All 109 tests pass (7 + 34 + 68) under
+`cargo +nightly test --package nexus-core --test neo4j_compatibility_*_test`;
+clippy warning-clean.
+
+**Benefits**:
+- Granular test targeting — `cargo test --test neo4j_compatibility_core_test`
+  runs only the 7 fixture-driven scenarios (~0.3s).
+- Parallel binary compilation — the three binaries link independently.
+- Each file is under 1,100 LOC, well under the 1,500 LOC target.
+
 ### 🧱 Regression Test Split (Tier 3.1) (2026-04-18)
 
 **`nexus-core/tests/regression_extended.rs` was 2,184 LOC covering seven
