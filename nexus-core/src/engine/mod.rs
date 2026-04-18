@@ -20,43 +20,14 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub mod config;
+pub mod stats;
+
 #[cfg(test)]
 mod tests;
 
-/// Graph statistics for analysis and monitoring
-#[derive(Debug, Clone, Default)]
-pub struct GraphStatistics {
-    /// Total number of nodes
-    pub node_count: u64,
-    /// Total number of relationships
-    pub relationship_count: u64,
-    /// Count of nodes per label
-    pub label_counts: std::collections::HashMap<String, u64>,
-    /// Count of relationships per type
-    pub relationship_type_counts: std::collections::HashMap<String, u64>,
-}
-
-/// Tunable construction parameters for [`Engine`].
-///
-/// Holds the runtime-configurable knobs that used to be hardcoded inside
-/// `Engine::with_data_dir`. Call sites that need to honour a loaded YAML
-/// config should populate this explicitly via
-/// [`Engine::with_data_dir_and_config`]; `Engine::with_data_dir` stays as
-/// a thin wrapper that picks up [`EngineConfig::default`].
-#[derive(Debug, Clone)]
-pub struct EngineConfig {
-    /// Page cache capacity in 8 KB pages. Historical default was 1024
-    /// (8 MB), which is tiny for any real workload but safe on cold start.
-    pub page_cache_capacity: usize,
-}
-
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self {
-            page_cache_capacity: 1024,
-        }
-    }
-}
+pub use config::{EngineConfig, GraphStatistics};
+pub use stats::{EngineStats, HealthState, HealthStatus};
 
 /// Graph database engine
 pub struct Engine {
@@ -4582,35 +4553,6 @@ impl Engine {
 
         Ok(())
     }
-}
-
-/// Engine statistics
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct EngineStats {
-    pub nodes: u64,
-    pub relationships: u64,
-    pub labels: u64,
-    pub rel_types: u64,
-    pub page_cache_hits: u64,
-    pub page_cache_misses: u64,
-    pub wal_entries: u64,
-    pub active_transactions: u64,
-    pub cache_stats: cache::CacheStats,
-}
-
-/// Health status
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct HealthStatus {
-    pub overall: HealthState,
-    pub components: std::collections::HashMap<String, HealthState>,
-}
-
-/// Health state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum HealthState {
-    Healthy,
-    Unhealthy,
-    Degraded,
 }
 
 impl Default for Engine {
