@@ -5,8 +5,10 @@
 
 # Rust
 target/
-Cargo.lock
 **/*.rs.bk
+# Note: `Cargo.lock` is intentionally NOT ignored — the Dockerfile's cargo-chef
+# recipe stage `COPY Cargo.toml Cargo.lock ./` requires it. Excluding it makes
+# `docker build` fail with "failed to compute cache key ... /Cargo.lock not found".
 
 # IDE
 .vscode/
