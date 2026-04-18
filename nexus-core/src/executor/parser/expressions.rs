@@ -467,9 +467,15 @@ impl CypherParser {
         }
     }
 
-    /// Peek character at specific offset
+    /// Peek the character `offset` characters ahead of `self.pos`.
+    ///
+    /// Slicing from `self.pos` first (an O(1) byte-slice op) and then
+    /// walking `offset` chars keeps the cost proportional to `offset`
+    /// rather than `self.pos + offset` — a measurable win for the
+    /// two-char lookahead patterns that drive operator detection
+    /// (`==`, `!=`, `..`, …).
     pub(super) fn peek_char_at(&self, offset: usize) -> Option<char> {
-        self.input.chars().nth(self.pos + offset)
+        self.input[self.pos..].chars().nth(offset)
     }
 
     /// Parse primary expression

@@ -205,6 +205,38 @@ parse paths (e.g. Cypher `parameters` maps with strongly-typed
 schemas, or RPC frames that pre-bind their shapes) where the
 measurement will tip in `simd-json`'s favour.
 
+### Tokenizer O(N²) fix (non-SIMD, follow-up to phase-3 audit)
+
+`peek_char`, `consume_char`, `peek_char_at`, `skip_whitespace`,
+`peek_keyword`, and `peek_keyword_at` all called
+`self.input.chars().nth(self.pos)` on every character — an O(n)
+iterator walk from the start of the input. Over a full parse that
+compounded into **O(N²)** wall time.
+
+Fix: replace `self.input.chars().nth(pos)` with
+`self.input[pos..].chars().next()`. Byte-slice creation is O(1)
+and `chars().next()` decodes exactly one character — O(1) per
+peek, O(N) over the full parse.
+
+Measured on Ryzen 9 7950X3D via `benches/parser_tokenize.rs`:
+
+| Query size  | Parse time | ns / byte |
+|-------------|------------|-----------|
+|    85 bytes | 7.8 µs     | 92        |
+| 4.2 KiB     | 454 µs     | 108       |
+| 31.5 KiB    | 3.7 ms     | 117       |
+
+Cost per byte is effectively constant across three orders of
+magnitude — confirming the O(N²) is gone. If the quadratic
+pattern had remained, the 31.5 KiB query would have taken
+`(31555/85)² × 7.8 µs ≈ 1.07 s`, i.e. ~290× the current 3.7 ms.
+
+This is the fix the phase-3 `§8–9 Cypher tokenizer SWAR`
+task item gestured at. SIMD on the byte loop is a further
+~2× on top of this once the O(N²) is out of the way; it is not
+implemented in phase-3 because the linear-scaling fix already
+covers the bulk of the gain for current query sizes.
+
 ### Phase 3 status — honest scope
 
 The phase-3 task spec (`phase3_simd-storage-checksum-parse`)

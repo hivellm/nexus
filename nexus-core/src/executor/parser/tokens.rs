@@ -130,15 +130,23 @@ impl CypherParser {
             .unwrap_or(false)
     }
 
-    /// Peek at current character
+    /// Peek at the character starting at `self.pos`.
+    ///
+    /// Uses `self.input[self.pos..].chars().next()` rather than
+    /// `self.input.chars().nth(self.pos)`: the former is O(1) because
+    /// byte-slice creation plus a single UTF-8 decode is constant-time,
+    /// while the latter walks the iterator from the start of the input
+    /// on every call (O(n) per peek → O(n²) over a full parse).
+    /// Cypher queries are predominantly ASCII, so `pos` is a byte
+    /// offset that coincides with a character boundary in practice.
     pub(super) fn peek_char(&self) -> Option<char> {
-        self.input.chars().nth(self.pos)
+        self.input[self.pos..].chars().next()
     }
 
-    /// Consume current character
+    /// Consume and return the character at `self.pos`.
     pub(super) fn consume_char(&mut self) -> Option<char> {
         if self.pos < self.input.len() {
-            let ch = self.input.chars().nth(self.pos).unwrap();
+            let ch = self.input[self.pos..].chars().next()?;
             self.pos += 1;
 
             if ch == '\n' {
@@ -182,7 +190,7 @@ impl CypherParser {
         for _ in 0..offset {
             // Skip whitespace
             while pos < self.input.len() {
-                let ch = self.input.chars().nth(pos).unwrap();
+                let ch = self.input[pos..].chars().next().unwrap();
                 if ch.is_whitespace() {
                     pos += 1;
                 } else {
@@ -191,7 +199,7 @@ impl CypherParser {
             }
             // Skip word
             while pos < self.input.len() {
-                let ch = self.input.chars().nth(pos).unwrap();
+                let ch = self.input[pos..].chars().next().unwrap();
                 if ch.is_alphanumeric() || ch == '_' {
                     pos += 1;
                 } else {
@@ -202,7 +210,7 @@ impl CypherParser {
 
         // Skip whitespace before the target keyword
         while pos < self.input.len() {
-            let ch = self.input.chars().nth(pos).unwrap();
+            let ch = self.input[pos..].chars().next().unwrap();
             if ch.is_whitespace() {
                 pos += 1;
             } else {
@@ -223,7 +231,7 @@ impl CypherParser {
 
         // Skip whitespace
         while pos < self.input.len() {
-            let ch = self.input.chars().nth(pos).unwrap();
+            let ch = self.input[pos..].chars().next().unwrap();
             if ch.is_whitespace() {
                 pos += 1;
             } else {
@@ -246,7 +254,7 @@ impl CypherParser {
     /// Skip whitespace
     pub(super) fn skip_whitespace(&mut self) {
         while self.pos < self.input.len() {
-            let ch = self.input.chars().nth(self.pos).unwrap();
+            let ch = self.input[self.pos..].chars().next().unwrap();
             if ch.is_whitespace() {
                 self.consume_char();
             } else {

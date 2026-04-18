@@ -144,6 +144,10 @@ harness = false
 name = "simd_rle"
 harness = false
 
+[[bench]]
+name = "parser_tokenize"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../examples/hierarchical_call_graph_example.rs"
