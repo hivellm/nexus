@@ -19,33 +19,17 @@ use crate::NexusServer;
 use axum::extract::{Extension, Json, State};
 use nexus_core::auth::{Permission, middleware::AuthContext};
 use nexus_core::executor::parser::PropertyMap;
-use nexus_core::executor::{Executor, ExecutorShared, Query};
-use parking_lot::RwLock;
+use nexus_core::executor::{Executor, Query};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock as TokioRwLock;
 
-/// Global executor instance for concurrent execution
-/// Executor is Clone and contains only Arc internally, so no RwLock needed
-/// Multiple queries can clone the executor and execute in parallel
-static EXECUTOR: std::sync::OnceLock<Arc<Executor>> = std::sync::OnceLock::new();
-
-/// Global executor shared state for concurrent execution
-/// Note: Currently not used - Executor is cloned directly from EXECUTOR
-static _EXECUTOR_SHARED: std::sync::OnceLock<Arc<ExecutorShared>> = std::sync::OnceLock::new();
-
-/// Global engine instance for CREATE operations
-static ENGINE: std::sync::OnceLock<Arc<TokioRwLock<nexus_core::Engine>>> =
-    std::sync::OnceLock::new();
-
-/// Global database manager instance for multi-database support
-static DATABASE_MANAGER: std::sync::OnceLock<Arc<RwLock<nexus_core::database::DatabaseManager>>> =
-    std::sync::OnceLock::new();
-
-/// Initialize the executor (deprecated - use init_engine_with_executor instead)
-pub fn init_executor() -> anyhow::Result<Arc<Executor>> {
+/// Build the server's shared `Executor` with the intelligent query cache
+/// enabled. `main.rs` calls this once, wraps the result in an `Arc`, and
+/// hands it to `NexusServer::new` — every Axum handler reads the same
+/// `Arc` via the `State<Arc<NexusServer>>` extractor.
+pub fn build_executor() -> anyhow::Result<Executor> {
     let mut executor = Executor::default();
 
     // Enable intelligent query cache with default configuration
@@ -64,94 +48,14 @@ pub fn init_executor() -> anyhow::Result<Arc<Executor>> {
         cache_config.max_memory_bytes / (1024 * 1024)
     );
 
-    let executor_arc = Arc::new(executor);
-    EXECUTOR
-        .set(executor_arc.clone())
-        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
-    Ok(executor_arc)
-}
-
-/// Initialize the engine
-pub fn init_engine(engine: Arc<TokioRwLock<nexus_core::Engine>>) -> anyhow::Result<()> {
-    ENGINE
-        .set(engine.clone())
-        .map_err(|_| anyhow::anyhow!("Failed to set engine"))?;
-    Ok(())
-}
-
-/// Initialize the database manager for multi-database support
-pub fn init_database_manager(
-    manager: Arc<RwLock<nexus_core::database::DatabaseManager>>,
-) -> anyhow::Result<()> {
-    DATABASE_MANAGER
-        .set(manager.clone())
-        .map_err(|_| anyhow::anyhow!("Failed to set database manager"))?;
-
-    // Set the database manager on the executor if it's already initialized
-    if let Some(executor) = EXECUTOR.get() {
-        executor
-            .set_database_manager(manager)
-            .map_err(|_| anyhow::anyhow!("Failed to set database manager on executor"))?;
-    }
-
-    tracing::info!("Multi-database support enabled");
-    Ok(())
-}
-
-/// Get the database manager instance
-pub fn get_database_manager()
--> Option<Arc<parking_lot::RwLock<nexus_core::database::DatabaseManager>>> {
-    DATABASE_MANAGER.get().cloned()
-}
-
-/// Initialize both engine and executor with shared storage
-pub fn init_engine_with_executor(
-    engine: Arc<TokioRwLock<nexus_core::Engine>>,
-) -> anyhow::Result<()> {
-    // Set the engine
-    ENGINE
-        .set(engine.clone())
-        .map_err(|_| anyhow::anyhow!("Failed to set engine"))?;
-
-    // Create a wrapper for the executor that's inside the engine
-    // We'll use a pattern where we access the engine's executor via the engine itself
-    // For now, we'll still use a dummy executor for non-CREATE queries
-    // The real solution is to make CREATE and MATCH both use the engine
-    // Executor is Clone and contains only Arc internally, so no RwLock needed
-    let mut executor = Executor::default();
-
-    // Enable intelligent query cache with default configuration
-    let cache_config = nexus_core::query_cache::QueryCacheConfig {
-        max_entries: 10000,
-        max_memory_bytes: 512 * 1024 * 1024, // 512MB
-        default_ttl: std::time::Duration::from_secs(3600), // 1 hour
-        adaptive_ttl: true,
-        min_ttl: std::time::Duration::from_secs(30), // 30 seconds
-        max_ttl: std::time::Duration::from_secs(3600), // 1 hour
-    };
-    executor.enable_query_cache_with_config(cache_config.clone())?;
-    tracing::info!(
-        "Query cache enabled with config: max_entries={}, max_memory={}MB",
-        cache_config.max_entries,
-        cache_config.max_memory_bytes / (1024 * 1024)
-    );
-
-    let executor_arc = Arc::new(executor);
-    EXECUTOR
-        .set(executor_arc)
-        .map_err(|_| anyhow::anyhow!("Failed to set executor"))?;
-
-    Ok(())
-}
-
-/// Get the executor instance
-pub fn get_executor() -> Arc<Executor> {
-    EXECUTOR.get().expect("Executor not initialized").clone()
+    Ok(executor)
 }
 
 /// Get query cache statistics
-pub async fn get_cache_stats() -> impl axum::response::IntoResponse {
-    let executor = get_executor();
+pub async fn get_cache_stats(
+    State(server): State<Arc<NexusServer>>,
+) -> impl axum::response::IntoResponse {
+    let executor = server.executor.clone();
     if let Some(stats) = executor.get_query_cache_stats() {
         axum::Json(serde_json::json!({
             "cache_enabled": true,
@@ -183,9 +87,10 @@ pub struct ClearCacheRequest {
 
 /// Clear query cache endpoint
 pub async fn clear_cache(
+    State(server): State<Arc<NexusServer>>,
     Json(request): Json<ClearCacheRequest>,
 ) -> impl axum::response::IntoResponse {
-    let executor = get_executor();
+    let executor = server.executor.clone();
 
     if request.affected_labels.is_empty() && request.affected_properties.is_empty() {
         // Clear entire cache
@@ -211,8 +116,10 @@ pub async fn clear_cache(
 }
 
 /// Clean expired cache entries
-pub async fn clean_cache() -> impl axum::response::IntoResponse {
-    let executor = get_executor();
+pub async fn clean_cache(
+    State(server): State<Arc<NexusServer>>,
+) -> impl axum::response::IntoResponse {
+    let executor = server.executor.clone();
     executor.clean_query_cache();
     axum::Json(serde_json::json!({
         "success": true,

@@ -470,8 +470,9 @@ async fn create_vectorizer_test_server()
     let rbac = nexus_core::auth::RoleBasedAccessControl::new();
     let rbac_arc = Arc::new(TokioRwLock::new(rbac));
 
-    // Initialize API modules
-    api::data::init_engine(engine_arc.clone()).unwrap();
+    // Initialize API modules. `api::data::init_engine` was removed in
+    // phase2a — data handlers now take `State<Arc<NexusServer>>` and
+    // read directly from the server state constructed below.
     api::stats::init_engine(engine_arc.clone()).unwrap();
     api::health::init();
 

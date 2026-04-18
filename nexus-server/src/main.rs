@@ -130,25 +130,25 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     );
     let engine_arc = Arc::new(TokioRwLock::new(engine));
 
-    // Initialize executor
-    let executor = api::cypher::init_executor()?;
+    // Build the shared executor (with query cache enabled) that every
+    // handler reads via State<Arc<NexusServer>>.
+    let executor = Arc::new(api::cypher::build_executor()?);
 
-    // Share executor with other modules
+    // Share executor with knn API (not yet migrated to NexusServer — see
+    // phase2b_consolidate-oncelock-schema-stats-knn).
     api::knn::init_executor(executor.clone())?;
 
     // The Engine already contains Catalog, LabelIndex, KnnIndex etc.
     // For the new data endpoints, we'll use the Engine's components directly via engine_arc.
     // No need to create separate instances - they should all come from Engine.
 
-    // Initialize engine for all API modules that need it
-    api::data::init_engine(engine_arc.clone())?;
+    // Initialize engine for API modules still reading global state
+    // (stats — not yet migrated, see phase2b).
     api::stats::init_engine(engine_arc.clone())?;
-    // Initialize cypher engine
-    api::cypher::init_engine(engine_arc.clone())?;
-    // Initialize performance monitoring
+    // Initialize performance monitoring (not yet migrated, see phase2c)
     api::performance::init_performance_monitoring(1000, 1000, 100, 10)?; // 1000ms threshold, 1000 max slow queries, 100 plan cache size, 10MB memory
 
-    // Initialize MCP tool performance monitoring
+    // Initialize MCP tool performance monitoring (not yet migrated, see phase2c)
     api::mcp_performance::init_mcp_performance_monitoring(
         500,  // 500ms threshold for slow tools
         1000, // Max 1000 slow tool records
@@ -160,9 +160,11 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     let database_manager = nexus_core::database::DatabaseManager::new(data_dir.clone().into())?;
     let database_manager_arc = Arc::new(RwLock::new(database_manager));
 
-    // Configure DatabaseManager in cypher API for multi-database commands
-    let db_manager_clone = database_manager_arc.clone();
-    api::cypher::init_database_manager(db_manager_clone)?;
+    // Wire the DatabaseManager into the executor so multi-database
+    // Cypher commands (USE / CREATE DATABASE / ...) can reach it.
+    executor
+        .set_database_manager(database_manager_arc.clone())
+        .map_err(|_| anyhow::anyhow!("Failed to set database manager on executor"))?;
     info!("Multi-database support enabled with DatabaseManager");
 
     // Initialize RBAC for user management
@@ -218,7 +220,7 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     // Create Nexus server state
     let nexus_server = Arc::new(NexusServer::new(
-        api::cypher::get_executor(),
+        executor.clone(),
         engine_arc,
         database_manager_arc,
         rbac_arc,

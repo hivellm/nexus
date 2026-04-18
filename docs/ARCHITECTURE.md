@@ -1179,6 +1179,40 @@ CorrelationGraph
 6. **Export Flexibility**: Multiple export formats for different use cases
 7. **Pattern Extensibility**: Easy to add new pattern detectors via trait implementation
 
+## Server State Ownership (`NexusServer`)
+
+Every piece of shared server state — the engine, the shared executor,
+the multi-database manager, RBAC, the auth/JWT/audit chain, and the
+root-user config — lives on the `NexusServer` struct in
+[`nexus-server/src/lib.rs`](../nexus-server/src/lib.rs).
+`NexusServer::new` builds the struct once inside `main.rs::async_main`,
+wraps it in an `Arc`, and hands the same `Arc<NexusServer>` to Axum via
+`.with_state(...)`.
+
+HTTP handlers reach the state through Axum's `State` extractor:
+
+```rust
+pub async fn create_node(
+    State(server): State<Arc<NexusServer>>,
+    Json(request): Json<CreateNodeRequest>,
+) -> Json<CreateNodeResponse> {
+    let mut engine = server.engine.write().await;
+    // ...
+}
+```
+
+This replaces an older pattern that kept every subsystem in its own
+`OnceLock<Arc<_>>` per API file (`api::cypher::EXECUTOR`,
+`api::data::ENGINE`, …), which broke test isolation — two tests that
+each called `init_engine` silently collided on the same process-wide
+singleton. The migration is sliced into `phase2a`–`phase2e`; as of
+phase2a the cypher and data handlers read exclusively from
+`NexusServer` and the paired `OnceLock`s + `init_*` / `get_*` helpers
+have been deleted. Later slices migrate schema / stats / knn /
+performance / graph-correlation / health / prometheus onto the same
+handle and add a final `tests/no_oncelock_globals.rs` guard that fails
+if the anti-pattern comes back.
+
 ## References
 
 - Neo4j Internals: https://neo4j.com/docs/operations-manual/current/

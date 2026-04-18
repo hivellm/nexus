@@ -129,8 +129,8 @@ pub async fn execute_cypher(
 
     if has_show_constraints_or_functions {
         // Use Engine for these commands
-        if let Some(engine) = ENGINE.get() {
-            let mut engine = engine.write().await;
+        {
+            let mut engine = server.engine.write().await;
             match engine.execute_cypher(&request.query) {
                 Ok(result) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
@@ -156,14 +156,6 @@ pub async fn execute_cypher(
                     });
                 }
             }
-        } else {
-            let execution_time = start_time.elapsed().as_millis() as u64;
-            return Json(CypherResponse {
-                columns: vec![],
-                rows: vec![],
-                execution_time_ms: execution_time,
-                error: Some("Engine not initialized".to_string()),
-            });
         }
     }
 
@@ -184,9 +176,9 @@ pub async fn execute_cypher(
 
     if is_create_query || is_merge_query {
         // Use Engine for CREATE operations
-        if let Some(engine) = ENGINE.get() {
+        {
             // Execute all clauses sequentially using Engine
-            let mut engine = engine.write().await;
+            let mut engine = server.engine.write().await;
 
             // Create a context map to store variable bindings between clauses
             // For now, we'll use a simple map: variable_name -> node_id
@@ -1122,9 +1114,9 @@ pub async fn execute_cypher(
 
     // For MATCH queries, use the engine's executor to access the shared storage
     if is_match_query {
-        if let Some(engine) = ENGINE.get() {
+        {
             // Use the engine's execute_cypher method which uses its internal executor
-            let mut engine_guard = engine.write().await;
+            let mut engine_guard = server.engine.write().await;
             match engine_guard.execute_cypher(&request.query) {
                 Ok(result_set) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
@@ -1163,18 +1155,7 @@ pub async fn execute_cypher(
     // Get executor instance for other queries
     // Executor is Clone and contains only Arc internally, so we can clone directly
     // without any locks - this enables true parallel execution
-    let executor = match EXECUTOR.get() {
-        Some(executor) => executor.clone(),
-        None => {
-            tracing::error!("Executor not initialized");
-            return Json(CypherResponse {
-                columns: vec![],
-                rows: vec![],
-                execution_time_ms: start_time.elapsed().as_millis() as u64,
-                error: Some("Executor not initialized".to_string()),
-            });
-        }
-    };
+    let executor = server.executor.clone();
 
     // Create query
     let query = Query {
