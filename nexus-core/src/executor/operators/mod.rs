@@ -5,6 +5,7 @@
 //! evaluation lives in `super::eval`.
 
 pub mod aggregate;
+pub mod create;
 pub mod expand;
 pub mod filter;
 pub mod join;
