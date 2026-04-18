@@ -162,6 +162,38 @@ tie because the workload is memory-bandwidth bound on Zen 4. At the
 1 KiB row (`sum_i64` n=1 024) the dispatch still wins ~2.4× because
 the data fits in L1.
 
+### CRC benchmark — honest findings
+
+The phase-3 task spec anticipated a 6–10× speedup from switching WAL
+checksums from `crc32fast` (IEEE polynomial) to `crc32c` (Castagnoli
+via `_mm_crc32_u64` / ARMv8 `__crc32cd`). Measured on Zen 4:
+
+| Buffer size | `crc32fast` (PCLMUL) | `crc32c` (HW CRC32) | Ratio |
+|-------------|----------------------|---------------------|-------|
+| 256 B       | 16 ns                | 36 ns               | 0.44× |
+| 4 KiB       | 216 ns               | 454 ns              | 0.48× |
+| 64 KiB      | 3.5 µs               | 7.0 µs              | 0.50× |
+
+`crc32fast` runs a 3-way parallel CLMUL-based CRC32 at ~15 GB/s, which
+beats the single-instruction sequential `_mm_crc32_u64` loop
+(~7 GB/s). On this class of hardware, `crc32fast` is the right choice
+for raw throughput.
+
+Decision: **WAL default stays on `crc32fast`.** The dual-format
+infrastructure (magic byte + algo field) is still worth shipping
+because:
+
+- It enables per-frame algorithm tagging without breaking old files.
+- When AVX-512 VPCLMULQDQ parallel CRC32C lands in a future kernel
+  implementation, or on platforms where CRC32C has interop value
+  (iSCSI / ZFS / cloud-storage object stores), the algo field lets
+  us switch in one line — `append_with_algo(entry, Crc32C)` — with
+  no migration work and no legacy-read breakage.
+
+The `simd::crc32c` wrapper is kept as a public primitive for interop
+use. The `Crc32C` variant of `ChecksumAlgo` is exercised end-to-end
+by `wal::tests::v2_frame_with_crc32c_roundtrips`.
+
 The ADR-003 acceptance target of ≥4× AVX2 vs scalar at dim=768 is
 cleared by more than 3×. CI is expected to refuse a PR that regresses
 dispatch by >5% on any scale already benchmarked — the check hook is

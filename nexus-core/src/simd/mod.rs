@@ -28,6 +28,7 @@
 
 pub mod bitmap;
 pub mod compare;
+pub mod crc32c;
 pub mod dispatch;
 pub mod distance;
 pub mod reduce;
