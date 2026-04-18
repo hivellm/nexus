@@ -2,8 +2,6 @@
 
 use axum::response::{IntoResponse, Json, Response};
 use serde::Serialize;
-use std::fs;
-use std::path::PathBuf;
 
 /// Server configuration response
 #[derive(Debug, Serialize)]
@@ -38,23 +36,12 @@ pub struct AuthConfig {
 
 /// Get server configuration
 pub async fn get_config() -> Response {
-    // Try to read from config file
-    let config_paths = vec![
-        PathBuf::from("./config.yml"),
-        PathBuf::from("./config.example.yml"),
-    ];
-
-    let mut config_data = serde_json::json!({});
-
-    for config_path in config_paths {
-        if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&config_path) {
-                // Try to parse YAML (simplified - would need yaml parsing library)
-                // For now, return a basic structure
-                break;
-            }
-        }
-    }
+    // The on-disk config file (config.yml / config.example.yml) is the
+    // source of truth for operators, but this endpoint just returns the
+    // defaults the process was booted with — parsing the file here
+    // duplicates what `Config::from_env_and_yaml` already does at start.
+    // If we later want to surface live-reloaded overrides, reach back
+    // into the parsed `Config` instance rather than re-reading the file.
 
     // Return default configuration
     let config = ConfigResponse {

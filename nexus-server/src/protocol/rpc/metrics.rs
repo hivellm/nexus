@@ -87,8 +87,8 @@ mod tests {
         record_rpc_frame_sizes(128, 256);
         let after = snapshot();
 
-        assert!(after.commands_total >= before.commands_total + 2);
-        assert!(after.commands_error_total >= before.commands_error_total + 1);
+        assert!(after.commands_total > before.commands_total + 1);
+        assert!(after.commands_error_total > before.commands_error_total);
         assert!(after.command_duration_us_total > before.command_duration_us_total);
         assert!(after.bytes_in_total >= before.bytes_in_total + 128);
         assert!(after.bytes_out_total >= before.bytes_out_total + 256);

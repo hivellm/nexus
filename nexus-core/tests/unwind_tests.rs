@@ -1,10 +1,6 @@
 use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
 use nexus_core::{Engine, Error, executor::ResultSet};
 use serde_json::json;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-/// Counter for unique test labels to prevent cross-test interference
-static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 /// Helper to execute query and return result
 fn execute_query(engine: &mut Engine, query: &str) -> Result<ResultSet, Error> {

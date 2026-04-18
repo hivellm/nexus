@@ -4,7 +4,6 @@ use nexus_core::storage::row_lock::{ResourceId, RowLockManager};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tracing;
 
 #[test]
 fn test_concurrent_writes_to_different_nodes() {
@@ -351,7 +350,7 @@ fn test_stress_many_concurrent_locks() {
         let handle = thread::spawn(move || {
             let node_id = (i * 5) % num_nodes;
             let guard = manager_clone
-                .acquire_write(i as u64, ResourceId::node(node_id))
+                .acquire_write(i, ResourceId::node(node_id))
                 .unwrap();
             thread::sleep(Duration::from_millis(10));
             drop(guard);
@@ -455,7 +454,7 @@ fn test_concurrent_reads_during_write() {
     let manager = Arc::new(RowLockManager::default());
 
     let manager1 = manager.clone();
-    let manager2 = manager.clone();
+    let _manager2 = manager.clone();
     let manager3 = manager.clone();
 
     // Thread 1: Write lock
@@ -624,12 +623,11 @@ fn test_lock_contention_high_load() {
             let node_id = i % num_hot_nodes;
             // Shorter timeout to increase chance of failures
             let result = manager_clone.acquire_write_with_timeout(
-                i as u64,
+                i,
                 ResourceId::node(node_id),
                 Duration::from_millis(50), // Reduced from 100ms
             );
-            if result.is_ok() {
-                let guard = result.unwrap();
+            if let Ok(guard) = result {
                 // Longer hold time to create more contention
                 thread::sleep(Duration::from_millis(20)); // Increased from 10ms
                 drop(guard);

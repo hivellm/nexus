@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Tests for cross-database query capabilities
 //!
 //! Tests the ability to:
@@ -6,7 +8,7 @@
 //! - Maintain data isolation between databases
 //! - Use database() function to track current database
 
-use nexus_core::executor::{Executor, Query};
+use nexus_core::executor::Query;
 use nexus_core::testing::create_isolated_test_executor;
 use std::collections::HashMap;
 
@@ -198,7 +200,7 @@ fn test_cross_database_query_sequence() {
 
 #[test]
 fn test_use_database_parsing() {
-    use nexus_core::executor::parser::{Clause, CypherParser, UseDatabaseClause};
+    use nexus_core::executor::parser::{Clause, CypherParser};
 
     let mut parser = CypherParser::new("USE DATABASE mydb".to_string());
     let ast = parser.parse().unwrap();

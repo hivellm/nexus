@@ -20,8 +20,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 /// Test master node creation and basic operations
 #[tokio::test]
@@ -607,7 +605,7 @@ async fn test_sequential_replication() {
     for i in 0..100 {
         let entry = WalEntry::CreateNode {
             node_id: i,
-            label_bits: (i % 8) as u64,
+            label_bits: i % 8,
         };
         master.replicate(entry, 1).await.unwrap();
     }
@@ -681,7 +679,7 @@ async fn test_concurrent_snapshot_prevention() {
 
     // Try second snapshot (may fail if first is in progress)
     let snap2 = snapshot.clone();
-    let result2 = snap2.create().await;
+    let _result2 = snap2.create().await;
 
     // Wait for first
     let result1 = handle1.await.unwrap();

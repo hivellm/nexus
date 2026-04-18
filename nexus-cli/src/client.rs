@@ -341,7 +341,7 @@ impl NexusClient {
 
     pub async fn get_indexes(&self) -> Result<Vec<Value>> {
         let result = self.query("SHOW INDEXES", None).await?;
-        Ok(result.rows.into_iter().map(|r| Value::Array(r)).collect())
+        Ok(result.rows.into_iter().map(Value::Array).collect())
     }
 
     pub async fn clear_database(&self) -> Result<()> {

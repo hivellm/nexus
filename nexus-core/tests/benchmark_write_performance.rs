@@ -4,11 +4,21 @@
 //! - 1.3.4: Measure performance improvement from deferred index updates
 //! - 1.7: Benchmark write performance (CREATE node and CREATE relationship)
 
+// Every benchmark in this file is gated by `#[cfg(feature = "benchmarks")]`,
+// so the imports only appear inside that config — otherwise `cargo test`
+// without the feature would see unused-imports warnings.
+#[cfg(feature = "benchmarks")]
 use nexus_core::Engine;
+#[cfg(feature = "benchmarks")]
 use nexus_core::testing::{TestContext, setup_test_engine};
+#[cfg(feature = "benchmarks")]
 use std::time::{Duration, Instant};
 
-/// Helper to extract count from result
+/// Helper to extract count from result. Used by benchmarks that are
+/// currently behind `#[ignore]`; keep the helper alongside them so
+/// enabling the benchmarks does not bring the helper back in a
+/// separate PR.
+#[allow(dead_code)]
 fn extract_count(result: nexus_core::executor::ResultSet) -> u64 {
     result
         .rows

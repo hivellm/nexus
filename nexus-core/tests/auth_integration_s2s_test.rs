@@ -13,7 +13,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LoginRequest {

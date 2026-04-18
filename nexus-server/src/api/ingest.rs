@@ -368,7 +368,7 @@ async fn create_relationship_in_batch(
 mod tests {
     use super::*;
     use crate::config::RootUserConfig;
-    use axum::extract::{Json, State};
+    use axum::extract::State;
     use nexus_core::testing::TestContext;
     use nexus_core::{
         Engine,

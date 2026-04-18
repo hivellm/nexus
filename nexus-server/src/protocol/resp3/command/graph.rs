@@ -127,9 +127,7 @@ pub async fn node_delete(state: &SessionState, args: &[Resp3Value]) -> Resp3Valu
     let out = tokio::task::spawn_blocking(move || {
         let mut guard = engine.blocking_write();
         if detach {
-            if let Err(e) = guard.delete_node_relationships(id) {
-                return Err(e);
-            }
+            guard.delete_node_relationships(id)?;
         }
         guard.delete_node(id)
     })

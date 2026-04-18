@@ -47,12 +47,12 @@ pub struct CreateIndexResponse {
     pub index_name: Option<String>,
 }
 
-/// List all indexes
-pub async fn list_indexes(State(state): State<IndexState>) -> Response {
-    let engine = state.engine.read().await;
-
-    // For now, return empty list since index management is not fully implemented
-    // This is a placeholder that returns the structure the GUI expects
+/// List all indexes. Today the HTTP surface returns an empty list —
+/// `protocol::rpc::dispatch::schema::INDEXES` is the authoritative path
+/// for binary clients, and the GUI only uses this endpoint to learn the
+/// response shape. When the HTTP listing is wired up, swap the empty
+/// vector for a call into `state.engine`.
+pub async fn list_indexes(State(_state): State<IndexState>) -> Response {
     Json(ListIndexesResponse { indexes: vec![] }).into_response()
 }
 

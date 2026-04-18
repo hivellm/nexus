@@ -5,8 +5,6 @@
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing;
-// use thiserror::Error;
 
 // ============================================================================
 // Mock Vectorizer Implementation

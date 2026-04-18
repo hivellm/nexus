@@ -24,7 +24,7 @@ use tokio::sync::RwLock;
 /// can surface it in the Prometheus `/prometheus` endpoint.
 ///
 /// This is the "fail-open" half of the audit-log failure policy documented
-/// in `docs/SECURITY_AUDIT.md`: when `AuditLogger::log_authentication_failed`
+/// in `docs/security/SECURITY_AUDIT.md`: when `AuditLogger::log_authentication_failed`
 /// returns `Err`, the middleware still returns the original 401/429/500 to
 /// the caller (we never convert an auth failure into a 500 just because the
 /// audit sink broke) but bumps this counter and emits a `tracing::error!` so
@@ -43,7 +43,7 @@ pub fn audit_log_failures_total() -> u64 {
 ///
 /// Use this helper whenever an audit-log write returns `Err` on a code path
 /// that **must not** fail the request as a result (the fail-open half of
-/// the policy in `docs/SECURITY_AUDIT.md`). The typical pattern is:
+/// the policy in `docs/security/SECURITY_AUDIT.md`). The typical pattern is:
 ///
 /// ```ignore
 /// if let Err(e) = audit_logger.log_write_operation(params).await {
@@ -62,7 +62,7 @@ pub fn record_audit_log_failure(context: &'static str, err: &dyn std::fmt::Displ
         error = %err,
         "audit log write failed — the originating request was still served \
          with its original response status, but the event was not persisted \
-         to the audit log (see docs/SECURITY_AUDIT.md)"
+         to the audit log (see docs/security/SECURITY_AUDIT.md)"
     );
 }
 

@@ -8,7 +8,7 @@
 
 use nexus_core::testing::create_test_graph;
 use nexus_core::validation::{GraphValidator, ValidationSeverity};
-use nexus_core::{Edge, EdgeId, Graph, Node, NodeId, PropertyValue};
+use nexus_core::{Edge, EdgeId, Node, NodeId, PropertyValue};
 use std::collections::HashMap;
 
 // ============================================================================

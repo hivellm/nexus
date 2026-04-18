@@ -140,12 +140,7 @@ impl QueryRoot {
             rows: result
                 .rows
                 .iter()
-                .map(|row| {
-                    row.values
-                        .iter()
-                        .map(|v| json_to_property_value(v))
-                        .collect()
-                })
+                .map(|row| row.values.iter().map(json_to_property_value).collect())
                 .collect(),
             execution_time_ms: elapsed,
         })

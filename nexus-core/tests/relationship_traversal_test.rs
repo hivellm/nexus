@@ -1,4 +1,4 @@
-use nexus_core::storage::{RecordStore, RelationshipRecord};
+use nexus_core::storage::RecordStore;
 use nexus_core::testing::TestContext;
 use nexus_core::transaction::TransactionManager;
 

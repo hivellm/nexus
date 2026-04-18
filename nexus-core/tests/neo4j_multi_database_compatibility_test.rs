@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Neo4j Multi-Database Compatibility Tests
 //!
 //! Tests verify that Nexus's multi-database support is compatible with Neo4j's
@@ -6,7 +8,7 @@
 //! Reference: https://neo4j.com/docs/cypher-manual/current/administration/databases/
 
 use nexus_core::database::DatabaseManager;
-use nexus_core::executor::{Executor, Query};
+use nexus_core::executor::Query;
 use nexus_core::testing::{TestContext, create_isolated_test_executor};
 use std::collections::HashMap;
 
@@ -413,7 +415,7 @@ fn test_database_function_neo4j_compatibility() {
             assert_eq!(r.columns[0], "currentDb");
             assert_eq!(r.rows.len(), 1);
 
-            if let Some(db_value) = r.rows[0].values.get(0) {
+            if let Some(db_value) = r.rows[0].values.first() {
                 if let Some(db_name) = db_value.as_str() {
                     println!("✓ database() function returns: {}", db_name);
                     // Should return default database name

@@ -258,7 +258,7 @@ async fn push_id_requests_are_refused_with_error() {
     .unwrap();
     let resp = read_response(&mut stream).await.unwrap();
     assert_eq!(resp.id, PUSH_ID);
-    let err = resp.result.err().expect("should be Err");
+    let err = resp.result.expect_err("should be Err");
     assert!(err.contains("reserved"));
 }
 

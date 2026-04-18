@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Regression tests for fixes implemented in fix-comprehensive-test-failures
 //!
 //! These tests ensure that the fixes implemented don't regress and continue to work correctly.

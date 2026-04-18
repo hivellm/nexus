@@ -45,7 +45,7 @@ fn test_show_constraints_after_creating_unique() {
         result.columns,
         vec!["label", "property", "type", "description"]
     );
-    assert!(result.rows.len() >= 1);
+    assert!(!result.rows.is_empty());
 
     // Find the Person email constraint
     let person_email = result.rows.iter().find(|row| {
@@ -80,7 +80,7 @@ fn test_show_constraints_after_creating_exists() {
         result.columns,
         vec!["label", "property", "type", "description"]
     );
-    assert!(result.rows.len() >= 1);
+    assert!(!result.rows.is_empty());
 
     // Find the Employee id constraint
     let employee_id = result.rows.iter().find(|row| {

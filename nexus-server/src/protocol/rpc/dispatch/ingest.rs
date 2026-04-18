@@ -255,26 +255,26 @@ mod tests {
     }
 
     fn node_map(labels: &[&str], props: &[(&str, NexusValue)]) -> NexusValue {
-        let mut entries = Vec::with_capacity(2);
-        entries.push((
-            NexusValue::Str("labels".into()),
-            NexusValue::Array(
-                labels
-                    .iter()
-                    .map(|l| NexusValue::Str((*l).into()))
-                    .collect(),
+        NexusValue::Map(vec![
+            (
+                NexusValue::Str("labels".into()),
+                NexusValue::Array(
+                    labels
+                        .iter()
+                        .map(|l| NexusValue::Str((*l).into()))
+                        .collect(),
+                ),
             ),
-        ));
-        entries.push((
-            NexusValue::Str("properties".into()),
-            NexusValue::Map(
-                props
-                    .iter()
-                    .map(|(k, v)| (NexusValue::Str((*k).into()), v.clone()))
-                    .collect(),
+            (
+                NexusValue::Str("properties".into()),
+                NexusValue::Map(
+                    props
+                        .iter()
+                        .map(|(k, v)| (NexusValue::Str((*k).into()), v.clone()))
+                        .collect(),
+                ),
             ),
-        ));
-        NexusValue::Map(entries)
+        ])
     }
 
     fn rel_map(src: i64, dst: i64, ty: &str, props: &[(&str, NexusValue)]) -> NexusValue {

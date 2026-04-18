@@ -1,4 +1,4 @@
-use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
+use nexus_core::testing::setup_isolated_test_engine;
 use nexus_core::{Engine, Error};
 
 fn setup_test_data(engine: &mut Engine) -> Result<(), Error> {

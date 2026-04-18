@@ -476,7 +476,8 @@ mod tests {
         let stats = storage.get_stats();
         assert_eq!(stats.total_relationships, 10);
         assert!(stats.memory_usage_bytes > 0);
-        assert!(stats.avg_lookup_time_ns >= 0);
+        // avg_lookup_time_ns is u64 — trivially >= 0, kept here only to
+        // document the field's non-negative invariant.
     }
 
     // Helper struct for traversal tests

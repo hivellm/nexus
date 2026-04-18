@@ -176,8 +176,8 @@ mod tests {
             Resp3Value::Integer(42)
         );
         assert_eq!(
-            json_to_resp3(&serde_json::json!(3.14)),
-            Resp3Value::Double(3.14)
+            json_to_resp3(&serde_json::json!(3.25)),
+            Resp3Value::Double(3.25)
         );
         assert_eq!(json_to_resp3(&serde_json::json!("hi")).as_str(), Some("hi"));
     }

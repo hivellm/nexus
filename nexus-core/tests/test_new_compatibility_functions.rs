@@ -116,7 +116,7 @@ fn test_temporal_dayofweek_function() {
     );
     let dow = get_single_value(&result).as_i64().unwrap();
     // Should return 1-7 (Monday to Sunday)
-    assert!(dow >= 1 && dow <= 7);
+    assert!((1..=7).contains(&dow));
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn test_math_asin_function() {
 
     let result = execute_query(&mut engine, "RETURN asin(0.5) AS result");
     let asin = get_single_value(&result).as_f64().unwrap();
-    assert!((asin - 0.5236).abs() < 0.001); // approximately pi/6
+    assert!((asin - std::f64::consts::FRAC_PI_6).abs() < 0.001);
 }
 
 #[test]
@@ -328,7 +328,7 @@ fn test_math_acos_function() {
 
     let result = execute_query(&mut engine, "RETURN acos(0.5) AS result");
     let acos = get_single_value(&result).as_f64().unwrap();
-    assert!((acos - 1.0472).abs() < 0.001); // approximately pi/3
+    assert!((acos - std::f64::consts::FRAC_PI_3).abs() < 0.001);
 }
 
 #[test]

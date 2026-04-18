@@ -2,7 +2,7 @@
 
 use crate::NexusServer;
 use crate::api::graphql::types::*;
-use async_graphql::{Context, ID, InputObject, Object, Result as GQLResult};
+use async_graphql::{Context, ID, Object, Result as GQLResult};
 use nexus_core::executor::Query;
 use std::collections::HashMap;
 use std::sync::Arc;

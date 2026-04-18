@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 use nexus_core::executor::Query;
 use nexus_core::testing::create_isolated_test_executor;
 use serde_json::Value;

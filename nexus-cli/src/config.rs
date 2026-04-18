@@ -66,6 +66,11 @@ impl Config {
             .join("config.toml")
     }
 
+    /// Fetch a stored profile by name. Public part of the config API;
+    /// not yet wired to any subcommand but the symmetry with
+    /// `set_profile`/`remove_profile` keeps the surface predictable for
+    /// future profile-switching work.
+    #[allow(dead_code)]
     pub fn get_profile(&self, name: &str) -> Option<&Profile> {
         self.profiles.get(name)
     }

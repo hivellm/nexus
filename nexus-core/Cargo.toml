@@ -10,21 +10,16 @@ description = "Core graph database engine for Nexus - Property Graph with Cypher
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
-# Suppress common warnings
-unused = "allow"
-unused_imports = "allow"
-unused_variables = "allow"
-unused_mut = "allow"
-unused_assignments = "allow"
-dead_code = "allow"
 
 [lints.clippy]
-# Suppress clippy warnings
-all = "allow"
-redundant_closure = "allow"
-derivable_impls = "allow"
-unnecessary_cast = "allow"
-collapsible_match = "allow"
+# The lints below pop up in tens of call sites inside the executor /
+# planner / storage hot paths where fixing them would be churn for no
+# signal. Everything else is left at the clippy default so actual bugs
+# (held-lock-across-await, approx_constant, result-then-expect, ...)
+# surface from every PR.
+too_many_arguments = "allow"
+type_complexity = "allow"
+result_large_err = "allow"
 
 [features]
 default = []
@@ -155,4 +150,3 @@ path = "../examples/hierarchical_call_graph_example.rs"
 [[example]]
 name = "call_graph_filtering_example"
 path = "../examples/call_graph_filtering_example.rs"
-num_cpus = "1.16"

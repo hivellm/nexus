@@ -179,7 +179,7 @@ pub async fn db_use(state: &SessionState, args: &[Resp3Value]) -> Resp3Value {
     if exists {
         Resp3Value::SimpleString("OK".into())
     } else {
-        err(format!("ERR DB.USE: database not found"))
+        err("ERR DB.USE: database not found")
     }
 }
 
@@ -338,7 +338,7 @@ async fn run_cypher_as_array(state: &SessionState, query: String, cmd: &str) -> 
                 .map(|row| {
                     let entries: Vec<(Resp3Value, Resp3Value)> = cols
                         .iter()
-                        .zip(row.values.into_iter())
+                        .zip(row.values)
                         .map(|(c, v)| (Resp3Value::bulk(c.clone()), json_value_to_resp3(&v)))
                         .collect();
                     Resp3Value::Map(entries)

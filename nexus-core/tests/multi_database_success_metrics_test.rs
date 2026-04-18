@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Success metrics verification tests for multi-database support
 //!
 //! Verifies the following success criteria:
@@ -8,7 +10,7 @@
 //! - CLI commands working end-to-end
 
 use nexus_core::database::DatabaseManager;
-use nexus_core::executor::{Executor, Query};
+use nexus_core::executor::Query;
 use nexus_core::testing::{TestContext, create_isolated_test_executor};
 use std::collections::HashMap;
 use std::sync::Arc;

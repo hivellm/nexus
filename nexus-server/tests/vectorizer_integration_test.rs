@@ -25,8 +25,6 @@ use nexus_protocol::mcp::McpClient;
 use nexus_server::NexusServer;
 use nexus_server::api;
 use nexus_server::config::RootUserConfig;
-use tracing;
-// use thiserror::Error;
 
 // ============================================================================
 // Mock Vectorizer Implementation

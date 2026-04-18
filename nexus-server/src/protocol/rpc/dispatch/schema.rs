@@ -200,7 +200,7 @@ mod tests {
         match out {
             NexusValue::Array(items) => {
                 let names: Vec<_> = items.iter().filter_map(|v| v.as_str()).collect();
-                assert!(names.iter().any(|n| *n == "Alpha"), "got {names:?}");
+                assert!(names.contains(&"Alpha"), "got {names:?}");
             }
             other => panic!("expected Array, got {other:?}"),
         }
@@ -254,7 +254,7 @@ mod tests {
         match out {
             NexusValue::Array(items) => {
                 let names: Vec<_> = items.iter().filter_map(|v| v.as_str()).collect();
-                assert!(names.iter().any(|n| *n == "KNOWS"), "got {names:?}");
+                assert!(names.contains(&"KNOWS"), "got {names:?}");
             }
             other => panic!("expected Array, got {other:?}"),
         }

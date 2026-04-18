@@ -251,7 +251,7 @@ fn test_full_transaction_lifecycle() {
     // The test verifies that increment_node_count was called once in this test
     let cat_stats = catalog.get_statistics().unwrap();
     assert!(
-        cat_stats.node_counts.get(&0).is_some(),
+        cat_stats.node_counts.contains_key(&0),
         "Node count should exist for label 0"
     );
 }
@@ -544,7 +544,6 @@ fn test_checkpoint_integration() {
 fn test_concurrent_transactions() {
     use std::sync::Arc;
     use std::thread;
-    use tracing;
 
     let ctx = TestContext::new();
     let dir = ctx.path();

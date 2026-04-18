@@ -299,16 +299,15 @@ mod tests {
     async fn test_get_stats_without_catalog() {
         let response = get_stats().await;
         // Check if catalog is initialized (may be initialized by other tests)
-        if response.error.is_some() {
-            assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        if let Some(err) = response.error.as_ref() {
+            assert_eq!(err, "Catalog not initialized");
             assert_eq!(response.catalog.label_count, 0);
             assert_eq!(response.catalog.rel_type_count, 0);
             assert_eq!(response.catalog.node_count, 0);
             assert_eq!(response.catalog.rel_count, 0);
-        } else {
-            // If catalog is initialized, the request should succeed
-            assert!(response.error.is_none());
         }
+        // If catalog is initialized, the request succeeds with no error —
+        // nothing to assert beyond that.
     }
 
     #[tokio::test]

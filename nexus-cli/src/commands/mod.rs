@@ -18,6 +18,9 @@ pub struct OutputContext {
     pub json: bool,
     pub csv: bool,
     pub verbose: bool,
+    /// Reserved for future debug output wiring (set from the --debug CLI flag);
+    /// read sites will grow in follow-up CLI work.
+    #[allow(dead_code)]
     pub debug: bool,
 }
 
@@ -35,7 +38,10 @@ pub fn create_spinner(message: &str) -> ProgressBar {
     spinner
 }
 
-/// Creates a progress bar with the given length
+/// Creates a progress bar with the given length. Exposed for future
+/// bulk-ingest wiring; callers will re-enable once the long-operation
+/// commands land.
+#[allow(dead_code)]
 pub fn create_progress_bar(len: u64, message: &str) -> ProgressBar {
     let pb = ProgressBar::new(len);
     pb.set_style(
@@ -48,7 +54,9 @@ pub fn create_progress_bar(len: u64, message: &str) -> ProgressBar {
     pb
 }
 
-/// Creates a progress bar for download/upload operations
+/// Creates a progress bar for download/upload operations. Reserved for
+/// future `ingest`/`export` subcommands.
+#[allow(dead_code)]
 pub fn create_bytes_progress_bar(len: u64, message: &str) -> ProgressBar {
     let pb = ProgressBar::new(len);
     pb.set_style(
@@ -61,7 +69,9 @@ pub fn create_bytes_progress_bar(len: u64, message: &str) -> ProgressBar {
     pb
 }
 
-/// Creates a multi-progress bar container
+/// Creates a multi-progress bar container. Reserved for future parallel
+/// ingest workflows.
+#[allow(dead_code)]
 pub fn create_multi_progress() -> MultiProgress {
     MultiProgress::new()
 }
@@ -80,7 +90,7 @@ impl OutputContext {
         if self.csv {
             println!("{}", columns.join(","));
             for row in rows {
-                let values: Vec<String> = row.iter().map(|v| value_to_string(v)).collect();
+                let values: Vec<String> = row.iter().map(value_to_string).collect();
                 println!("{}", values.join(","));
             }
             return;
@@ -92,7 +102,7 @@ impl OutputContext {
         table.set_header(columns);
 
         for row in rows {
-            let values: Vec<String> = row.iter().map(|v| value_to_string(v)).collect();
+            let values: Vec<String> = row.iter().map(value_to_string).collect();
             table.add_row(values);
         }
 
@@ -100,11 +110,9 @@ impl OutputContext {
     }
 
     pub fn print_json<T: serde::Serialize>(&self, data: &T) {
-        if self.json {
-            println!("{}", serde_json::to_string_pretty(data).unwrap());
-        } else {
-            println!("{}", serde_json::to_string_pretty(data).unwrap());
-        }
+        // Table/CSV formats would be nonsensical for free-form JSON
+        // responses, so both branches collapse to the same output today.
+        println!("{}", serde_json::to_string_pretty(data).unwrap());
     }
 
     pub fn print_success(&self, message: &str) {
@@ -130,7 +138,7 @@ fn value_to_string(v: &Value) -> String {
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),
         Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(|i| value_to_string(i)).collect();
+            let items: Vec<String> = arr.iter().map(value_to_string).collect();
             format!("[{}]", items.join(", "))
         }
         Value::Object(obj) => serde_json::to_string(obj).unwrap_or_default(),

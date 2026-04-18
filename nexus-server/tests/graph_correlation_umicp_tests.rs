@@ -2,7 +2,6 @@
 
 use nexus_server::api::graph_correlation_umicp::{GraphUmicpHandler, UmicpRequest};
 use serde_json::json;
-use tracing;
 
 #[tokio::test]
 async fn test_umicp_graph_generate() {

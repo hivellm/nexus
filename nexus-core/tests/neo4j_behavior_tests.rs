@@ -1,7 +1,7 @@
 /// Tests that verify Nexus behavior matches Neo4j specifications
 /// These tests encode expected Neo4j behavior based on official documentation
 use nexus_core::Error;
-use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
+use nexus_core::testing::setup_isolated_test_engine;
 
 // ============================================================================
 // AGGREGATION BEHAVIOR TESTS

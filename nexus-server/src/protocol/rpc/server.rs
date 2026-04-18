@@ -368,7 +368,7 @@ mod tests {
         write_request(&mut stream, &req).await.unwrap();
         let resp = read_response(&mut stream).await.unwrap();
         assert_eq!(resp.id, PUSH_ID);
-        let msg = resp.result.err().expect("should be an error");
+        let msg = resp.result.expect_err("should be an error");
         assert!(msg.contains("reserved"), "got: {msg}");
     }
 

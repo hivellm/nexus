@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 #[test]
 fn test_substring_positive_index() {
-    let (mut executor, _ctx) = create_test_executor();
+    let (executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN substring('hello', 1, 3) AS result".to_string(),
@@ -19,7 +19,7 @@ fn test_substring_positive_index() {
 
 #[test]
 fn test_substring_negative_index() {
-    let (mut executor, _ctx) = create_test_executor();
+    let (executor, _ctx) = create_test_executor();
 
     // Test negative index - should count from end
     let query = Query {
@@ -35,7 +35,7 @@ fn test_substring_negative_index() {
 
 #[test]
 fn test_substring_negative_index_no_length() {
-    let (mut executor, _ctx) = create_test_executor();
+    let (executor, _ctx) = create_test_executor();
 
     // Test negative index without length - should take from that position to end
     let query = Query {
@@ -51,7 +51,7 @@ fn test_substring_negative_index_no_length() {
 
 #[test]
 fn test_substring_negative_index_large() {
-    let (mut executor, _ctx) = create_test_executor();
+    let (executor, _ctx) = create_test_executor();
 
     // Test negative index larger than string length - should start from beginning
     let query = Query {
@@ -67,7 +67,7 @@ fn test_substring_negative_index_large() {
 
 #[test]
 fn test_substring_no_length() {
-    let (mut executor, _ctx) = create_test_executor();
+    let (executor, _ctx) = create_test_executor();
 
     let query = Query {
         cypher: "RETURN substring('hello', 2) AS result".to_string(),

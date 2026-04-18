@@ -1,6 +1,6 @@
 use anyhow::Result;
-use clap::{Args, Subcommand};
-use std::io::{self, BufRead, Write};
+use clap::Args;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use super::OutputContext;
@@ -172,8 +172,8 @@ pub async fn execute(client: &NexusClient, args: QueryArgs, output: &OutputConte
 
     // Sort
     if let Some(sort_col) = &args.sort {
-        let (col_name, descending) = if sort_col.starts_with('-') {
-            (&sort_col[1..], true)
+        let (col_name, descending) = if let Some(stripped) = sort_col.strip_prefix('-') {
+            (stripped, true)
         } else {
             (sort_col.as_str(), false)
         };
@@ -361,8 +361,8 @@ async fn run_interactive(client: &NexusClient, output: &OutputContext) -> Result
                 }
 
                 // Re-run history command :!N
-                if trimmed.starts_with(":!") {
-                    if let Ok(num) = trimmed[2..].parse::<usize>() {
+                if let Some(rest) = trimmed.strip_prefix(":!") {
+                    if let Ok(num) = rest.parse::<usize>() {
                         let history = load_history();
                         if let Some(query) = history.get(num.saturating_sub(1)) {
                             println!("{} {}", "Executing:".dimmed(), query);

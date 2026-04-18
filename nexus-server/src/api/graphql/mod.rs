@@ -10,7 +10,6 @@ mod schema;
 mod types;
 
 pub use mutation::*;
-pub use resolver::*;
 pub use schema::*;
 pub use types::*;
 

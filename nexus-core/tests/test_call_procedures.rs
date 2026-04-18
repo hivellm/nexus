@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Test CALL procedure syntax variations
 use nexus_core::executor::Query;
 use nexus_core::testing::create_test_executor;

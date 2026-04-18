@@ -1,8 +1,8 @@
+use rustyline::Context;
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
-use rustyline::hint::{Hinter, HistoryHinter};
-use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
-use rustyline::{Context, Helper};
+use rustyline::hint::HistoryHinter;
+use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter, Validator};
 
 /// Cypher keywords for tab completion

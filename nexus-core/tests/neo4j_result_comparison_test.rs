@@ -8,7 +8,6 @@
 use reqwest::Client;
 use serde_json::json;
 use std::collections::HashMap;
-use tracing;
 
 // Helper function to execute query on Nexus via REST API
 async fn execute_nexus_query(

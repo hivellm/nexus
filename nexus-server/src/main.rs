@@ -68,16 +68,14 @@ fn main() -> anyhow::Result<()> {
         .map(|n| n.get())
         .unwrap_or(4)
         * 2)
-    .max(8)
-    .min(32);
+    .clamp(8, 32);
 
     // Use CPU count * 4 for blocking threads, minimum 32, maximum 128
     let blocking_threads = (thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
         * 4)
-    .max(32)
-    .min(128);
+    .clamp(32, 128);
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
@@ -114,7 +112,7 @@ fn main() -> anyhow::Result<()> {
     rt.block_on(async_main(worker_threads))
 }
 
-async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
+async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // Tracing already initialized in main()
 
     // Load configuration (YAML file -> env vars -> defaults, env wins).

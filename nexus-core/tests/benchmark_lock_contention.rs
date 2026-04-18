@@ -10,7 +10,6 @@ use nexus_core::storage::row_lock::{ResourceId, RowLockManager};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing;
 
 /// Simulate table-level locking by acquiring locks on all resources
 fn simulate_table_lock(manager: &RowLockManager, tx_id: u64, num_resources: usize) -> Duration {

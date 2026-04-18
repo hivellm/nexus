@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Detailed profiling benchmark for CREATE operations
 //! This benchmark helps identify performance bottlenecks
 
@@ -5,7 +7,6 @@
 mod tests {
     use nexus_core::Engine;
     use std::time::{Duration, Instant};
-    use tracing;
 
     #[test]
     #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
@@ -23,7 +24,7 @@ mod tests {
         let mut total_parse = Duration::ZERO;
         let mut total_execute = Duration::ZERO;
         let mut total_commit = Duration::ZERO;
-        let mut total_flush = Duration::ZERO;
+        let _total_flush = Duration::ZERO;
 
         for i in 0..iterations {
             let query = format!(
@@ -39,7 +40,7 @@ mod tests {
             total_parse += parse_time;
 
             let execute_start = Instant::now();
-            let result = engine.execute_cypher(&query).unwrap();
+            let _result = engine.execute_cypher(&query).unwrap();
             let execute_time = execute_start.elapsed();
             total_execute += execute_time;
 

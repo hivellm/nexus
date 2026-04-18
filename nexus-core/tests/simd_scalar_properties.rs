@@ -52,7 +52,7 @@ fn reference_popcount(words: &[u64]) -> u64 {
     for &w in words {
         let mut v = w;
         while v != 0 {
-            total += (v & 1) as u64;
+            total += v & 1;
             v >>= 1;
         }
     }
@@ -64,7 +64,7 @@ fn reference_and_popcount(a: &[u64], b: &[u64]) -> u64 {
     for i in 0..a.len() {
         let mut v = a[i] & b[i];
         while v != 0 {
-            total += (v & 1) as u64;
+            total += v & 1;
             v >>= 1;
         }
     }

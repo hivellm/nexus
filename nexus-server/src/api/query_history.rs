@@ -23,6 +23,12 @@ pub struct QueryHistoryState {
     pub history: Arc<RwLock<VecDeque<QueryHistoryEntry>>>,
 }
 
+impl Default for QueryHistoryState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueryHistoryState {
     pub fn new() -> Self {
         Self {

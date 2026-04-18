@@ -8,7 +8,7 @@
 
 use crate::protocol::rpc::NexusValue;
 
-use super::convert::{json_to_nexus, nexus_to_json, pairs_to_json_object};
+use super::convert::{json_to_nexus, pairs_to_json_object};
 use super::{RpcSession, arg_array, arg_int, arg_map, arg_str};
 
 /// Dispatch the graph CRUD command family.

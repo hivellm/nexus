@@ -10,13 +10,8 @@ description = "Command-line interface for Nexus graph database"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
-unused = "allow"
-unused_imports = "allow"
-unused_variables = "allow"
-dead_code = "allow"
 
 [lints.clippy]
-all = "allow"
 
 [[bin]]
 name = "nexus"

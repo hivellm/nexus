@@ -12,7 +12,6 @@
 #![cfg(feature = "s2s")]
 
 use serde::{Deserialize, Serialize};
-use tracing;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CypherRequest {

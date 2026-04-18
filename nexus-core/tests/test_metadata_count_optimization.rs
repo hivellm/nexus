@@ -121,7 +121,7 @@ fn test_count_star_with_group_by() {
     let result = execute_cypher(&mut engine, &query);
 
     // Should have groups (may vary based on implementation)
-    assert!(result.rows.len() >= 1, "Should have at least 1 group");
+    assert!(!result.rows.is_empty(), "Should have at least 1 group");
 
     // Verify counts - find our unique label groups
     let person_count = result

@@ -346,10 +346,13 @@ mod tests {
     async fn test_create_duplicate_database() {
         let state = create_test_state().await;
 
-        // Create first time
-        let manager = state.manager.read();
-        manager.create_database("test_db").unwrap();
-        drop(manager);
+        // Create first time — scope the guard so it definitely drops
+        // before any `.await` below (clippy doesn't track explicit drops
+        // across await boundaries).
+        {
+            let manager = state.manager.read();
+            manager.create_database("test_db").unwrap();
+        }
 
         // Try to create again
         let response = create_database(
@@ -379,12 +382,13 @@ mod tests {
         let test_state = TestState::new();
         let state = test_state.state();
 
-        // Create multiple databases
-        let manager = state.manager.read();
-        manager.create_database("db1").unwrap();
-        manager.create_database("db2").unwrap();
-        manager.create_database("db3").unwrap();
-        drop(manager);
+        // Create multiple databases — scoped for clippy.
+        {
+            let manager = state.manager.read();
+            manager.create_database("db1").unwrap();
+            manager.create_database("db2").unwrap();
+            manager.create_database("db3").unwrap();
+        }
 
         let response = list_databases(State(state)).await;
 
@@ -396,10 +400,11 @@ mod tests {
     async fn test_get_database_with_data() {
         let state = create_test_state().await;
 
-        // Create database and add data
-        let manager = state.manager.read();
-        let db = manager.create_database("test_db").unwrap();
-        drop(manager);
+        // Create database and add data — scoped for clippy.
+        let db = {
+            let manager = state.manager.read();
+            manager.create_database("test_db").unwrap()
+        };
 
         {
             let mut engine = db.write();
@@ -457,10 +462,11 @@ mod tests {
     async fn test_drop_and_recreate_database() {
         let state = create_test_state().await;
 
-        // Create database
-        let manager = state.manager.read();
-        manager.create_database("test_db").unwrap();
-        drop(manager);
+        // Create database — scoped for clippy.
+        {
+            let manager = state.manager.read();
+            manager.create_database("test_db").unwrap();
+        }
 
         // Drop it
         let _response1 = drop_database(State(state.clone()), Path("test_db".to_string())).await;

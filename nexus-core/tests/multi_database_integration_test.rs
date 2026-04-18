@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Multi-database integration tests
 //!
 //! Tests cover:
@@ -8,7 +10,7 @@
 //! - DatabaseManager API
 
 use nexus_core::database::{DatabaseInfo, DatabaseManager};
-use nexus_core::executor::{Executor, Query};
+use nexus_core::executor::Query;
 use nexus_core::testing::{TestContext, create_isolated_test_executor};
 use std::collections::HashMap;
 
@@ -275,7 +277,7 @@ fn test_database_function() {
             assert_eq!(r.columns[0], "db");
             assert_eq!(r.rows.len(), 1);
             // Default database should be "neo4j"
-            if let Some(db_name) = r.rows[0].values.get(0) {
+            if let Some(db_name) = r.rows[0].values.first() {
                 if let Some(name_str) = db_name.as_str() {
                     assert_eq!(name_str, "neo4j");
                 }
@@ -303,7 +305,7 @@ fn test_db_function_alias() {
             assert_eq!(r.columns[0], "database_name");
             assert_eq!(r.rows.len(), 1);
             // Default database should be "neo4j"
-            if let Some(db_name) = r.rows[0].values.get(0) {
+            if let Some(db_name) = r.rows[0].values.first() {
                 if let Some(name_str) = db_name.as_str() {
                     assert_eq!(name_str, "neo4j");
                 }

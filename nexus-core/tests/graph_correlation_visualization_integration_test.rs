@@ -14,7 +14,6 @@ use nexus_core::graph::correlation::visualization::{
 use nexus_core::graph::correlation::{
     CorrelationGraph, GraphCorrelationManager, GraphSourceData, GraphType,
 };
-use tracing;
 
 #[test]
 fn test_complete_visualization_pipeline_call_graph() {

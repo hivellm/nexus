@@ -97,7 +97,7 @@ fn benchmark_group_by() {
         &mut engine,
         "MATCH (n) RETURN labels(n)[0] as label, count(*) as total ORDER BY label",
     );
-    assert!(result.rows.len() >= 1, "Should have at least 1 group");
+    assert!(!result.rows.is_empty(), "Should have at least 1 group");
 }
 
 /// Benchmark COLLECT performance

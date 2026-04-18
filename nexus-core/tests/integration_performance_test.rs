@@ -1,3 +1,6 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+#![allow(dead_code)] // helpers behind `#[ignore]`d integration benchmarks
+
 //! System Integration Performance Test
 //!
 //! Comprehensive integration test that validates all performance optimizations
@@ -15,9 +18,7 @@ use nexus_core::executor::{Executor, Query};
 use nexus_core::index::LabelIndex;
 use nexus_core::storage::RecordStore;
 use nexus_core::testing::TestContext;
-use nexus_core::wal::{AsyncWalConfig, AsyncWalWriter, Wal};
 use nexus_core::{catalog::Catalog, index::KnnIndex};
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -112,10 +113,10 @@ async fn generate_test_data(executor: &mut Executor, config: &IntegrationTestCon
                 cypher.push_str(", ");
             }
             cypher.push_str(&format!(
-                "(n{}:Person {{id: {}, name: '{}', age: {}}})",
+                "(n{}:Person {{id: {}, name: 'Person{}', age: {}}})",
                 j,
                 j,
-                format!("Person{}", j),
+                j,
                 20 + (j % 50)
             ));
         }
@@ -269,7 +270,7 @@ async fn run_concurrent_workload_test(
 }
 
 /// Validate data consistency after test
-fn validate_data_consistency(executor: &Executor, config: &IntegrationTestConfig) -> bool {
+fn validate_data_consistency(executor: &Executor, _config: &IntegrationTestConfig) -> bool {
     // For this integration test, we'll use a simpler validation
     // since the exact Row API might vary. We'll assume if no panics occurred,
     // and basic operations worked, the data is consistent.

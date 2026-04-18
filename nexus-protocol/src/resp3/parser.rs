@@ -567,8 +567,8 @@ mod tests {
     #[tokio::test]
     async fn double_inf_nan() {
         assert_eq!(
-            parse_bytes(b",3.14\r\n").await.unwrap().unwrap(),
-            Resp3Value::Double(3.14)
+            parse_bytes(b",3.25\r\n").await.unwrap().unwrap(),
+            Resp3Value::Double(3.25)
         );
         assert_eq!(
             parse_bytes(b",inf\r\n").await.unwrap().unwrap(),

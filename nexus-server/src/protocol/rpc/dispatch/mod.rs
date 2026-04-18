@@ -160,10 +160,7 @@ pub fn arg_float(args: &[NexusValue], idx: usize) -> Result<f64, String> {
 }
 
 /// Extract a `Map` at `idx` as a borrowed slice of (key, value) pairs.
-pub fn arg_map<'a>(
-    args: &'a [NexusValue],
-    idx: usize,
-) -> Result<&'a [(NexusValue, NexusValue)], String> {
+pub fn arg_map(args: &[NexusValue], idx: usize) -> Result<&[(NexusValue, NexusValue)], String> {
     match args.get(idx) {
         Some(NexusValue::Map(pairs)) => Ok(pairs.as_slice()),
         Some(_) => Err(format!("ERR argument {idx} must be a map")),
@@ -172,7 +169,7 @@ pub fn arg_map<'a>(
 }
 
 /// Extract an `Array` at `idx` as a borrowed slice.
-pub fn arg_array<'a>(args: &'a [NexusValue], idx: usize) -> Result<&'a [NexusValue], String> {
+pub fn arg_array(args: &[NexusValue], idx: usize) -> Result<&[NexusValue], String> {
     match args.get(idx) {
         Some(NexusValue::Array(items)) => Ok(items.as_slice()),
         Some(_) => Err(format!("ERR argument {idx} must be an array")),

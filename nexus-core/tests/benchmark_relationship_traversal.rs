@@ -7,7 +7,7 @@
 
 #[cfg(test)]
 mod tests {
-    use nexus_core::Engine;
+
     use nexus_core::testing::setup_test_engine;
     use std::time::Instant;
 

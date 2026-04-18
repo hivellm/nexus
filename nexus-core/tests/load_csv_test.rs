@@ -2,7 +2,6 @@
 use nexus_core::executor::parser::CypherParser;
 use serde_json::Value;
 use std::fs;
-use tracing;
 
 fn create_engine() -> Engine {
     Engine::new().expect("Failed to create engine")

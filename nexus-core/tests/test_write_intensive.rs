@@ -3,7 +3,6 @@
 //! Tests for high-concurrency write operations to verify performance and consistency
 //! under heavy write loads (Phase 1 Week 5).
 
-use nexus_core::Engine;
 use nexus_core::testing::setup_test_engine;
 
 /// Helper function to extract count from result

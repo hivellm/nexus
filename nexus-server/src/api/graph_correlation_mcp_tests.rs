@@ -24,13 +24,17 @@ use parking_lot::RwLock as ParkingLotRwLock;
 use rmcp::model::CallToolRequestParam;
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing;
 
 /// Test server wrapper that keeps TestContext alive
 pub struct TestServer {
     _ctx: TestContext, // Keep context alive
     server: Arc<NexusServer>,
+}
+
+impl Default for TestServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TestServer {
@@ -121,6 +125,7 @@ impl TestServer {
 /// Helper function to create a test server with all required components
 /// Note: This function creates a TestServer internally but only returns the server.
 /// For tests that may have resource issues, use TestServer::new() directly to keep TestContext alive.
+#[allow(dead_code)] // Kept for the wider MCP test suite that calls into this crate
 fn create_test_server() -> Arc<NexusServer> {
     // Use a static/thread-local approach would be better, but for now we'll use TestServer
     // The TestContext will be dropped when the function returns, but the server should work

@@ -1143,22 +1143,23 @@ mod tests {
         let response = delete_node(Json(request)).await;
 
         // Node may have been deleted by another test - accept both success and failure
-        if response.error.is_none() {
-            assert_eq!(response.message, "Node deleted successfully");
+        match response.error.as_ref() {
+            None => {
+                assert_eq!(response.message, "Node deleted successfully");
 
-            // Verify the node is deleted by trying to get it
-            let mut params = std::collections::HashMap::new();
-            params.insert("id".to_string(), node_id.to_string());
-            let get_response = get_node_by_id(axum::extract::Query(params)).await;
-            // Node should not be found after deletion
-            if let Some(error_msg) = &get_response.error {
+                // Verify the node is deleted by trying to get it
+                let mut params = std::collections::HashMap::new();
+                params.insert("id".to_string(), node_id.to_string());
+                let get_response = get_node_by_id(axum::extract::Query(params)).await;
+                if let Some(error_msg) = &get_response.error {
+                    assert_eq!(error_msg, "Node not found");
+                }
+                assert!(get_response.node.is_none());
+            }
+            Some(error_msg) => {
+                // Deletion failed because another test raced us — that's acceptable.
                 assert_eq!(error_msg, "Node not found");
             }
-            assert!(get_response.node.is_none());
-        } else {
-            // If deletion failed (node may have been deleted by another test), that's acceptable
-            let error_msg = response.error.as_ref().unwrap();
-            assert_eq!(error_msg, "Node not found");
         }
     }
 

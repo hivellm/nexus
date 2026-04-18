@@ -7,7 +7,6 @@
 //!
 //! Validates that all optimizations work together correctly and improve performance.
 
-use nexus_core::Engine;
 use nexus_core::testing::setup_test_engine;
 use std::time::Instant;
 

@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Test CREATE with RETURN clause
 //! Critical bug: CREATE executes successfully but returns 0 rows instead of 1
 

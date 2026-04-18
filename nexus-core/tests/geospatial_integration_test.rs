@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Comprehensive integration tests for geospatial features
 //!
 //! Tests cover:

@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Test Point literal in RETURN clause
 use nexus_core::executor::Query;
 use nexus_core::testing::create_test_executor;

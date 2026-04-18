@@ -10,21 +10,8 @@ description = "HTTP server for Nexus graph database"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
-# Suppress common warnings
-unused = "allow"
-unused_imports = "allow"
-unused_variables = "allow"
-unused_mut = "allow"
-unused_assignments = "allow"
-dead_code = "allow"
 
 [lints.clippy]
-# Suppress clippy warnings
-all = "allow"
-redundant_closure = "allow"
-derivable_impls = "allow"
-unnecessary_cast = "allow"
-collapsible_match = "allow"
 # Hold-lock-across-await is a hard deny so the DatabaseManager lock can never
 # be re-acquired inside an async fn without `spawn_blocking` (see
 # docs/performance/CONCURRENCY.md).

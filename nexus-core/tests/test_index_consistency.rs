@@ -3,7 +3,6 @@
 //! Tests to verify that indexes remain consistent after applying pending index updates
 //! in batch during commit (Phase 1 optimization).
 
-use nexus_core::Engine;
 use nexus_core::testing::setup_test_engine;
 use std::sync::atomic::{AtomicU32, Ordering};
 

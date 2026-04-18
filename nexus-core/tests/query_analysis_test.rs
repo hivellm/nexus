@@ -1,4 +1,4 @@
-﻿use nexus_core::Engine;
+use nexus_core::Engine;
 use serde_json::Value;
 
 fn create_engine() -> Engine {
@@ -270,7 +270,6 @@ fn test_using_join_hint_parsing() {
 #[test]
 fn test_multiple_hints_parsing() {
     use nexus_core::executor::parser::CypherParser;
-    use tracing;
 
     // Test multiple hints
     let query = "MATCH (n:Person) USING INDEX n:Person(email) USING SCAN n:Person RETURN n";

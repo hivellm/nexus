@@ -290,14 +290,13 @@ mod tests {
 
         let response = create_label(Json(request)).await;
         // Check if catalog is initialized (may be initialized by other tests)
-        if response.error.is_some() {
-            assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        if let Some(err) = response.error.as_ref() {
+            assert_eq!(err, "Catalog not initialized");
             assert_eq!(response.label_id, 0);
-        } else {
-            // If catalog is initialized, the request should succeed
-            // Note: label_id can be 0 for the first label if catalog uses 0-based indexing
-            // Just verify that the request succeeded (label_id will be valid)
         }
+        // If catalog is initialized, the request should succeed (label_id
+        // will be a valid id, possibly zero for the first entry — nothing
+        // to assert there beyond the absence of an error).
     }
 
     #[tokio::test]
@@ -343,11 +342,9 @@ mod tests {
 
         let response = create_label(Json(request)).await;
         // Check if catalog is initialized (may be initialized by other tests)
-        if response.error.is_some() {
-            assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
-        } else {
-            // If catalog is initialized, the request should succeed
-            assert!(response.label_id > 0);
+        match response.error.as_ref() {
+            Some(err) => assert_eq!(err, "Catalog not initialized"),
+            None => assert!(response.label_id > 0),
         }
     }
 
@@ -374,8 +371,8 @@ mod tests {
         // Check if catalog is initialized (may be initialized by other tests)
         // If not initialized, should have an error
         // If initialized by other tests, labels may not be empty
-        if response.error.is_some() {
-            assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        if let Some(err) = response.error.as_ref() {
+            assert_eq!(err, "Catalog not initialized");
         }
         // Note: Cannot assert labels.len() == 0 because other tests may have added labels
         // The catalog is global and shared across tests
@@ -403,8 +400,8 @@ mod tests {
 
         let response = create_rel_type(Json(request)).await;
         // Check if catalog is initialized (may be initialized by other tests)
-        if response.error.is_some() {
-            assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        if let Some(err) = response.error.as_ref() {
+            assert_eq!(err, "Catalog not initialized");
         }
         assert_eq!(response.type_id, 0);
     }
@@ -435,8 +432,8 @@ mod tests {
 
         let response = create_rel_type(Json(request)).await;
         // Check if catalog is initialized (may be initialized by other tests)
-        if response.error.is_some() {
-            assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        if let Some(err) = response.error.as_ref() {
+            assert_eq!(err, "Catalog not initialized");
         }
     }
 
@@ -453,11 +450,9 @@ mod tests {
         let response = create_rel_type(Json(request)).await;
         // If catalog is initialized, should succeed
         // If not (because already initialized by another test), might fail
-        if response.error.is_none() {
-            assert!(response.message.contains("KNOWS"));
-        } else {
-            // If error, it should be about catalog initialization
-            assert!(response.error.as_ref().unwrap().contains("Catalog"));
+        match response.error.as_ref() {
+            None => assert!(response.message.contains("KNOWS")),
+            Some(err) => assert!(err.contains("Catalog")),
         }
     }
 
@@ -465,8 +460,8 @@ mod tests {
     async fn test_list_rel_types_without_catalog() {
         let response = list_rel_types().await;
         // The response might have an error or be empty depending on catalog state
-        if response.error.is_some() {
-            assert_eq!(response.error.as_ref().unwrap(), "Catalog not initialized");
+        if let Some(err) = response.error.as_ref() {
+            assert_eq!(err, "Catalog not initialized");
         }
         // If no error, the types list should be empty or contain existing types
     }

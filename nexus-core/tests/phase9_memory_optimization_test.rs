@@ -5,9 +5,8 @@
 //! - Advanced caching strategies
 //! - Lock-free data structures
 
-use nexus_core::Engine;
 use nexus_core::memory::{
-    CacheStats, LockFreeCounter, LockFreeHashMap, LockFreeStack, NumaAllocator, NumaConfig,
+    LockFreeCounter, LockFreeHashMap, LockFreeStack, NumaAllocator, NumaConfig,
     NumaPartitionedCache, NumaScheduler, PredictivePrefetcher,
 };
 use nexus_core::testing::setup_test_engine;

@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Comprehensive tests for executor operations
 //!
 //! Tests cover:

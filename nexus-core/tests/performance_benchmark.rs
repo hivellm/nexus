@@ -9,6 +9,11 @@
 //! - Throughput: >500 queries/second
 //! - Memory usage: <2GB for test dataset
 
+// The benchmark scaffolding below sits behind `#[ignore]`d tests and
+// is wired up for `cargo test --release -- --ignored`. Until CI opts
+// into that opt-in surface, the helpers register as dead code.
+#![allow(dead_code)]
+
 use nexus_core::cache::MultiLayerCache;
 use nexus_core::executor::{Executor, Query};
 use nexus_core::index::LabelIndex;
@@ -172,7 +177,7 @@ async fn benchmark_create_operations(
             params: HashMap::new(),
         };
 
-        if let Ok(_) = executor.execute(&query) {
+        if executor.execute(&query).is_ok() {
             latencies.push(op_start.elapsed());
             operations += 1;
         }

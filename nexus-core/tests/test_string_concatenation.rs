@@ -1,3 +1,5 @@
+#![allow(unused_mut)] // test fixtures declare `mut` preemptively
+
 //! Test String Concatenation operator (+)
 //! Neo4j compatibility tests for string concatenation
 

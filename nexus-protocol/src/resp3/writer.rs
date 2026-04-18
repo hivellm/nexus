@@ -360,7 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn double_regular_and_specials() {
-        assert_eq!(encode(Resp3Value::Double(3.14)).await, b",3.14\r\n");
+        assert_eq!(encode(Resp3Value::Double(3.25)).await, b",3.25\r\n");
         assert_eq!(encode(Resp3Value::Double(f64::INFINITY)).await, b",inf\r\n");
         assert_eq!(
             encode(Resp3Value::Double(f64::NEG_INFINITY)).await,

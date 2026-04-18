@@ -10,8 +10,7 @@ use nexus_core::storage::NodeRecord;
 use nexus_core::storage::RecordStore;
 use nexus_core::storage::RelationshipRecord;
 use nexus_core::storage::graph_engine::{
-    GraphStorageEngine, MigrationOptions, MigrationStats, export_to_record_store,
-    migrate_to_graph_engine,
+    GraphStorageEngine, MigrationOptions, migrate_to_graph_engine,
 };
 use std::time::Instant;
 use tempfile::TempDir;
@@ -97,7 +96,7 @@ fn test_correctness_adjacency_list_integrity() {
     let center = engine.create_node(1).unwrap();
     let mut peripherals = Vec::new();
 
-    for i in 0..5 {
+    for _i in 0..5 {
         let node = engine.create_node(2).unwrap();
         peripherals.push(node);
         engine.create_relationship(center, node, 100).unwrap();
@@ -284,8 +283,8 @@ fn test_performance_bloom_filter_rejection() {
     let start = Instant::now();
 
     for i in 0..num_checks {
-        let src = (i % num_nodes) as u64;
-        let dst = ((i + 50) % num_nodes) as u64; // Most won't exist
+        let src = i % num_nodes;
+        let dst = (i + 50) % num_nodes; // Most won't exist
         let _ = engine.might_have_edge(src, dst, 1);
     }
 

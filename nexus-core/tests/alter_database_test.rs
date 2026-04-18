@@ -4,7 +4,13 @@
 //! - SET ACCESS READ WRITE / READ ONLY
 //! - SET OPTION key value
 
-use nexus_core::executor::{Executor, Query};
+// Test fixtures declare `let (mut executor, ...)` preemptively so
+// individual assertions can opt into mutation without threading the
+// harness through an extra variable. Clippy's unused-mut warning is
+// noise here.
+#![allow(unused_mut)]
+
+use nexus_core::executor::Query;
 use nexus_core::testing::create_isolated_test_executor;
 use std::collections::HashMap;
 
@@ -124,9 +130,7 @@ fn test_alter_database_nonexistent() {
 
 #[test]
 fn test_alter_database_parsing() {
-    use nexus_core::executor::parser::{
-        AlterDatabaseClause, Clause, CypherParser, DatabaseAlteration,
-    };
+    use nexus_core::executor::parser::{Clause, CypherParser, DatabaseAlteration};
 
     // Test parsing READ WRITE
     let mut parser1 = CypherParser::new("ALTER DATABASE mydb SET ACCESS READ WRITE".to_string());
@@ -140,7 +144,7 @@ fn test_alter_database_parsing() {
         assert_eq!(alter_clause.name, "mydb");
         match &alter_clause.alteration {
             DatabaseAlteration::SetAccess { read_only } => {
-                assert_eq!(*read_only, false);
+                assert!(!*read_only);
             }
             _ => panic!("Expected SetAccess alteration"),
         }
@@ -155,7 +159,7 @@ fn test_alter_database_parsing() {
         assert_eq!(alter_clause.name, "mydb");
         match &alter_clause.alteration {
             DatabaseAlteration::SetAccess { read_only } => {
-                assert_eq!(*read_only, true);
+                assert!(*read_only);
             }
             _ => panic!("Expected SetAccess alteration"),
         }
