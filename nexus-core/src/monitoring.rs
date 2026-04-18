@@ -62,23 +62,42 @@ pub struct MetricSample {
 
 /// Metric collector
 pub struct MetricCollector {
-    /// Collected metrics
+    /// Collected metrics (keyed by `{name}{:?labels}`).
+    /// Unbounded growth here was a memory-leak vector when callers emit
+    /// high-cardinality labels (e.g. per-query or per-request values). A
+    /// cap is enforced in `record_sample`; see `max_metrics_size`.
     metrics: Arc<RwLock<HashMap<String, MetricSample>>>,
     /// Metric history (for time-series data)
     history: Arc<RwLock<VecDeque<MetricSample>>>,
     /// Maximum history size
     max_history_size: usize,
+    /// Maximum unique metric keys retained before new insertions are dropped.
+    /// Updates to existing keys are always accepted; only previously-unseen
+    /// `(name, labels)` combinations are rejected when the cap is hit.
+    max_metrics_size: usize,
     /// Collection start time
     start_time: Instant,
 }
 
+/// Hard ceiling on unique metric keys when callers do not override.
+/// Protects against unbounded growth from high-cardinality labels.
+const DEFAULT_MAX_METRICS_SIZE: usize = 10_000;
+
 impl MetricCollector {
-    /// Create a new metric collector
+    /// Create a new metric collector using [`DEFAULT_MAX_METRICS_SIZE`] for
+    /// the unique-key cap.
     pub fn new(max_history_size: usize) -> Self {
+        Self::with_limits(max_history_size, DEFAULT_MAX_METRICS_SIZE)
+    }
+
+    /// Create a new metric collector with explicit limits on both
+    /// rolling-window history size and unique metric key cardinality.
+    pub fn with_limits(max_history_size: usize, max_metrics_size: usize) -> Self {
         Self {
             metrics: Arc::new(RwLock::new(HashMap::new())),
             history: Arc::new(RwLock::new(VecDeque::new())),
             max_history_size,
+            max_metrics_size,
             start_time: Instant::now(),
         }
     }
@@ -162,10 +181,19 @@ impl MetricCollector {
     fn record_sample(&self, sample: MetricSample) {
         let key = format!("{}{:?}", sample.name, sample.labels);
 
-        // Update current metrics
+        // Update current metrics. Existing keys are always updated; new keys
+        // are rejected once the cap is reached to avoid unbounded growth
+        // when callers emit high-cardinality labels.
         {
             let mut metrics = self.metrics.write().unwrap();
-            metrics.insert(key.clone(), sample.clone());
+            if metrics.contains_key(&key) || metrics.len() < self.max_metrics_size {
+                metrics.insert(key, sample.clone());
+            } else {
+                tracing::warn!(
+                    max_metrics_size = self.max_metrics_size,
+                    "MetricCollector: metric cardinality cap reached — dropping new key"
+                );
+            }
         }
 
         // Add to history
