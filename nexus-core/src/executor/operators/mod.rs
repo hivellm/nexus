@@ -5,3 +5,4 @@
 //! evaluation lives in `super::eval`.
 
 pub mod aggregate;
+pub mod expand;
