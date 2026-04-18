@@ -26,6 +26,8 @@ pub struct Config {
     pub multi_database: MultiDatabaseConfig,
     /// RESP3 listener configuration (additive to the HTTP port).
     pub resp3: Resp3Config,
+    /// Native binary RPC listener configuration (additive to the HTTP port).
+    pub rpc: RpcConfig,
 }
 
 /// Configuration for the optional RESP3 TCP listener. Disabled or enabled
@@ -54,6 +56,46 @@ impl Default for Resp3Config {
             enabled: false,
             addr: "127.0.0.1:15476".parse().unwrap(),
             require_auth: true,
+        }
+    }
+}
+
+/// Configuration for the native binary RPC listener (Phase 1 of
+/// `phase1_nexus-rpc-binary-protocol`). Enabled by default — it is the
+/// preferred transport for first-party SDKs. Operators who don't want the
+/// extra port set `enabled = false` in the `[rpc]` section of `config.yml`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RpcConfig {
+    /// Whether the RPC listener is spawned at all.
+    pub enabled: bool,
+    /// Bind address (host:port). Default is `0.0.0.0:15475` so the SDK can
+    /// reach it on LAN; keep behind a firewall or flip this to loopback
+    /// for local-only deployments.
+    pub addr: SocketAddr,
+    /// Whether the listener requires `AUTH` before running any non-pre-auth
+    /// command. Inherits from `auth.enabled` in `main.rs`.
+    pub require_auth: bool,
+    /// Maximum encoded body size of a single frame, in bytes. Defaults to
+    /// 64 MiB — matches `nexus_protocol::rpc::DEFAULT_MAX_FRAME_BYTES`.
+    pub max_frame_bytes: usize,
+    /// Cap on the number of in-flight requests per connection. Excess
+    /// requests wait on a per-connection semaphore.
+    pub max_in_flight_per_conn: usize,
+    /// Milliseconds above which a completed command logs at WARN. 2 ms is
+    /// 2x the target point-read latency; tune per deployment.
+    pub slow_threshold_ms: u64,
+}
+
+impl Default for RpcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            addr: "0.0.0.0:15475".parse().unwrap(),
+            require_auth: true,
+            max_frame_bytes: 64 * 1024 * 1024,
+            max_in_flight_per_conn: 1024,
+            slow_threshold_ms: 2,
         }
     }
 }
@@ -147,6 +189,7 @@ impl Default for Config {
             auth: AuthConfig::default(),
             multi_database: MultiDatabaseConfig::default(),
             resp3: Resp3Config::default(),
+            rpc: RpcConfig::default(),
         }
     }
 }
@@ -357,6 +400,34 @@ impl Config {
             .and_then(|v| v.parse::<bool>().ok())
             .unwrap_or(auth.enabled);
 
+        // RPC: enabled by default (the preferred SDK transport). Env vars
+        // follow the same shape as `NEXUS_RESP3_*` for operator parity.
+        let rpc_defaults = RpcConfig::default();
+        let rpc_enabled = std::env::var("NEXUS_RPC_ENABLED")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(rpc_defaults.enabled);
+        let rpc_addr: SocketAddr = std::env::var("NEXUS_RPC_ADDR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(rpc_defaults.addr);
+        let rpc_require_auth = std::env::var("NEXUS_RPC_REQUIRE_AUTH")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(auth.enabled);
+        let rpc_max_frame_bytes = std::env::var("NEXUS_RPC_MAX_FRAME_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(rpc_defaults.max_frame_bytes);
+        let rpc_max_in_flight = std::env::var("NEXUS_RPC_MAX_IN_FLIGHT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(rpc_defaults.max_in_flight_per_conn);
+        let rpc_slow_threshold_ms = std::env::var("NEXUS_RPC_SLOW_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(rpc_defaults.slow_threshold_ms);
+
         Self {
             addr,
             data_dir,
@@ -369,6 +440,14 @@ impl Config {
                 enabled: resp3_enabled,
                 addr: resp3_addr,
                 require_auth: resp3_require_auth,
+            },
+            rpc: RpcConfig {
+                enabled: rpc_enabled,
+                addr: rpc_addr,
+                require_auth: rpc_require_auth,
+                max_frame_bytes: rpc_max_frame_bytes,
+                max_in_flight_per_conn: rpc_max_in_flight,
+                slow_threshold_ms: rpc_slow_threshold_ms,
             },
         }
     }

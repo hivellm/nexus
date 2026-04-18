@@ -285,6 +285,34 @@ async fn async_main(worker_threads: usize) -> anyhow::Result<()> {
         }
     }
 
+    // Native binary RPC listener (see docs/specs/rpc-wire-format.md).
+    // Enabled by default — first-party SDKs prefer this transport for its
+    // multiplexed MessagePack framing, but HTTP and RESP3 keep running
+    // regardless so existing clients and tooling stay working.
+    if config.rpc.enabled {
+        match nexus_server::protocol::rpc::spawn_rpc_listener(
+            nexus_server.clone(),
+            config.rpc.addr,
+            config.rpc.clone(),
+            config.rpc.require_auth,
+        )
+        .await
+        {
+            Ok(()) => {
+                info!(
+                    "Nexus RPC listener bound on {} (auth_required={}, max_frame_bytes={})",
+                    config.rpc.addr, config.rpc.require_auth, config.rpc.max_frame_bytes
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to bind RPC listener on {}: {}. HTTP/RESP3 surfaces continue unaffected.",
+                    config.rpc.addr, e
+                );
+            }
+        }
+    }
+
     // Create MCP router with StreamableHTTP transport
     let mcp_router = create_mcp_router(nexus_server.clone()).await?;
 

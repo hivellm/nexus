@@ -9,6 +9,10 @@
 //!   in Phase 7 of `phase1_nexus-rpc-binary-protocol`).
 
 pub mod dispatch;
+pub mod metrics;
+pub mod server;
+
+pub use server::spawn_rpc_listener;
 
 // Re-export the shared wire surface for ergonomic intra-server use so
 // handlers can write `use crate::protocol::rpc::NexusValue;` instead of

@@ -45,26 +45,26 @@
 - [x] 6.7 Reject unauthenticated commands when `auth.required && !authenticated` (except `PING`/`HELLO`/`AUTH`/`QUIT`)
 
 ## 7. TCP server and accept loop
-- [ ] 7.1 Implement `spawn_rpc_listener(state, addr)` in `rpc/server.rs` (copy Synap's shape)
-- [ ] 7.2 Per-connection: split into `(read_half, write_half)`, spawn a writer task behind an mpsc channel
-- [ ] 7.3 Per-request: `tokio::spawn` a task that calls `dispatch` and sends `(Response, cmd, elapsed, in_bytes)` to the writer
-- [ ] 7.4 Cap in-flight-per-connection via semaphore (`max_in_flight_per_conn`); excess requests wait
-- [ ] 7.5 Handle clean EOF without logging noise (`UnexpectedEof` is expected on close)
-- [ ] 7.6 Reserve `id = u32::MAX` for server-initiated push frames; document in rustdoc
+- [x] 7.1 Implement `spawn_rpc_listener(state, addr)` in `rpc/server.rs` (copy Synap's shape)
+- [x] 7.2 Per-connection: split into `(read_half, write_half)`, spawn a writer task behind an mpsc channel
+- [x] 7.3 Per-request: `tokio::spawn` a task that calls `dispatch` and sends `(Response, cmd, elapsed, in_bytes)` to the writer
+- [x] 7.4 Cap in-flight-per-connection via semaphore (`max_in_flight_per_conn`); excess requests wait
+- [x] 7.5 Handle clean EOF without logging noise (`UnexpectedEof` is expected on close)
+- [x] 7.6 Reserve `id = u32::MAX` for server-initiated push frames; document in rustdoc
 
 ## 8. Config and metrics
-- [ ] 8.1 Add `RpcConfig { enabled, host, port, max_frame_bytes, max_in_flight_per_conn }` to `nexus-server/src/config.rs`
-- [ ] 8.2 Default `enabled = true`, `host = "0.0.0.0"`, `port = 15475`
-- [ ] 8.3 Support `NEXUS_RPC_ADDR` env override for ops parity with `NEXUS_ADDR`
-- [ ] 8.4 Register prometheus metrics: `nexus_rpc_connections`, `nexus_rpc_commands_total`, `nexus_rpc_command_duration_seconds`, `nexus_rpc_frame_size_bytes_in/out` (the `nexus_` prefix here is the project-wide Prometheus namespace, not the module path)
-- [ ] 8.5 Add `metrics::record_rpc_command(cmd, ok, elapsed)` helper
-- [ ] 8.6 Slow-command warning threshold: 2 ms (configurable via `rpc.slow_threshold_ms`)
+- [x] 8.1 Add `RpcConfig { enabled, host, port, max_frame_bytes, max_in_flight_per_conn }` to `nexus-server/src/config.rs`
+- [x] 8.2 Default `enabled = true`, `host = "0.0.0.0"`, `port = 15475`
+- [x] 8.3 Support `NEXUS_RPC_ADDR` env override for ops parity with `NEXUS_ADDR`
+- [x] 8.4 Register prometheus metrics: `nexus_rpc_connections`, `nexus_rpc_commands_total`, `nexus_rpc_command_duration_seconds`, `nexus_rpc_frame_size_bytes_in/out` (the `nexus_` prefix here is the project-wide Prometheus namespace, not the module path)
+- [x] 8.5 Add `metrics::record_rpc_command(cmd, ok, elapsed)` helper
+- [x] 8.6 Slow-command warning threshold: 2 ms (configurable via `rpc.slow_threshold_ms`)
 
 ## 9. Main wiring
-- [ ] 9.1 In `nexus-server/src/main.rs`, after `axum::serve` is prepared, call `spawn_rpc_listener` when `config.rpc.enabled`
-- [ ] 9.2 Log `"Nexus RPC listening on {addr}"` at INFO on startup
-- [ ] 9.3 Integration test: boot the server and PING via the RPC port returns PONG in <5 ms
-- [ ] 9.4 Integration test: a Cypher `RETURN 1` via RPC matches the HTTP response exactly
+- [x] 9.1 In `nexus-server/src/main.rs`, after `axum::serve` is prepared, call `spawn_rpc_listener` when `config.rpc.enabled`
+- [x] 9.2 Log `"Nexus RPC listening on {addr}"` at INFO on startup
+- [x] 9.3 Integration test: boot the server and PING via the RPC port returns PONG in <5 ms
+- [x] 9.4 Integration test: a Cypher `RETURN 1` via RPC matches the HTTP response exactly
 
 ## 10. Cargo + lint + coverage
 - [ ] 10.1 Add `rmp-serde` to `nexus-server/Cargo.toml`

@@ -96,6 +96,9 @@ impl PrometheusMetrics {
         // they pick up bumps from every connection regardless of which
         // `PrometheusMetrics` instance formatted the response.
         let resp3 = crate::protocol::resp3::server::metrics_snapshot();
+        // Native binary RPC metrics — same pattern (process-wide
+        // AtomicU64 counters).
+        let rpc = crate::protocol::rpc::metrics::snapshot();
 
         let avg_time = if total > 0 {
             total_time as f64 / total as f64
@@ -174,6 +177,34 @@ nexus_resp3_bytes_read_total {resp3_bytes_read}
 # HELP nexus_resp3_bytes_written_total Bytes written to RESP3 sockets since start.
 # TYPE nexus_resp3_bytes_written_total counter
 nexus_resp3_bytes_written_total {resp3_bytes_written}
+
+# HELP nexus_rpc_connections Currently-live native binary RPC connections.
+# TYPE nexus_rpc_connections gauge
+nexus_rpc_connections {rpc_connections}
+
+# HELP nexus_rpc_commands_total Total RPC commands dispatched since server start.
+# TYPE nexus_rpc_commands_total counter
+nexus_rpc_commands_total {rpc_commands}
+
+# HELP nexus_rpc_commands_error_total RPC commands that returned an error response.
+# TYPE nexus_rpc_commands_error_total counter
+nexus_rpc_commands_error_total {rpc_commands_error}
+
+# HELP nexus_rpc_command_duration_microseconds_total Sum of RPC handler wall-clock durations in microseconds. Divide by nexus_rpc_commands_total for an average.
+# TYPE nexus_rpc_command_duration_microseconds_total counter
+nexus_rpc_command_duration_microseconds_total {rpc_duration}
+
+# HELP nexus_rpc_frame_bytes_in_total Sum of incoming RPC frame body sizes in bytes (including 4-byte length prefix).
+# TYPE nexus_rpc_frame_bytes_in_total counter
+nexus_rpc_frame_bytes_in_total {rpc_bytes_in}
+
+# HELP nexus_rpc_frame_bytes_out_total Sum of outgoing RPC frame body sizes in bytes.
+# TYPE nexus_rpc_frame_bytes_out_total counter
+nexus_rpc_frame_bytes_out_total {rpc_bytes_out}
+
+# HELP nexus_rpc_slow_commands_total RPC commands that exceeded the configured slow-threshold.
+# TYPE nexus_rpc_slow_commands_total counter
+nexus_rpc_slow_commands_total {rpc_slow}
 "#,
             total = total,
             successful = successful,
@@ -191,6 +222,13 @@ nexus_resp3_bytes_written_total {resp3_bytes_written}
             resp3_duration = resp3.command_duration_microseconds_total,
             resp3_bytes_read = resp3.bytes_read_total,
             resp3_bytes_written = resp3.bytes_written_total,
+            rpc_connections = rpc.active_connections,
+            rpc_commands = rpc.commands_total,
+            rpc_commands_error = rpc.commands_error_total,
+            rpc_duration = rpc.command_duration_us_total,
+            rpc_bytes_in = rpc.bytes_in_total,
+            rpc_bytes_out = rpc.bytes_out_total,
+            rpc_slow = rpc.slow_commands_total,
         )
     }
 }
