@@ -28,6 +28,8 @@ pub use jwt::{JwtConfig, JwtManager, TokenPair};
 pub use middleware::{
     AuthContext, AuthError, AuthMiddleware, audit_log_failures_total, record_audit_log_failure,
 };
+#[cfg(feature = "axum")]
+pub use middleware::{extract_auth_context, extract_user_context};
 pub use password::{hash_password, verify_password};
 pub use permissions::{Permission, PermissionSet};
 pub use queue_permissions::{

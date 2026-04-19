@@ -1,6 +1,7 @@
 //! Authentication middleware for HTTP requests
 
 use super::{AuthManager, Permission};
+use crate::cluster::{UserContext, UserNamespace};
 #[cfg(feature = "axum")]
 use axum::{
     extract::{Request, State},
@@ -75,7 +76,14 @@ pub(crate) fn reset_audit_log_failures_for_test() {
     AUDIT_LOG_FAILURES.store(0, Ordering::Relaxed);
 }
 
-/// Authentication context for the current request
+/// Authentication context for the current request.
+///
+/// Stays `Serialize + Deserialize` so audit logs and plan snapshots
+/// round-trip through JSON unchanged. The cluster-mode `UserContext`
+/// is NOT part of this struct on purpose — it rides its own
+/// request-extension slot (`request.extensions().get::<UserContext>()`)
+/// so downstream layers that only need a namespace don't also have
+/// to depend on the auth types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthContext {
     /// The authenticated API key
@@ -256,6 +264,11 @@ impl RateLimiter {
 pub struct AuthMiddleware {
     auth_manager: Arc<AuthManager>,
     require_auth: bool,
+    /// When `true`, cluster-mode semantics are active: every endpoint
+    /// requires authentication (including health/stats), and the
+    /// middleware builds a [`UserContext`] from the resolved API key
+    /// and stashes it into request extensions for downstream layers.
+    cluster_enabled: bool,
     rate_limiter: Option<Arc<RateLimiter>>,
     audit_logger: Option<Arc<super::AuditLogger>>,
 }
@@ -266,6 +279,7 @@ impl AuthMiddleware {
         Self {
             auth_manager,
             require_auth,
+            cluster_enabled: false,
             rate_limiter: None,
             audit_logger: None,
         }
@@ -280,6 +294,7 @@ impl AuthMiddleware {
         Self {
             auth_manager,
             require_auth,
+            cluster_enabled: false,
             rate_limiter: None,
             audit_logger: Some(audit_logger),
         }
@@ -294,9 +309,57 @@ impl AuthMiddleware {
         Self {
             auth_manager,
             require_auth,
+            cluster_enabled: false,
             rate_limiter: Some(Arc::new(rate_limiter)),
             audit_logger: None,
         }
+    }
+
+    /// Enable cluster-mode semantics on this middleware. Once set,
+    /// `require_auth` is implicitly `true` for every endpoint (no
+    /// public exemptions) and each successfully authenticated
+    /// request gets a [`UserContext`] inserted into its extensions.
+    ///
+    /// Returns `self` so callers can chain this onto one of the
+    /// existing constructors (keeping the call sites that build
+    /// standalone middlewares untouched).
+    pub fn with_cluster_mode(mut self) -> Self {
+        self.cluster_enabled = true;
+        self.require_auth = true;
+        self
+    }
+
+    /// Whether cluster-mode semantics are active on this middleware.
+    pub fn is_cluster_mode(&self) -> bool {
+        self.cluster_enabled
+    }
+
+    /// Derive a cluster-mode [`UserContext`] from an authenticated
+    /// API key, or explain why the key is not eligible.
+    ///
+    /// Returns:
+    /// * `Ok(Some(ctx))` — the key carries a `user_id` that parses
+    ///   as a valid [`UserNamespace`]; use the context downstream.
+    /// * `Ok(None)` — the key has no `user_id`; acceptable in
+    ///   standalone mode but will be treated as an error by the
+    ///   middleware when `cluster_enabled = true`.
+    /// * `Err(AuthError)` — the key had a `user_id` but it failed
+    ///   namespace validation (e.g. contained the reserved
+    ///   delimiter). Caller should 401 the request.
+    pub fn user_context_from_api_key(
+        api_key: &super::ApiKey,
+    ) -> Result<Option<UserContext>, AuthError> {
+        let user_id = match &api_key.user_id {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+        let namespace =
+            UserNamespace::new(user_id.clone()).map_err(|_| AuthError::invalid_token())?;
+        let ctx = match &api_key.allowed_functions {
+            None => UserContext::unrestricted(namespace, api_key.id.clone()),
+            Some(list) => UserContext::restricted(namespace, api_key.id.clone(), list.clone()),
+        };
+        Ok(Some(ctx))
     }
 
     /// Extract the API key from headers
@@ -330,8 +393,17 @@ impl AuthMiddleware {
         None
     }
 
-    /// Check if the request requires authentication
+    /// Check if the request requires authentication.
+    ///
+    /// In cluster mode (`cluster_enabled = true`) the answer is
+    /// unconditionally `true` — including for `/health`, `/stats`,
+    /// and `/openapi.json` — because a shared multi-tenant server
+    /// must not expose any surface without an authenticated caller.
     pub fn requires_auth(&self, uri: &str, require_health_auth: bool) -> bool {
+        if self.cluster_enabled {
+            return true;
+        }
+
         // Health check endpoint - configurable
         if uri == "/health" || uri == "/" {
             return require_health_auth;
@@ -514,6 +586,46 @@ pub async fn auth_middleware_handler(
         }
     }
 
+    // In cluster mode, the key MUST resolve to a namespaced user
+    // context. A key without a `user_id`, or one whose `user_id`
+    // fails namespace validation, cannot be trusted to route to a
+    // specific tenant — we 401 rather than silently routing it to
+    // the global scope.
+    let user_context_opt = if auth_service.cluster_enabled {
+        match AuthMiddleware::user_context_from_api_key(&api_key) {
+            Ok(Some(ctx)) => Some(ctx),
+            Ok(None) | Err(_) => {
+                if let Some(ref audit_logger) = auth_service.audit_logger {
+                    let ip_address = request
+                        .headers()
+                        .get("x-forwarded-for")
+                        .or_else(|| request.headers().get("x-real-ip"))
+                        .and_then(|h| h.to_str().ok())
+                        .map(|s| s.to_string());
+                    if let Err(e) = audit_logger
+                        .log_authentication_failed(
+                            None,
+                            format!(
+                                "API key {} has no valid user_id for cluster mode",
+                                api_key.id
+                            ),
+                            ip_address,
+                        )
+                        .await
+                    {
+                        record_audit_log_failure("cluster_missing_user_id", &e);
+                    }
+                }
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(AuthError::invalid_token()),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
     // Create authentication context
     let auth_context = AuthContext {
         api_key: api_key.clone(),
@@ -524,6 +636,14 @@ pub async fn auth_middleware_handler(
     request
         .extensions_mut()
         .insert(axum::extract::Extension(Some(auth_context)));
+
+    // In cluster mode, also expose the UserContext on its own extension
+    // slot so downstream handlers / middleware (quota, namespace
+    // scoping) can find it via `request.extensions().get::<UserContext>()`
+    // without depending on the auth module's types.
+    if let Some(user_context) = user_context_opt {
+        request.extensions_mut().insert(user_context);
+    }
 
     // Continue with the request and add rate limit headers if configured
     let mut response = next.run(request).await;
@@ -590,6 +710,15 @@ pub async fn rate_limit_middleware(
     // Rate limiting is now integrated into auth_middleware_handler
     // This middleware is kept for backward compatibility
     Ok(next.run(request).await)
+}
+
+#[cfg(feature = "axum")]
+/// Pull the cluster-mode [`UserContext`] off a request's extensions,
+/// if the auth middleware installed one. Returns `None` in standalone
+/// mode and for unauthenticated requests in cluster mode (which the
+/// middleware would have rejected before reaching this call site).
+pub fn extract_user_context(request: &Request) -> Option<&UserContext> {
+    request.extensions().get::<UserContext>()
 }
 
 #[cfg(feature = "axum")]
@@ -807,6 +936,110 @@ mod tests {
         assert!(middleware.requires_auth("/cypher", false));
         assert!(middleware.requires_auth("/data/nodes", false));
         assert!(middleware.requires_auth("/schema/labels", false));
+    }
+
+    #[test]
+    fn cluster_mode_requires_auth_on_every_path() {
+        // The exact uris that are public in standalone mode —
+        // cluster mode must override every one of them, including
+        // /health and /openapi.json, because a shared multi-tenant
+        // server cannot advertise its surface without identifying
+        // the caller first.
+        let config = super::super::AuthConfig::default();
+        let auth_manager = Arc::new(AuthManager::new(config));
+        let middleware = AuthMiddleware::new(auth_manager, false).with_cluster_mode();
+
+        assert!(middleware.is_cluster_mode());
+        for uri in ["/", "/health", "/stats", "/openapi.json", "/cypher"] {
+            assert!(
+                middleware.requires_auth(uri, false),
+                "cluster mode must require auth for {uri}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_context_from_api_key_unrestricted() {
+        use crate::auth::api_key::ApiKey;
+
+        let mut key = ApiKey::new(
+            "key-1".into(),
+            "alice-key".into(),
+            vec![super::Permission::Read],
+            "hash".into(),
+        );
+        key.user_id = Some("alice".into());
+
+        let ctx = AuthMiddleware::user_context_from_api_key(&key)
+            .expect("valid user_id must build a context")
+            .expect("user_id present means context is Some");
+
+        assert_eq!(ctx.namespace().as_id(), "alice");
+        assert_eq!(ctx.api_key_id(), "key-1");
+        // No allow-list on the key → unrestricted context.
+        assert!(ctx.allowed_functions().is_none());
+        assert!(ctx.may_call("anything"));
+    }
+
+    #[test]
+    fn user_context_from_api_key_honours_function_allow_list() {
+        use crate::auth::api_key::ApiKey;
+
+        let mut key = ApiKey::new(
+            "key-2".into(),
+            "scoped-key".into(),
+            vec![super::Permission::Read],
+            "hash".into(),
+        )
+        .with_allowed_functions(Some(vec!["cypher.execute".into()]));
+        key.user_id = Some("bob".into());
+
+        let ctx = AuthMiddleware::user_context_from_api_key(&key)
+            .unwrap()
+            .unwrap();
+        assert!(ctx.may_call("cypher.execute"));
+        assert!(!ctx.may_call("nexus.admin.drop_database"));
+    }
+
+    #[test]
+    fn user_context_from_api_key_without_user_id_is_none() {
+        use crate::auth::api_key::ApiKey;
+
+        // Unlike the no-auth case, this is a _valid_ key with no
+        // user_id at all. In standalone mode we're fine; the cluster
+        // middleware is the one that turns this `Ok(None)` into a
+        // 401, which is covered by the integration-level test that
+        // exercises `auth_middleware_handler`.
+        let key = ApiKey::new(
+            "key-3".into(),
+            "no-user".into(),
+            vec![super::Permission::Read],
+            "hash".into(),
+        );
+        assert!(
+            AuthMiddleware::user_context_from_api_key(&key)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn user_context_from_api_key_rejects_invalid_user_id() {
+        use crate::auth::api_key::ApiKey;
+
+        // `:` is reserved in the namespace format. An API key that
+        // ships with a forbidden user_id is almost certainly a bug
+        // upstream — we surface it as an auth error rather than
+        // silently collapsing to the global scope.
+        let mut key = ApiKey::new(
+            "key-4".into(),
+            "bad-user".into(),
+            vec![super::Permission::Read],
+            "hash".into(),
+        );
+        key.user_id = Some("has:colon".into());
+        let err = AuthMiddleware::user_context_from_api_key(&key).unwrap_err();
+        assert_eq!(err.code, "INVALID_TOKEN");
     }
 
     #[tokio::test]
