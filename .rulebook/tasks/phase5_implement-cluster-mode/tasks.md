@@ -20,17 +20,17 @@
 - [ ] 1.10 Write integration tests with mock SDK client
 
 ### 2. Quota Management Service
-- [ ] 2.1 Create `nexus-core/src/cluster/quota.rs` module
+- [x] 2.1 Create `nexus-core/src/cluster/quota.rs` module
 - [ ] 2.2 Implement quota cache layer on top of SDK (leveraging SDK's built-in caching)
-- [ ] 2.3 Implement quota validation logic using SDK quota responses
-- [ ] 2.4 Implement storage quota tracking per user using SDK's quota data
-- [ ] 2.5 Implement rate limit quota tracking per user using SDK's quota data
+- [x] 2.3 Implement quota validation logic (synchronous `check_rate` / `check_storage` on `LocalQuotaProvider`)
+- [x] 2.4 Implement storage quota tracking per user (`record_usage` + `snapshot`)
+- [x] 2.5 Implement rate limit quota tracking per user (per-minute + per-hour `RateWindow`)
 - [ ] 2.6 Map SDK quota errors to Nexus quota error types
-- [ ] 2.7 Write unit tests for quota service with SDK mock
+- [x] 2.7 Write unit tests for quota service (5 unit tests in `cluster::quota::tests`)
 - [ ] 2.8 Write integration tests for quota enforcement
 
 ### 3. Configuration
-- [ ] 3.1 Add cluster mode configuration flag to config.yml
+- [x] 3.1 Add cluster mode configuration flag (`ClusterConfig { enabled, default_quotas }` in `cluster::config`)
 - [ ] 3.2 Add HiveHub SDK configuration (base_url, service_api_key for SDK initialization)
 - [ ] 3.3 Add SDK client configuration (timeout, retries, retry_delay)
 - [ ] 3.4 Add quota cache TTL configuration (if using additional caching layer)
@@ -43,11 +43,11 @@
 ## Phase 2: Data Segmentation by User (3-4 weeks)
 
 ### 4. Namespace System
-- [ ] 4.1 Create `nexus-core/src/cluster/namespace.rs` module
-- [ ] 4.2 Implement user namespace ID generation and validation
-- [ ] 4.3 Implement namespace prefix for storage keys
+- [x] 4.1 Create `nexus-core/src/cluster/namespace.rs` module
+- [x] 4.2 Implement user namespace ID generation and validation (`UserNamespace::new` rejects empty / oversized / delimiter / control chars)
+- [x] 4.3 Implement namespace prefix for storage keys (`prefix()`, `prefix_key()`, `owns()`)
 - [ ] 4.4 Add namespace context to execution context
-- [ ] 4.5 Write unit tests for namespace system
+- [x] 4.5 Write unit tests for namespace system (8 unit tests in `cluster::namespace::tests`)
 
 ### 5. Storage Layer Namespace Support
 - [ ] 5.1 Modify catalog to support namespaced labels/types/keys

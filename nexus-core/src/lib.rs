@@ -44,6 +44,7 @@ use tracing;
 pub mod auth;
 pub mod cache;
 pub mod catalog;
+pub mod cluster;
 pub mod concurrent_access;
 pub mod database;
 pub mod error;
