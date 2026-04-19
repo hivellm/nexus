@@ -165,15 +165,21 @@ class Index
 
 /**
  * Configuration for Nexus client.
+ *
+ * Transport precedence: URL scheme in $baseUrl > NEXUS_SDK_TRANSPORT
+ * env var > $transport field > default (binary RPC).
  */
 class Config
 {
     public function __construct(
-        public string $baseUrl = 'http://localhost:15474',
+        public string $baseUrl = 'nexus://127.0.0.1:15475',
         public ?string $apiKey = null,
         public ?string $username = null,
         public ?string $password = null,
-        public int $timeout = 30
+        public int $timeout = 30,
+        public ?\Nexus\SDK\Transport\TransportMode $transport = null,
+        public ?int $rpcPort = null,
+        public ?int $resp3Port = null,
     ) {
     }
 }

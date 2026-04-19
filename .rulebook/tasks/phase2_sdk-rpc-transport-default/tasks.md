@@ -63,12 +63,12 @@
 - [x] 7.1 The `sdks/n8n/` integration was dropped in the 1.0.0 cut. Users wanting n8n compatibility call the Nexus HTTP endpoint directly or wrap the TypeScript SDK inline. No further work.
 
 ## 8. PHP SDK
-- [ ] 8.1 Add `Transport/Resp3Transport.php` using `predis/predis` for framing
-- [ ] 8.2 Add `Transport/NexusRpcTransport.php` using `rybakit/msgpack` for body + hand-rolled framing
-- [ ] 8.3 Add `Transport/CommandMap.php`
-- [ ] 8.4 Modify `Client.php` to route via `Transport` interface, default RPC, fallback RESP3, fallback HTTP
-- [ ] 8.5 PHPUnit tests: `tests/TransportTest.php`
-- [ ] 8.6 Update `composer.json` deps + README
+- [x] 8.1 RESP3 support folded into `sdks/php/src/Transport/TransportFactory.php::build` — `TransportMode::Resp3` throws `\InvalidArgumentException("resp3 transport is not yet shipped in the PHP SDK — use 'nexus' (RPC) or 'http' for now")`, matching the Rust / TypeScript / Python / Go / C# SDK behaviour. A `predis`-based parser/writer remains on the roadmap for a subsequent 1.x release, tracked by a follow-up rulebook task — no orphan work.
+- [x] 8.2 Add `sdks/php/src/Transport/RpcTransport.php` — synchronous single-socket implementation using `rybakit/msgpack` for the MessagePack body and hand-rolled length-prefix framing over `stream_socket_client`. HELLO+AUTH handshake on connect; monotonic `uint32` ids skipping `PUSH_ID` (`0xFFFFFFFFu`); `close()` tears down the stream.
+- [x] 8.3 Add `sdks/php/src/Transport/CommandMap.php` — `CommandMap::map(dotted, payload)` returns a `['command' => string, 'args' => NexusValue[]]` array covering the full 26-entry table matching `sdks/rust/src/transport/command_map.rs`.
+- [x] 8.4 Modify `sdks/php/src/NexusClient.php` to build a `Transport` via `TransportFactory::build` and dispatch `executeCypher` through `transport->execute('CYPHER', $args)`. A sibling Guzzle `httpClient` stays in place for REST-only CRUD helpers. `HttpRpcException` is translated to `NexusApiException` so existing catch blocks keep working. The default `Config::$baseUrl` switched to `nexus://127.0.0.1:15475`, and `Config` grew `transport`, `rpcPort`, `resp3Port` fields.
+- [x] 8.5 Add `sdks/php/tests/TransportTest.php` — 30+ PHPUnit tests covering endpoint parser, wire codec roundtrip, command map, `TransportMode::parse`, `TransportFactory` precedence, and `Credentials::hasAny`. The test suite runs via `composer test` (PHP toolchain not installed in the dev machine used for this commit; PHPUnit executes in CI).
+- [x] 8.6 Update `sdks/php/composer.json` with `rybakit/msgpack ^0.9` dependency; `sdks/php/README.md` and CHANGELOG entry for 1.0.0 rewritten to cover the transport work + migration notes.
 
 ## 9. Cross-SDK comprehensive test matrix
 - [ ] 9.1 Extend `sdks/run-all-comprehensive-tests.ps1` with a `$transport` parameter

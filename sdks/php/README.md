@@ -360,7 +360,7 @@ See the [examples](./examples) directory for complete working examples:
 
 ## License
 
-MIT License - see [LICENSE](../../LICENSE) file for details
+Apache License 2.0 - see [LICENSE](./LICENSE) file for details
 
 ## Contributing
 

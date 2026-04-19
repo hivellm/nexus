@@ -8,31 +8,60 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
 
 ## [1.0.0] — 2026-04-19
 
+### Added
+
+- **Native binary RPC transport** (`nexus://host:15475`) — a new
+  `Nexus\SDK\Transport` namespace implements a synchronous
+  single-socket `RpcTransport` using `rybakit/msgpack` for the
+  MessagePack body and hand-rolled length-prefix framing over
+  `stream_socket_client`. HELLO+AUTH handshake on connect; monotonic
+  `uint32` ids skipping `PUSH_ID` (`0xFFFFFFFFu`).
+- `TransportMode` enum (`NexusRpc` / `Resp3` / `Http` / `Https`)
+  aligned with the URL scheme and the `NEXUS_SDK_TRANSPORT` env-var
+  tokens. `TransportMode::parse()` accepts `rpc` / `nexusrpc`
+  aliases.
+- `Config::$transport`, `Config::$rpcPort`, `Config::$resp3Port`
+  fields on the client config.
+- `Transport` interface (`Nexus\SDK\Transport\Transport`) +
+  `HttpTransport` implementation wrapping GuzzleHttp with a route
+  table for CYPHER / PING+HEALTH / STATS / DB_* / schema. Non-2xx
+  responses surface as `HttpRpcException`.
+- `CommandMap::map(dotted, payload)` — 26-entry table matching
+  `sdks/rust/src/transport/command_map.rs`.
+- `TransportFactory::build(baseUrl, credentials, …)` — precedence
+  chain: URL scheme > `NEXUS_SDK_TRANSPORT` env > hint > default
+  (`NexusRpc`).
+- `NexusClient::getTransportMode()` / `endpointDescription()` /
+  `close()` surface the resolved transport.
+- `rybakit/msgpack` 0.9 Composer dependency.
+- `tests/TransportTest.php` — 30+ PHPUnit tests covering endpoint
+  parser, wire codec roundtrip, command map, `TransportMode::parse`,
+  `TransportFactory` precedence, and `Credentials::hasAny`.
+
 ### Changed
 
-- **Version aligned to 1.0.0** across all Nexus SDKs. Tag the
-  repository at `v1.0.0` to publish on packagist. No runtime
-  behaviour changes in this release — the SDK continues to talk
-  HTTP/JSON against the Nexus REST endpoint on port 15474.
+- **Default endpoint is now `nexus://127.0.0.1:15475`** (RPC).
+  Previously defaulted to HTTP on `http://localhost:15474`. Existing
+  callers passing an explicit `http://` URL are unaffected. Callers
+  relying on the default now need either (a) a running Nexus server
+  with the RPC listener open (default in 1.0.0) or (b)
+  `NEXUS_SDK_TRANSPORT=http` / `Config::$transport = TransportMode::Http`.
+- `NexusClient::executeCypher` dispatches via the active transport.
+  The response is decoded from the `NexusValue` envelope into the
+  existing `QueryResult` type.
+- `NexusClient::__destruct` releases the persistent RPC socket.
 
-### Pending (tracked by `phase2_sdk-rpc-transport-default` §8)
+### Migration
 
-The following work lands in a subsequent 1.x release:
+- **Opt out of RPC** if your deployment cannot open port `15475`:
+  - Env var: `export NEXUS_SDK_TRANSPORT=http`
+  - Per-client: `new Config(baseUrl: 'http://host:15474', apiKey: '...')`
+  - Per-client explicit: `new Config(transport: TransportMode::Http, baseUrl: 'host:15474')`
+- **CRUD helpers** (`createNode`, `updateNode`, …) continue to hit
+  the REST endpoints via the side-car Guzzle client. For full RPC
+  coverage, call `executeCypher` with equivalent Cypher statements.
 
-- **Native binary RPC transport** (`nexus://host:15475`) using
-  `rybakit/msgpack` for the MessagePack body + hand-rolled
-  length-prefix framing — default transport in the shared SDK
-  contract, already shipped by the Rust SDK.
-- RESP3 transport via `predis/predis`.
-- `Transport` interface + `TransportMode` enum with `"nexus"` /
-  `"resp3"` / `"http"` string values.
-- `NEXUS_SDK_TRANSPORT` env var override.
-- 500 ms connect-timeout auto-downgrade to HTTP.
-- Command-map parity with the spec's §6 table.
-
-The shared contract lives at
-[`docs/specs/sdk-transport.md`](../../docs/specs/sdk-transport.md)
-and the Rust SDK is the reference implementation.
+See [`docs/MIGRATION_SDK_TRANSPORT.md`](../../docs/MIGRATION_SDK_TRANSPORT.md) for the cross-SDK guide.
 
 ## Earlier versions
 

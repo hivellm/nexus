@@ -7,25 +7,83 @@ namespace Nexus\SDK;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\RequestOptions;
+use Nexus\SDK\Transport\CommandMap;
+use Nexus\SDK\Transport\Credentials;
+use Nexus\SDK\Transport\Endpoint;
+use Nexus\SDK\Transport\HttpRpcException;
+use Nexus\SDK\Transport\NexusValue;
+use Nexus\SDK\Transport\Transport;
+use Nexus\SDK\Transport\TransportFactory;
+use Nexus\SDK\Transport\TransportMode;
 
 /**
  * Client for interacting with Nexus graph database.
+ *
+ * Defaults to the native binary RPC transport on
+ * nexus://127.0.0.1:15475. Callers can opt down to HTTP with
+ * Config::$transport = TransportMode::Http or by passing an
+ * http:// URL as Config::$baseUrl.
  */
 class NexusClient
 {
     private Client $httpClient;
     private ?string $token = null;
+    private readonly Transport $transport;
+    private readonly Endpoint $endpoint;
+    private readonly TransportMode $mode;
 
     public function __construct(private readonly Config $config)
     {
+        $built = TransportFactory::build(
+            $config->baseUrl,
+            new Credentials(
+                apiKey: $config->apiKey,
+                username: $config->username,
+                password: $config->password,
+            ),
+            transportHint: $config->transport,
+            rpcPort: $config->rpcPort,
+            resp3Port: $config->resp3Port,
+            timeoutS: $config->timeout,
+        );
+        $this->transport = $built['transport'];
+        $this->endpoint = $built['endpoint'];
+        $this->mode = $built['mode'];
+
+        // REST-specific convenience methods keep a sibling httpClient
+        // against the sibling HTTP port so CRUD helpers (CreateNode, …)
+        // continue to work even when the primary transport is RPC.
         $this->httpClient = new Client([
-            'base_uri' => rtrim($config->baseUrl, '/'),
+            'base_uri' => $this->endpoint->asHttpUrl(),
             'timeout' => $config->timeout,
             'headers' => [
                 'Accept' => 'application/json',
                 'Content-Type' => 'application/json',
             ],
         ]);
+    }
+
+    /** Active transport mode after the precedence chain was resolved. */
+    public function getTransportMode(): TransportMode
+    {
+        return $this->mode;
+    }
+
+    /** Human-readable endpoint + transport label. */
+    public function endpointDescription(): string
+    {
+        return $this->transport->describe();
+    }
+
+    /** Release the persistent RPC socket (if any). */
+    public function close(): void
+    {
+        $this->transport->close();
+    }
+
+    public function __destruct()
+    {
+        $this->close();
     }
 
     /**
@@ -47,20 +105,32 @@ class NexusClient
     }
 
     /**
-     * Execute a Cypher query.
+     * Execute a Cypher query via the active transport.
      *
      * @param array<string, mixed>|null $parameters
      * @throws NexusApiException
      */
     public function executeCypher(string $query, ?array $parameters = null): QueryResult
     {
-        $body = ['query' => $query];
+        $args = [NexusValue::str($query)];
         if ($parameters !== null) {
-            $body['parameters'] = $parameters;
+            $args[] = CommandMap::jsonToNexus($parameters);
         }
-
-        $response = $this->doRequest('POST', '/cypher', $body);
-        return QueryResult::fromArray($response);
+        try {
+            $resp = $this->transport->execute('CYPHER', $args);
+        } catch (HttpRpcException $e) {
+            throw new NexusApiException($e->body, $e->statusCode);
+        } catch (\RuntimeException $e) {
+            throw new NexusApiException($e->getMessage(), 0, $e);
+        }
+        $json = CommandMap::nexusToJson($resp);
+        if (!is_array($json)) {
+            throw new NexusApiException(sprintf(
+                'CYPHER: expected object response, got %s',
+                get_debug_type($json),
+            ));
+        }
+        return QueryResult::fromArray($json);
     }
 
     /**
