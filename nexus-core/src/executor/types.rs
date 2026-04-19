@@ -17,6 +17,16 @@ pub struct ExecutorConfig {
     pub enable_parallel_execution: bool,
     /// Minimum dataset size to trigger vectorized operations
     pub vectorized_threshold: usize,
+    /// Minimum row count at which the filter / groupless-aggregate
+    /// operators materialise a columnar batch and dispatch through
+    /// the SIMD kernels in `crate::simd::compare` + `crate::simd::reduce`.
+    ///
+    /// Below this threshold the row-at-a-time path stays active — the
+    /// columnar materialisation has a non-zero per-batch cost that
+    /// only amortises on large inputs. Tuned on the reference
+    /// benchmark hardware; see `phase3_executor-columnar-wiring` for
+    /// the tuning rationale.
+    pub columnar_threshold: usize,
     /// Enable advanced join algorithms (hash joins, merge joins)
     pub enable_advanced_joins: bool,
     /// Enable relationship processing optimizations (specialized storage, advanced traversal, property indexing)
@@ -38,6 +48,11 @@ impl Default for ExecutorConfig {
             // completes; flip via ExecutorConfig when opting in.
             enable_parallel_execution: false,
             vectorized_threshold: 50,
+            // 4096 rows matches the proposal's tuning target — big
+            // enough that msgpack + page-cache overhead dominates,
+            // small enough that an in-flight query over a
+            // medium-sized label slice still benefits.
+            columnar_threshold: 4096,
             enable_advanced_joins: true,
             enable_relationship_optimizations: true,
             enable_numa_optimizations: false, // Disabled by default (requires NUMA hardware)

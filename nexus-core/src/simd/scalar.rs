@@ -271,6 +271,27 @@ scalar_cmp_f64!(le_f64, <=);
 scalar_cmp_f64!(gt_f64, >);
 scalar_cmp_f64!(ge_f64, >=);
 
+macro_rules! scalar_cmp_f32 {
+    ($name:ident, $op:tt) => {
+        #[inline(always)]
+        pub fn $name(values: &[f32], scalar: f32) -> Vec<u64> {
+            let mut out = bitmap_bytes(values.len());
+            for (i, &v) in values.iter().enumerate() {
+                if v $op scalar {
+                    set_bit(&mut out, i);
+                }
+            }
+            out
+        }
+    };
+}
+scalar_cmp_f32!(eq_f32, ==);
+scalar_cmp_f32!(ne_f32, !=);
+scalar_cmp_f32!(lt_f32, <);
+scalar_cmp_f32!(le_f32, <=);
+scalar_cmp_f32!(gt_f32, >);
+scalar_cmp_f32!(ge_f32, >=);
+
 // ── bitmap kernels ────────────────────────────────────────────────────────────
 
 /// Population count over a slice of `u64` words.

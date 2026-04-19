@@ -2,131 +2,78 @@
 //!
 //! This module provides columnar data representations optimized for
 //! SIMD processing and vectorized query execution.
+//!
+//! Compare kernels route through the canonical, proptest-covered
+//! implementations in [`crate::simd::compare`] — AVX-512 → AVX2 →
+//! scalar dispatch based on runtime CPU features, with NaN-aware
+//! IEEE-ordered semantics for floats. The tagged `ComparisonOp` here
+//! maps onto the six per-type entry points in the kernel module; no
+//! bespoke intrinsics live in this file.
 
 use crate::error::{Error, Result};
+use crate::simd::compare as cmp;
 use std::collections::HashMap;
 
-/// SIMD operations for columnar data processing
-#[cfg(target_arch = "x86_64")]
+/// SIMD-accelerated compare + filter helpers for [`Column`].
+///
+/// Thin wrappers that dispatch to [`crate::simd::compare`] and present
+/// a `Vec<bool>` API to the existing columnar consumers (joins, JIT
+/// codegen). Internally the kernel returns a packed `Vec<u64>`
+/// bitmap; [`bitmap_to_bool_vec`] expands it once on the way out.
 mod simd_ops {
     use super::*;
-    use std::arch::x86_64::*;
 
-    /// SIMD-accelerated comparison operations for i64 columns
-    pub struct SimdComparator {
-        chunk_size: usize,
-    }
+    /// SIMD-accelerated comparison operations for numeric columns.
+    pub struct SimdComparator;
 
     impl SimdComparator {
         pub fn new() -> Self {
-            Self {
-                chunk_size: 64 / std::mem::size_of::<i64>(),
-            } // AVX-512 can process 8 i64 values
+            Self
         }
 
-        /// Compare i64 column values against a scalar using SIMD
+        /// Compare an i64 column against a scalar using the dispatched
+        /// canonical kernel. Returns a boolean result per row.
         pub fn compare_scalar_i64(
             &self,
             column: &Column,
             scalar: i64,
             op: ComparisonOp,
         ) -> Vec<bool> {
-            let slice = column.as_slice::<i64>();
-            let mut results = Vec::with_capacity(column.len);
-
-            // Process in SIMD chunks
-            for chunk in slice.chunks(self.chunk_size) {
-                let chunk_results = self.compare_chunk_i64(chunk, scalar, op);
-                results.extend_from_slice(&chunk_results);
-            }
-
-            // Handle remainder
-            let remainder_start = slice.len() / self.chunk_size * self.chunk_size;
-            for &val in &slice[remainder_start..] {
-                let result = match op {
-                    ComparisonOp::Equal => val == scalar,
-                    ComparisonOp::NotEqual => val != scalar,
-                    ComparisonOp::Greater => val > scalar,
-                    ComparisonOp::GreaterEqual => val >= scalar,
-                    ComparisonOp::Less => val < scalar,
-                    ComparisonOp::LessEqual => val <= scalar,
-                };
-                results.push(result);
-            }
-
-            results
+            let values = column.as_slice::<i64>();
+            let bitmap = match op {
+                ComparisonOp::Equal => cmp::eq_i64(values, scalar),
+                ComparisonOp::NotEqual => cmp::ne_i64(values, scalar),
+                ComparisonOp::Greater => cmp::gt_i64(values, scalar),
+                ComparisonOp::GreaterEqual => cmp::ge_i64(values, scalar),
+                ComparisonOp::Less => cmp::lt_i64(values, scalar),
+                ComparisonOp::LessEqual => cmp::le_i64(values, scalar),
+            };
+            bitmap_to_bool_vec(&bitmap, values.len())
         }
 
-        /// Compare a chunk of i64 values against scalar using SIMD
-        fn compare_chunk_i64(&self, chunk: &[i64], scalar: i64, op: ComparisonOp) -> Vec<bool> {
-            let mut results = Vec::with_capacity(chunk.len());
-
-            if chunk.len() >= 4 {
-                // Use SIMD for chunks of 4 or more
-                let scalar_vec = unsafe { _mm256_set1_epi64x(scalar) };
-
-                for i in (0..chunk.len()).step_by(4) {
-                    if i + 4 <= chunk.len() {
-                        let data_vec = unsafe {
-                            _mm256_set_epi64x(
-                                *chunk.get(i + 3).unwrap_or(&0) as i64,
-                                *chunk.get(i + 2).unwrap_or(&0) as i64,
-                                *chunk.get(i + 1).unwrap_or(&0) as i64,
-                                *chunk.get(i).unwrap_or(&0) as i64,
-                            )
-                        };
-
-                        let cmp_result = match op {
-                            ComparisonOp::Equal => unsafe {
-                                _mm256_cmpeq_epi64(data_vec, scalar_vec)
-                            },
-                            ComparisonOp::Greater => unsafe {
-                                _mm256_cmpgt_epi64(data_vec, scalar_vec)
-                            },
-                            _ => {
-                                // For other operations, fall back to scalar
-                                for j in 0..4 {
-                                    let val = chunk[i + j];
-                                    let result = match op {
-                                        ComparisonOp::NotEqual => val != scalar,
-                                        ComparisonOp::GreaterEqual => val >= scalar,
-                                        ComparisonOp::Less => val < scalar,
-                                        ComparisonOp::LessEqual => val <= scalar,
-                                        _ => unreachable!(),
-                                    };
-                                    results.push(result);
-                                }
-                                continue;
-                            }
-                        };
-
-                        // Extract comparison results
-                        let mask = unsafe { _mm256_movemask_epi8(cmp_result) };
-                        for j in 0..4 {
-                            results.push((mask & (1 << (j * 8))) != 0);
-                        }
-                    }
-                }
-            }
-
-            // Handle remaining elements
-            for &val in &chunk[results.len()..] {
-                let result = match op {
-                    ComparisonOp::Equal => val == scalar,
-                    ComparisonOp::NotEqual => val != scalar,
-                    ComparisonOp::Greater => val > scalar,
-                    ComparisonOp::GreaterEqual => val >= scalar,
-                    ComparisonOp::Less => val < scalar,
-                    ComparisonOp::LessEqual => val <= scalar,
-                };
-                results.push(result);
-            }
-
-            results
+        /// Compare an f64 column against a scalar — IEEE-ordered, so
+        /// any NaN operand yields `false` for eq/lt/le/gt/ge and
+        /// `true` for ne, matching the scalar kernel reference.
+        pub fn compare_scalar_f64(
+            &self,
+            column: &Column,
+            scalar: f64,
+            op: ComparisonOp,
+        ) -> Vec<bool> {
+            let values = column.as_slice::<f64>();
+            let bitmap = match op {
+                ComparisonOp::Equal => cmp::eq_f64(values, scalar),
+                ComparisonOp::NotEqual => cmp::ne_f64(values, scalar),
+                ComparisonOp::Greater => cmp::gt_f64(values, scalar),
+                ComparisonOp::GreaterEqual => cmp::ge_f64(values, scalar),
+                ComparisonOp::Less => cmp::lt_f64(values, scalar),
+                ComparisonOp::LessEqual => cmp::le_f64(values, scalar),
+            };
+            bitmap_to_bool_vec(&bitmap, values.len())
         }
     }
 
-    /// SIMD-accelerated filter operations
+    /// SIMD-accelerated filter operations.
     pub struct SimdFilter {
         comparator: SimdComparator,
     }
@@ -138,30 +85,35 @@ mod simd_ops {
             }
         }
 
-        /// Apply WHERE filter with SIMD acceleration
+        /// Apply a WHERE filter against a single column. And/Or
+        /// operands recurse through the same column; multi-column
+        /// predicates land with the broader filter-operator wiring
+        /// in a later slice of `phase3_executor-columnar-wiring`.
         pub fn apply_where_filter(&self, column: &Column, condition: &WhereCondition) -> Vec<bool> {
             match condition {
                 WhereCondition::Comparison {
                     column: _,
                     op,
                     value,
-                } => {
-                    match column.data_type {
-                        DataType::Int64 => {
-                            if let serde_json::Value::Number(num) = value {
-                                if let Some(int_val) = num.as_i64() {
-                                    return self
-                                        .comparator
-                                        .compare_scalar_i64(column, int_val, *op);
-                                }
+                } => match column.data_type {
+                    DataType::Int64 => {
+                        if let serde_json::Value::Number(num) = value {
+                            if let Some(int_val) = num.as_i64() {
+                                return self.comparator.compare_scalar_i64(column, int_val, *op);
                             }
                         }
-                        DataType::Float64 => {
-                            // TODO: Implement SIMD for f64
-                        }
-                        _ => {}
+                        vec![true; column.len]
                     }
-                }
+                    DataType::Float64 => {
+                        if let serde_json::Value::Number(num) = value {
+                            if let Some(float_val) = num.as_f64() {
+                                return self.comparator.compare_scalar_f64(column, float_val, *op);
+                            }
+                        }
+                        vec![true; column.len]
+                    }
+                    _ => vec![true; column.len],
+                },
                 WhereCondition::And(conditions) => {
                     let mut result = vec![true; column.len];
                     for cond in conditions {
@@ -170,7 +122,7 @@ mod simd_ops {
                             result[i] = result[i] && partial[i];
                         }
                     }
-                    return result;
+                    result
                 }
                 WhereCondition::Or(conditions) => {
                     let mut result = vec![false; column.len];
@@ -180,12 +132,115 @@ mod simd_ops {
                             result[i] = result[i] || partial[i];
                         }
                     }
-                    return result;
+                    result
                 }
             }
+        }
+    }
 
-            // Fallback to scalar processing
-            vec![true; column.len]
+    /// Expand a packed bitmap (`Vec<u64>` with LSB-first bit ordering
+    /// within each word — the shape [`crate::simd::compare`]
+    /// kernels emit) into a `Vec<bool>` of exactly `len` entries.
+    fn bitmap_to_bool_vec(bitmap: &[u64], len: usize) -> Vec<bool> {
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            let word = i >> 6; // i / 64
+            let bit = i & 0x3F; // i % 64
+            let set = bitmap
+                .get(word)
+                .map(|w| ((w >> bit) & 1) != 0)
+                .unwrap_or(false);
+            out.push(set);
+        }
+        out
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn compare_scalar_i64_matches_scalar_across_ops() {
+            let values: Vec<i64> = (0..257).collect();
+            let mut column = Column::with_capacity(DataType::Int64, values.len());
+            for v in &values {
+                column.push::<i64>(*v).unwrap();
+            }
+            let comp = SimdComparator::new();
+            for &(op, scalar) in &[
+                (ComparisonOp::Equal, 42_i64),
+                (ComparisonOp::NotEqual, 42),
+                (ComparisonOp::Less, 100),
+                (ComparisonOp::LessEqual, 100),
+                (ComparisonOp::Greater, 100),
+                (ComparisonOp::GreaterEqual, 100),
+            ] {
+                let got = comp.compare_scalar_i64(&column, scalar, op);
+                let expected: Vec<bool> = values
+                    .iter()
+                    .map(|&v| match op {
+                        ComparisonOp::Equal => v == scalar,
+                        ComparisonOp::NotEqual => v != scalar,
+                        ComparisonOp::Less => v < scalar,
+                        ComparisonOp::LessEqual => v <= scalar,
+                        ComparisonOp::Greater => v > scalar,
+                        ComparisonOp::GreaterEqual => v >= scalar,
+                    })
+                    .collect();
+                assert_eq!(got, expected, "op={:?} scalar={}", op, scalar);
+            }
+        }
+
+        #[test]
+        fn compare_scalar_f64_handles_nan() {
+            let values = vec![1.0, 2.0, f64::NAN, 3.5, 4.0];
+            let mut column = Column::with_capacity(DataType::Float64, values.len());
+            for v in &values {
+                column.push::<f64>(*v).unwrap();
+            }
+            let comp = SimdComparator::new();
+            // eq with NaN: every compare with NaN collapses to false.
+            let eq = comp.compare_scalar_f64(&column, f64::NAN, ComparisonOp::Equal);
+            assert_eq!(eq, vec![false, false, false, false, false]);
+            // lt 3.0 should skip the NaN row.
+            let lt = comp.compare_scalar_f64(&column, 3.0, ComparisonOp::Less);
+            assert_eq!(lt, vec![true, true, false, false, false]);
+        }
+
+        #[test]
+        fn apply_where_filter_f64_uses_dispatched_kernel() {
+            let values = vec![1.0, 5.0, 10.0, 15.0, 20.0];
+            let mut column = Column::with_capacity(DataType::Float64, values.len());
+            for v in &values {
+                column.push::<f64>(*v).unwrap();
+            }
+            let filter = SimdFilter::new();
+            let cond = WhereCondition::Comparison {
+                column: "x".into(),
+                op: ComparisonOp::GreaterEqual,
+                value: serde_json::json!(10.0),
+            };
+            let got = filter.apply_where_filter(&column, &cond);
+            assert_eq!(got, vec![false, false, true, true, true]);
+        }
+
+        #[test]
+        fn bitmap_to_bool_vec_round_trip() {
+            // Craft a bitmap: bits 0, 2, 63, 64, 65 set.
+            let mut bitmap = vec![0u64; 2];
+            bitmap[0] |= 1 << 0;
+            bitmap[0] |= 1 << 2;
+            bitmap[0] |= 1 << 63;
+            bitmap[1] |= 1 << 0;
+            bitmap[1] |= 1 << 1;
+            let out = bitmap_to_bool_vec(&bitmap, 66);
+            assert_eq!(out.len(), 66);
+            assert!(out[0]);
+            assert!(!out[1]);
+            assert!(out[2]);
+            assert!(out[63]);
+            assert!(out[64]);
+            assert!(out[65]);
         }
     }
 }
@@ -343,6 +398,39 @@ impl Column {
         }
 
         unsafe { std::slice::from_raw_parts(self.data.as_ptr() as *const T, self.len) }
+    }
+
+    /// Typed i64 slice — `None` when `data_type != Int64`.
+    ///
+    /// Safer alternative to the generic `as_slice::<i64>()` for
+    /// callers that need a compile-time-checked numeric path; the
+    /// generic form still exists for the SIMD hot loops that already
+    /// know the dispatch target.
+    pub fn as_i64_slice(&self) -> Option<&[i64]> {
+        (self.data_type == DataType::Int64).then(|| self.as_slice::<i64>())
+    }
+
+    /// Typed f64 slice — `None` when `data_type != Float64`.
+    pub fn as_f64_slice(&self) -> Option<&[f64]> {
+        (self.data_type == DataType::Float64).then(|| self.as_slice::<f64>())
+    }
+
+    /// Typed bool slice — `None` when `data_type != Bool`.
+    ///
+    /// The underlying storage is one byte per bool (not packed);
+    /// returning `&[bool]` is safe because Rust's `bool` repr is a
+    /// single byte with values 0/1, matching the writes made by
+    /// [`ColumnValue::write_to`].
+    pub fn as_bool_slice(&self) -> Option<&[bool]> {
+        if self.data_type != DataType::Bool {
+            return None;
+        }
+        // SAFETY: `Self::push::<bool>` writes a single `0`/`1` byte
+        // per element via `ColumnValue::write_to`, which matches the
+        // bit-layout of `bool` (a single non-aliased byte). `self.len`
+        // bytes within `self.data` are initialised because `push` is
+        // the only producer.
+        Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr() as *const bool, self.len) })
     }
 }
 
@@ -542,37 +630,33 @@ impl ColumnarResult {
         result
     }
 
-    /// Apply SIMD-accelerated WHERE filter to columnar result
+    /// Apply SIMD-accelerated WHERE filter to columnar result.
+    ///
+    /// The underlying compare kernels (`crate::simd::compare`) pick
+    /// the best tier at runtime (AVX-512 → AVX2 → NEON → scalar), so
+    /// this entry point is architecture-agnostic — no per-arch `cfg`
+    /// gate is required.
     pub fn apply_simd_where_filter(&self, condition: &WhereCondition) -> ColumnarResult {
-        #[cfg(target_arch = "x86_64")]
-        {
-            use self::simd_ops::SimdFilter;
+        use self::simd_ops::SimdFilter;
 
-            let filter = SimdFilter::new();
-            let mut masks = HashMap::new();
+        let filter = SimdFilter::new();
+        let mut masks = HashMap::new();
 
-            // Apply filter to each relevant column
-            for (col_name, column) in &self.columns {
-                let mask = filter.apply_where_filter(column, condition);
-                masks.insert(col_name.clone(), mask);
-            }
-
-            // Combine masks for all conditions (simplified - assumes single column for now)
-            let mut final_mask = vec![true; self.row_count];
-            for mask in masks.values() {
-                for i in 0..final_mask.len().min(mask.len()) {
-                    final_mask[i] = final_mask[i] && mask[i];
-                }
-            }
-
-            self.filter_by_mask(&final_mask)
+        // Apply filter to each relevant column
+        for (col_name, column) in &self.columns {
+            let mask = filter.apply_where_filter(column, condition);
+            masks.insert(col_name.clone(), mask);
         }
 
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            // Fallback to scalar filtering
-            self.apply_scalar_where_filter(condition)
+        // Combine masks for all conditions (simplified - assumes single column for now)
+        let mut final_mask = vec![true; self.row_count];
+        for mask in masks.values() {
+            for i in 0..final_mask.len().min(mask.len()) {
+                final_mask[i] = final_mask[i] && mask[i];
+            }
         }
+
+        self.filter_by_mask(&final_mask)
     }
 
     /// Scalar fallback for WHERE filtering
@@ -768,6 +852,45 @@ mod tests {
         let filtered_age = filtered.get_column("age").unwrap();
         assert_eq!(filtered_age.get::<i64>(0).unwrap(), 25);
         assert_eq!(filtered_age.get::<i64>(1).unwrap(), 35);
+    }
+
+    #[test]
+    fn typed_accessor_i64_returns_slice_of_expected_length() {
+        let mut column = Column::with_capacity(DataType::Int64, 8);
+        for v in [1_i64, 2, 3, 4, 5] {
+            column.push(v).unwrap();
+        }
+        let slice = column.as_i64_slice().expect("typed access");
+        assert_eq!(slice, &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn typed_accessor_rejects_wrong_dtype() {
+        let column = Column::with_capacity(DataType::Int64, 4);
+        assert!(column.as_f64_slice().is_none());
+        assert!(column.as_bool_slice().is_none());
+        assert!(column.as_i64_slice().is_some());
+    }
+
+    #[test]
+    fn typed_accessor_f64_round_trips_values() {
+        let mut column = Column::with_capacity(DataType::Float64, 4);
+        for v in [1.5_f64, -2.25, f64::NAN, 0.0] {
+            column.push(v).unwrap();
+        }
+        let slice = column.as_f64_slice().unwrap();
+        assert_eq!(slice.len(), 4);
+        assert_eq!(slice[0], 1.5);
+        assert_eq!(slice[1], -2.25);
+        assert!(slice[2].is_nan());
+        assert_eq!(slice[3], 0.0);
+    }
+
+    #[test]
+    fn executor_config_default_columnar_threshold() {
+        use crate::executor::types::ExecutorConfig;
+        let cfg = ExecutorConfig::default();
+        assert_eq!(cfg.columnar_threshold, 4096);
     }
 
     #[test]

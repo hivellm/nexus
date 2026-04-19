@@ -118,6 +118,7 @@ pub fn benchmark_executor_creation() -> Result<()> {
         enable_jit_compilation: true,
         enable_parallel_execution: false,
         vectorized_threshold: 10,
+        columnar_threshold: 4096,
         enable_advanced_joins: true,
         enable_relationship_optimizations: true,
         enable_numa_optimizations: false,
@@ -140,6 +141,7 @@ pub fn benchmark_executor_creation() -> Result<()> {
         enable_jit_compilation: false,
         enable_parallel_execution: false,
         vectorized_threshold: 1000,
+        columnar_threshold: usize::MAX, // row path for the baseline
         enable_advanced_joins: false,
         enable_relationship_optimizations: false,
         enable_numa_optimizations: false,

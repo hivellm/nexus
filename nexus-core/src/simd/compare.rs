@@ -219,6 +219,41 @@ public_f64_op!(le_f64, LE_F64, pick_le_f64);
 public_f64_op!(gt_f64, GT_F64, pick_gt_f64);
 public_f64_op!(ge_f64, GE_F64, pick_ge_f64);
 
+// ── f32 compare ──────────────────────────────────────────────────────────────
+//
+// f32 dispatch currently bottoms out at the scalar kernel on every
+// architecture. AVX2/AVX-512 f32 compare kernels will land alongside
+// the SIMD-filter benchmark work in a follow-up slice of
+// `phase3_executor-columnar-wiring`. The public entry points live
+// here now so the executor-side columnar path has a single shape to
+// target regardless of element width, and so CPU-dispatch upgrades
+// become drop-in replacements.
+
+#[inline]
+pub fn eq_f32(values: &[f32], scalar: f32) -> Vec<u64> {
+    scalar::eq_f32(values, scalar)
+}
+#[inline]
+pub fn ne_f32(values: &[f32], scalar: f32) -> Vec<u64> {
+    scalar::ne_f32(values, scalar)
+}
+#[inline]
+pub fn lt_f32(values: &[f32], scalar: f32) -> Vec<u64> {
+    scalar::lt_f32(values, scalar)
+}
+#[inline]
+pub fn le_f32(values: &[f32], scalar: f32) -> Vec<u64> {
+    scalar::le_f32(values, scalar)
+}
+#[inline]
+pub fn gt_f32(values: &[f32], scalar: f32) -> Vec<u64> {
+    scalar::gt_f32(values, scalar)
+}
+#[inline]
+pub fn ge_f32(values: &[f32], scalar: f32) -> Vec<u64> {
+    scalar::ge_f32(values, scalar)
+}
+
 // ── observability ────────────────────────────────────────────────────────────
 
 /// Kernel tier per compare op for /stats.
@@ -239,6 +274,14 @@ pub fn kernel_tiers() -> Vec<(&'static str, &'static str)> {
         ("le_f64", tier),
         ("gt_f64", tier),
         ("ge_f64", tier),
+        // f32 compare sits on the scalar kernel today; reported as such
+        // so the /stats view matches reality.
+        ("eq_f32", "scalar"),
+        ("ne_f32", "scalar"),
+        ("lt_f32", "scalar"),
+        ("le_f32", "scalar"),
+        ("gt_f32", "scalar"),
+        ("ge_f32", "scalar"),
     ]
 }
 
@@ -283,6 +326,59 @@ mod tests {
             let got = lt_i64(&values, 50);
             let expected = scalar::lt_i64(&values, 50);
             assert_eq!(got, expected, "lt_i64 len={n}");
+        }
+    }
+
+    #[test]
+    fn f32_compare_parity() {
+        // Dispatched (which today equals scalar) should match the scalar
+        // reference for every op across a realistic range of values.
+        let values: Vec<f32> = (0..257).map(|i| (i as f32) * 0.5).collect();
+        let scalar_val = 32.5_f32;
+        assert_eq!(
+            eq_f32(&values, scalar_val),
+            scalar::eq_f32(&values, scalar_val)
+        );
+        assert_eq!(
+            ne_f32(&values, scalar_val),
+            scalar::ne_f32(&values, scalar_val)
+        );
+        assert_eq!(
+            lt_f32(&values, scalar_val),
+            scalar::lt_f32(&values, scalar_val)
+        );
+        assert_eq!(
+            le_f32(&values, scalar_val),
+            scalar::le_f32(&values, scalar_val)
+        );
+        assert_eq!(
+            gt_f32(&values, scalar_val),
+            scalar::gt_f32(&values, scalar_val)
+        );
+        assert_eq!(
+            ge_f32(&values, scalar_val),
+            scalar::ge_f32(&values, scalar_val)
+        );
+    }
+
+    #[test]
+    fn f32_nan_matches_ieee() {
+        // IEEE ordered comparison: any NaN operand collapses lt/le/gt/ge
+        // to false, eq to false, ne to true — the reference behaviour
+        // the scalar kernel encodes.
+        let values = vec![f32::NAN, 1.0_f32, f32::NAN, 2.0_f32];
+        assert_eq!(eq_f32(&values, f32::NAN), vec![0u64]);
+        assert_eq!(lt_f32(&values, 10.0_f32), scalar::lt_f32(&values, 10.0));
+        assert_eq!(ne_f32(&values, 1.0_f32), scalar::ne_f32(&values, 1.0));
+    }
+
+    #[test]
+    fn f32_length_corner_cases() {
+        for &n in &[0usize, 1, 7, 8, 15, 16, 63, 64, 255, 256] {
+            let values: Vec<f32> = (0..n as u32).map(|i| i as f32).collect();
+            let got = lt_f32(&values, 50.0);
+            let expected = scalar::lt_f32(&values, 50.0);
+            assert_eq!(got, expected, "lt_f32 len={n}");
         }
     }
 }
