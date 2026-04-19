@@ -46,8 +46,8 @@
 - [x] 4.1 Create `nexus-core/src/cluster/namespace.rs` module
 - [x] 4.2 Implement user namespace ID generation and validation (`UserNamespace::new` rejects empty / oversized / delimiter / control chars)
 - [x] 4.3 Implement namespace prefix for storage keys (`prefix()`, `prefix_key()`, `owns()`)
-- [ ] 4.4 Add namespace context to execution context
-- [x] 4.5 Write unit tests for namespace system (8 unit tests in `cluster::namespace::tests`)
+- [x] 4.4 Add namespace context to execution context — `cluster::UserContext` carries namespace + api-key id + optional function allow-list
+- [x] 4.5 Write unit tests for namespace system (8 unit tests in `cluster::namespace::tests`, 6 in `cluster::context::tests`)
 
 ### 5. Storage Layer Namespace Support
 - [ ] 5.1 Modify catalog to support namespaced labels/types/keys
@@ -79,11 +79,11 @@
 ## Phase 3: Enhanced Authentication & Permissions (2-3 weeks)
 
 ### 8. API Key Enhancements
-- [ ] 8.1 Add `user_id` field to API key structure
-- [ ] 8.2 Add `allowed_functions` field to API key (list of MCP function names)
-- [ ] 8.3 Update API key creation to accept function permissions
-- [ ] 8.4 Update API key storage to persist function permissions
-- [ ] 8.5 Write unit tests for enhanced API keys
+- [x] 8.1 Add `user_id` field to API key structure (pre-existing — `ApiKey.user_id: Option<String>`)
+- [x] 8.2 Add `allowed_functions` field to API key (`Option<Vec<String>>`, `#[serde(default)]` for legacy records)
+- [x] 8.3 Update API key creation to accept function permissions (`ApiKey::with_allowed_functions` builder method)
+- [x] 8.4 Update API key storage to persist function permissions (LMDB serialization switched from bincode to JSON for forward-compat; `may_call_function` accessor added)
+- [x] 8.5 Write unit tests for enhanced API keys (4 new tests in `auth::api_key::tests` covering default / restricted / empty-list / legacy-record round-trip)
 
 ### 9. Function-Level Permission Filtering
 - [ ] 9.1 Extend permission enum to include function-level permissions

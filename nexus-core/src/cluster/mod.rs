@@ -20,9 +20,11 @@
 //! the subsystems they modify and consume types from here.
 
 pub mod config;
+pub mod context;
 pub mod namespace;
 pub mod quota;
 
 pub use config::{ClusterConfig, TenantDefaults};
+pub use context::UserContext;
 pub use namespace::UserNamespace;
 pub use quota::{LocalQuotaProvider, QuotaDecision, QuotaProvider, QuotaSnapshot, UsageDelta};

@@ -98,6 +98,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(check_chatroom_permission(&api_key, ChatroomOperation::Read));
@@ -123,6 +124,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(check_chatroom_permission(&api_key, ChatroomOperation::Read));
@@ -148,6 +150,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(!check_chatroom_permission(
@@ -179,6 +182,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         let api_key_without_chatroom = ApiKey {
@@ -193,6 +197,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(can_read_chatroom(&api_key_with_chatroom));
@@ -214,6 +219,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         let api_key_without_chatroom = ApiKey {
@@ -228,6 +234,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(can_send_chatroom(&api_key_with_chatroom));
@@ -249,6 +256,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         let api_key_with_chatroom = ApiKey {
@@ -263,6 +271,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(can_manage_chatroom(&api_key_with_admin));

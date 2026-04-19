@@ -29,6 +29,17 @@ pub struct ApiKey {
     pub is_revoked: bool,
     /// Reason for revocation (if revoked)
     pub revocation_reason: Option<String>,
+    /// Optional allow-list of MCP / RPC function names this key may
+    /// invoke. `None` means "all functions the key's permissions
+    /// permit" (the pre-cluster-mode default). `Some(list)` restricts
+    /// the key to exactly those names — useful in cluster mode where
+    /// a per-tenant key should expose `cypher.execute` but not, say,
+    /// `nexus.admin.drop_database`.
+    ///
+    /// `#[serde(default)]` keeps LMDB-persisted keys from before this
+    /// field existed deserialising cleanly as `None`.
+    #[serde(default)]
+    pub allowed_functions: Option<Vec<String>>,
 }
 
 impl ApiKey {
@@ -46,6 +57,7 @@ impl ApiKey {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         }
     }
 
@@ -69,6 +81,7 @@ impl ApiKey {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         }
     }
 
@@ -92,6 +105,29 @@ impl ApiKey {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
+        }
+    }
+
+    /// Replace the function allow-list and return `self` for
+    /// chaining. Pass `None` for unrestricted access or `Some(vec)`
+    /// to restrict the key to exactly those function names. Used by
+    /// cluster-mode key provisioning to lock down per-tenant keys.
+    pub fn with_allowed_functions(mut self, allowed: Option<Vec<String>>) -> Self {
+        self.allowed_functions = allowed;
+        self
+    }
+
+    /// Whether this key is permitted to invoke the function named
+    /// `name`. Unrestricted keys (`allowed_functions = None`) accept
+    /// everything; restricted keys require an exact, case-sensitive
+    /// match against the allow-list. Function-name canonicalisation
+    /// (casing, prefixing) is the caller's responsibility — this
+    /// method does NOT massage the input.
+    pub fn may_call_function(&self, name: &str) -> bool {
+        match &self.allowed_functions {
+            None => true,
+            Some(list) => list.iter().any(|f| f == name),
         }
     }
 
@@ -307,5 +343,76 @@ mod tests {
         );
         api_key.deactivate();
         assert!(!api_key.is_valid());
+    }
+
+    #[test]
+    fn api_key_default_allows_all_functions() {
+        // Pre-cluster-mode behaviour: a key with no explicit
+        // allow-list lets every function through. Locked in as a
+        // regression guard — flipping the default silently would
+        // break every existing key in storage.
+        let key = ApiKey::new(
+            "id".into(),
+            "name".into(),
+            vec![Permission::Read],
+            "hash".into(),
+        );
+        assert!(key.allowed_functions.is_none());
+        assert!(key.may_call_function("anything"));
+        assert!(key.may_call_function("nexus.admin.drop_database"));
+    }
+
+    #[test]
+    fn api_key_restricted_function_list() {
+        let key = ApiKey::new(
+            "id".into(),
+            "name".into(),
+            vec![Permission::Read],
+            "hash".into(),
+        )
+        .with_allowed_functions(Some(vec!["cypher.execute".into(), "kv.get".into()]));
+
+        assert!(key.may_call_function("cypher.execute"));
+        assert!(key.may_call_function("kv.get"));
+        assert!(!key.may_call_function("nexus.admin.drop_database"));
+        // Case-sensitive matching — canonicalisation is the caller's
+        // job, otherwise `"KV.GET"` would silently bypass the filter.
+        assert!(!key.may_call_function("Cypher.Execute"));
+    }
+
+    #[test]
+    fn api_key_empty_allow_list_denies_everything() {
+        // Empty Some(vec![]) is deliberately distinct from None:
+        // "explicitly zero functions" for health-probe-only keys.
+        let key = ApiKey::new(
+            "id".into(),
+            "name".into(),
+            vec![Permission::Read],
+            "hash".into(),
+        )
+        .with_allowed_functions(Some(vec![]));
+        assert!(!key.may_call_function("cypher.execute"));
+    }
+
+    #[test]
+    fn api_key_allowed_functions_round_trip_serde() {
+        // Legacy keys in LMDB predate this field — `#[serde(default)]`
+        // must let them deserialise as `None` without migration.
+        let legacy = r#"{
+            "id": "legacy",
+            "name": "old-key",
+            "user_id": null,
+            "permissions": ["Read"],
+            "hashed_key": "h",
+            "created_at": "2020-01-01T00:00:00Z",
+            "expires_at": null,
+            "last_used": null,
+            "is_active": true,
+            "is_revoked": false,
+            "revocation_reason": null
+        }"#;
+        let key: ApiKey = serde_json::from_str(legacy).expect("legacy key must parse");
+        assert!(key.allowed_functions.is_none());
+        assert!(key.may_call_function("anything"));
     }
 }

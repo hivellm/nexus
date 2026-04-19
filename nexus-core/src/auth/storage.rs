@@ -14,7 +14,12 @@ pub struct ApiKeyStorage {
     /// LMDB environment
     env: Arc<Env>,
     /// API key ID → ApiKey mapping
-    api_keys_db: Database<Str, SerdeBincode<ApiKey>>,
+    // JSON, not bincode: JSON + `#[serde(default)]` is forward-compatible
+    // for appended fields, so adding (e.g.) `allowed_functions` later does
+    // not require a migration or invalidate existing records. Bincode's
+    // default config is NOT forward-compatible and would fail with
+    // `unexpected end of file` on the first schema change.
+    api_keys_db: Database<Str, SerdeJson<ApiKey>>,
 }
 
 impl ApiKeyStorage {
@@ -47,9 +52,12 @@ impl ApiKeyStorage {
             static AUTH_STORAGE_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
             let shared_dir = AUTH_STORAGE_DIR.get_or_init(|| {
-                // Use a fixed shared directory for all tests
-                // This ensures consistent auth state across all tests
-                let base = std::env::temp_dir().join("nexus_test_auth_shared");
+                // Use a fixed shared directory for all tests. The
+                // suffix is bumped whenever `ApiKey`'s on-disk schema
+                // changes (e.g. new field, encoding switch) so stale
+                // data left over from a previous run is orphaned
+                // rather than silently failing to deserialise.
+                let base = std::env::temp_dir().join("nexus_test_auth_shared_v2");
                 std::fs::create_dir_all(&base).ok();
                 base
             });
@@ -205,6 +213,7 @@ mod tests {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         }
     }
 

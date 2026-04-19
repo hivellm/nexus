@@ -152,6 +152,7 @@ impl AuthManager {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         };
 
         // Store the API key
@@ -198,6 +199,7 @@ impl AuthManager {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         };
 
         // Store the API key
@@ -244,6 +246,7 @@ impl AuthManager {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         };
 
         // Store the API key
@@ -291,6 +294,7 @@ impl AuthManager {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         };
 
         // Store the API key
@@ -661,6 +665,7 @@ mod tests {
             is_active: true,
             is_revoked: false,
             revocation_reason: None,
+            allowed_functions: None,
         };
 
         assert!(manager.has_permission(&api_key, Permission::Read));

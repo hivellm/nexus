@@ -98,6 +98,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(check_queue_permission(&api_key, QueueOperation::Consume));
@@ -120,6 +121,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(check_queue_permission(&api_key, QueueOperation::Consume));
@@ -142,6 +144,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(!check_queue_permission(&api_key, QueueOperation::Consume));
@@ -164,6 +167,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         let api_key_without_queue = ApiKey {
@@ -178,6 +182,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(can_consume_queue(&api_key_with_queue));
@@ -199,6 +204,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         let api_key_without_queue = ApiKey {
@@ -213,6 +219,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(can_publish_queue(&api_key_with_queue));
@@ -234,6 +241,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         let api_key_with_queue = ApiKey {
@@ -248,6 +256,7 @@ mod tests {
             is_revoked: false,
             revocation_reason: None,
             is_active: true,
+            allowed_functions: None,
         };
 
         assert!(can_manage_queue(&api_key_with_admin));
