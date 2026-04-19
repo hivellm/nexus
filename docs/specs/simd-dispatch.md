@@ -371,3 +371,12 @@ first, the gate wires up in that task).
 Related spec updates will land in `knn-integration.md` (§ "Distance
 implementation") and `wal-mvcc.md` (§ "CRC32C migration") as the
 downstream call sites are replaced.
+
+The executor-side consumer of the `simd::compare` and `simd::reduce`
+kernels lives in [`executor-columnar.md`](./executor-columnar.md) —
+that's where the filter and groupless-aggregate operators materialise
+their inputs into a `Column` before dispatching through the kernels
+described here. `executor-columnar.md` documents the
+`columnar_threshold` knob, the `PREFER_COLUMNAR` / `DISABLE_COLUMNAR`
+plan hints, and the parity / fallback rules that keep the row path
+authoritative for every shape the fast path doesn't cover.

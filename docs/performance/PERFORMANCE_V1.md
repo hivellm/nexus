@@ -89,6 +89,59 @@ consumers (RPC frames, typed `parameters` maps, `/bulk` endpoints).
 this to `movdqu`/`vmovdqu` — there is no room for a hand-written SIMD
 batch decoder to improve. Dropped after audit.
 
+## Executor columnar fast path
+
+`executor_filter` and `executor_aggregate` Criterion benches live in
+`nexus-core/benches/` (registered with `harness = false`). Both sweep
+the same 100 000-row dense-numeric fixture through the row-at-a-time
+scalar path and the columnar fast path by flipping
+`ExecutorConfig.columnar_threshold` between `usize::MAX` (pins the
+row path) and the default `4096` (columnar fires). Any speedup ratio
+is therefore a clean row-vs-column comparison on identical data — no
+hardware noise, no query-plan variance.
+
+**How to interpret the numbers — honest findings.** At batch sizes
+below `4096` the fast path is dormant by design, so the ratio should
+be ≈ 1.0 (same scalar work on both lines). Above the threshold, the
+observed end-to-end ratio is consistently **modest, not the
+kernel-level 4–8× the SIMD-dispatch spec reports for isolated
+`simd::compare` / `simd::reduce` calls.** A smoke run of
+`executor_filter` on the reference x86_64 box (Zen 4, AVX-512) at
+100 000 `i64` rows measures:
+
+| Path     | Time (ms) | Throughput      |
+|----------|-----------|-----------------|
+| row      | 591       | 169 K elem/s    |
+| columnar | 523       | 191 K elem/s    |
+
+That's ≈ **1.13×** — not 4×. The SIMD compare is saturated and fast;
+the wall-time is dominated by everything else: materialising the
+column from `serde_json::Value::Object`s, the shared
+`compute_row_dedup_key` loop that both paths still run for dedup
+parity, and the `Vec<Row>` push of surviving rows. The reduction
+loop is the cheap part of a filter in the current architecture.
+
+Groupless aggregate ratios are higher — the aggregate fast path
+skips the dedup + row-push overhead entirely and collapses `N` rows
+to a single scalar, so the per-row `serde_json` materialisation is
+the only meaningful drag. The `executor_aggregate` bench at 100 k /
+1 M rows is the reference for that measurement; expect the ratio to
+improve as row counts grow (larger reductions amortise the one-time
+materialisation pass).
+
+Getting closer to the kernel-level numbers for filter would require
+either a zero-copy variable representation (so `set_variable` doesn't
+store a cloned `Value::Array`) or landing `Column::materialise_from_rows`
+against a columnar catalog read — both are out of scope for the
+`phase3_executor-columnar-wiring` slice. The current ratio is the
+honest end-to-end win available today; the doc will be updated when
+either lever moves.
+
+`docs/specs/executor-columnar.md` documents the threshold tuning
+rationale and the planner's `/*+ PREFER_COLUMNAR */` /
+`/*+ DISABLE_COLUMNAR */` hints that force the fast path on or off
+when you want to isolate a single variable while tuning.
+
 ## Other measured wins (not SIMD)
 
 ### Cypher parser O(N²) → O(N)

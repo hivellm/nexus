@@ -148,6 +148,14 @@ harness = false
 name = "protocol_point_read"
 harness = false
 
+[[bench]]
+name = "executor_filter"
+harness = false
+
+[[bench]]
+name = "executor_aggregate"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../examples/hierarchical_call_graph_example.rs"

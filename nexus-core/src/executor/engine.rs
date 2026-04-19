@@ -129,6 +129,54 @@ impl Executor {
         })
     }
 
+    /// Override the `columnar_threshold` knob on this executor.
+    ///
+    /// Exposed as a narrow public mutator so benchmarks and profiling
+    /// tools can pin the filter / groupless-aggregate paths to the
+    /// row or columnar branch without mutating `ExecutorConfig`
+    /// directly. See [`docs/specs/executor-columnar.md`] for the
+    /// semantics of the knob.
+    pub fn set_columnar_threshold(&mut self, threshold: usize) {
+        self.config.columnar_threshold = threshold;
+    }
+
+    /// Run the filter operator over an in-memory working set.
+    ///
+    /// Builds a fresh `ExecutionContext`, binds `rows` to `variable`,
+    /// and runs `execute_filter` with `predicate`. Returns the number
+    /// of rows that survived the predicate. Useful for benches,
+    /// profiling, and tooling that wants to drive a single operator
+    /// without the full query pipeline.
+    pub fn run_in_memory_filter(
+        &self,
+        variable: &str,
+        rows: Vec<serde_json::Value>,
+        predicate: &str,
+    ) -> Result<usize> {
+        use super::context::ExecutionContext;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable(variable, serde_json::Value::Array(rows));
+        self.execute_filter(&mut context, predicate)?;
+        Ok(context.result_set.rows.len())
+    }
+
+    /// Run the groupless-aggregate operator over an in-memory working
+    /// set. See [`Self::run_in_memory_filter`] for the mechanics;
+    /// this variant takes an [`Aggregation`] and ignores `GROUP BY`
+    /// (same shape as the columnar fast path).
+    pub fn run_in_memory_aggregate(
+        &self,
+        variable: &str,
+        rows: Vec<serde_json::Value>,
+        aggregation: &super::types::Aggregation,
+    ) -> Result<usize> {
+        use super::context::ExecutionContext;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable(variable, serde_json::Value::Array(rows));
+        self.execute_aggregate(&mut context, &[], std::slice::from_ref(aggregation))?;
+        Ok(context.result_set.rows.len())
+    }
+
     /// Get reference to UDF registry
     pub fn udf_registry(&self) -> &UdfRegistry {
         &self.shared.udf_registry
