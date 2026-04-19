@@ -711,6 +711,23 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         // Add state to router (must be after all routes)
         .with_state(nexus_server.clone());
 
+    // Cluster-mode quota gate. Layered BEFORE the auth middleware in
+    // this block so it ends up INSIDE the auth layer at runtime (axum
+    // composes layers outermost-first, last `.layer()` call → closest
+    // to the handler). The quota middleware is a pass-through in
+    // standalone mode — the check is guarded on presence of a
+    // `UserContext` in request extensions, which only the cluster-mode
+    // auth path inserts.
+    if cluster_enabled {
+        let quota_provider: std::sync::Arc<dyn nexus_core::cluster::QuotaProvider> =
+            nexus_core::cluster::LocalQuotaProvider::new(config.cluster.default_quotas.clone());
+        let quota_state = nexus_core::cluster::QuotaMiddlewareState::new(quota_provider);
+        app = app.layer(axum_middleware::from_fn_with_state(
+            quota_state,
+            nexus_core::cluster::quota_middleware_handler,
+        ));
+    }
+
     // Apply authentication middleware if enabled
     if let Some(auth_middleware) = auth_middleware_state {
         app = app.layer(axum_middleware::from_fn_with_state(
