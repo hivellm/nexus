@@ -289,13 +289,22 @@ Environment overrides:
   layout, `Request`/`Response` shape). Adding commands does **not** bump
   the version.
 
-## 11. Reference implementation
+## 11. Reference implementations
 
-- **Rust client**: planned in `phase2_sdk-rpc-transport-default` — will
-  live in `nexus-protocol/src/rpc` as a lightweight async client built
-  on the same codec.
-- **Server**: `nexus-server/src/protocol/rpc/server.rs` (accept loop),
-  `nexus-server/src/protocol/rpc/dispatch/*.rs` (command handlers).
+All six first-party SDKs implement this wire format. See each SDK's
+transport module for the concrete code — they're deliberately small and
+parallel so the wire shape can be eyeballed across languages:
 
-See the Synap project's `synap_rpc` module for a second independent
-implementation the byte-compatible tooling can cross-verify against.
+- **Rust**: [`sdks/rust/src/transport/`](../../sdks/rust/src/transport/) — canonical reference, 930 LOC.
+- **TypeScript**: [`sdks/typescript/src/transports/`](../../sdks/typescript/src/transports/) — `msgpackr` framing.
+- **Python**: [`sdks/python/nexus_sdk/transport/`](../../sdks/python/nexus_sdk/transport/) — `asyncio` + `msgpack`.
+- **Go**: [`sdks/go/transport/`](../../sdks/go/transport/) — `vmihailenco/msgpack/v5` framing.
+- **C#**: [`sdks/csharp/Transports/`](../../sdks/csharp/Transports/) — `MessagePack-CSharp` typeless codec.
+- **PHP**: [`sdks/php/src/Transport/`](../../sdks/php/src/Transport/) — `rybakit/msgpack` body + hand-rolled framing.
+
+Server: [`nexus-server/src/protocol/rpc/server.rs`](../../nexus-server/src/protocol/rpc/server.rs) (accept loop),
+[`nexus-server/src/protocol/rpc/dispatch/`](../../nexus-server/src/protocol/rpc/dispatch/) (command handlers).
+
+The Synap project's `synap_rpc` module shares the same framing + codec
+(rmp-serde externally-tagged) so tooling can cross-verify against a
+second independent implementation.
