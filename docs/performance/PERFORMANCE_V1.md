@@ -121,21 +121,33 @@ column from `serde_json::Value::Object`s, the shared
 parity, and the `Vec<Row>` push of surviving rows. The reduction
 loop is the cheap part of a filter in the current architecture.
 
-Groupless aggregate ratios are higher — the aggregate fast path
-skips the dedup + row-push overhead entirely and collapses `N` rows
-to a single scalar, so the per-row `serde_json` materialisation is
-the only meaningful drag. The `executor_aggregate` bench at 100 k /
-1 M rows is the reference for that measurement; expect the ratio to
-improve as row counts grow (larger reductions amortise the one-time
-materialisation pass).
+The groupless-aggregate picture is even tighter — a smoke run of
+`SUM(n.age)` through `executor_aggregate` measures:
 
-Getting closer to the kernel-level numbers for filter would require
-either a zero-copy variable representation (so `set_variable` doesn't
-store a cloned `Value::Array`) or landing `Column::materialise_from_rows`
-against a columnar catalog read — both are out of scope for the
-`phase3_executor-columnar-wiring` slice. The current ratio is the
-honest end-to-end win available today; the doc will be updated when
-either lever moves.
+| Rows  | Row-path  | Columnar  | Ratio  |
+|-------|-----------|-----------|--------|
+| 10 k  | 61 ms     | 64 ms     | 0.96×  |
+| 100 k | 675 ms    | 654 ms    | 1.03×  |
+| 1 M   | 6.79 s    | 7.35 s    | 0.92×  |
+
+At 10 k and 1 M the columnar path is actually *slower*. The SIMD
+kernel saves real time, but the `materialize_f64_column` pass that
+walks every `Value::Number` to build a `Vec<f64>` costs more than
+the savings on large inputs. The row path's inline
+`extract_value_from_row` + `value_to_number` per row avoids that
+extra allocation.
+
+This is the honest end-to-end ratio available today: the columnar
+fast path is a **zero-regression wiring exercise**, not a free perf
+win. The architecture is ready — `/*+ PREFER_COLUMNAR */` flips the
+path, parity is byte-for-byte, and the SIMD kernels are in place.
+The wins land when the row feed stops being `Vec<serde_json::Value>`.
+Both of the levers that would move the number — a zero-copy variable
+representation (`set_variable` no longer cloning into `Value::Array`)
+and a columnar-catalog read path (so `materialise_from_rows`
+already sees `&[i64]` / `&[f64]` instead of reconstituting one
+`Value::Number` at a time) — are out of scope for
+`phase3_executor-columnar-wiring`.
 
 `docs/specs/executor-columnar.md` documents the threshold tuning
 rationale and the planner's `/*+ PREFER_COLUMNAR */` /
