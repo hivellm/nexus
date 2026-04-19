@@ -1,8 +1,16 @@
+# syntax=docker/dockerfile:1.6
 # Multi-stage Dockerfile for Nexus Graph Database
 #
 # HOW TO BUILD:
 #   docker build -t nexus-graph-db:latest .
 #   docker build -t nexus-graph-db:v0.11.0 -t nexus-graph-db:latest .
+#
+# The `# syntax=docker/dockerfile:1.6` header opts into the
+# `RUN --mount=type=cache` frontend so the cargo registry + target
+# directory are cached across rebuilds (see the build stage below).
+# Works out of the box with BuildKit — the default Docker CLI since
+# 23.0 and always on with `docker buildx build`. For older clients,
+# export `DOCKER_BUILDKIT=1` before `docker build`.
 #
 # HOW TO RUN:
 #   # Using docker run (basic):
@@ -62,8 +70,25 @@ COPY nexus-server ./nexus-server
 COPY nexus-protocol ./nexus-protocol
 COPY nexus-cli ./nexus-cli
 
-# Build in release mode
-RUN cargo +nightly build --release --workspace
+# Build in release mode.
+#
+# Two BuildKit cache mounts cut rebuild time from ~4 min (observed
+# during the memtest debugging session) to a fraction of that on warm
+# caches:
+#   - `/usr/local/cargo/registry` keeps the downloaded index + source
+#     of every crate (`tantivy`, `hnsw_rs`, `heed`, ...) across builds
+#     so `cargo fetch` doesn't re-download them every time.
+#   - `/app/target` keeps the compiled artifacts — when only one
+#     source file changed, rustc + cargo only recompile the
+#     touched crates + their dependents, not the full 300-crate
+#     workspace.
+# The cache is build-local (not in the final image), so the runtime
+# stage is still the same size and shape as before.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo +nightly build --release --workspace \
+ && mkdir -p /out/release \
+ && cp target/release/nexus-server /out/release/nexus-server
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -79,8 +104,11 @@ RUN useradd -m -u 1000 nexus && \
     mkdir -p /app/data /app/config /run/secrets && \
     chown -R nexus:nexus /app /run/secrets
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/nexus-server /usr/local/bin/nexus-server
+# Copy binary from builder. The build stage staged the binary under
+# `/out/release/` precisely because `/app/target/` is a cache mount
+# that does not persist into the image — only paths *outside* the
+# mount survive into subsequent stages.
+COPY --from=builder /out/release/nexus-server /usr/local/bin/nexus-server
 RUN chmod +x /usr/local/bin/nexus-server
 
 # Set working directory
@@ -89,8 +117,14 @@ WORKDIR /app
 # Switch to non-root user
 USER nexus
 
-# Expose default port
-EXPOSE 15474
+# Expose default ports.
+#   15474 — HTTP API (`/cypher`, `/knn_traverse`, `/health`, …).
+#   15475 — Native binary RPC transport (`nexus://host:15475`), the
+#           default for every first-party SDK since
+#           `phase2_sdk-rpc-transport-default`. Operators who want
+#           HTTP-only can leave 15475 unpublished on the host side
+#           or set `[rpc].enabled = false` in `config.yml`.
+EXPOSE 15474 15475
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

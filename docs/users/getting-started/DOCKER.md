@@ -15,10 +15,20 @@ Complete guide for deploying Nexus using Docker and Docker Compose.
 
 ### Using Docker Run
 
+The Nexus image exposes two ports:
+
+- **`15474`** — HTTP API (`/cypher`, `/knn_traverse`, `/health`, …).
+- **`15475`** — Native binary RPC transport (`nexus://host:15475`),
+  the default for every first-party SDK since the `phase2_sdk-rpc-
+  transport-default` rollout. Unpublish this port on the host side
+  (or set `[rpc].enabled = false` in `config.yml`) for HTTP-only
+  deployments.
+
 ```bash
 docker run -d \
   --name nexus \
   -p 15474:15474 \
+  -p 15475:15475 \
   -v nexus-data:/app/data \
   -e NEXUS_ROOT_USERNAME=admin \
   -e NEXUS_ROOT_PASSWORD=secure_password_here \
@@ -38,7 +48,8 @@ services:
     image: ghcr.io/hivellm/nexus:latest
     container_name: nexus
     ports:
-      - "15474:15474"
+      - "15474:15474"    # HTTP API
+      - "15475:15475"    # Native binary RPC (SDK default)
     volumes:
       - nexus-data:/app/data
     environment:
@@ -122,8 +133,15 @@ volumes:
 
 ```yaml
 ports:
-  - "15474:15474"  # REST API
+  - "15474:15474"  # HTTP API (/cypher, /knn_traverse, /health)
+  - "15475:15475"  # Native binary RPC — SDK default transport
 ```
+
+Leave `15475` unpublished on the host if you only plan to call Nexus
+over HTTP. The RPC listener inside the container still spins up
+(that's the default), but it won't be reachable externally. Setting
+`[rpc].enabled = false` in `config.yml` turns the listener off
+entirely.
 
 ### Custom Network
 
@@ -180,7 +198,8 @@ services:
     image: ghcr.io/hivellm/nexus:latest
     container_name: nexus
     ports:
-      - "127.0.0.1:15474:15474"  # Bind to localhost only
+      - "127.0.0.1:15474:15474"  # HTTP API, localhost only
+      - "127.0.0.1:15475:15475"  # Native binary RPC, localhost only
     volumes:
       - nexus-data:/app/data
     secrets:
@@ -240,6 +259,45 @@ docker restart nexus
 docker stop nexus
 docker rm nexus
 ```
+
+## Building from source
+
+`Dockerfile` and `scripts/memtest/Dockerfile.memtest` opt into
+BuildKit's `RUN --mount=type=cache` frontend (via the
+`# syntax=docker/dockerfile:1.6` header) to keep the cargo registry
+and `target/` directory warm across rebuilds. Requires:
+
+- Docker CLI ≥ 23.0 — BuildKit is on by default.
+- Older Docker (< 23.0) — export `DOCKER_BUILDKIT=1` before
+  `docker build`, or invoke `docker buildx build` instead.
+
+```bash
+# Default, modern Docker (BuildKit implicit):
+docker build -t nexus-graph-db:test .
+
+# Legacy CLI — opt-in:
+DOCKER_BUILDKIT=1 docker build -t nexus-graph-db:test .
+
+# Or via buildx (always BuildKit):
+docker buildx build -t nexus-graph-db:test --load .
+```
+
+**Measured impact** on the reference box (Docker Desktop 29.0.1 /
+Windows, 10-core CPU):
+
+| Scenario                                  | Time     |
+|-------------------------------------------|----------|
+| Cold build (`--no-cache`)                 | ~3m 00s  |
+| Warm rebuild after a single source edit   | ~1m 56s  |
+
+The cache mount reuses compiled artifacts in `/app/target/` across
+rebuilds, so cargo only recompiles the touched crate + dependents
+instead of the full 300-crate workspace. Larger wins are available
+by layering a `cargo-chef` prepare/cook stage on top of the cache
+mount — that's a follow-up that isolates the dependency graph
+compile from source compile. The cache mount alone is a clean
+baseline; `cargo-chef` is worth adding when the warm-rebuild target
+drops below the one-minute mark.
 
 ## Related Topics
 
