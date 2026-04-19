@@ -2,8 +2,10 @@
 
 ## Why
 
-Nexus ships 7 SDKs today (Rust, Python, TypeScript, Go, C#, n8n, PHP) and
-every one of them talks JSON-over-HTTP against `POST /cypher`. The server
+Nexus ships 6 first-party SDKs (Rust, Python, TypeScript, Go, C#, PHP)
+post the 1.0.0 cut (the n8n node + LangChain + LangFlow wrappers were
+removed — see the root CHANGELOG). Every remaining SDK talks
+JSON-over-HTTP against `POST /cypher`. The server
 changes in `phase1_nexus-rpc-binary-protocol` and
 `phase1_nexus-resp3-compatibility` add two faster, cheaper transports but
 deliver *zero* value until the SDKs actually use them.
@@ -86,7 +88,6 @@ by native wire mapping, Phase 2 exit criteria):
 | TypeScript | 95%                     | HTTP REST client   |
 | Go         | 90%                     | HTTP REST client   |
 | C#         | 90%                     | HTTP REST client   |
-| n8n        | 85%                     | HTTP (n8n native)  |
 | PHP        | 80%                     | HTTP REST client   |
 
 Rust ships with RPC-only (no HTTP fallback inside the SDK) because it's
@@ -105,7 +106,6 @@ adapters:
 | TypeScript | `msgpackr`                    | `Uint8Array` native     |
 | Go         | `github.com/vmihailenco/msgpack/v5` | `[]byte`          |
 | C#         | `MessagePack-CSharp`          | `byte[]`                |
-| n8n        | shares TS SDK                 | `Buffer`                |
 | PHP        | `rybakit/msgpack.php`         | native bytes            |
 
 Persistent connections, per-request `id`, automatic reconnect, and a
@@ -126,7 +126,6 @@ copied from Synap's transport — the logic is already field-tested.
   - Go SDK: +`transport_rpc.go`, `transport_resp3.go`, `command_map.go`,
     MODIFIED `client.go`
   - C# SDK: +`Transports/` namespace, MODIFIED `NexusClient.cs`
-  - n8n: shared with TS SDK; reuse via direct dependency
   - PHP: +`Transport/` namespace using `predis` for RESP3 and a
     hand-written RPC client
 - **Breaking change**: NO for existing users (default HTTP behavior is

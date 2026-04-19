@@ -28,7 +28,7 @@ Think of it as **Neo4j meets Vector Search** - optimized for AI applications tha
 - ✅ **19 GDS Procedures** - PageRank (standard, weighted, parallel), betweenness, eigenvector, Dijkstra, A*, Yen's k-paths, Louvain, label propagation, triangle count, clustering coefficients
 - ✅ **Complete Authentication** - API keys, JWT, RBAC, rate limiting
 - ✅ **Multiple Databases** - Isolated databases with full CRUD API
-- ✅ **Official SDKs** - Rust, Python, TypeScript, Go, C#, n8n (30+ tests each)
+- ✅ **Official SDKs** - Rust, Python, TypeScript, Go, C#, PHP (30+ tests each)
 - ✅ **Memory Hardened** - Input hardcaps, capped caches, cleanup paths, Docker memtest harness (see [docs/performance/MEMORY_TUNING.md](docs/performance/MEMORY_TUNING.md))
 - ✅ **SIMD kernels (AVX-512 / AVX2 / NEON)** - Runtime-dispatched `nexus-core::simd` module for KNN distance, bitmap popcount, numeric sum/min/max, compare, RLE scan, CRC32C primitive. Up to **12.7× KNN dot @ dim=768** on Zen 4 with proptest-enforced parity against scalar. Spec: [docs/specs/simd-dispatch.md](docs/specs/simd-dispatch.md).
 - ✅ **Linear-time Cypher parser** - O(N²) → O(N) fix in `peek_char`/`consume_char`; **~290× faster parse on 32 KiB queries**.
@@ -415,7 +415,7 @@ See [Performance Analysis](docs/performance/PERFORMANCE_V1.md) for comprehensive
 - ✅ Master-Replica Replication - Redis-style async/sync replication
   - WAL streaming, full sync via snapshot, failover support, REST API endpoints
 - ✅ Multi-Database Support - Isolated databases within single server
-- ✅ Official SDKs - Rust, Python, TypeScript, Go, C#, n8n (30+ tests each, 100% complete)
+- ✅ Official SDKs - Rust, Python, TypeScript, Go, C#, PHP (30+ tests each, 100% complete)
 - 🚧 Desktop GUI (Electron + Vue 3) - In Progress
 - 📋 Advanced Indexes (B-tree, Full-text) - Planned
 - 📋 Constraints & Schema - Planned
@@ -647,12 +647,12 @@ Nexus provides official SDKs for 6 programming languages, each with 30+ comprehe
 
 | SDK | Language | Package | Documentation |
 |-----|----------|---------|---------------|
-| 🦀 **Rust** | Rust | `nexus-sdk = "0.1.0"` | [sdks/rust/](sdks/rust/README.md) |
+| 🦀 **Rust** | Rust | `nexus-sdk = "1.0.0"` | [sdks/rust/](sdks/rust/README.md) |
 | 🐍 **Python** | Python | `pip install nexus-sdk` | [sdks/python/](sdks/python/README.md) |
-| 📘 **TypeScript** | TypeScript/Node.js | `npm install nexus-sdk` | [sdks/typescript/](sdks/typescript/README.md) |
+| 📘 **TypeScript** | TypeScript/Node.js | `npm install @hivellm/nexus-sdk` | [sdks/typescript/](sdks/typescript/README.md) |
 | 🐹 **Go** | Go | `go get github.com/hivellm/nexus-go` | [sdks/go/](sdks/go/README.md) |
 | 💜 **C#** | .NET | `dotnet add package Nexus.SDK` | [sdks/csharp/](sdks/csharp/README.md) |
-| 🔗 **n8n** | n8n Node | Community Node | [sdks/n8n/](sdks/n8n/README.md) |
+| 🐘 **PHP** | PHP | `composer require hivellm/nexus-php` | [sdks/php/](sdks/php/README.md) |
 
 ### **Quick Examples**
 
@@ -798,7 +798,7 @@ cat rulebook/tasks/[task-name]/tasks.md
 - ✅ **Complete Neo4j Cypher** - All 14 phases complete (100%)
 - ✅ **Authentication System** - API keys, RBAC, rate limiting (100%)
 - ✅ **Neo4j Compatibility** - 287/300 tests passing (95.99%)
-- ✅ **Multi-language SDKs** - Rust, Python, TypeScript, Go, C#, n8n (100%)
+- ✅ **Multi-language SDKs** - Rust, Python, TypeScript, Go, C#, PHP (100%)
 - 🚧 **OPTIONAL MATCH fixes** - 8 remaining compatibility issues
 
 See `rulebook/RULEBOOK.md` for complete workflow.

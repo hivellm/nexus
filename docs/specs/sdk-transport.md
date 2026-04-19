@@ -207,7 +207,6 @@ wire command, measured on the first release that ships RPC):
 | TypeScript  |  95%   | HTTP REST client (existing)          |
 | Go          |  90%   | HTTP REST client (existing)          |
 | C#          |  90%   | HTTP REST client (existing)          |
-| n8n         |  85%   | HTTP (n8n native)                    |
 | PHP         |  80%   | HTTP REST client (existing)          |
 
 Anything below the floor is a release blocker.
@@ -220,8 +219,6 @@ Anything below the floor is a release blocker.
   API.
 - **TypeScript SDK**: node builds ship RPC + RESP3 + HTTP; browser
   builds ship HTTP only because the browser cannot open raw TCP.
-- **n8n node**: reuses the TypeScript SDK as a peer dependency. No
-  independent wire-format implementation.
 - **PHP SDK**: RPC is hand-written on top of the standard socket
   API; RESP3 uses `predis` which ships with RESP3 primitives.
 

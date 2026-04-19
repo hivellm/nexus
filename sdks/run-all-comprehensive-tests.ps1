@@ -81,10 +81,10 @@ try {
 # Test C# SDK
 Write-Host "`n[C# SDK]" -ForegroundColor Yellow
 try {
-    Push-Location sdks/TestConsoleSimple
-    $output = dotnet run --verbosity quiet 2>&1
+    Push-Location sdks/csharp
+    $output = dotnet test --verbosity quiet 2>&1
     Pop-Location
-    if ($output -match "SUCCESS") {
+    if ($LASTEXITCODE -eq 0) {
         $results["CSharp"] = "PASS"
         Write-Host "[SUCCESS] C# SDK tests passed" -ForegroundColor Green
     } else {
@@ -97,24 +97,9 @@ try {
     Pop-Location
 }
 
-# Test n8n SDK
-Write-Host "`n[n8n SDK]" -ForegroundColor Yellow
-try {
-    Push-Location sdks/n8n
-    $output = npx tsx test-integration.ts 2>&1
-    Pop-Location
-    if ($output -match "SUCCESS") {
-        $results["n8n"] = "PASS"
-        Write-Host "[SUCCESS] n8n SDK tests passed" -ForegroundColor Green
-    } else {
-        $results["n8n"] = "FAIL"
-        Write-Host "[FAILED] n8n SDK tests failed" -ForegroundColor Red
-    }
-} catch {
-    $results["n8n"] = "ERROR"
-    Write-Host "[ERROR] n8n SDK tests error: $_" -ForegroundColor Red
-    Pop-Location
-}
+# NOTE: n8n / langchain / langflow SDKs were removed in the 1.0.0 cut.
+# Focus is on first-party SDKs only: rust, python, typescript, go,
+# csharp, php.
 
 # Print Summary
 Write-Host "`n" + ("=" * 70) -ForegroundColor Cyan

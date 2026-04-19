@@ -5,7 +5,42 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] — 2026-04-19
+
+### SDK + workspace version unification
+
+Every first-party crate and SDK bumped to **1.0.0** (previously a
+mix of `0.12.0` for the server workspace and `0.1.0` for some SDKs).
+One version number governs the CLI, server, protocol crate, Rust
+SDK, Python SDK, TypeScript SDK, Go SDK, C# SDK, and PHP SDK.
+
+### Removed ecosystem SDKs
+
+The following integrations were dropped to focus on first-party wire
+clients:
+
+- `sdks/n8n/` — the community n8n node. Users can still invoke the
+  Nexus HTTP endpoint or wrap the TypeScript SDK inline.
+- `sdks/langchain/` and `sdks/langflow/` — Python ecosystem
+  wrappers. The underlying Python SDK covers the same API surface;
+  higher-level orchestration wrappers are better maintained
+  out-of-tree where they can track upstream LangChain / LangFlow
+  releases on their own cadence.
+- `sdks/TestConsoleSimple/` — redundant C# test harness (the
+  canonical tests live in `sdks/csharp/Tests/`).
+
+### Documentation reorganisation
+
+- New `sdks/README.md` — canonical index of shipped SDKs with the
+  shared transport contract referenced up front.
+- `sdks/SDK_TEST_RESULTS.md`, `sdks/SDK_TEST_RESULTS_FINAL.md`, and
+  `sdks/TEST_COVERAGE_REPORT.md` moved to `docs/sdks/` so the `sdks/`
+  root only holds runnable client code + the test-matrix script.
+- Per-SDK `CHANGELOG.md` created for every remaining SDK (Rust,
+  Python, TypeScript, Go, C#, PHP) — the Rust SDK entry has the
+  full 1.0.0 RPC-default details, the others carry a "1.0.0 version
+  alignment, RPC default queued under
+  phase2_sdk-rpc-transport-default" entry.
 
 ### Native Binary RPC transport (2026-04-18)
 

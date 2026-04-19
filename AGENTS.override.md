@@ -179,10 +179,10 @@ powershell -ExecutionPolicy Bypass -File sdks/run-all-comprehensive-tests.ps1
 # Test individual SDKs
 cd sdks/python && python test_sdk_comprehensive.py
 cd sdks/typescript && npx tsx test-sdk-comprehensive.ts
-cd sdks/rust && cargo run --example test_sdk
+cd sdks/rust && cargo test
 cd sdks/go/test && go run test_sdk.go
-cd sdks/TestConsoleSimple && dotnet run
-cd sdks/n8n && npx tsx test-integration.ts
+cd sdks/csharp && dotnet test
+cd sdks/php && vendor/bin/phpunit
 ```
 
 ### CLI Development
@@ -285,7 +285,7 @@ nexus/
 │   ├── typescript/       # TypeScript SDK
 │   ├── go/               # Go SDK
 │   ├── csharp/           # C# SDK
-│   └── n8n/              # n8n community node
+│   └── php/              # PHP SDK
 ├── tests/                # 🧪 Integration tests
 │   └── cross-compatibility/ # Neo4j compatibility tests
 ├── docs/                 # 📚 Documentation
@@ -497,7 +497,7 @@ All SDKs follow consistent patterns:
 - **Python**: Uses `list[Any]` (flexible types)
 - **TypeScript**: Uses `any[]` (flexible types)
 - **Rust**: Uses `serde_json::Value` (flexible types)
-- **n8n**: Uses TypeScript types (flexible)
+- **PHP**: Uses native arrays (flexible types)
 
 #### Languages with Helper Methods
 - **Go**: `QueryResult.RowsAsMap()` converts `[][]interface{}` to `[]map[string]interface{}`

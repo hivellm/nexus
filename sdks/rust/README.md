@@ -14,8 +14,28 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-nexus-sdk = "0.1.0"
+nexus-sdk = "1.0.0"
 ```
+
+## Transports
+
+The SDK is **RPC-first** starting in 1.0.0. The default endpoint is
+`nexus://127.0.0.1:15475` (native binary RPC, length-prefixed
+MessagePack over TCP). URL scheme picks the transport:
+
+| URL form                     | Transport  | Default port |
+|------------------------------|------------|--------------|
+| `nexus://host[:port]`        | Binary RPC | `15475`      |
+| `http://host[:port]`         | HTTP/JSON  | `15474`      |
+| `https://host[:port]`        | HTTPS/JSON | `443`        |
+| `host[:port]` (no scheme)    | Binary RPC | `15475`      |
+
+Override per-client with `ClientConfig.transport`, per-process with
+the `NEXUS_SDK_TRANSPORT` env var (values: `nexus`, `http`, `https`,
+`resp3`, `auto`). URL scheme always wins over env/config.
+
+See [`docs/specs/sdk-transport.md`](../../docs/specs/sdk-transport.md)
+for the canonical contract every Nexus SDK follows.
 
 ## Usage
 
@@ -27,8 +47,10 @@ use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a client
-    let client = NexusClient::new("http://localhost:15474")?;
+    // Create a client — `nexus://` picks the native binary RPC
+    // transport automatically. Legacy `http://localhost:15474` still
+    // works for REST/JSON.
+    let client = NexusClient::new("nexus://127.0.0.1:15475")?;
 
     // Execute a Cypher query
     let result = client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None).await?;
@@ -56,10 +78,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nexus_sdk::NexusClient;
 
 // Using API key
-let client = NexusClient::with_api_key("http://localhost:15474", "your-api-key")?;
+let client = NexusClient::with_api_key("nexus://127.0.0.1:15475", "your-api-key")?;
 
 // Or using username/password
-let client = NexusClient::with_credentials("http://localhost:15474", "user", "pass")?;
+let client = NexusClient::with_credentials("nexus://127.0.0.1:15475", "user", "pass")?;
+
+// Force HTTP/JSON when you need a REST-only path
+let legacy = NexusClient::new("http://127.0.0.1:15474")?;
 ```
 
 ### Schema Management
@@ -322,6 +347,8 @@ async fn check_replication_status(master_url: &str) -> Result<(), Box<dyn std::e
 
 ## Features
 
+- ✅ **Native binary RPC transport** (default on `nexus://` URLs; ~3–10× lower latency vs HTTP/JSON)
+- ✅ Pluggable transport layer (`TransportMode::NexusRpc` / `Http` / `Https`)
 - ✅ Cypher query execution
 - ✅ Database statistics
 - ✅ Health check
@@ -412,6 +439,7 @@ The SDK includes comprehensive tests for:
 
 ## Roadmap
 
+- [x] Native binary RPC transport (landed 1.0.0)
 - [x] Node CRUD operations
 - [x] Relationship CRUD operations (Create, Update, Delete)
 - [x] Schema management
@@ -421,6 +449,7 @@ The SDK includes comprehensive tests for:
 - [x] Query builder
 - [x] Retry logic with exponential backoff (basic implementation)
 - [x] Neo4j compatibility comparison tests
+- [ ] RESP3 transport (wire format parsed; implementation deferred)
 - [ ] Connection pooling
 
 ## License

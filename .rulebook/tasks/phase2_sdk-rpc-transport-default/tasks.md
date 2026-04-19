@@ -59,11 +59,8 @@
 - [ ] 6.6 `dotnet test` — covers roundtrip, command-map, reconnect logic
 - [ ] 6.7 Update the `.nupkg` metadata + README
 
-## 7. n8n node
-- [ ] 7.1 Add a `transport` dropdown to the n8n node UI (default "RPC (fast)")
-- [ ] 7.2 Delegate to the TS SDK's transport selection — no independent implementation
-- [ ] 7.3 Update the built-in `.vue` docs for each n8n operation (note: "Uses Nexus RPC by default")
-- [ ] 7.4 Update `test-integration.ts` to run the test matrix through each transport
+## 7. n8n node — REMOVED IN 1.0.0
+- [x] 7.1 The `sdks/n8n/` integration was dropped in the 1.0.0 cut. Users wanting n8n compatibility call the Nexus HTTP endpoint directly or wrap the TypeScript SDK inline. No further work.
 
 ## 8. PHP SDK
 - [ ] 8.1 Add `Transport/Resp3Transport.php` using `predis/predis` for framing
@@ -79,10 +76,8 @@
 - [ ] 9.3 Add a parity assertion: the same Cypher query returns the same rows byte-for-byte across transports
 - [ ] 9.4 CI: `run-all-comprehensive-tests.ps1 -transport rpc` runs on every PR
 
-## 10. Langchain / Langflow wrappers
-- [ ] 10.1 Update `sdks/langchain/` to use the Python SDK's transport layer transparently (no UI change)
-- [ ] 10.2 Update `sdks/langflow/` similarly
-- [ ] 10.3 Spot-check: a LangChain `NexusGraphStore` ingestion 2–5x faster via RPC
+## 10. Langchain / Langflow wrappers — REMOVED IN 1.0.0
+- [x] 10.1 `sdks/langchain/` and `sdks/langflow/` were dropped in the 1.0.0 cut. Users keep the Python SDK; LangChain / LangFlow integrations move out-of-tree where they can track upstream releases on their own cadence. No further work.
 
 ## 11. Documentation and migration
 - [ ] 11.1 Write `/docs/MIGRATION_SDK_TRANSPORT.md` — 1-page guide (env var opt-out, firewall notes, downgrade path)
