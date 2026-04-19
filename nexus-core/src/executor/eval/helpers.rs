@@ -490,8 +490,33 @@ impl Executor {
                     !seen_row_keys.insert(entity_key)
                 }
             } else {
-                // No entity IDs found - use full row content as fallback
-                let row_key = serde_json::to_string(row_map).unwrap_or_default();
+                // No entity IDs found - use full row content as fallback dedup
+                // key. If JSON serialisation fails (usually: non-finite floats
+                // in a property map) we fall back to a `{:?}` key rather than
+                // the empty string; otherwise every failing row collapses into
+                // a single dedup bucket. A warn! + metric marks the event.
+                //
+                // This helper returns `()` with 18 call sites — propagating
+                // errors here would be a wide cascade. The failure is
+                // confined to the dedup decision, so degrading to Rust Debug
+                // for the key is a safe compromise (different values still
+                // produce different strings).
+                let row_key = match serde_json::to_string(row_map) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        super::super::serde_metrics::record_fallback(
+                            super::super::serde_metrics::SerdeFallbackSite::HelperRowDedupKey,
+                        );
+                        tracing::warn!(
+                            target: "nexus_core::executor",
+                            error = %e,
+                            "update_result_set_from_rows: serde_json::to_string failed for \
+                             dedup key; falling back to Debug representation. \
+                             See nexus_executor_serde_fallback_total{{site=\"helper_row_dedup_key\"}}."
+                        );
+                        format!("{:?}", row_map)
+                    }
+                };
                 !seen_row_keys.insert(row_key)
             };
 

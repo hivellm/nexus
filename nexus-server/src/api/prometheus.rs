@@ -112,6 +112,13 @@ impl PrometheusMetrics {
         // Native binary RPC metrics — same pattern (process-wide
         // AtomicU64 counters).
         let rpc = crate::protocol::rpc::metrics::snapshot();
+        // Executor serde-fallback counters — bumped when
+        // `serde_json::to_string` fails inside GROUP BY / DISTINCT /
+        // UNION key construction (propagated to the caller as an error)
+        // or inside the `update_result_set_from_rows` helper (fallback
+        // to `{:?}` and log warn!). See
+        // `nexus_core::executor::serde_metrics`.
+        let serde_fallback = nexus_core::executor::serde_metrics::snapshot();
 
         let avg_time = if total > 0 {
             total_time as f64 / total as f64
@@ -218,6 +225,14 @@ nexus_rpc_frame_bytes_out_total {rpc_bytes_out}
 # HELP nexus_rpc_slow_commands_total RPC commands that exceeded the configured slow-threshold.
 # TYPE nexus_rpc_slow_commands_total counter
 nexus_rpc_slow_commands_total {rpc_slow}
+
+# HELP nexus_executor_serde_fallback_total Events where serde_json::to_string failed inside the executor. The `site` label identifies the operator: `aggregate_group_key`, `distinct_key`, `union_dedup_key` (propagated as Error::CypherExecution), or `helper_row_dedup_key` / `warm_cache_lazy` (degraded fallback + warn!). A sustained rate on any site indicates a property type that is not JSON-representable (typically NaN/Infinity floats).
+# TYPE nexus_executor_serde_fallback_total counter
+nexus_executor_serde_fallback_total{{site="aggregate_group_key"}} {serde_aggregate}
+nexus_executor_serde_fallback_total{{site="distinct_key"}} {serde_distinct}
+nexus_executor_serde_fallback_total{{site="union_dedup_key"}} {serde_union}
+nexus_executor_serde_fallback_total{{site="helper_row_dedup_key"}} {serde_helper}
+nexus_executor_serde_fallback_total{{site="warm_cache_lazy"}} {serde_warm_cache}
 "#,
             total = total,
             successful = successful,
@@ -242,6 +257,11 @@ nexus_rpc_slow_commands_total {rpc_slow}
             rpc_bytes_in = rpc.bytes_in_total,
             rpc_bytes_out = rpc.bytes_out_total,
             rpc_slow = rpc.slow_commands_total,
+            serde_aggregate = serde_fallback.aggregate_group_key,
+            serde_distinct = serde_fallback.distinct_key,
+            serde_union = serde_fallback.union_dedup_key,
+            serde_helper = serde_fallback.helper_row_dedup_key,
+            serde_warm_cache = serde_fallback.warm_cache_lazy,
         )
     }
 }

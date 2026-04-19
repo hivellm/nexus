@@ -1377,6 +1377,39 @@ RETURN null.name
 -- Error: Cannot access property on null
 ```
 
+### Serialization-dependent Runtime Errors (`phase2_propagate-serde-errors`)
+
+Operators that build canonical row/group keys via JSON serialisation
+**now propagate the error** instead of silently coercing the failing
+row into an empty-string bucket. This matters in practice when a
+property holds a non-finite float (`NaN`, `+Infinity`, `-Infinity`) or
+any other value the JSON data model cannot represent.
+
+| Clause | Error message prefix | Failure mode before phase2 |
+|--------|----------------------|----------------------------|
+| `GROUP BY` | `GROUP BY key serialization failed (…)` | All failing rows collapsed into one bogus group with key `""`. |
+| `DISTINCT` | `DISTINCT key serialization failed (…)` | Unrelated failing rows silently deduplicated together. |
+| `UNION` (not `UNION ALL`) | `UNION dedup key serialization failed (…)` | Same as DISTINCT, across UNION branches. |
+
+Each failure bumps the Prometheus counter
+`nexus_executor_serde_fallback_total{site="<op>"}` (label values:
+`aggregate_group_key`, `distinct_key`, `union_dedup_key`). Operators
+wishing to sidestep the error can use `UNION ALL` instead of `UNION`,
+strip the offending property before grouping, or coerce non-finite
+floats to `null`.
+
+A secondary fallback path at `eval/helpers.rs::update_result_set_from_rows`
+keeps its previous dedup-best-effort behaviour but now logs a
+`tracing::warn!` and bumps
+`nexus_executor_serde_fallback_total{site="helper_row_dedup_key"}` so
+the degradation is observable. The key is degraded to the Rust `Debug`
+representation of the failing value (distinct values still produce
+distinct keys), never to the empty string.
+
+Cache-warming failures inside the executor hot path
+(`Executor::execute` lazy warmup) are similarly logged and counted
+under `site="warm_cache_lazy"` instead of being silently dropped.
+
 ## Performance Characteristics
 
 | Query Pattern | Complexity | Notes |

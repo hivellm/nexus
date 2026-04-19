@@ -228,9 +228,24 @@ impl Executor {
                 }
             }
 
-            // Convert group key to canonical string representation for reliable hashing
-            // This ensures that NULL values, numbers, strings, etc. are compared correctly
-            let group_key = serde_json::to_string(&group_key_values).unwrap_or_default();
+            // Convert group key to canonical string representation for reliable hashing.
+            // If this fails (most commonly: a property holding a non-finite float like
+            // NaN that JSON cannot represent) we propagate the error instead of silently
+            // substituting `""` — that degenerate path collapses every failing row into
+            // a single bogus group and produces wrong aggregation results.
+            let group_key = match serde_json::to_string(&group_key_values) {
+                Ok(s) => s,
+                Err(e) => {
+                    super::super::serde_metrics::record_propagated_failure(
+                        super::super::serde_metrics::SerdeFallbackSite::AggregateGroupKey,
+                    );
+                    return Err(Error::CypherExecution(format!(
+                        "GROUP BY key serialization failed ({}). Non-finite floats and \
+                         other non-JSON-representable values cannot participate in group keys.",
+                        e
+                    )));
+                }
+            };
             groups.entry(group_key).or_default().push(row);
         }
 

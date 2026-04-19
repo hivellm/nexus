@@ -312,9 +312,24 @@ impl Executor {
             let mut deduped_rows = Vec::new();
 
             for row in combined_rows {
-                // Serialize row values to a string for comparison
-                // Use a canonical JSON representation to ensure consistent comparison
-                let row_key = serde_json::to_string(&row.values).unwrap_or_default();
+                // Serialize row values to a canonical JSON string for comparison.
+                // Phase2: propagate serialisation failures rather than deduping all
+                // failing rows into the empty-string bucket. Callers running
+                // `UNION` (not `UNION ALL`) over a column with non-finite floats
+                // now see a clear error.
+                let row_key = match serde_json::to_string(&row.values) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        super::super::serde_metrics::record_propagated_failure(
+                            super::super::serde_metrics::SerdeFallbackSite::UnionDedupKey,
+                        );
+                        return Err(Error::CypherExecution(format!(
+                            "UNION dedup key serialization failed ({}). Use UNION ALL to skip \
+                             deduplication when rows contain non-JSON-representable values.",
+                            e
+                        )));
+                    }
+                };
                 if seen.insert(row_key.clone()) {
                     deduped_rows.push(row);
                 } else {

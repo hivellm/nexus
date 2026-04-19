@@ -682,11 +682,25 @@ impl Executor {
                 }
             }
 
-            // Create a canonical key for comparison
-            // Use JSON serialization with sorted keys for objects to ensure consistent comparison
-            // This handles NULL, numbers, strings, arrays, objects correctly
-            // For consistent comparison, we need to ensure the same value always produces the same key
-            let key = serde_json::to_string(&key_values).unwrap_or_default();
+            // Create a canonical key for comparison using JSON serialisation.
+            // Prior to phase2 this called `.unwrap_or_default()`; that substituted `""`
+            // on serialisation failure (non-finite float, etc.) and silently deduped
+            // unrelated rows together. Phase2 propagates the failure instead — a
+            // DISTINCT query over a column containing NaN now errors rather than
+            // producing wrong results.
+            let key = match serde_json::to_string(&key_values) {
+                Ok(s) => s,
+                Err(e) => {
+                    super::super::serde_metrics::record_propagated_failure(
+                        super::super::serde_metrics::SerdeFallbackSite::DistinctKey,
+                    );
+                    return Err(Error::CypherExecution(format!(
+                        "DISTINCT key serialization failed ({}). Non-finite floats and \
+                         other non-JSON-representable values cannot participate in DISTINCT.",
+                        e
+                    )));
+                }
+            };
 
             tracing::debug!(
                 "DISTINCT: row {} key={}, key_values={:?}",
