@@ -1051,20 +1051,31 @@ impl Catalog {
 }
 
 impl Default for Catalog {
+    /// Build a fresh `Catalog` backed by a throwaway directory.
+    ///
+    /// Previously this returned a clone of a process-wide
+    /// `SHARED_CATALOG` rooted at `./data/catalog` (a path relative
+    /// to the current working directory). Under `cargo test` with the
+    /// default parallelism that meant every test was hammering the
+    /// same catalog in the project root, and the first test to create
+    /// a label permanently polluted every subsequent test's label-id
+    /// enumeration. It also left stray `./data/catalog/*.mdb` files
+    /// behind every test run.
+    ///
+    /// Post `phase3_remove-test-shared-state` the default impl uses
+    /// `tempfile::tempdir().keep()` for the root path and calls
+    /// `Catalog::new` — which under `cargo test` still gets folded
+    /// into the per-process `nexus_test_catalogs_shared` directory
+    /// via `Catalog::with_map_size`, so file-descriptor usage stays
+    /// bounded, but the relative-path pollution of the project tree
+    /// is gone. Tests that need strict catalog isolation (fresh
+    /// label/type IDs) should call
+    /// [`Catalog::with_isolated_path`] directly instead of going
+    /// through `default`.
     fn default() -> Self {
-        use std::sync::{Mutex, Once};
-
-        // Use a shared catalog for tests to prevent file descriptor leaks
-        static INIT: Once = Once::new();
-        static SHARED_CATALOG: Mutex<Option<Catalog>> = Mutex::new(None);
-
-        let mut catalog_guard = SHARED_CATALOG.lock().unwrap();
-        if catalog_guard.is_none() {
-            let catalog = Self::new("./data/catalog").expect("Failed to create default catalog");
-            *catalog_guard = Some(catalog);
-        }
-
-        catalog_guard.as_ref().unwrap().clone()
+        let temp_dir = tempfile::tempdir().expect("Failed to create default-catalog temp dir");
+        let path = temp_dir.keep();
+        Self::new(&path).expect("Failed to create default catalog")
     }
 }
 

@@ -1067,23 +1067,34 @@ impl Executor {
 }
 
 impl Default for Executor {
+    /// Build a fresh `Executor` backed by an isolated record store
+    /// rooted at a throwaway temp directory.
+    ///
+    /// Every call allocates its own `RecordStore`, `Catalog`,
+    /// `LabelIndex`, and `KnnIndex`, so concurrent tests cannot see
+    /// each other's nodes / relationships. The temp directory holding
+    /// the record store is deliberately leaked via
+    /// `TempDir::keep()` — test processes are short-lived and the leak
+    /// is bounded by the number of `default()` calls, but the record
+    /// store file descriptor stays valid for the whole process so
+    /// concurrent readers of the same `Executor` clone still work.
+    ///
+    /// Before `phase3_remove-test-shared-state` this function returned
+    /// a `RecordStore` clone drawn from a process-wide `SHARED_STORE`
+    /// guarded by a `Once`. Every caller observed the same store, so
+    /// any test that created nodes polluted every other test. The
+    /// current implementation gives each caller its own isolated
+    /// state — tests that previously relied (even accidentally) on
+    /// cross-test state will need to be updated.
     fn default() -> Self {
-        use std::sync::{Arc, Mutex, Once};
-
-        // Use a shared record store for tests to prevent file descriptor leaks
-        static INIT: Once = Once::new();
-        static SHARED_STORE: Mutex<Option<RecordStore>> = Mutex::new(None);
-
-        let mut store_guard = SHARED_STORE.lock().unwrap();
-        if store_guard.is_none() {
-            let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
-            let store = RecordStore::new(temp_dir.path()).expect("Failed to create record store");
-            // Keep temp_dir alive by leaking it (acceptable for testing)
-            std::mem::forget(temp_dir);
-            *store_guard = Some(store);
-        }
-
-        let store = store_guard.as_ref().unwrap().clone();
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+        // `keep()` consumes the `TempDir` and returns the PathBuf,
+        // suppressing the destructor that would otherwise remove the
+        // directory when the binding goes out of scope. Equivalent in
+        // effect to the previous `mem::forget(temp_dir)` but uses the
+        // idiomatic API.
+        let path = temp_dir.keep();
+        let store = RecordStore::new(&path).expect("Failed to create record store");
         let catalog = Catalog::default();
         let label_index = LabelIndex::default();
         let knn_index = KnnIndex::new_default(128).expect("Failed to create default KNN index");
@@ -1252,5 +1263,31 @@ mod tests {
         let after = serde_metrics::snapshot();
         assert!(after.warm_cache_lazy > before.warm_cache_lazy);
         assert!(after.total() > before.total());
+    }
+
+    // ── phase3_remove-test-shared-state: isolation guard ──────────────
+    //
+    // Before phase3, `Executor::default()` returned a clone drawn from
+    // a process-wide `SHARED_STORE`, so any two tests that called
+    // `default()` observed each other's writes. This test proves the
+    // shared state is gone: two executors created by independent
+    // `default()` calls carry distinct `RecordStore` file descriptors.
+
+    #[test]
+    fn two_default_executors_do_not_share_record_store() {
+        let a = Executor::default();
+        let b = Executor::default();
+
+        // The shared store used `Arc::ptr_eq`-cloneable handles, so
+        // proving "not the same store" reduces to proving the
+        // internal `store` Arc pointers differ.
+        let a_store = a.shared.store.clone();
+        let b_store = b.shared.store.clone();
+        assert!(
+            !std::sync::Arc::ptr_eq(&a_store, &b_store),
+            "Executor::default() must give each caller its own record store; \
+             phase3_remove-test-shared-state removed the SHARED_STORE cache \
+             that used to make parallel tests see each other's writes."
+        );
     }
 }
