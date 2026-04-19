@@ -6,6 +6,6 @@
 - [x] 1.5 Add counter `executor_serde_fallback_total` to the Prometheus exporter
 
 ## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [x] 2.1 Update `docs/specs/cypher-subset.md` listing new error paths
-- [x] 2.2 Write targeted executor tests that feed values serde_json can't round-trip and assert the new behaviour (error or warn)
-- [x] 2.3 Run tests and confirm they pass: `cargo test --package nexus-core executor::`
+- [x] 2.1 Update or create documentation covering the implementation: `docs/specs/cypher-subset.md` Error Handling section lists the new GROUP BY / DISTINCT / UNION error paths and the `nexus_executor_serde_fallback_total` counter
+- [x] 2.2 Write tests covering the new behavior: `serde_metrics::tests::*`, `executor::tests::aggregate_group_by_propagates_serde_failure`, `executor::tests::serde_metrics_snapshot_is_monotonic`
+- [x] 2.3 Run tests and confirm they pass: `cargo +nightly test -p nexus-core -p nexus-server`
