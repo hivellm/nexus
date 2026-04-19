@@ -10,12 +10,12 @@
 |--------|------|----------|-------------|
 | ⬚ | phase2_cli-default-rpc-transport | 0/12 | cli default rpc transport |
 | ⬚ | phase2_sdk-rpc-transport-default | 0/72 | sdk rpc transport default |
-| ⬚ | phase2_simd-executor-filter-aggregate | 38/86 | simd executor filter aggregate |
 
 ## phase3
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
+| ⬚ | phase3_executor-columnar-wiring | 0/5 | executor columnar wiring |
 | ⬚ | phase3_rpc-protocol-docs-benchmarks | 0/58 | rpc protocol docs benchmarks |
 
 ## phase4
