@@ -432,6 +432,103 @@ impl Column {
         // the only producer.
         Some(unsafe { std::slice::from_raw_parts(self.data.as_ptr() as *const bool, self.len) })
     }
+
+    /// SIMD-backed scalar compare for an `Int64` column.
+    ///
+    /// Returns a `Vec<bool>` of length `self.len` when `data_type ==
+    /// Int64`, `None` otherwise — letting filter-path callers fall
+    /// back to the row-at-a-time executor without panicking. Routes
+    /// through the canonical [`crate::simd::compare`] dispatch
+    /// (AVX-512 → AVX2 → NEON → scalar).
+    pub fn compare_scalar_i64(&self, scalar: i64, op: ComparisonOp) -> Option<Vec<bool>> {
+        (self.data_type == DataType::Int64)
+            .then(|| simd_ops::SimdComparator::new().compare_scalar_i64(self, scalar, op))
+    }
+
+    /// SIMD-backed scalar compare for a `Float64` column.
+    ///
+    /// IEEE-ordered: any NaN operand yields `false` for eq/lt/le/gt/ge
+    /// and `true` for ne, matching the scalar kernel reference in
+    /// [`crate::simd::compare`]. Returns `None` when the column's
+    /// dtype is not `Float64`.
+    pub fn compare_scalar_f64(&self, scalar: f64, op: ComparisonOp) -> Option<Vec<bool>> {
+        (self.data_type == DataType::Float64)
+            .then(|| simd_ops::SimdComparator::new().compare_scalar_f64(self, scalar, op))
+    }
+
+    /// Materialise a dense numeric column from a slice of executor
+    /// row maps — the first consumer lives in
+    /// [`crate::executor::Executor::execute_filter`]'s columnar
+    /// fast path (see `phase3_executor-columnar-wiring` §3.2).
+    ///
+    /// Reads `row[variable]` — which must be a `Value::Object`
+    /// (node or relationship) — then looks up `property` first at
+    /// the top level and then under a nested `"properties"` map,
+    /// mirroring [`crate::executor::Executor::extract_property`]. A
+    /// `None` return signals the caller to fall back to the
+    /// row-at-a-time path: that happens the first time any row
+    /// yields a missing property, `Value::Null`, or a `Number` that
+    /// can't be coerced into `dtype`. Keeping the NULL / type-
+    /// mismatch semantics on the row path preserves byte-for-byte
+    /// parity with the scalar executor.
+    ///
+    /// Only `DataType::Int64` and `DataType::Float64` are supported
+    /// today; string / bool columnar filtering is tracked by a
+    /// later slice of the same phase-3 task (§3.3 keeps those on
+    /// the row path unchanged).
+    pub fn materialise_from_rows(
+        rows: &[HashMap<String, serde_json::Value>],
+        variable: &str,
+        property: &str,
+        dtype: DataType,
+    ) -> Option<Column> {
+        if !matches!(dtype, DataType::Int64 | DataType::Float64) {
+            return None;
+        }
+        let mut column = Column::with_capacity(dtype, rows.len());
+        for row in rows {
+            let entity = row.get(variable)?;
+            let value = extract_property_from_entity(entity, property);
+            match (dtype, &value) {
+                (DataType::Int64, serde_json::Value::Number(n)) => {
+                    let i = n.as_i64()?;
+                    column.push::<i64>(i).ok()?;
+                }
+                (DataType::Float64, serde_json::Value::Number(n)) => {
+                    let f = n.as_f64()?;
+                    column.push::<f64>(f).ok()?;
+                }
+                _ => return None,
+            }
+        }
+        Some(column)
+    }
+}
+
+/// Mirror of [`crate::executor::Executor::extract_property`] kept
+/// local to the columnar module so the filter fast path doesn't need
+/// to pull the executor into scope. Any divergence from the canonical
+/// extractor is caught by the byte-for-byte parity test in
+/// `executor::operators::filter`.
+fn extract_property_from_entity(entity: &serde_json::Value, property: &str) -> serde_json::Value {
+    if let serde_json::Value::Object(obj) = entity {
+        if let Some(value) = obj.get(property) {
+            if property == "_nexus_id"
+                || (property != "_nexus_type"
+                    && property != "_source"
+                    && property != "_target"
+                    && property != "_element_id")
+            {
+                return value.clone();
+            }
+        }
+        if let Some(serde_json::Value::Object(props)) = obj.get("properties") {
+            if let Some(value) = props.get(property) {
+                return value.clone();
+            }
+        }
+    }
+    serde_json::Value::Null
 }
 
 /// Trait for values that can be stored in columns

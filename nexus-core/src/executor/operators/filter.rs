@@ -133,123 +133,122 @@ impl Executor {
                 rows.len()
             );
 
-            // CRITICAL FIX: Deduplicate rows by COMPOSITE KEY (all values in row) before filtering
-            // Use HashSet to track unique row combinations to avoid processing duplicate rows
-            // IMPORTANT: Include BOTH node IDs AND primitive values (from UNWIND) in the key
-            // This allows valid cartesian products and UNWIND-generated rows to be processed correctly
+            // Try the columnar fast path first — fires only when the
+            // batch is large enough that the per-batch materialisation
+            // cost amortises AND the predicate shape is
+            // `variable.property OP numeric-literal`. Every other
+            // filter shape (string predicates, multi-column predicates,
+            // IS NULL, subqueries, function calls, heterogeneous row
+            // widths) stays on the row-at-a-time path below, unchanged
+            // — see §3.3 of phase3_executor-columnar-wiring.
             use std::collections::HashSet;
-            let mut seen_row_keys = HashSet::new();
-
-            for row in &rows {
-                // Extract ALL values from row to create composite key
-                // CRITICAL FIX: Include variable names in the key to differentiate between
-                // rows like (p1=Alice, p2=Bob) and (p1=Bob, p2=Alice)
-                let mut var_value_pairs: Vec<(String, String)> = Vec::new();
-                let mut found_node_id: Option<u64> = None;
-
-                // First pass: collect (variable_name, value_key) pairs for ALL values
-                for var_name in row.keys() {
-                    if let Some(value) = row.get(var_name) {
-                        let value_key = match value {
-                            Value::Object(obj) => {
-                                // For objects (nodes/relationships), use _nexus_id
-                                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
-                                    if let Some(node_id) = id.as_u64() {
-                                        if found_node_id.is_none() {
-                                            found_node_id = Some(node_id);
-                                        }
-                                        format!("obj:{}", node_id)
-                                    } else {
-                                        "obj:unknown".to_string()
-                                    }
-                                } else {
-                                    "obj:no_id".to_string()
-                                }
-                            }
-                            // CRITICAL: Handle primitive values from UNWIND
-                            Value::Number(n) => format!("num:{}", n),
-                            Value::String(s) => format!("str:{}", s),
-                            Value::Bool(b) => format!("bool:{}", b),
-                            Value::Null => "null".to_string(),
-                            Value::Array(arr) => format!("arr:{}", arr.len()),
-                        };
-                        var_value_pairs.push((var_name.clone(), value_key));
+            let mut columnar_fast_path_taken = false;
+            if rows.len() >= self.config.columnar_threshold {
+                if let Some(mask) = try_columnar_filter_mask(&rows, &expr) {
+                    tracing::debug!(
+                        "Filter operator: columnar fast path on {} rows (threshold={})",
+                        rows.len(),
+                        self.config.columnar_threshold
+                    );
+                    let mut seen_row_keys = HashSet::new();
+                    for (row, &keep) in rows.iter().zip(mask.iter()) {
+                        if !keep {
+                            continue;
+                        }
+                        let row_key = compute_row_dedup_key(row);
+                        if seen_row_keys.insert(row_key) {
+                            filtered_rows.push(row.clone());
+                        }
                     }
+                    columnar_fast_path_taken = true;
                 }
+            }
 
-                // Sort by variable name for consistent key generation
-                // This ensures the key order is deterministic
-                var_value_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            if !columnar_fast_path_taken {
+                // CRITICAL FIX: Deduplicate rows by COMPOSITE KEY (all values in row) before filtering
+                // Use HashSet to track unique row combinations to avoid processing duplicate rows
+                // IMPORTANT: Include BOTH node IDs AND primitive values (from UNWIND) in the key
+                // This allows valid cartesian products and UNWIND-generated rows to be processed correctly
+                let mut seen_row_keys = HashSet::new();
 
-                // Create composite key with variable names and values
-                // Format: "var1=val1,var2=val2,..." to differentiate all row combinations
-                let row_key = var_value_pairs
-                    .iter()
-                    .map(|(var, val)| format!("{}={}", var, val))
-                    .collect::<Vec<_>>()
-                    .join(",");
+                for row in &rows {
+                    let row_key = compute_row_dedup_key(row);
+                    // `found_node_id` is retained purely for the debug-log
+                    // pathway below; `HashMap` iteration has always been
+                    // non-deterministic so "first" has always meant "any"
+                    // — `find_map` preserves that shape.
+                    let found_node_id: Option<u64> = row.values().find_map(|v| {
+                        if let Value::Object(obj) = v {
+                            if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                                return id.as_u64();
+                            }
+                        }
+                        None
+                    });
 
-                // Check if we've seen this exact combination before
-                let is_duplicate = !seen_row_keys.insert(row_key);
+                    // Check if we've seen this exact combination before
+                    let is_duplicate = !seen_row_keys.insert(row_key);
 
-                // Only process row if it's not a duplicate and passes the predicate
-                if !is_duplicate {
-                    // TRACE: Check row variables for relationships before evaluation
-                    let mut has_relationships_in_row = false;
-                    let mut var_types: Vec<(String, String)> = Vec::new();
-                    for (var_name, var_value) in row.iter() {
-                        let var_type = match var_value {
-                            Value::Object(obj) => {
-                                if obj.contains_key("type") {
-                                    has_relationships_in_row = true;
-                                    "RELATIONSHIP".to_string()
-                                } else {
-                                    "NODE".to_string()
+                    // Only process row if it's not a duplicate and passes the predicate
+                    if !is_duplicate {
+                        // TRACE: Check row variables for relationships before evaluation
+                        let mut has_relationships_in_row = false;
+                        let mut var_types: Vec<(String, String)> = Vec::new();
+                        for (var_name, var_value) in row.iter() {
+                            let var_type = match var_value {
+                                Value::Object(obj) => {
+                                    if obj.contains_key("type") {
+                                        has_relationships_in_row = true;
+                                        "RELATIONSHIP".to_string()
+                                    } else {
+                                        "NODE".to_string()
+                                    }
+                                }
+                                _ => "OTHER".to_string(),
+                            };
+                            var_types.push((var_name.clone(), var_type));
+                        }
+                        // CRITICAL FIX: Extract variable name from predicate for correct logging
+                        // Try to extract the variable from PropertyAccess expressions (e.g., "p1.name")
+                        let predicate_var_name = match &expr {
+                            parser::Expression::PropertyAccess { variable, .. } => {
+                                Some(variable.clone())
+                            }
+                            parser::Expression::BinaryOp { left, .. } => {
+                                // For binary ops like "p1.name = 'Alice'", extract from left side
+                                match left.as_ref() {
+                                    parser::Expression::PropertyAccess { variable, .. } => {
+                                        Some(variable.clone())
+                                    }
+                                    _ => None,
                                 }
                             }
-                            _ => "OTHER".to_string(),
+                            _ => None,
                         };
-                        var_types.push((var_name.clone(), var_type));
-                    }
-                    // CRITICAL FIX: Extract variable name from predicate for correct logging
-                    // Try to extract the variable from PropertyAccess expressions (e.g., "p1.name")
-                    let predicate_var_name = match &expr {
-                        parser::Expression::PropertyAccess { variable, .. } => {
-                            Some(variable.clone())
-                        }
-                        parser::Expression::BinaryOp { left, .. } => {
-                            // For binary ops like "p1.name = 'Alice'", extract from left side
-                            match left.as_ref() {
-                                parser::Expression::PropertyAccess { variable, .. } => {
-                                    Some(variable.clone())
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    };
 
-                    // DEBUG: Log node properties before evaluating predicate
-                    // Use the variable from predicate if available, otherwise use found_node_id
-                    let log_node_id = if let Some(var_name) = &predicate_var_name {
-                        // Try to get node_id from the specific variable in the row
-                        row.get(var_name)
-                            .and_then(|v| {
-                                if let Value::Object(obj) = v {
-                                    obj.get("_nexus_id").and_then(|id| id.as_u64())
-                                } else {
-                                    None
-                                }
-                            })
-                            .or(found_node_id)
-                    } else {
-                        found_node_id
-                    };
+                        // DEBUG: Log node properties before evaluating predicate
+                        // Use the variable from predicate if available, otherwise use found_node_id
+                        let log_node_id = if let Some(var_name) = &predicate_var_name {
+                            // Try to get node_id from the specific variable in the row
+                            row.get(var_name)
+                                .and_then(|v| {
+                                    if let Value::Object(obj) = v {
+                                        obj.get("_nexus_id").and_then(|id| id.as_u64())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .or(found_node_id)
+                        } else {
+                            found_node_id
+                        };
 
-                    let predicate_result = self.evaluate_predicate_on_row(row, context, &expr)?;
-                    if predicate_result {
-                        filtered_rows.push(row.clone());
-                        // Row key already tracked in seen_row_keys during duplicate check
+                        let predicate_result =
+                            self.evaluate_predicate_on_row(row, context, &expr)?;
+                        if predicate_result {
+                            filtered_rows.push(row.clone());
+                            // Row key already tracked in seen_row_keys during duplicate check
+                        }
                     }
                 }
             }
@@ -444,5 +443,209 @@ impl Executor {
         }
 
         Ok(())
+    }
+}
+
+/// Compute the dedup key for a row — the same shape the filter
+/// operator's row-at-a-time path has always used. Pulled out of the
+/// inline loop so the columnar fast path in
+/// [`Executor::execute_filter`] produces byte-for-byte identical
+/// output to the row path when both apply.
+fn compute_row_dedup_key(row: &HashMap<String, Value>) -> String {
+    let mut var_value_pairs: Vec<(String, String)> = Vec::with_capacity(row.len());
+    for var_name in row.keys() {
+        if let Some(value) = row.get(var_name) {
+            let value_key = match value {
+                Value::Object(obj) => {
+                    // For objects (nodes/relationships), use _nexus_id
+                    if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                        if let Some(node_id) = id.as_u64() {
+                            format!("obj:{}", node_id)
+                        } else {
+                            "obj:unknown".to_string()
+                        }
+                    } else {
+                        "obj:no_id".to_string()
+                    }
+                }
+                // CRITICAL: Handle primitive values from UNWIND
+                Value::Number(n) => format!("num:{}", n),
+                Value::String(s) => format!("str:{}", s),
+                Value::Bool(b) => format!("bool:{}", b),
+                Value::Null => "null".to_string(),
+                Value::Array(arr) => format!("arr:{}", arr.len()),
+            };
+            var_value_pairs.push((var_name.clone(), value_key));
+        }
+    }
+    var_value_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    var_value_pairs
+        .iter()
+        .map(|(var, val)| format!("{}={}", var, val))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Try to compute a filter mask columnar-style.
+///
+/// Returns `Some(mask)` only when the predicate is a
+/// `variable.property OP numeric-literal` binary op with a
+/// comparison operator (`=`, `!=`, `<`, `<=`, `>`, `>=`) — the shape
+/// the SIMD compare kernels cover today. `None` means "fall back to
+/// the row-at-a-time executor path unchanged", so every other
+/// predicate shape (string ops, AND/OR trees, IS NULL, function
+/// calls, multi-column, etc.) keeps its existing semantics.
+///
+/// The returned `Vec<bool>` has length `rows.len()` — one entry per
+/// input row, in the input order, with `true` marking rows the
+/// predicate accepts.
+fn try_columnar_filter_mask(
+    rows: &[HashMap<String, Value>],
+    expr: &parser::Expression,
+) -> Option<Vec<bool>> {
+    use crate::execution::columnar::{Column, ComparisonOp, DataType};
+    use parser::{BinaryOperator, Expression, Literal};
+
+    let (left, op, right) = match expr {
+        Expression::BinaryOp { left, op, right } => (left.as_ref(), *op, right.as_ref()),
+        _ => return None,
+    };
+
+    let cmp_op = match op {
+        BinaryOperator::Equal => ComparisonOp::Equal,
+        BinaryOperator::NotEqual => ComparisonOp::NotEqual,
+        BinaryOperator::LessThan => ComparisonOp::Less,
+        BinaryOperator::LessThanOrEqual => ComparisonOp::LessEqual,
+        BinaryOperator::GreaterThan => ComparisonOp::Greater,
+        BinaryOperator::GreaterThanOrEqual => ComparisonOp::GreaterEqual,
+        _ => return None,
+    };
+
+    // Only `property OP literal` today. `literal OP property`
+    // (argument-swapped form) stays on the row path — it's rare and
+    // needs operator inversion logic that's cheaper to land alongside
+    // string / multi-column support than up front here.
+    let (variable, property) = match left {
+        Expression::PropertyAccess { variable, property } => (variable.as_str(), property.as_str()),
+        _ => return None,
+    };
+
+    match right {
+        Expression::Literal(Literal::Integer(n)) => {
+            let column = Column::materialise_from_rows(rows, variable, property, DataType::Int64)?;
+            column.compare_scalar_i64(*n, cmp_op)
+        }
+        Expression::Literal(Literal::Float(f)) => {
+            let column =
+                Column::materialise_from_rows(rows, variable, property, DataType::Float64)?;
+            column.compare_scalar_f64(*f, cmp_op)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! §3.4 byte-for-byte parity — the columnar fast path and the
+    //! row-at-a-time path must produce identical result sets for every
+    //! predicate the fast path claims to handle. Run both paths over
+    //! the same 10k-row fixture by flipping `columnar_threshold`
+    //! between `usize::MAX` (forces row path) and `4096` (default —
+    //! fast path fires) and assert value equality.
+
+    use super::*;
+    use crate::executor::context::ExecutionContext;
+    use crate::testing::create_test_executor;
+
+    fn build_person(id: u64, age: i64, score: f64) -> Value {
+        let mut props = serde_json::Map::new();
+        props.insert("age".to_string(), Value::Number(age.into()));
+        props.insert(
+            "score".to_string(),
+            Value::Number(
+                serde_json::Number::from_f64(score).expect("fixture score is always finite"),
+            ),
+        );
+
+        let mut node = serde_json::Map::new();
+        node.insert("_nexus_id".to_string(), Value::Number(id.into()));
+        node.insert("properties".to_string(), Value::Object(props));
+        Value::Object(node)
+    }
+
+    fn filter_with_threshold(
+        nodes: &[Value],
+        predicate: &str,
+        columnar_threshold: usize,
+    ) -> Vec<Vec<Value>> {
+        let (mut executor, _ctx) = create_test_executor();
+        executor.config.columnar_threshold = columnar_threshold;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("n", Value::Array(nodes.to_vec()));
+        executor
+            .execute_filter(&mut context, predicate)
+            .expect("filter should succeed");
+        context
+            .result_set
+            .rows
+            .iter()
+            .map(|row| row.values.clone())
+            .collect()
+    }
+
+    fn assert_parity(nodes: &[Value], predicate: &str) {
+        let row_path = filter_with_threshold(nodes, predicate, usize::MAX);
+        let columnar = filter_with_threshold(nodes, predicate, 4096);
+        assert_eq!(
+            row_path.len(),
+            columnar.len(),
+            "row/columnar row-count mismatch for `{}`: row={} columnar={}",
+            predicate,
+            row_path.len(),
+            columnar.len()
+        );
+        assert_eq!(
+            row_path, columnar,
+            "row/columnar value mismatch for predicate `{}`",
+            predicate
+        );
+    }
+
+    #[test]
+    fn filter_columnar_matches_row_path_on_10k_int_predicates() {
+        let nodes: Vec<Value> = (0..10_000)
+            .map(|i| build_person(i as u64, i as i64, i as f64 * 0.5))
+            .collect();
+        assert!(nodes.len() > 4096, "fixture must exceed columnar threshold");
+
+        for predicate in [
+            "n.age > 5000",
+            "n.age >= 5000",
+            "n.age < 5000",
+            "n.age <= 5000",
+            "n.age = 5000",
+            "n.age <> 5000",
+        ] {
+            assert_parity(&nodes, predicate);
+        }
+    }
+
+    #[test]
+    fn filter_columnar_matches_row_path_on_10k_float_predicates() {
+        let nodes: Vec<Value> = (0..10_000)
+            .map(|i| build_person(i as u64, i as i64, i as f64 * 0.5))
+            .collect();
+        assert!(nodes.len() > 4096, "fixture must exceed columnar threshold");
+
+        for predicate in [
+            "n.score > 2500.0",
+            "n.score >= 2500.0",
+            "n.score < 2500.0",
+            "n.score <= 2500.0",
+            "n.score = 2500.0",
+            "n.score <> 2500.0",
+        ] {
+            assert_parity(&nodes, predicate);
+        }
     }
 }
