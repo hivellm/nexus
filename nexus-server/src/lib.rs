@@ -93,6 +93,21 @@ pub struct NexusServer {
     /// execute path records query successes / failures + cache hits /
     /// misses on this handle.
     pub metrics: Arc<crate::api::prometheus::PrometheusMetrics>,
+
+    /// Optional cluster-mode quota provider. `None` in standalone
+    /// deployments. When set, the server wires it into two places
+    /// that together constitute the write-path quota contract:
+    ///
+    /// 1. The Axum quota middleware uses it for per-request rate
+    ///    limiting (429 + Retry-After + X-RateLimit-Remaining).
+    /// 2. The inner `nexus_core::Engine` uses it for the
+    ///    storage-quota pre-check and post-write usage accounting.
+    ///
+    /// Exposed as `Arc<dyn QuotaProvider>` so stats handlers can
+    /// query per-tenant snapshots without needing access to the
+    /// middleware state.
+    pub quota_provider:
+        Arc<tokio::sync::RwLock<Option<Arc<dyn nexus_core::cluster::QuotaProvider>>>>,
 }
 
 impl NexusServer {
@@ -193,7 +208,33 @@ impl NexusServer {
             umicp_handler,
             start_time,
             metrics,
+            quota_provider: Arc::new(tokio::sync::RwLock::new(None)),
         }
+    }
+
+    /// Install a cluster-mode quota provider and plumb it through
+    /// the inner `Engine` so storage-quota gating on writes uses
+    /// the same provider the HTTP rate-limit middleware consults.
+    /// Idempotent — replacing the provider with `None` clears it
+    /// on both sides.
+    pub async fn set_cluster_quota_provider(
+        &self,
+        provider: Option<Arc<dyn nexus_core::cluster::QuotaProvider>>,
+    ) {
+        *self.quota_provider.write().await = provider.clone();
+        self.engine.write().await.set_quota_provider(provider);
+    }
+
+    /// Snapshot of a tenant's current rate / storage usage, if the
+    /// provider knows the tenant. Returns `None` on standalone
+    /// deployments (no provider wired) or for namespaces the
+    /// provider has not seen yet.
+    pub async fn tenant_quota_snapshot(
+        &self,
+        ns: &nexus_core::cluster::UserNamespace,
+    ) -> Option<nexus_core::cluster::QuotaSnapshot> {
+        let provider = self.quota_provider.read().await.clone()?;
+        provider.snapshot(ns)
     }
 
     /// Check if root user should be disabled after first admin user creation

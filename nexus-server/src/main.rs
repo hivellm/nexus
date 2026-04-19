@@ -514,6 +514,13 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         .route("/data/relationships", post(api::data::create_rel))
         // Statistics endpoint
         .route("/stats", get(api::stats::get_stats))
+        // Cluster-mode per-tenant stats. Returns 404
+        // CLUSTER_MODE_DISABLED on standalone deployments, 404
+        // TENANT_UNKNOWN for tenants that haven't been seen yet,
+        // and 401 NO_TENANT_CONTEXT if the request didn't carry
+        // a tenant binding (shouldn't happen in cluster mode but
+        // guards the case anyway).
+        .route("/cluster/stats/self", get(api::cluster_stats::tenant_stats))
         // Database management endpoints
         .route(
             "/databases",
@@ -718,9 +725,18 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // standalone mode — the check is guarded on presence of a
     // `UserContext` in request extensions, which only the cluster-mode
     // auth path inserts.
+    //
+    // The SAME provider is also installed on `NexusServer` (and,
+    // through it, on the inner `Engine`) so the rate-limit middleware
+    // on the HTTP side and the storage-quota gate on the engine-write
+    // side consult ONE tenant's usage counters, not two out-of-sync
+    // views.
     if cluster_enabled {
         let quota_provider: std::sync::Arc<dyn nexus_core::cluster::QuotaProvider> =
             nexus_core::cluster::LocalQuotaProvider::new(config.cluster.default_quotas.clone());
+        nexus_server
+            .set_cluster_quota_provider(Some(quota_provider.clone()))
+            .await;
         let quota_state = nexus_core::cluster::QuotaMiddlewareState::new(quota_provider);
         app = app.layer(axum_middleware::from_fn_with_state(
             quota_state,

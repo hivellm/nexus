@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod auto_generate;
+pub mod cluster_stats;
 pub mod clustering;
 pub mod comparison;
 pub mod config;

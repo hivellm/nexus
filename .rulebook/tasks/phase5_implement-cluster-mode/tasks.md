@@ -132,11 +132,11 @@
 - [ ] 13.6 Write load tests for quota enforcement
 
 ### 14. Usage Tracking & Reporting
-- [ ] 14.1 Implement usage metrics tracking (requests, storage, operations)
+- [x] 14.1 Implement usage metrics tracking (requests, storage, operations) (`LocalQuotaProvider` tracks per-tenant `storage_bytes_used` + rate-window request counts; engine's post-write block bumps `record_usage` on every successful write)
 - [ ] 14.2 Use SDK's `nexus().update_usage()` method for periodic usage reporting to HiveHub
-- [ ] 14.3 Implement usage aggregation per user before calling SDK
-- [ ] 14.4 Add usage statistics endpoints (authenticated) - local stats only
-- [ ] 14.5 Write tests for usage tracking
+- [x] 14.3 Implement usage aggregation per user before calling SDK (`LocalQuotaProvider::snapshot` aggregates per-namespace state; `record_usage` accumulates in-process; ready to be bridged to a HiveHub-backed provider)
+- [x] 14.4 Add usage statistics endpoints (authenticated) - local stats only (`GET /cluster/stats/self` returns `TenantStatsResponse` with storage + rate limits for the authenticated tenant; stable 404 codes for standalone / unknown-tenant)
+- [x] 14.5 Write tests for usage tracking (covered by `cluster::quota::tests::snapshot_reports_committed_usage` + the 4 new quota tests in `cluster_isolation_tests` that record writes and read back snapshots)
 - [ ] 14.6 Write tests for usage reporting with SDK mock
 
 ---
