@@ -212,6 +212,59 @@ impl Engine {
         self.quota_provider.is_some()
     }
 
+    /// Approximate storage bytes owned by a specific tenant
+    /// namespace. Sums `node_count * NODE_RECORD_SIZE` across every
+    /// label whose catalog name carries the `ns` prefix, plus
+    /// `rel_count * REL_RECORD_SIZE` across every scoped
+    /// relationship type.
+    ///
+    /// Returns the raw record-byte total only — property-chain
+    /// bytes are NOT included because the catalog has no per-
+    /// namespace key index and walking every node's property list
+    /// would be O(N) in node count. The post-write flat-rate
+    /// heuristic in `execute_cypher_with_context` already
+    /// approximates property bytes; this helper is the truthful
+    /// lower bound used by reconcilers and admin-level audits to
+    /// verify the heuristic hasn't drifted.
+    ///
+    /// **Caveat on relationship counts.** The current CREATE
+    /// operator batches node-count catalog updates but does NOT
+    /// increment `catalog.rel_counts` when a relationship is
+    /// created (see `executor::operators::create` —
+    /// `batch_increment_node_counts` is called, the rel-type
+    /// equivalent is not). As a result this function's node total
+    /// is accurate but the relationship total is a lower bound,
+    /// typically zero. Fixing create.rs to also batch
+    /// `increment_rel_count` is a separate follow-up; once that
+    /// lands the calculation here needs no change — it's
+    /// already summing both columns.
+    ///
+    /// Under [`crate::cluster::TenantIsolationMode::None`] (or when
+    /// the namespace has no catalog entries yet) this returns 0
+    /// cleanly — no scan, no error.
+    pub fn storage_bytes_for_namespace(&self, ns: &crate::cluster::UserNamespace) -> Result<u64> {
+        let ns_prefix = ns.prefix();
+        let mut total: u64 = 0;
+
+        for (label_id, name) in self.catalog.list_all_labels() {
+            if !name.starts_with(&ns_prefix) {
+                continue;
+            }
+            let count = self.catalog.get_node_count(label_id)?;
+            total = total.saturating_add(count.saturating_mul(storage::NODE_RECORD_SIZE as u64));
+        }
+
+        for (type_id, name) in self.catalog.list_all_types() {
+            if !name.starts_with(&ns_prefix) {
+                continue;
+            }
+            let count = self.catalog.get_rel_count(type_id)?;
+            total = total.saturating_add(count.saturating_mul(storage::REL_RECORD_SIZE as u64));
+        }
+
+        Ok(total)
+    }
+
     /// Create engine with isolated catalog (bypasses test sharing)
     ///
     /// WARNING: Use sparingly - each call creates a new LMDB environment.

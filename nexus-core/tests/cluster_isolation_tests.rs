@@ -383,6 +383,75 @@ fn reads_are_never_quota_gated_even_over_budget() -> Result<(), Error> {
 }
 
 #[test]
+fn storage_bytes_for_namespace_matches_node_count() -> Result<(), Error> {
+    // `Engine::storage_bytes_for_namespace` is the truthful lower
+    // bound on what a tenant actually owns: it walks the catalog,
+    // finds every label prefixed with the tenant's namespace,
+    // multiplies by `NODE_RECORD_SIZE` (32 B), and sums. This test
+    // pins the node-count arithmetic end-to-end so drifts between
+    // the storage layout and the calculation surface immediately.
+    //
+    // Note: the CREATE operator currently only batches node-count
+    // catalog updates, not rel-count updates, so the rel half of
+    // the sum is always zero on the write path. The helper itself
+    // already reads both — see its doc comment. When create.rs
+    // starts incrementing `rel_counts`, this test gains a `LIKES`
+    // edge and the assertion goes up to `3 * 32 + N * 52`.
+    let (mut engine, _guard) = setup_isolated_test_engine()?;
+    let alice = ctx_for("alice");
+
+    engine.execute_cypher_with_context(
+        "CREATE (a:Person {name: 'A'}), (b:Person {name: 'B'}), (c:Person {name: 'C'})",
+        Some(&alice),
+        TenantIsolationMode::CatalogPrefix,
+    )?;
+
+    let bytes = engine.storage_bytes_for_namespace(alice.namespace())?;
+    assert_eq!(bytes, 3 * 32, "three Persons must account for 96 B");
+
+    Ok(())
+}
+
+#[test]
+fn storage_bytes_for_namespace_isolates_between_tenants() -> Result<(), Error> {
+    // Counts for alice must not include bob's records, and
+    // vice-versa. This is the property-level proof of catalog
+    // prefixing: bytes-owned-by-tenant is a pure filter over
+    // catalog entries, and those entries are already scoped by
+    // name.
+    let (mut engine, _guard) = setup_isolated_test_engine()?;
+    let alice = ctx_for("alice");
+    let bob = ctx_for("bob");
+
+    for _ in 0..5 {
+        engine.execute_cypher_with_context(
+            "CREATE (n:Person)",
+            Some(&alice),
+            TenantIsolationMode::CatalogPrefix,
+        )?;
+    }
+    for _ in 0..2 {
+        engine.execute_cypher_with_context(
+            "CREATE (n:Person)",
+            Some(&bob),
+            TenantIsolationMode::CatalogPrefix,
+        )?;
+    }
+
+    assert_eq!(
+        engine.storage_bytes_for_namespace(alice.namespace())?,
+        5 * 32
+    );
+    assert_eq!(engine.storage_bytes_for_namespace(bob.namespace())?, 2 * 32);
+
+    // Unknown tenant → 0.
+    let ghost = UserNamespace::new("ghost").unwrap();
+    assert_eq!(engine.storage_bytes_for_namespace(&ghost)?, 0);
+
+    Ok(())
+}
+
+#[test]
 fn standalone_mode_ignores_quota_provider_on_writes() -> Result<(), Error> {
     // Regression guard: legacy `execute_cypher` callers (no
     // UserContext) MUST never hit the quota gate, even if an

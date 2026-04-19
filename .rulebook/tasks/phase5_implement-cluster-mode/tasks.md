@@ -68,7 +68,7 @@
 - [x] 6.7 Write integration tests for cross-namespace isolation (4 tests in `tests/cluster_isolation_tests.rs`: two-tenant node isolation, relationship-type isolation, standalone-mode regression, and the alice-deletes-bob attack)
 
 ### 7. Storage Quota Tracking
-- [ ] 7.1 Implement storage size calculation per namespace
+- [x] 7.1 Implement storage size calculation per namespace (`Engine::storage_bytes_for_namespace` walks the catalog for labels / rel-types prefixed with the tenant's `ns`, sums `count × NODE_RECORD_SIZE` + `count × REL_RECORD_SIZE`; 2 tests in `cluster_isolation_tests` pin the arithmetic and cross-tenant isolation)
 - [x] 7.2 Add storage quota check before write operations (`Engine::execute_cypher_with_context` calls `provider.check_storage(ns, 0)` before any `is_write_query` query — see §13.1)
 - [x] 7.3 Implement storage usage reporting (`LocalQuotaProvider::snapshot(ns)` returns current `storage_bytes_used` + rate-window counters; exposed via `GET /cluster/stats/self`)
 - [ ] 7.4 Add periodic storage quota sync with HiveHub
