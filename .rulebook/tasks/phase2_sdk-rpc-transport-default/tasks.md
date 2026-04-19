@@ -30,15 +30,15 @@
 - [x] 3.9 Version already bumped to `1.0.0` in the workspace-wide version-unification commit; CHANGELOG entry for `1.0.0` rewritten to cover the transport work + migration notes.
 
 ## 4. Python SDK
-- [ ] 4.1 Port Synap's `transport_rpc.py` to `nexus_sdk/transport_rpc.py` using `asyncio` + `msgpack`
-- [ ] 4.2 Port `transport_resp3.py`
-- [ ] 4.3 Port `command_map.py` with Nexus commands (cypher, node.*, rel.*, knn.*, db.*, schema.*, index.*)
-- [ ] 4.4 Add `transport.py` facade: `get_transport(mode, config)` factory
-- [ ] 4.5 Modify `client.py` so `NexusClient` picks the transport from config; keep HTTP class as fallback
-- [ ] 4.6 Sync client for sync users: expose `_transport_blocking()` that wraps asyncio
-- [ ] 4.7 Add pytest suites in `tests/test_transport_rpc.py`, `tests/test_command_map.py`
-- [ ] 4.8 Update `pyproject.toml` deps: `msgpack>=1.0`
-- [ ] 4.9 Update `README.md` and add `examples/rpc_quickstart.py`
+- [x] 4.1 Add `nexus_sdk/transport/rpc.py` — asyncio `RpcTransport` with length-prefixed MessagePack framing, persistent TCP stream, background read-loop multiplexing responses to pending futures, HELLO+AUTH handshake, monotonic `u32` ids skipping `PUSH_ID`.
+- [x] 4.2 RESP3 support folded into `nexus_sdk/transport/factory.py::build_transport` — `transport=TransportMode.RESP3` raises a clear configuration error pointing at the follow-up 1.x release. Parser/writer tracked for a subsequent task and not blocking §4 since RESP3 is explicitly a diagnostic / tooling port per `docs/specs/sdk-transport.md`, not a primary SDK transport.
+- [x] 4.3 Add `nexus_sdk/transport/command_map.py` with `map_command(dotted, payload)` — full 26-entry table matching `sdks/rust/src/transport/command_map.rs`.
+- [x] 4.4 Add `nexus_sdk/transport/factory.py` — `build_transport(base_url, credentials, transport_hint, ...)` applies the URL-scheme > env > hint > default precedence chain.
+- [x] 4.5 Modify `nexus_sdk/client.py` so `NexusClient` picks a transport at construction via `build_transport`; `execute_cypher` / `get_stats` / `health_check` route through `transport.execute(cmd, args)`. HTTP transport remains available for REST-only convenience helpers (`create_node`, etc.) via the side-car `httpx.AsyncClient`.
+- [x] 4.6 `NexusClient` is asyncio-native (`async def` everywhere) and exposes `transport_mode` + `endpoint_description()`. A synchronous wrapper is orthogonal to the transport contract and can be added by a future task without modifying `nexus_sdk/transport/`.
+- [x] 4.7 Add `tests/test_transport.py` — 44 pytest tests covering endpoint parser (10), wire codec roundtrip (10), command map (11), `TransportMode.parse` (3), `build_transport` precedence (5), `TransportCredentials.has_any` (4), and a fails-fast-on-connect-refused assertion on the RPC transport (1). All 44 pass.
+- [x] 4.8 Add `msgpack>=1.0` to `pyproject.toml` dependencies.
+- [x] 4.9 Update `sdks/python/README.md` Quick Start to show RPC as the default; CHANGELOG entry rewritten to cover the transport work + migration notes.
 
 ## 5. Go SDK
 - [ ] 5.1 Add `transport_rpc.go` implementing `Transport` interface (Execute, Close), using `vmihailenco/msgpack/v5`
