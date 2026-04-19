@@ -28,6 +28,11 @@ pub struct Config {
     pub resp3: Resp3Config,
     /// Native binary RPC listener configuration (additive to the HTTP port).
     pub rpc: RpcConfig,
+    /// Cluster-mode configuration. Disabled by default; when enabled,
+    /// every endpoint requires authentication and each authenticated
+    /// request is scoped to the tenant namespace derived from its API
+    /// key's `user_id`. See `nexus_core::cluster::ClusterConfig`.
+    pub cluster: nexus_core::cluster::ClusterConfig,
 }
 
 /// Configuration for the optional RESP3 TCP listener. Disabled or enabled
@@ -190,6 +195,7 @@ impl Default for Config {
             multi_database: MultiDatabaseConfig::default(),
             resp3: Resp3Config::default(),
             rpc: RpcConfig::default(),
+            cluster: nexus_core::cluster::ClusterConfig::default(),
         }
     }
 }
@@ -448,6 +454,19 @@ impl Config {
                 max_frame_bytes: rpc_max_frame_bytes,
                 max_in_flight_per_conn: rpc_max_in_flight,
                 slow_threshold_ms: rpc_slow_threshold_ms,
+            },
+            // Cluster mode is env-var-opt-in to keep existing
+            // deployments untouched. `NEXUS_CLUSTER_ENABLED=true`
+            // flips the master switch; everything else inherits
+            // `ClusterConfig::default()` (sensible tenant quotas).
+            cluster: if std::env::var("NEXUS_CLUSTER_ENABLED")
+                .ok()
+                .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+                .unwrap_or(false)
+            {
+                nexus_core::cluster::ClusterConfig::enabled_with_defaults()
+            } else {
+                nexus_core::cluster::ClusterConfig::default()
             },
         }
     }

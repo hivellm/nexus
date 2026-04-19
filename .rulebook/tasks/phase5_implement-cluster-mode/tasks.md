@@ -34,7 +34,7 @@
 - [ ] 3.2 Add HiveHub SDK configuration (base_url, service_api_key for SDK initialization)
 - [ ] 3.3 Add SDK client configuration (timeout, retries, retry_delay)
 - [ ] 3.4 Add quota cache TTL configuration (if using additional caching layer)
-- [ ] 3.5 Update config loading to read cluster mode settings
+- [x] 3.5 Update config loading to read cluster mode settings (server `Config` carries `nexus_core::cluster::ClusterConfig`; `NEXUS_CLUSTER_ENABLED` env var flips the master switch)
 - [ ] 3.6 Initialize HiveHub SDK client from configuration on server startup
 - [ ] 3.7 Write tests for configuration loading and SDK initialization
 
@@ -95,20 +95,20 @@
 - [ ] 9.7 Write integration tests for MCP function isolation
 
 ### 10. Mandatory Authentication for Cluster Mode
-- [ ] 10.1 Update auth middleware to require auth in cluster mode
-- [ ] 10.2 Remove public endpoint exceptions in cluster mode
-- [ ] 10.3 Update health check to require authentication in cluster mode
-- [ ] 10.4 Update all REST endpoints to check cluster mode flag
-- [ ] 10.5 Ensure MCP endpoints always require auth in cluster mode
-- [ ] 10.6 Write tests for mandatory authentication
-- [ ] 10.7 Write tests for public endpoint blocking in cluster mode
+- [x] 10.1 Update auth middleware to require auth in cluster mode (`AuthMiddleware::with_cluster_mode` + short-circuit in `requires_auth`)
+- [x] 10.2 Remove public endpoint exceptions in cluster mode (`/`, `/health`, `/stats`, `/openapi.json` all require auth when `cluster_enabled`)
+- [x] 10.3 Update health check to require authentication in cluster mode (covered by 10.2 — same code path)
+- [x] 10.4 Update all REST endpoints to check cluster mode flag (`main.rs` wires `config.cluster.enabled` into `create_auth_middleware`)
+- [x] 10.5 Ensure MCP endpoints always require auth in cluster mode (`create_mcp_router` accepts `cluster_enabled` and hands it to the auth layer)
+- [x] 10.6 Write tests for mandatory authentication (`cluster_mode_requires_auth_on_every_path` + 4 `user_context_from_api_key_*` tests in `auth::middleware::tests`)
+- [x] 10.7 Write tests for public endpoint blocking in cluster mode (covered by `cluster_mode_requires_auth_on_every_path` — asserts `/`, `/health`, `/stats`, `/openapi.json` all return `true`)
 
 ### 11. User Context Propagation
-- [ ] 11.1 Extract user_id from API key in middleware
-- [ ] 11.2 Add user context to request extensions
-- [ ] 11.3 Propagate user context through execution context
-- [ ] 11.4 Ensure user context is available in all operations
-- [ ] 11.5 Write tests for user context propagation
+- [x] 11.1 Extract user_id from API key in middleware (`AuthMiddleware::user_context_from_api_key`)
+- [x] 11.2 Add user context to request extensions (separate extension slot, not inside `AuthContext`)
+- [x] 11.3 Propagate user context through execution context (`extract_user_context(&Request)` helper exported from `auth`)
+- [x] 11.4 Ensure user context is available in all operations — the extension slot is set before `next.run(request)` so every downstream layer sees it
+- [x] 11.5 Write tests for user context propagation (4 tests in `auth::middleware::tests` covering unrestricted / restricted / missing / invalid user_id cases)
 
 ---
 

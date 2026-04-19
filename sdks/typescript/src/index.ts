@@ -1,5 +1,5 @@
 /**
- * @hivellm/nexus-sdk
+ * @hivehub/nexus-sdk
  * 
  * Official TypeScript/JavaScript SDK for Nexus Graph Database
  * 

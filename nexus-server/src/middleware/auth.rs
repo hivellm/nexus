@@ -10,13 +10,30 @@ use axum::{
 use nexus_core::auth::{AuthError, middleware::AuthMiddleware};
 use std::sync::Arc;
 
-/// Create authentication middleware from NexusServer
-pub fn create_auth_middleware(server: Arc<NexusServer>, require_auth: bool) -> AuthMiddleware {
-    AuthMiddleware::with_audit_logger(
+/// Create authentication middleware from NexusServer.
+///
+/// When `cluster_enabled` is `true`, the middleware runs with
+/// cluster-mode semantics: every uri requires auth (including
+/// `/health`) and successfully authenticated requests get a
+/// `UserContext` inserted into extensions. `require_auth` is
+/// forced to `true` in that case — the parameter is retained so
+/// standalone callers can still opt into require-auth without
+/// cluster scoping.
+pub fn create_auth_middleware(
+    server: Arc<NexusServer>,
+    require_auth: bool,
+    cluster_enabled: bool,
+) -> AuthMiddleware {
+    let base = AuthMiddleware::with_audit_logger(
         server.auth_manager.clone(),
         require_auth,
         server.audit_logger.clone(),
-    )
+    );
+    if cluster_enabled {
+        base.with_cluster_mode()
+    } else {
+        base
+    }
 }
 
 /// Authentication middleware handler for Axum

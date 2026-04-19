@@ -1,8 +1,8 @@
-# @hivellm/nexus-sdk
+# @hivehub/nexus-sdk
 
 Official TypeScript/JavaScript SDK for [Nexus Graph Database](https://github.com/hivellm/nexus).
 
-[![npm version](https://img.shields.io/npm/v/@hivellm/nexus-sdk.svg)](https://www.npmjs.com/package/@hivellm/nexus-sdk)
+[![npm version](https://img.shields.io/npm/v/@hivehub/nexus-sdk.svg)](https://www.npmjs.com/package/@hivehub/nexus-sdk)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## Features
@@ -17,25 +17,25 @@ Official TypeScript/JavaScript SDK for [Nexus Graph Database](https://github.com
 ## Installation
 
 ```bash
-npm install @hivellm/nexus-sdk
+npm install @hivehub/nexus-sdk
 ```
 
 or
 
 ```bash
-yarn add @hivellm/nexus-sdk
+yarn add @hivehub/nexus-sdk
 ```
 
 or
 
 ```bash
-pnpm add @hivellm/nexus-sdk
+pnpm add @hivehub/nexus-sdk
 ```
 
 ## Quick Start (RPC — default)
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 // Defaults to nexus://127.0.0.1:15475 (binary RPC).
 const client = new NexusClient();
@@ -317,7 +317,7 @@ Use the **master** for all write operations and **replicas** for read operations
 ### NexusCluster Class
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 /**
  * Client for Nexus cluster with master-replica topology.
@@ -365,7 +365,7 @@ class NexusCluster {
 ### Usage Example
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 async function main() {
   // Connect to cluster
@@ -480,7 +480,7 @@ import {
   ConnectionError,
   QueryExecutionError,
   ValidationError,
-} from '@hivellm/nexus-sdk';
+} from '@hivehub/nexus-sdk';
 
 try {
   await client.executeCypher('MATCH (n) RETURN n');
@@ -506,7 +506,7 @@ import type {
   Relationship,
   QueryResult,
   SchemaInfo,
-} from '@hivellm/nexus-sdk';
+} from '@hivehub/nexus-sdk';
 
 const result: QueryResult = await client.executeCypher('MATCH (n) RETURN n');
 const nodes: Node[] = await client.findNodes('Person');

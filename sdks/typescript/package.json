@@ -1,5 +1,5 @@
 {
-  "name": "@hivellm/nexus-sdk",
+  "name": "@hivehub/nexus-sdk",
   "version": "1.0.0",
   "description": "Official TypeScript/JavaScript SDK for Nexus Graph Database",
   "main": "dist/index.js",

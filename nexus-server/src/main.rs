@@ -305,8 +305,13 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         }
     }
 
+    // Hoisted above `create_mcp_router` so both the MCP and main
+    // routers see the same cluster flag. Legacy auth stays wired
+    // up through `auth.enabled`; cluster mode piggy-backs on it.
+    let cluster_enabled = config.cluster.enabled;
+
     // Create MCP router with StreamableHTTP transport
-    let mcp_router = create_mcp_router(nexus_server.clone()).await?;
+    let mcp_router = create_mcp_router(nexus_server.clone(), cluster_enabled).await?;
 
     // Health + Prometheus now read `server.start_time` and
     // `server.metrics` via State<Arc<NexusServer>> (phase2e); the
@@ -323,8 +328,17 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // Initialize authentication middleware if enabled
     // For now, we'll enable it based on config.auth.enabled
     // In the future, this can be made more granular per route
-    let auth_middleware_state = if config.auth.enabled {
-        Some(create_auth_middleware(nexus_server.clone(), true))
+    // Cluster mode implies authentication — no "cluster without auth"
+    // deployment shape exists. The `||` here keeps the legacy
+    // auth.enabled = true / cluster.enabled = false deployments wired
+    // up exactly as before. `cluster_enabled` was already hoisted
+    // above `create_mcp_router`; reuse it.
+    let auth_middleware_state = if config.auth.enabled || cluster_enabled {
+        Some(create_auth_middleware(
+            nexus_server.clone(),
+            true,
+            cluster_enabled,
+        ))
     } else {
         None
     };
@@ -740,6 +754,7 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 /// Create MCP router with StreamableHTTP transport
 async fn create_mcp_router(
     nexus_server: Arc<NexusServer>,
+    cluster_enabled: bool,
 ) -> anyhow::Result<Router<Arc<NexusServer>>> {
     use hyper::service::Service;
     use hyper_util::service::TowerToHyperService;
@@ -777,10 +792,11 @@ async fn create_mcp_router(
         .with_state(nexus_server.clone());
 
     // Apply MCP authentication middleware if authentication is enabled
-    if nexus_server.auth_manager.config().enabled {
+    if nexus_server.auth_manager.config().enabled || cluster_enabled {
         let auth_middleware = create_auth_middleware(
             nexus_server.clone(),
             true, // Require authentication for MCP
+            cluster_enabled,
         );
 
         router = router.layer(axum_middleware::from_fn_with_state(
@@ -957,8 +973,8 @@ mod tests {
             RootUserConfig::default(),
         ));
 
-        // Test that MCP router can be created
-        let result = create_mcp_router(server).await;
+        // Test that MCP router can be created (standalone mode; cluster off)
+        let result = create_mcp_router(server, false).await;
         assert!(result.is_ok());
 
         let _router = result.unwrap();
@@ -1092,8 +1108,8 @@ mod tests {
             RootUserConfig::default(),
         ));
 
-        // Test that we can create the MCP router
-        let mcp_router_result = create_mcp_router(server.clone()).await;
+        // Test that we can create the MCP router (standalone mode)
+        let mcp_router_result = create_mcp_router(server.clone(), false).await;
         assert!(mcp_router_result.is_ok());
 
         let _mcp_router = mcp_router_result.unwrap();
