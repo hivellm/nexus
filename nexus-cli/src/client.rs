@@ -273,6 +273,24 @@ impl NexusClient {
     }
 
     pub async fn status(&self) -> Result<ServerStatus> {
+        if let Some(rpc) = &self.rpc {
+            // Synthesise a ServerStatus from HELLO (version + authed
+            // flag) and HEALTH (state). No dedicated STATUS verb — the
+            // REST `/status` endpoint was always a thin shim over
+            // HELLO-like metadata.
+            let hello = rpc.call("HELLO", vec![]).await?;
+            let health = rpc.call("HEALTH", vec![]).await.ok();
+            let version = map_lookup_str(&hello, "version");
+            let health_state = health
+                .as_ref()
+                .and_then(|h| map_lookup_str(h, "state"))
+                .unwrap_or_else(|| "unknown".to_string());
+            return Ok(ServerStatus {
+                status: health_state,
+                version,
+                uptime_seconds: None,
+            });
+        }
         let response = self
             .build_request(reqwest::Method::GET, "/status")
             .send()
@@ -281,7 +299,6 @@ impl NexusClient {
         if response.status() == StatusCode::OK {
             Ok(response.json().await?)
         } else {
-            // Fallback for servers without /status endpoint
             Ok(ServerStatus {
                 status: "running".to_string(),
                 version: None,
@@ -291,6 +308,10 @@ impl NexusClient {
     }
 
     pub async fn health(&self) -> Result<Value> {
+        if let Some(rpc) = &self.rpc {
+            let reply = rpc.call("HEALTH", vec![]).await?;
+            return Ok(nexus_value_to_json(&reply));
+        }
         let response = self
             .build_request(reqwest::Method::GET, "/health")
             .send()
@@ -304,6 +325,23 @@ impl NexusClient {
     }
 
     pub async fn stats(&self) -> Result<DatabaseStats> {
+        if let Some(rpc) = &self.rpc {
+            let reply = rpc.call("STATS", vec![]).await?;
+            // Map the RPC STATS envelope (`{nodes, relationships, labels,
+            // rel_types, page_cache_hits/misses, wal_entries,
+            // active_transactions}`) onto the legacy `DatabaseStats`
+            // shape so command renderers keep working.
+            let node_count = map_lookup_int(&reply, "nodes").unwrap_or(0);
+            let relationship_count = map_lookup_int(&reply, "relationships").unwrap_or(0);
+            let label_count = map_lookup_int(&reply, "labels").unwrap_or(0);
+            let property_key_count = 0; // not exposed by RPC STATS today
+            return Ok(DatabaseStats {
+                node_count,
+                relationship_count,
+                label_count,
+                property_key_count,
+            });
+        }
         let response = self
             .build_request(reqwest::Method::GET, "/stats")
             .send()
@@ -317,6 +355,40 @@ impl NexusClient {
     }
 
     pub async fn get_users(&self) -> Result<Vec<UserInfo>> {
+        if self.is_rpc() {
+            // `SHOW USERS` returns `[username, roles, is_active]` per
+            // row. Route it through Cypher so the RPC CYPHER dispatcher
+            // picks it up (the dispatcher now recognises admin clauses).
+            let result = self.query("SHOW USERS", None).await?;
+            let users = result
+                .rows
+                .into_iter()
+                .filter_map(|row| {
+                    let username = row.first().and_then(|v| v.as_str()).map(String::from)?;
+                    let roles = row
+                        .get(1)
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let is_active = row.get(2).and_then(|v| v.as_bool()).unwrap_or(true);
+                    Some(UserInfo {
+                        id: None,
+                        username,
+                        email: None,
+                        roles,
+                        permissions: Vec::new(),
+                        is_active,
+                        is_root: false,
+                        created_at: None,
+                    })
+                })
+                .collect();
+            return Ok(users);
+        }
         let response = self
             .build_request(reqwest::Method::GET, "/auth/users")
             .send()
@@ -355,6 +427,61 @@ impl NexusClient {
     }
 
     pub async fn get_api_keys(&self) -> Result<Vec<ApiKeyInfo>> {
+        if self.is_rpc() {
+            // `SHOW API KEYS` via the RPC CYPHER dispatcher. The REST
+            // handler returns a denser struct (permissions enum names,
+            // created_at timestamps) — when column names are present
+            // in the response we map each row by index. The exact
+            // column set depends on the parser's `ShowApiKeys` clause;
+            // we support the common `[id, name, permissions,
+            // is_active, expires_at]` shape.
+            let result = self.query("SHOW API KEYS", None).await?;
+            let cols: std::collections::HashMap<String, usize> = result
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (c.clone(), i))
+                .collect();
+            let keys = result
+                .rows
+                .into_iter()
+                .filter_map(|row| {
+                    let get_str = |name: &str| -> Option<String> {
+                        cols.get(name)
+                            .and_then(|&i| row.get(i))
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    };
+                    let get_bool = |name: &str| -> Option<bool> {
+                        cols.get(name)
+                            .and_then(|&i| row.get(i))
+                            .and_then(|v| v.as_bool())
+                    };
+                    let id = get_str("id").or_else(|| get_str("key_id"))?;
+                    let name = get_str("name").unwrap_or_else(|| id.clone());
+                    let permissions: Vec<String> = cols
+                        .get("permissions")
+                        .and_then(|&i| row.get(i))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let is_active = get_bool("is_active").unwrap_or(true);
+                    Some(ApiKeyInfo {
+                        id,
+                        name,
+                        permissions,
+                        is_active,
+                        expires_at: get_str("expires_at"),
+                        created_at: get_str("created_at"),
+                    })
+                })
+                .collect();
+            return Ok(keys);
+        }
         let response = self
             .build_request(reqwest::Method::GET, "/auth/keys")
             .send()
@@ -443,6 +570,16 @@ impl NexusClient {
     }
 
     pub async fn export_data(&self, format: &str) -> Result<String> {
+        if let Some(rpc) = &self.rpc {
+            let reply = rpc
+                .call("EXPORT", vec![NexusValue::Str(format.to_string())])
+                .await?;
+            // Server returns `{format, records, data: Str}` — extract
+            // the `data` payload for the caller to print / write.
+            let data = map_lookup_str(&reply, "data")
+                .ok_or_else(|| anyhow!("EXPORT reply missing 'data' field"))?;
+            return Ok(data);
+        }
         let response = self
             .build_request(reqwest::Method::GET, &format!("/export?format={}", format))
             .send()
@@ -456,6 +593,17 @@ impl NexusClient {
     }
 
     pub async fn import_data(&self, data: &str, format: &str) -> Result<()> {
+        if let Some(rpc) = &self.rpc {
+            rpc.call(
+                "IMPORT",
+                vec![
+                    NexusValue::Str(format.to_string()),
+                    NexusValue::Str(data.to_string()),
+                ],
+            )
+            .await?;
+            return Ok(());
+        }
         let response = self
             .build_request(reqwest::Method::POST, &format!("/import?format={}", format))
             .body(data.to_string())
@@ -608,6 +756,49 @@ fn nexus_to_query_result(v: NexusValue) -> Result<QueryResult> {
             ..Default::default()
         }),
     })
+}
+
+/// Look up a string field inside a `NexusValue::Map` envelope. Returns
+/// `None` if the key is absent, the top-level value is not a Map, or
+/// the matched value is not a `Str`.
+fn map_lookup_str(v: &NexusValue, key: &str) -> Option<String> {
+    match v {
+        NexusValue::Map(entries) => entries.iter().find_map(|(k, val)| {
+            if k.as_str() == Some(key) {
+                val.as_str().map(String::from)
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    }
+}
+
+/// Same as `map_lookup_str` but returns the matched `Int` (widening
+/// floats when present) as `i64`.
+fn map_lookup_int(v: &NexusValue, key: &str) -> Option<i64> {
+    match v {
+        NexusValue::Map(entries) => entries.iter().find_map(|(k, val)| {
+            if k.as_str() == Some(key) {
+                match val {
+                    NexusValue::Int(i) => Some(*i),
+                    NexusValue::Float(f) => Some(*f as i64),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    }
+}
+
+/// Convert a `NexusValue` borrow into a `serde_json::Value` for paths
+/// (like `health()`) that want to hand the decoded reply back as
+/// opaque JSON. Clones through the tree because NexusValue has
+/// owning variants for bytes/strings.
+fn nexus_value_to_json(v: &NexusValue) -> Value {
+    nexus_to_json(v.clone())
 }
 
 /// Convert a `NexusValue` back to `serde_json::Value` for the result

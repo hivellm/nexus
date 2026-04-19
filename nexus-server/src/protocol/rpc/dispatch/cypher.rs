@@ -28,7 +28,12 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use nexus_core::executor::Query;
+use nexus_core::executor::parser::{Clause, CypherParser, CypherQuery};
 
+use crate::api::cypher::{
+    CypherResponse, execute_api_key_commands, execute_database_commands,
+    execute_query_management_commands, execute_user_commands,
+};
 use crate::protocol::rpc::NexusValue;
 
 use super::convert::{json_to_nexus, nexus_to_json};
@@ -62,6 +67,139 @@ async fn cypher(state: &RpcSession, args: &[NexusValue]) -> Result<NexusValue, S
     }
 }
 
+/// If the parsed AST contains an admin-level clause (database / user /
+/// api-key / query-management), route to the shared REST handler and
+/// convert its `CypherResponse` into the RPC envelope. Returns `None`
+/// for regular data queries so the caller falls through to
+/// `executor.execute()`.
+///
+/// This is the bridge that lets `SHOW USERS`, `SHOW API KEYS`,
+/// `CREATE USER`, `DROP DATABASE`, `TERMINATE QUERY`, etc. run over
+/// RPC with the exact same semantics as the REST `/cypher` endpoint.
+async fn dispatch_admin_if_any(
+    state: &RpcSession,
+    ast: &CypherQuery,
+    started: Instant,
+) -> Option<Result<NexusValue, String>> {
+    let has_db = ast.clauses.iter().any(|c| {
+        matches!(
+            c,
+            Clause::CreateDatabase(_)
+                | Clause::DropDatabase(_)
+                | Clause::ShowDatabases
+                | Clause::UseDatabase(_)
+        )
+    });
+    let has_user = ast.clauses.iter().any(|c| {
+        matches!(
+            c,
+            Clause::ShowUsers
+                | Clause::ShowUser(_)
+                | Clause::CreateUser(_)
+                | Clause::DropUser(_)
+                | Clause::Grant(_)
+                | Clause::Revoke(_)
+        )
+    });
+    let has_api_key = ast.clauses.iter().any(|c| {
+        matches!(
+            c,
+            Clause::CreateApiKey(_)
+                | Clause::ShowApiKeys(_)
+                | Clause::RevokeApiKey(_)
+                | Clause::DeleteApiKey(_)
+        )
+    });
+    let has_query_mgmt = ast
+        .clauses
+        .iter()
+        .any(|c| matches!(c, Clause::ShowQueries | Clause::TerminateQuery(_)));
+
+    // Same waterfall order as the REST handler (api/cypher/execute.rs)
+    // so behaviour is identical regardless of transport.
+    let resp: Option<CypherResponse> = if has_db {
+        Some(
+            execute_database_commands(state.server.clone(), ast, started)
+                .await
+                .0,
+        )
+    } else if has_api_key {
+        Some(
+            execute_api_key_commands(state.server.clone(), ast, started)
+                .await
+                .0,
+        )
+    } else if has_user {
+        Some(
+            execute_user_commands(state.server.clone(), ast, started)
+                .await
+                .0,
+        )
+    } else if has_query_mgmt {
+        Some(
+            execute_query_management_commands(state.server.clone(), ast, started)
+                .await
+                .0,
+        )
+    } else {
+        None
+    };
+
+    resp.map(|r| Ok(cypher_response_to_nexus(r)))
+}
+
+/// Convert a REST `CypherResponse` (`{columns, rows: Vec<serde_json::Value>,
+/// execution_time_ms, error}`) into the canonical RPC envelope that
+/// matches `result_set_to_nexus`'s output. Errors surface as a
+/// [`Result::Err`] exactly the way the direct-executor path does.
+fn cypher_response_to_nexus(resp: CypherResponse) -> NexusValue {
+    // If the REST helper reported an error, surface it as a server-
+    // error response with no rows. The caller wraps this in `Ok(...)`
+    // so we convert the error to a Map envelope with an `error` field;
+    // the RPC caller (CLI / SDK) distinguishes by checking whether
+    // `rows` is populated. This matches the REST JSON shape byte-for-
+    // byte so SDKs decode it identically on both transports.
+    let CypherResponse {
+        columns,
+        rows,
+        execution_time_ms,
+        error,
+    } = resp;
+
+    let columns_val = NexusValue::Array(columns.into_iter().map(NexusValue::Str).collect());
+    let rows_val = NexusValue::Array(
+        rows.into_iter()
+            .map(|row| match row {
+                serde_json::Value::Array(arr) => {
+                    NexusValue::Array(arr.into_iter().map(json_to_nexus).collect())
+                }
+                other => NexusValue::Array(vec![json_to_nexus(other)]),
+            })
+            .collect(),
+    );
+    let stats = NexusValue::Map(vec![(
+        NexusValue::Str("rows".into()),
+        NexusValue::Int(match &rows_val {
+            NexusValue::Array(a) => a.len() as i64,
+            _ => 0,
+        }),
+    )]);
+
+    let mut entries = vec![
+        (NexusValue::Str("columns".into()), columns_val),
+        (NexusValue::Str("rows".into()), rows_val),
+        (NexusValue::Str("stats".into()), stats),
+        (
+            NexusValue::Str("execution_time_ms".into()),
+            NexusValue::Int(execution_time_ms as i64),
+        ),
+    ];
+    if let Some(e) = error {
+        entries.push((NexusValue::Str("error".into()), NexusValue::Str(e)));
+    }
+    NexusValue::Map(entries)
+}
+
 // ── Shared execution path ─────────────────────────────────────────────────────
 
 async fn execute_query(
@@ -69,8 +207,22 @@ async fn execute_query(
     query: String,
     params: HashMap<String, serde_json::Value>,
 ) -> Result<NexusValue, String> {
-    let executor = state.server.executor.clone();
     let started = Instant::now();
+
+    // Parse once. If the AST carries an admin clause, route through
+    // the shared REST helpers so `SHOW USERS` / `SHOW API KEYS` /
+    // `CREATE DATABASE` / etc. behave identically over both
+    // transports. Otherwise fall through to the plain executor path.
+    let ast = match CypherParser::new(query.clone()).parse() {
+        Ok(ast) => ast,
+        Err(e) => return Err(format!("Parse error: {e}")),
+    };
+
+    if let Some(admin_result) = dispatch_admin_if_any(state, &ast, started).await {
+        return admin_result;
+    }
+
+    let executor = state.server.executor.clone();
     let q = Query {
         cypher: query,
         params,

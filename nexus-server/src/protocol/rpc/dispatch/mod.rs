@@ -16,6 +16,7 @@ pub mod admin;
 pub mod convert;
 pub mod cypher;
 pub mod database;
+pub mod export;
 pub mod graph;
 pub mod ingest;
 pub mod knn;
@@ -99,6 +100,7 @@ pub async fn run(
         "DB_LIST" | "DB_CREATE" | "DB_DROP" | "DB_USE" => {
             database::run(state, cmd.as_str(), &args).await
         }
+        "EXPORT" | "IMPORT" => export::run(state, cmd.as_str(), &args).await,
         other => Err(format!("ERR unknown command '{other}'")),
     }
 }
