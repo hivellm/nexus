@@ -31,7 +31,11 @@ pub fn create_spinner(message: &str) -> ProgressBar {
         ProgressStyle::default_spinner()
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
             .template("{spinner:.cyan} {msg}")
-            .unwrap(),
+            // Invariant: the template is a compile-time string literal
+            // with no dynamic placeholders; `indicatif` only errors here
+            // on malformed template syntax, which the source proves is
+            // impossible.
+            .expect("spinner template is a valid compile-time literal"),
     );
     spinner.set_message(message.to_string());
     spinner.enable_steady_tick(Duration::from_millis(100));
@@ -47,8 +51,9 @@ pub fn create_progress_bar(len: u64, message: &str) -> ProgressBar {
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-            .unwrap()
-            .progress_chars("█▓▒░")
+            // See `create_spinner` — compile-time literal template.
+            .expect("progress-bar template is a valid compile-time literal")
+            .progress_chars("█▓▒░"),
     );
     pb.set_message(message.to_string());
     pb
@@ -62,8 +67,9 @@ pub fn create_bytes_progress_bar(len: u64, message: &str) -> ProgressBar {
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
-            .unwrap()
-            .progress_chars("█▓▒░")
+            // See `create_spinner` — compile-time literal template.
+            .expect("bytes progress-bar template is a valid compile-time literal")
+            .progress_chars("█▓▒░"),
     );
     pb.set_message(message.to_string());
     pb
@@ -83,7 +89,14 @@ impl OutputContext {
                 "columns": columns,
                 "rows": rows,
             });
-            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            // `serde_json::to_string_pretty` on a `serde_json::Value`
+            // only fails for custom Serialize impls, and Value's
+            // built-in impl is infallible. If that ever changes we'd
+            // rather log and continue than panic the CLI.
+            match serde_json::to_string_pretty(&result) {
+                Ok(s) => println!("{}", s),
+                Err(e) => eprintln!("failed to serialize result as JSON: {}", e),
+            }
             return;
         }
 
@@ -112,7 +125,13 @@ impl OutputContext {
     pub fn print_json<T: serde::Serialize>(&self, data: &T) {
         // Table/CSV formats would be nonsensical for free-form JSON
         // responses, so both branches collapse to the same output today.
-        println!("{}", serde_json::to_string_pretty(data).unwrap());
+        // Serialization can fail on custom Serialize impls that
+        // themselves return an error; log and continue rather than
+        // panic the CLI.
+        match serde_json::to_string_pretty(data) {
+            Ok(s) => println!("{}", s),
+            Err(e) => eprintln!("failed to serialize response as JSON: {}", e),
+        }
     }
 
     pub fn print_success(&self, message: &str) {

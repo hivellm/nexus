@@ -29,8 +29,16 @@ fn load_history() -> Vec<String> {
 /// Save query to history file
 fn save_to_history(query: &str) {
     let path = get_history_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        // Non-fatal: history persistence is best-effort. Print to
+        // stderr and continue so the user's query still runs.
+        eprintln!(
+            "warning: failed to create history dir {}: {}",
+            parent.display(),
+            e
+        );
     }
 
     // Append to history file (max 1000 entries)
@@ -302,9 +310,16 @@ async fn run_interactive(client: &NexusClient, output: &OutputContext) -> Result
     let mut rl = Editor::<crate::cypher_helper::CypherHelper, FileHistory>::new()?;
     rl.set_helper(Some(crate::cypher_helper::CypherHelper::new()));
 
-    // Load history
-    if history_path.exists() {
-        let _ = rl.load_history(&history_path);
+    // Load history. Best-effort: absence or read errors are surfaced
+    // on stderr but never prevent the REPL from starting.
+    if history_path.exists()
+        && let Err(e) = rl.load_history(&history_path)
+    {
+        eprintln!(
+            "warning: failed to load history from {}: {}",
+            history_path.display(),
+            e
+        );
     }
 
     let mut buffer = String::new();

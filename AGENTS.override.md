@@ -717,6 +717,35 @@ Each database is completely isolated:
 - Epoch-based MVCC for readers
 - No distributed transactions (V1)
 
+#### 6. Binary-Boundary Error Handling
+
+The CLI and server entry points must **never panic on user-facing
+input**. `.unwrap()` is banned in `nexus-cli/src/main.rs`,
+`nexus-cli/src/commands/*`, and `nexus-server/src/main.rs` outside
+their `#[cfg(test)]` modules. The preferred patterns are:
+
+```rust
+// Propagate via `?` + `anyhow::Context` where the caller can handle it.
+let parsed: Config = serde_json::from_str(&body)
+    .with_context(|| format!("parsing config file {}", path.display()))?;
+
+// Explicit invariant with `.expect("...why this cannot fail...")` for
+// values whose failure mode is impossible to reach (e.g. compile-time
+// string literals passed to `ProgressStyle::template()`).
+.template("{msg}")
+.expect("template is a valid compile-time literal")
+
+// Best-effort side effects: match + log to stderr, never `let _ = ...`
+// silently.
+if let Err(e) = std::fs::create_dir_all(parent) {
+    eprintln!("warning: failed to create {}: {}", parent.display(), e);
+}
+```
+
+Enforced by `scripts/ci/check_no_unwrap_in_bin.sh` on every CI run.
+The script skips `#[cfg(test)] mod tests { ... }` trailing modules so
+unit tests that need `.unwrap()` for brevity continue to compile.
+
 ### Performance Constraints
 
 - **Target Throughput**: 100K+ point reads/sec, 10K+ KNN queries/sec
