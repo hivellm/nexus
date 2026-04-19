@@ -174,6 +174,13 @@ impl MutationRoot {
         let from_node_id: u64 = from_id.parse().map_err(|_| "Invalid from node ID format")?;
         let to_node_id: u64 = to_id.parse().map_err(|_| "Invalid to node ID format")?;
 
+        // Validate the relationship type before interpolating — without
+        // this `KNOWS]->(x) MATCH (m) DETACH DELETE m //` escapes the
+        // pattern and appends a destructive clause.
+        let safe_rel_type = crate::api::identifier::validate_identifier(&rel_type)
+            .map_err(|e| format!("invalid relationship type: {}", e))?
+            .to_string();
+
         // Build CREATE query
         let props_str = if let Some(props) = &properties {
             if props.is_empty() {
@@ -191,7 +198,7 @@ impl MutationRoot {
 
         let query_str = format!(
             "MATCH (a), (b) WHERE id(a) = {} AND id(b) = {} CREATE (a)-[r:{}{}]->(b) RETURN id(r), '{}', id(a), id(b), properties(r)",
-            from_node_id, to_node_id, rel_type, props_str, rel_type
+            from_node_id, to_node_id, safe_rel_type, props_str, safe_rel_type
         );
 
         // Execute query

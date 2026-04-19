@@ -20,6 +20,7 @@ pub mod graph_correlation_mcp_tests;
 pub mod graph_correlation_umicp;
 pub mod graphql;
 pub mod health;
+pub mod identifier;
 pub mod indexes;
 pub mod ingest;
 pub mod knn;

@@ -70,6 +70,22 @@ pub async fn knn_traverse(
         request.k
     );
 
+    // Validate the label before interpolating into the Cypher query —
+    // without this a client can send
+    // `Person) DETACH DELETE n //` and escape the node pattern.
+    let safe_label = match super::identifier::validate_identifier(&request.label) {
+        Ok(s) => s,
+        Err(e) => {
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            tracing::warn!("KNN traverse rejected invalid label: {}", e);
+            return Json(KnnTraverseResponse {
+                nodes: vec![],
+                execution_time_ms: execution_time,
+                error: Some(format!("invalid label: {}", e)),
+            });
+        }
+    };
+
     let executor = server.executor.clone();
 
     // For MVP, we'll use a simple approach:
@@ -78,7 +94,7 @@ pub async fn knn_traverse(
     // 3. Return results with scores
 
     // Create a simple MATCH query for the label
-    let cypher_query = format!("MATCH (n:{}) RETURN n", request.label);
+    let cypher_query = format!("MATCH (n:{}) RETURN n", safe_label);
     let query = Query {
         cypher: cypher_query,
         params: HashMap::new(),

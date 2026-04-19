@@ -294,6 +294,12 @@ async fn create_node_in_batch(
     server: &std::sync::Arc<NexusServer>,
     node: &NodeIngest,
 ) -> Result<(), String> {
+    // Validate every label before it enters the Cypher query — otherwise
+    // a crafted label like `Person) DETACH DELETE n //` would escape the
+    // node pattern.
+    super::identifier::validate_all(node.labels.iter().map(String::as_str))
+        .map_err(|e| format!("invalid label: {}", e))?;
+
     let labels_str = if node.labels.is_empty() {
         "".to_string()
     } else {
@@ -333,6 +339,12 @@ async fn create_relationship_in_batch(
     server: &std::sync::Arc<NexusServer>,
     rel: &RelIngest,
 ) -> Result<(), String> {
+    // Validate the relationship type before interpolating it into the
+    // CREATE query — prevents `KNOWS]->(x) MATCH (m) DETACH DELETE m //`
+    // style escapes.
+    super::identifier::validate_identifier(&rel.r#type)
+        .map_err(|e| format!("invalid relationship type: {}", e))?;
+
     // Build properties string
     let props_str = if rel.properties.is_object() {
         let props_map = rel.properties.as_object().unwrap();

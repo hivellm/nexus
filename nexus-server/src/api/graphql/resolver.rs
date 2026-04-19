@@ -60,9 +60,14 @@ impl Node {
         let limit = clamp_rel_limit(limit);
 
         let query_str = if let Some(rt) = rel_type {
+            // Validate user-supplied relationship type before interpolating —
+            // prevents `KNOWS]->(x) DETACH DELETE m //` style escapes.
+            let safe_rt = crate::api::identifier::validate_identifier(&rt)
+                .map_err(|e| format!("invalid relationship type: {}", e))?
+                .to_string();
             format!(
                 "MATCH (n)-[r:{}]->(m) WHERE id(n) = {} RETURN id(r), '{}', id(n), id(m), properties(r) LIMIT {}",
-                rt, node_id, rt, limit
+                safe_rt, node_id, safe_rt, limit
             )
         } else {
             format!(
@@ -116,9 +121,13 @@ impl Node {
         let limit = clamp_rel_limit(limit);
 
         let query_str = if let Some(rt) = rel_type {
+            // Validate user-supplied relationship type before interpolating.
+            let safe_rt = crate::api::identifier::validate_identifier(&rt)
+                .map_err(|e| format!("invalid relationship type: {}", e))?
+                .to_string();
             format!(
                 "MATCH (m)-[r:{}]->(n) WHERE id(n) = {} RETURN id(r), '{}', id(m), id(n), properties(r) LIMIT {}",
-                rt, node_id, rt, limit
+                safe_rt, node_id, safe_rt, limit
             )
         } else {
             format!(
@@ -171,8 +180,19 @@ impl Node {
         let node_id = self.id.parse::<u64>().map_err(|_| "Invalid node ID")?;
         let limit = clamp_rel_limit(limit);
 
+        // Validate rel_type once up-front — both queries below reuse
+        // the identifier.
+        let safe_rt: Option<String> = match rel_type {
+            Some(ref rt) => Some(
+                crate::api::identifier::validate_identifier(rt)
+                    .map_err(|e| format!("invalid relationship type: {}", e))?
+                    .to_string(),
+            ),
+            None => None,
+        };
+
         // Fetch outgoing relationships
-        let outgoing_query = if let Some(ref rt) = rel_type {
+        let outgoing_query = if let Some(ref rt) = safe_rt {
             format!(
                 "MATCH (n)-[r:{}]->(m) WHERE id(n) = {} RETURN id(r), '{}', id(n), id(m), properties(r) LIMIT {}",
                 rt, node_id, rt, limit
@@ -185,7 +205,7 @@ impl Node {
         };
 
         // Fetch incoming relationships
-        let incoming_query = if let Some(ref rt) = rel_type {
+        let incoming_query = if let Some(ref rt) = safe_rt {
             format!(
                 "MATCH (m)-[r:{}]->(n) WHERE id(n) = {} RETURN id(r), '{}', id(m), id(n), properties(r) LIMIT {}",
                 rt, node_id, rt, limit

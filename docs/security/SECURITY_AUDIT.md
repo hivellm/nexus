@@ -246,6 +246,47 @@ the success-path audit call site, not by changing the fail-open default.
 
 **Test Results**: All SQL injection tests passed (`test_sql_injection_prevention`)
 
+### Cypher Injection via Unvalidated Identifiers
+
+**Status**: ✅ SECURE (closed in `phase3_cypher-injection-validation`)
+
+Several HTTP handlers built Cypher queries via string interpolation —
+`format!("MATCH (n:{}) RETURN n", user_label)` — without validating that
+`user_label` was a syntactic Cypher identifier. A client could send
+
+```
+POST /knn_traverse  {"label": "Person) DETACH DELETE n //", ...}
+```
+
+which would close the node pattern and append a destructive clause.
+Similar holes existed at:
+
+- `nexus-server/src/api/knn.rs` — label in `/knn_traverse`
+- `nexus-server/src/api/ingest.rs` — every label and relationship type
+  passed through `POST /ingest`
+- `nexus-server/src/api/graphql/resolver.rs` — four `rel_type`
+  interpolation sites in relationship resolvers
+- `nexus-server/src/api/graphql/mutation.rs` — `rel_type` in the
+  `createRelationship` GraphQL mutation
+
+**Fix**: every interpolation site now calls
+`nexus_server::api::identifier::validate_identifier(s)` which enforces
+`^[A-Za-z_][A-Za-z0-9_]*$` and a 255-byte length cap. Failures surface
+as a structured error to the caller (400 / GraphQL error / ingest
+batch failure) before the executor runs.
+
+**Test Results**: see `nexus-server/tests/cypher_injection_test.rs`.
+The suite exercises the canonical `"Person) DETACH DELETE n //"`
+payload plus every realistic escape character (`) ] { } space tab
+newline / - " ' ;`) and asserts validation fails *before* the Cypher
+runtime is invoked.
+
+**Hardening note**: the validator is intentionally strict (no hyphens,
+no backtick-quoted identifiers). Future work to accept richer identifier
+grammars must also switch the interpolation strategy to backtick
+quoting — do not relax the validator without also updating the
+generator.
+
 ### XSS Prevention
 
 **Status**: ✅ SECURE
