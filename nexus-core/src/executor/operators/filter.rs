@@ -143,7 +143,7 @@ impl Executor {
             // — see §3.3 of phase3_executor-columnar-wiring.
             use std::collections::HashSet;
             let mut columnar_fast_path_taken = false;
-            if rows.len() >= self.config.columnar_threshold {
+            if context.should_use_columnar(rows.len(), self.config.columnar_threshold) {
                 if let Some(mask) = try_columnar_filter_mask(&rows, &expr) {
                     tracing::debug!(
                         "Filter operator: columnar fast path on {} rows (threshold={})",
@@ -628,6 +628,74 @@ mod tests {
         ] {
             assert_parity(&nodes, predicate);
         }
+    }
+
+    #[test]
+    fn prefer_columnar_hint_forces_fast_path_below_threshold() {
+        // 500 rows is far below the default threshold of 4096, so the
+        // fast path would normally stay dormant. With
+        // `PreferColumnar(true)` in the context, it must fire and
+        // produce the same output as the row path.
+        let nodes: Vec<Value> = (0..500)
+            .map(|i| build_person(i as u64, i as i64, i as f64 * 0.5))
+            .collect();
+
+        let (mut executor, _ctx) = create_test_executor();
+        executor.config.columnar_threshold = 4096;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_plan_hints(vec![crate::executor::planner::PlanHint::PreferColumnar(
+            true,
+        )]);
+        context.set_variable("n", Value::Array(nodes.clone()));
+        executor
+            .execute_filter(&mut context, "n.age > 100")
+            .expect("filter should succeed");
+        let hinted: Vec<_> = context
+            .result_set
+            .rows
+            .iter()
+            .map(|r| r.values.clone())
+            .collect();
+
+        // Baseline: same query without the hint at the same size
+        // takes the row path (500 < 4096), so should produce an
+        // identical result set.
+        let baseline = filter_with_threshold(&nodes, "n.age > 100", 4096);
+        assert_eq!(hinted, baseline, "hint should not change output values");
+        assert!(
+            !hinted.is_empty(),
+            "fixture must produce at least some matches"
+        );
+    }
+
+    #[test]
+    fn disable_columnar_hint_forces_row_path_above_threshold() {
+        // 5 000 rows would normally trip the 4096 threshold and take
+        // the fast path. `PreferColumnar(false)` must pin the row
+        // path while still producing identical output.
+        let nodes: Vec<Value> = (0..5_000)
+            .map(|i| build_person(i as u64, i as i64, i as f64 * 0.5))
+            .collect();
+
+        let (mut executor, _ctx) = create_test_executor();
+        executor.config.columnar_threshold = 4096;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_plan_hints(vec![crate::executor::planner::PlanHint::PreferColumnar(
+            false,
+        )]);
+        context.set_variable("n", Value::Array(nodes.clone()));
+        executor
+            .execute_filter(&mut context, "n.age > 1000")
+            .expect("filter should succeed");
+        let hinted: Vec<_> = context
+            .result_set
+            .rows
+            .iter()
+            .map(|r| r.values.clone())
+            .collect();
+
+        let baseline = filter_with_threshold(&nodes, "n.age > 1000", usize::MAX);
+        assert_eq!(hinted, baseline, "hint should not change output values");
     }
 
     #[test]

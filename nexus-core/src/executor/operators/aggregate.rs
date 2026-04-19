@@ -496,12 +496,13 @@ impl Executor {
             // amortises. `None` entries fall through to the scalar
             // match arms unchanged. Group-by stays on the row path
             // (see §4.1 — out of scope for this slice).
-            let columnar_cache: Vec<Option<Value>> =
-                if group_by.is_empty() && group_rows.len() >= self.config.columnar_threshold {
-                    self.compute_columnar_agg_cache(&group_rows, aggregations, columns_for_lookup)
-                } else {
-                    vec![None; aggregations.len()]
-                };
+            let columnar_cache: Vec<Option<Value>> = if group_by.is_empty()
+                && context.should_use_columnar(group_rows.len(), self.config.columnar_threshold)
+            {
+                self.compute_columnar_agg_cache(&group_rows, aggregations, columns_for_lookup)
+            } else {
+                vec![None; aggregations.len()]
+            };
 
             for (agg_idx, agg) in aggregations.iter().enumerate() {
                 let agg_value = if let Some(v) = columnar_cache[agg_idx].clone() {
@@ -2065,6 +2066,76 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn prefer_columnar_hint_forces_aggregate_fast_path_below_threshold() {
+        // 500 rows is below the default 4096 threshold — without a
+        // hint, the columnar cache is skipped and the scalar arms
+        // run. `PreferColumnar(true)` must make the fast path fire
+        // regardless, with identical output.
+        let nodes: Vec<Value> = (0..500)
+            .map(|i| build_person(i as u64, i as i64, i as f64 * 0.5))
+            .collect();
+
+        let (mut executor, _ctx) = create_test_executor();
+        executor.config.columnar_threshold = 4096;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_plan_hints(vec![crate::executor::planner::PlanHint::PreferColumnar(
+            true,
+        )]);
+        context.set_variable("n", Value::Array(nodes.clone()));
+        let agg = Aggregation::Sum {
+            column: "n.age".into(),
+            alias: agg_alias("sum", "n.age"),
+        };
+        executor
+            .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg))
+            .expect("aggregate should succeed");
+        let hinted = context
+            .result_set
+            .rows
+            .first()
+            .and_then(|r| r.values.first())
+            .cloned()
+            .expect("aggregate must produce a row");
+
+        let baseline = aggregate_with_threshold(&nodes, agg, usize::MAX);
+        assert_eq!(hinted, baseline, "hint must not change output values");
+    }
+
+    #[test]
+    fn disable_columnar_hint_forces_aggregate_row_path_above_threshold() {
+        // 5 000 rows would normally trip the columnar cache.
+        // `PreferColumnar(false)` forces the scalar arms.
+        let nodes: Vec<Value> = (0..5_000)
+            .map(|i| build_person(i as u64, i as i64, i as f64 * 0.5))
+            .collect();
+
+        let (mut executor, _ctx) = create_test_executor();
+        executor.config.columnar_threshold = 4096;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_plan_hints(vec![crate::executor::planner::PlanHint::PreferColumnar(
+            false,
+        )]);
+        context.set_variable("n", Value::Array(nodes.clone()));
+        let agg = Aggregation::Max {
+            column: "n.age".into(),
+            alias: agg_alias("max", "n.age"),
+        };
+        executor
+            .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg))
+            .expect("aggregate should succeed");
+        let hinted = context
+            .result_set
+            .rows
+            .first()
+            .and_then(|r| r.values.first())
+            .cloned()
+            .expect("aggregate must produce a row");
+
+        let baseline = aggregate_with_threshold(&nodes, agg, 4096);
+        assert_eq!(hinted, baseline, "hint must not change output values");
     }
 
     #[test]

@@ -107,8 +107,13 @@ impl Executor {
             .query_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
+        // Extract `/*+ ... */` plan hints before parsing — the cleaned
+        // query is what the main parser sees so the hint syntax stays
+        // invisible to the rest of the Cypher front-end.
+        let (cleaned_cypher, plan_hints) = planner::extract_plan_hints(&query.cypher);
+
         // Parse the query into operators
-        let operators = self.parse_and_plan(&query.cypher)?;
+        let operators = self.parse_and_plan(&cleaned_cypher)?;
 
         // TODO: JIT and Parallel execution - implement after core optimizations
         // For now, focus on proven optimizations: columnar, SIMD, caching
@@ -186,6 +191,7 @@ impl Executor {
             query.cypher
         );
         let mut context = ExecutionContext::new(query.params.clone(), self.shared.cache.clone());
+        context.set_plan_hints(plan_hints);
         tracing::trace!(
             "New ExecutionContext created: variables.len()={}, result_set.rows.len()={}",
             context.variables.len(),

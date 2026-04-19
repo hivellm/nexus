@@ -4,10 +4,13 @@
 //!   pattern reordering, join algorithm choice, index push-down).
 //! - `tests` — cfg(test) harness.
 
+pub mod preparse;
 pub mod queries;
 
 #[cfg(test)]
 mod tests;
+
+pub use preparse::{PlanHint, extract_plan_hints};
 
 use super::parser::{
     BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement, QueryHint,

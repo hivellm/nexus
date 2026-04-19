@@ -3,6 +3,7 @@
 //! `RelationshipInfo` record used by expand/path operators and the advanced
 //! columnar relationship-join fast path.
 
+use super::planner::PlanHint;
 use super::types::{Direction, ResultSet, Row};
 use crate::{Error, Result};
 use serde_json::Value;
@@ -28,6 +29,12 @@ pub struct ExecutionContext {
     pub(super) result_set: ResultSet,
     /// Cache system for optimizations
     pub(super) cache: Option<Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>>,
+    /// Plan hints parsed from `/*+ … */` comments — steer operator
+    /// choices (columnar vs row path today) without touching the
+    /// global `ExecutorConfig`. Populated by `Executor::execute`
+    /// before dispatching operators; empty for direct-call tests
+    /// that construct a context without going through `execute`.
+    pub(super) plan_hints: Vec<PlanHint>,
 }
 
 impl ExecutionContext {
@@ -43,7 +50,36 @@ impl ExecutionContext {
                 rows: Vec::new(),
             },
             cache,
+            plan_hints: Vec::new(),
         }
+    }
+
+    /// Override the plan hints for this context (used by the query
+    /// entry point after extracting `/*+ ... */` comments).
+    pub(in crate::executor) fn set_plan_hints(&mut self, hints: Vec<PlanHint>) {
+        self.plan_hints = hints;
+    }
+
+    /// Decide whether the columnar fast path should run over a batch
+    /// of `row_count` rows.
+    ///
+    /// A `PreferColumnar` hint is authoritative and overrides the
+    /// `ExecutorConfig` threshold in both directions:
+    ///   * `/*+ PREFER_COLUMNAR */` → always run the fast path
+    ///   * `/*+ DISABLE_COLUMNAR */` → always run the row path
+    ///
+    /// Without a hint, the threshold is the only gate.
+    pub(in crate::executor) fn should_use_columnar(
+        &self,
+        row_count: usize,
+        threshold: usize,
+    ) -> bool {
+        for hint in &self.plan_hints {
+            if let PlanHint::PreferColumnar(pref) = hint {
+                return *pref;
+            }
+        }
+        row_count >= threshold
     }
 
     pub(super) fn set_variable(&mut self, name: &str, value: Value) {
