@@ -311,67 +311,55 @@ impl Engine {
             }
         }
 
-        // Rebuild MATCH query as string with explicit RETURN of all variables
-        let mut match_query_str = String::new();
-        for clause in &match_query.clauses {
-            if let executor::parser::Clause::Match(mc) = clause {
-                match_query_str.push_str("MATCH ");
-                // Reconstruct pattern
-                for (idx, element) in mc.pattern.elements.iter().enumerate() {
-                    if let executor::parser::PatternElement::Node(node) = element {
-                        if idx > 0 {
-                            match_query_str.push_str(", ");
-                        }
-                        match_query_str.push('(');
-                        if let Some(var) = &node.variable {
-                            match_query_str.push_str(var);
-                        }
-                        for label in &node.labels {
-                            match_query_str.push_str(&format!(":{}", label));
-                        }
-                        if let Some(props) = &node.properties {
-                            match_query_str.push_str(" {");
-                            let mut first = true;
-                            for (key, val_expr) in &props.properties {
-                                if !first {
-                                    match_query_str.push_str(", ");
-                                }
-                                first = false;
-                                match_query_str.push_str(key);
-                                match_query_str.push_str(": ");
-                                if let executor::parser::Expression::Literal(lit) = val_expr {
-                                    match lit {
-                                        executor::parser::Literal::String(s) => {
-                                            match_query_str.push_str(&format!("\"{}\"", s));
-                                        }
-                                        executor::parser::Literal::Integer(i) => {
-                                            match_query_str.push_str(&i.to_string());
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            match_query_str.push('}');
-                        }
-                        match_query_str.push(')');
-                    }
-                }
-                match_query_str.push(' ');
-            }
-        }
+        // Build a synthetic RETURN clause that projects every
+        // matched node variable, then attach it to the MATCH-only
+        // AST and hand the whole thing to the executor as a
+        // preparsed override. Going through an AST override avoids
+        // ever re-serialising the scoped label strings (e.g.
+        // `ns:alice:Person`) into Cypher and re-parsing them — that
+        // round-trip would split on `:` into three separate labels
+        // and break cluster-mode isolation on `MATCH … DELETE`.
+        //
+        // Pre-cluster-mode deployments (`mode = None` in
+        // `execute_cypher_with_context`) end up here too, with
+        // unscoped labels, and the override path handles them
+        // identically — one code path, two modes.
+        let return_items: Vec<executor::parser::ReturnItem> = node_variables
+            .iter()
+            .map(|var| executor::parser::ReturnItem {
+                expression: executor::parser::Expression::Variable(var.clone()),
+                alias: Some(var.clone()),
+            })
+            .collect();
+        let mut match_query_with_return = match_query.clone();
+        match_query_with_return
+            .clauses
+            .push(executor::parser::Clause::Return(
+                executor::parser::ReturnClause {
+                    items: return_items,
+                    distinct: false,
+                },
+            ));
 
-        // Add explicit RETURN for all node variables
-        match_query_str.push_str("RETURN ");
-        for (idx, var) in node_variables.iter().enumerate() {
-            if idx > 0 {
-                match_query_str.push_str(", ");
-            }
-            match_query_str.push_str(var);
+        // RAII guard clears the override on every return path so a
+        // leftover override cannot leak into an unrelated caller.
+        struct OverrideGuard {
+            executor: executor::Executor,
         }
+        impl Drop for OverrideGuard {
+            fn drop(&mut self) {
+                self.executor.install_preparsed_ast_override(None);
+            }
+        }
+        self.executor
+            .install_preparsed_ast_override(Some(match_query_with_return));
+        let _override_guard = OverrideGuard {
+            executor: self.executor.clone(),
+        };
 
         let query_obj = executor::Query {
-            cypher: match_query_str,
-            params: std::collections::HashMap::new(),
+            cypher: String::new(),
+            params: ast.params.clone(),
         };
 
         let match_results = self.executor.execute(&query_obj)?;

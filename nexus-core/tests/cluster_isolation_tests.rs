@@ -165,16 +165,6 @@ fn standalone_mode_is_unaffected_by_context_api() -> Result<(), Error> {
 }
 
 #[test]
-#[ignore = "The engine's MATCH-DELETE path reconstructs a Cypher string \
-by hand (execute_match_delete_query in engine/mod.rs) and re-parses \
-it, which round-trips through Cypher's `:Label:Label` multi-label \
-lexer and splits `ns:alice:Person` into three separate labels. Core \
-isolation (read-side MATCH, relationship types, standalone mode) \
-still holds and is covered by the non-ignored tests above. The fix \
-is either (a) backtick support in the parser so scoped labels can \
-be quoted, or (b) teaching execute_match_delete_query to skip the \
-reconstruct-and-reparse dance and hand the scoped AST straight to \
-the executor. Tracked as a cluster-mode follow-up."]
 fn alice_cannot_delete_bobs_data_via_label_match() -> Result<(), Error> {
     // Attack shape: Alice issues a `MATCH (n:Person) DELETE n` in
     // cluster mode. The scope rewriter turns her MATCH label into
