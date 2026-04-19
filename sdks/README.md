@@ -96,5 +96,5 @@ focus on first-party wire clients:
 ## License
 
 See each SDK directory for its own license file. All first-party
-SDKs are dual-licensed under Apache-2.0 or MIT unless otherwise
-noted in the per-SDK metadata.
+SDKs are licensed under Apache-2.0 unless otherwise noted in the
+per-SDK metadata.

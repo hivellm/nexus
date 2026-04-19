@@ -76,6 +76,7 @@ secrets/*.txt
 /.rulebook/*
 !/.rulebook/specs/
 !/.rulebook/tasks/
+!/.rulebook/archive/
 !/.rulebook/tasks/**/*.md
 !/.rulebook/rulebook.json
 
