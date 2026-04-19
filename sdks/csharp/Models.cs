@@ -178,13 +178,20 @@ public class Index
 
 /// <summary>
 /// Configuration for the Nexus client.
+///
+/// Transport precedence: URL scheme in <see cref="BaseUrl"/> &gt;
+/// <c>NEXUS_SDK_TRANSPORT</c> env var &gt; <see cref="Transport"/>
+/// field &gt; default (binary RPC).
 /// </summary>
 public class NexusClientConfig
 {
     /// <summary>
-    /// Base URL of the Nexus server (required).
+    /// Endpoint URL. Accepts <c>nexus://</c> (binary RPC, default),
+    /// <c>http://</c> / <c>https://</c>, <c>resp3://</c>, or bare
+    /// <c>host[:port]</c>. Defaults to <c>nexus://127.0.0.1:15475</c>
+    /// when empty.
     /// </summary>
-    public string BaseUrl { get; set; } = "http://localhost:15474";
+    public string BaseUrl { get; set; } = "nexus://127.0.0.1:15475";
 
     /// <summary>
     /// API key for authentication (optional).
@@ -202,9 +209,20 @@ public class NexusClientConfig
     public string? Password { get; set; }
 
     /// <summary>
-    /// HTTP request timeout (default: 30 seconds).
+    /// HTTP request timeout (default: 30 seconds). Ignored by the RPC transport.
     /// </summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Explicit transport hint. URL scheme wins if set.
+    /// </summary>
+    public Nexus.SDK.Transports.TransportMode? Transport { get; set; }
+
+    /// <summary>RPC port override (default 15475).</summary>
+    public ushort? RpcPort { get; set; }
+
+    /// <summary>RESP3 port override (default 15476).</summary>
+    public ushort? Resp3Port { get; set; }
 }
 
 /// <summary>

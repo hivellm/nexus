@@ -2,13 +2,20 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Nexus.SDK.Transports;
 
 namespace Nexus.SDK;
 
 /// <summary>
 /// Client for interacting with Nexus graph database.
+///
+/// Defaults to the native binary RPC transport on
+/// <c>nexus://127.0.0.1:15475</c>. Callers can opt down to HTTP with
+/// <see cref="NexusClientConfig.Transport"/> set to
+/// <see cref="TransportMode.Http"/> or by passing an <c>http://</c>
+/// URL as <see cref="NexusClientConfig.BaseUrl"/>.
 /// </summary>
-public class NexusClient : IDisposable
+public class NexusClient : IDisposable, IAsyncDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
@@ -16,13 +23,34 @@ public class NexusClient : IDisposable
     private string? _token;
     private bool _disposed;
 
+    private readonly ITransport _transport;
+    private readonly Endpoint _endpoint;
+    private readonly TransportMode _mode;
+
     /// <summary>
     /// Creates a new Nexus client with the specified configuration.
     /// </summary>
     /// <param name="config">Client configuration.</param>
     public NexusClient(NexusClientConfig config)
     {
-        _baseUrl = config.BaseUrl.TrimEnd('/');
+        var built = TransportFactory.Build(new TransportBuildOptions
+        {
+            BaseUrl = config.BaseUrl,
+            Transport = config.Transport,
+            RpcPort = config.RpcPort,
+            Resp3Port = config.Resp3Port,
+            Timeout = config.Timeout,
+        }, new Credentials
+        {
+            ApiKey = config.ApiKey,
+            Username = config.Username,
+            Password = config.Password,
+        });
+        _transport = built.Transport;
+        _endpoint = built.Endpoint;
+        _mode = built.Mode;
+
+        _baseUrl = _endpoint.AsHttpUrl().TrimEnd('/');
         _apiKey = config.ApiKey;
 
         _httpClient = new HttpClient
@@ -33,6 +61,22 @@ public class NexusClient : IDisposable
 
         _httpClient.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
+    }
+
+    /// <summary>Active transport mode after precedence chain resolution.</summary>
+    public TransportMode TransportMode => _mode;
+
+    /// <summary>Human-readable endpoint + transport label.</summary>
+    public string EndpointDescription() => _transport.Describe();
+
+    /// <summary>Release the persistent RPC socket (if any) and the HTTP client.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        await _transport.DisposeAsync().ConfigureAwait(false);
+        _httpClient.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <summary>
@@ -60,7 +104,8 @@ public class NexusClient : IDisposable
     #region Cypher Queries
 
     /// <summary>
-    /// Executes a Cypher query and returns the results.
+    /// Executes a Cypher query via the active transport and returns
+    /// the results. Works on both RPC and HTTP transports.
     /// </summary>
     /// <param name="query">Cypher query string.</param>
     /// <param name="parameters">Query parameters (optional).</param>
@@ -71,22 +116,48 @@ public class NexusClient : IDisposable
         Dictionary<string, object?>? parameters = null,
         CancellationToken cancellationToken = default)
     {
-        var requestBody = new Dictionary<string, object?>
-        {
-            ["query"] = query
-        };
-
+        var args = new List<NexusValue> { NexusValue.Str(query) };
         if (parameters != null)
+            args.Add(CommandMap.JsonToNexus(parameters));
+
+        TransportResponse resp;
+        try
         {
-            requestBody["parameters"] = parameters;
+            resp = await _transport.ExecuteAsync(
+                new TransportRequest { Command = "CYPHER", Args = args },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRpcException e)
+        {
+            throw new NexusException($"CYPHER failed: HTTP {e.StatusCode}: {e.Body}");
         }
 
-        var response = await DoRequestAsync(
-            HttpMethod.Post, "/cypher", requestBody, cancellationToken);
+        var json = CommandMap.NexusToJson(resp.Value);
+        if (json is not IDictionary<string, object?> obj)
+            throw new NexusException($"CYPHER: expected object response, got {json?.GetType().Name}");
 
-        return await response.Content.ReadFromJsonAsync<QueryResult>(
-            cancellationToken: cancellationToken)
-            ?? throw new NexusException("Failed to deserialize query result");
+        var result = new QueryResult();
+        if (obj.TryGetValue("columns", out var colsRaw) && colsRaw is IEnumerable<object?> cols)
+        {
+            var list = new List<string>();
+            foreach (var c in cols) list.Add(c?.ToString() ?? "");
+            result.Columns = list;
+        }
+        if (obj.TryGetValue("rows", out var rowsRaw) && rowsRaw is IEnumerable<object?> rows)
+        {
+            var list = new List<List<object?>>();
+            foreach (var r in rows)
+            {
+                if (r is IEnumerable<object?> rr)
+                {
+                    var row = new List<object?>();
+                    foreach (var cell in rr) row.Add(cell);
+                    list.Add(row);
+                }
+            }
+            result.Rows = list;
+        }
+        return result;
     }
 
     #endregion

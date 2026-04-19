@@ -4,50 +4,86 @@ Official .NET client library for [Nexus](https://github.com/hivellm/nexus), a hi
 
 ## Features
 
-- **Complete Cypher Support** - Execute any Cypher query with parameters
-- **CRUD Operations** - Simplified methods for nodes and relationships
-- **Batch Operations** - Create multiple nodes/relationships efficiently
-- **Transaction Support** - Full ACID transaction management with async/await
-- **Schema Management** - Indexes, labels, and relationship types
-- **Authentication** - API keys and bearer tokens
-- **Async/Await** - Fully asynchronous API with CancellationToken support
-- **Type-Safe** - Strongly typed models with nullable reference types
-- **.NET 8+** - Built for modern .NET with latest language features
+- **Binary RPC by default** — connects over `nexus://127.0.0.1:15475` using length-prefixed MessagePack; 3–10× lower latency and 40–60% smaller payloads than the legacy HTTP path.
+- **HTTP fallback in one line** — pass an `http://…` URL or set `Transport = TransportMode.Http` to use the REST transport.
+- **Complete Cypher support** — execute any Cypher query with parameters over both transports.
+- **CRUD helpers** — simplified methods for nodes and relationships (REST under the hood; call `ExecuteCypherAsync` for full RPC coverage).
+- **Transaction support** — full ACID transaction management with async/await.
+- **Schema management** — indexes, labels, and relationship types.
+- **Authentication** — API keys or basic auth.
+- **Async/await** — fully asynchronous API with `CancellationToken` support.
+- **Type-safe** — strongly typed models with nullable reference types.
+- **.NET 8+** — built for modern .NET with latest language features.
 
 ## Installation
 
 ### NuGet Package Manager
 
 ```bash
-dotnet add package Nexus.SDK
-```
-
-### Package Manager Console
-
-```powershell
-Install-Package Nexus.SDK
+dotnet add package Nexus.SDK --version 1.0.0
 ```
 
 ### .csproj Reference
 
 ```xml
-<PackageReference Include="Nexus.SDK" Version="0.1.0" />
+<PackageReference Include="Nexus.SDK" Version="1.0.0" />
 ```
 
-## Quick Start
+## Quick Start (RPC — default)
 
 ```csharp
 using Nexus.SDK;
 
-// Create client
+// Defaults to nexus://127.0.0.1:15475 (binary RPC).
+await using var client = new NexusClient(new NexusClientConfig());
+
+var result = await client.ExecuteCypherAsync("RETURN 1 AS one");
+Console.WriteLine($"{result.Rows[0][0]} via {client.EndpointDescription()}");
+```
+
+## Transports
+
+| URL form                   | Transport                  | Default port | Use case                       |
+|----------------------------|----------------------------|--------------|--------------------------------|
+| `nexus://host[:port]`      | Binary RPC (MessagePack)   | `15475`      | **Default.** Lowest latency.   |
+| `http://host[:port]`       | HTTP/JSON                  | `15474`      | Proxies, firewalls, tooling.   |
+| `https://host[:port]`      | HTTPS/JSON                 | `443`        | Public-internet HTTP with TLS. |
+| `resp3://host[:port]`      | RESP3 (reserved)           | `15476`      | Not yet shipped — throws.      |
+
+Precedence: **URL scheme > `NEXUS_SDK_TRANSPORT` env var > `Config.Transport` > default (`NexusRpc`)**.
+
+```csharp
+// HTTP fallback
 var config = new NexusClientConfig
 {
     BaseUrl = "http://localhost:15474",
-    ApiKey = "your-api-key", // Optional
-    Timeout = TimeSpan.FromSeconds(30)
+    ApiKey = Environment.GetEnvironmentVariable("NEXUS_API_KEY"),
+};
+await using var client = new NexusClient(config);
+
+// Transport hint on a bare URL
+var config2 = new NexusClientConfig
+{
+    BaseUrl = "host:15474",
+    Transport = Nexus.SDK.Transports.TransportMode.Http,
+};
+```
+
+Full cross-SDK spec: [`docs/specs/sdk-transport.md`](../../docs/specs/sdk-transport.md).
+
+## Advanced Usage
+
+```csharp
+using Nexus.SDK;
+
+var config = new NexusClientConfig
+{
+    BaseUrl = "nexus://127.0.0.1:15475",
+    ApiKey = "your-api-key",   // Optional
+    Timeout = TimeSpan.FromSeconds(30),
 };
 
-using var client = new NexusClient(config);
+await using var client = new NexusClient(config);
 
 // Check connection
 await client.PingAsync();
@@ -670,7 +706,7 @@ See the [Examples](./Examples) directory for complete working examples:
 
 ## License
 
-MIT License - see [LICENSE](../../LICENSE) file for details
+Apache License 2.0 - see [LICENSE](./LICENSE) file for details
 
 ## Contributing
 

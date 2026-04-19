@@ -7,32 +7,68 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [1.0.0] — 2026-04-19
 
+### Added
+
+- **Native binary RPC transport** (`nexus://host:15475`) — a new
+  `Nexus.SDK.Transports` namespace implements a single-socket
+  `RpcTransport` using `MessagePack-CSharp` for the `Typeless`
+  codec, length-prefixed framing over `TcpClient`, a background
+  reader task that multiplexes responses back to pending
+  `TaskCompletionSource`s keyed by request id, HELLO+AUTH handshake
+  on connect, and monotonic `uint32` ids skipping `PUSH_ID`
+  (`0xFFFFFFFFu`).
+- `TransportMode` enum (`NexusRpc` / `Resp3` / `Http` / `Https`)
+  aligned with the URL scheme and the `NEXUS_SDK_TRANSPORT` env-var
+  tokens. `TransportModeParser.Parse` honours `rpc` / `nexusrpc`
+  aliases.
+- `NexusClientConfig.Transport`, `.RpcPort`, `.Resp3Port` fields.
+- `NEXUS_SDK_TRANSPORT` env-var detection via
+  `Nexus.SDK.Transports.TransportFactory.Build`.
+- `NexusClient.TransportMode` property and `EndpointDescription()`
+  method surface the resolved transport; the new `DisposeAsync`
+  implementation releases the persistent RPC socket.
+- `HttpTransport` — axum-style route table mapping wire verbs onto
+  `/cypher`, `/health`, `/stats`, `/databases`, `/session/database`,
+  `/schema/*`. Non-2xx responses surface as `HttpRpcException`.
+- `CommandMap.Map(dotted, payload)` — 26-entry table matching
+  `sdks/rust/src/transport/command_map.rs`.
+- `sdks/csharp/Tests/` xUnit project — 49 tests covering endpoint
+  parser (9), wire codec roundtrip (8), command map (10),
+  `TransportModeParser` (11), `TransportFactory` precedence (5),
+  `Credentials.HasAny` (4), and a fails-fast-on-connect-refused
+  assertion (1). All 49 pass.
+- `MessagePack` 2.5.187 NuGet dependency.
+
 ### Changed
 
-- **Version aligned to 1.0.0** across all Nexus SDKs (was `0.1.0`).
-  No runtime behaviour changes in this release — the SDK continues to
-  talk HTTP/JSON against the Nexus REST endpoint on port 15474.
-- The `TestConsoleSimple` ad-hoc runner was removed from the tree.
-  The canonical C# tests now live under `sdks/csharp/Tests/`; the
-  cross-SDK comprehensive script runs `dotnet test` there.
+- **Default endpoint is now `nexus://127.0.0.1:15475`** (RPC).
+  Previously defaulted to HTTP on `http://localhost:15474`. Existing
+  callers passing an explicit `http://` URL are unaffected. Callers
+  relying on the default now need either (a) a running Nexus server
+  with the RPC listener open (default in 1.0.0) or (b)
+  `NEXUS_SDK_TRANSPORT=http` / `Transport = TransportMode.Http`.
+- `NexusClient.ExecuteCypherAsync` dispatches via the active
+  transport. The response is decoded from the `NexusValue` envelope
+  into the existing `QueryResult` type.
+- `NexusClient` now implements `IAsyncDisposable` in addition to
+  `IDisposable`; prefer `await using` to get the RPC socket released
+  cleanly.
+- The `TestConsoleSimple` ad-hoc runner was removed earlier in the
+  1.0.0 cut. The canonical C# tests now live under
+  `sdks/csharp/Tests/`.
 
-### Pending (tracked by `phase2_sdk-rpc-transport-default` §6)
+### Migration
 
-The following work lands in a subsequent 1.x release:
+- **Opt out of RPC** if your deployment cannot open port `15475`:
+  - Env var: `set NEXUS_SDK_TRANSPORT=http` (Windows) or
+    `export NEXUS_SDK_TRANSPORT=http` (Unix)
+  - Per-client: `new NexusClient(new NexusClientConfig { BaseUrl = "http://host:15474", ApiKey = "..." })`
+  - Per-client explicit: `new NexusClientConfig { Transport = TransportMode.Http, BaseUrl = "host:15474" }`
+- **CRUD helpers** (`CreateNodeAsync`, …) continue to hit the sibling
+  HTTP port via the side-car `HttpClient`. For full RPC coverage of
+  those flows, call `ExecuteCypherAsync` with equivalent Cypher.
 
-- **Native binary RPC transport** (`nexus://host:15475`) using
-  `MessagePack-CSharp` — default transport in the shared SDK
-  contract, already shipped by the Rust SDK.
-- `TransportMode` enum with `"nexus"` / `"resp3"` / `"http"` string
-  values.
-- `NexusClientOptions.Transport` property + `NEXUS_SDK_TRANSPORT`
-  env var override.
-- 500 ms connect-timeout auto-downgrade to HTTP.
-- Command-map parity with the spec's §6 table.
-
-The shared contract lives at
-[`docs/specs/sdk-transport.md`](../../docs/specs/sdk-transport.md)
-and the Rust SDK is the reference implementation.
+See [`docs/MIGRATION_SDK_TRANSPORT.md`](../../docs/MIGRATION_SDK_TRANSPORT.md) for the cross-SDK guide.
 
 ## Earlier versions
 

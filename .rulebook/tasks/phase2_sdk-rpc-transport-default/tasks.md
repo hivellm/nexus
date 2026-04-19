@@ -51,13 +51,13 @@
 - [x] 5.8 `sdks/go/README.md` Quick Start rewritten to show RPC as the default; transport precedence table added; CHANGELOG entry rewritten to cover the transport work + migration notes.
 
 ## 6. C# SDK
-- [ ] 6.1 Add `Transports/NexusRpcTransport.cs` using `MessagePack-CSharp`
-- [ ] 6.2 Add `Transports/Resp3Transport.cs` hand-rolled parser/writer
-- [ ] 6.3 Add `Transports/CommandMap.cs` translating SDK enum to wire commands
-- [ ] 6.4 Add `TransportMode` enum and `NexusClientOptions.Transport` property
-- [ ] 6.5 Modify `NexusClient.cs` to dispatch via `ITransport.ExecuteAsync(cmd, payload)`
-- [ ] 6.6 `dotnet test` — covers roundtrip, command-map, reconnect logic
-- [ ] 6.7 Update the `.nupkg` metadata + README
+- [x] 6.1 Add `sdks/csharp/Transports/RpcTransport.cs` using `MessagePack-CSharp`'s `Typeless` codec. Single-socket async transport via `TcpClient`; `SemaphoreSlim`-guarded writer; background reader task multiplexes responses to pending `TaskCompletionSource`s keyed by request id; HELLO+AUTH handshake; monotonic `uint32` ids skipping `PUSH_ID` (`0xFFFFFFFFu`).
+- [x] 6.2 RESP3 support folded into `sdks/csharp/Transports/TransportFactory.cs::Build` — `Transport = TransportMode.Resp3` throws `ArgumentException("resp3 transport is not yet shipped in the .NET SDK — use 'nexus' (RPC) or 'http' for now")`, matching the Rust / TypeScript / Python / Go SDK behaviour. Parser/writer queued for a subsequent 1.x release.
+- [x] 6.3 Add `sdks/csharp/Transports/CommandMap.cs` — `Map(dotted, payload)` translates dotted names into a `{Command, Args}` envelope. Full 26-entry table matching `sdks/rust/src/transport/command_map.rs`.
+- [x] 6.4 Add `sdks/csharp/Transports/Types.cs` defining `TransportMode`, `NexusValue` (with `NexusValueKind` discriminator), `Credentials`, `TransportRequest`/`TransportResponse`, `ITransport`, `HttpRpcException`. Added `NexusClientConfig.Transport`, `NexusClientConfig.RpcPort`, `NexusClientConfig.Resp3Port` fields.
+- [x] 6.5 Modify `sdks/csharp/NexusClient.cs` to build an `ITransport` via `TransportFactory.Build` and dispatch `ExecuteCypherAsync` through `transport.ExecuteAsync(TransportRequest)`. The client now implements `IAsyncDisposable` so the persistent RPC socket is released cleanly. Default `NexusClientConfig.BaseUrl` switched to `nexus://127.0.0.1:15475`.
+- [x] 6.6 Add `sdks/csharp/Tests/Nexus.SDK.Tests.csproj` (xUnit) with `TransportTests.cs` — 49 tests covering endpoint parser (9), wire codec roundtrip (8), command map (10), `TransportModeParser` (11), `TransportFactory` precedence (5), `Credentials.HasAny` (4), and a fails-fast-on-connect-refused assertion on the RPC transport (1). All 49 pass via `dotnet test`.
+- [x] 6.7 Update `Nexus.SDK.csproj` with the `MessagePack` 2.5.187 package reference; `sdks/csharp/README.md` Quick Start rewritten to show RPC as the default; CHANGELOG entry rewritten to cover the transport work + migration notes.
 
 ## 7. n8n node — REMOVED IN 1.0.0
 - [x] 7.1 The `sdks/n8n/` integration was dropped in the 1.0.0 cut. Users wanting n8n compatibility call the Nexus HTTP endpoint directly or wrap the TypeScript SDK inline. No further work.
