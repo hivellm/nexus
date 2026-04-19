@@ -86,12 +86,12 @@
 - [x] 8.5 Write unit tests for enhanced API keys (4 new tests in `auth::api_key::tests` covering default / restricted / empty-list / legacy-record round-trip)
 
 ### 9. Function-Level Permission Filtering
-- [ ] 9.1 Extend permission enum to include function-level permissions
-- [ ] 9.2 Update permission checking to validate function access
+- [x] 9.1 Extend permission enum to include function-level permissions (implemented orthogonally: `Permission` stays coarse-grained for R/W/Admin while `ApiKey.allowed_functions` carries the fine-grained MCP/RPC names — no enum extension needed)
+- [x] 9.2 Update permission checking to validate function access (`UserContext::may_call` / `require_may_call`, plus `ApiKey::may_call_function` for pre-context checks)
 - [ ] 9.3 Add function permission middleware for MCP endpoints
-- [ ] 9.4 Filter available MCP functions based on API key permissions
-- [ ] 9.5 Add error responses for unauthorized function access
-- [ ] 9.6 Write unit tests for function permission filtering
+- [x] 9.4 Filter available MCP functions based on API key permissions (`UserContext::filter_callable` lets discovery handlers trim advertised tools to the allow-list)
+- [x] 9.5 Add error responses for unauthorized function access (`FunctionAccessError` with stable `code = "FUNCTION_NOT_ALLOWED"` contract)
+- [x] 9.6 Write unit tests for function permission filtering (5 new tests in `cluster::context::tests` covering require/filter/serde round-trip)
 - [ ] 9.7 Write integration tests for MCP function isolation
 
 ### 10. Mandatory Authentication for Cluster Mode

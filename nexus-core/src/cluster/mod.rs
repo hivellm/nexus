@@ -28,7 +28,7 @@ pub mod quota;
 pub mod middleware;
 
 pub use config::{ClusterConfig, TenantDefaults};
-pub use context::UserContext;
+pub use context::{FunctionAccessError, UserContext};
 pub use namespace::UserNamespace;
 pub use quota::{LocalQuotaProvider, QuotaDecision, QuotaProvider, QuotaSnapshot, UsageDelta};
 

@@ -16,7 +16,54 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use super::namespace::UserNamespace;
+
+/// Structured rejection returned by [`UserContext::require_may_call`].
+///
+/// Lives here (not in `error::Error`) because the HTTP / MCP layer
+/// translates it into a 403 response body directly — the variant
+/// never flows through the core `Result<T>` chain, so adding it to
+/// the main error enum would just cost us a roundtrip through
+/// `From` impls every time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FunctionAccessError {
+    /// Canonical function name the caller tried to invoke.
+    pub function: String,
+    /// Stable machine-readable code. Kept in sync with the MCP /
+    /// REST error-body contract so SDKs can match on it without
+    /// string-matching the `message` field.
+    pub code: String,
+    /// Human-readable explanation safe to return to the caller.
+    /// Does NOT include the namespace id or api-key id — those are
+    /// internal to the server and would leak otherwise.
+    pub message: String,
+}
+
+impl FunctionAccessError {
+    /// Error code used when an API key's allow-list does not
+    /// include the requested function. Stable wire constant —
+    /// SDKs match on this, never on the `message` text.
+    pub const CODE: &'static str = "FUNCTION_NOT_ALLOWED";
+
+    fn forbidden(function: impl Into<String>) -> Self {
+        let function = function.into();
+        Self {
+            message: format!("function '{function}' is not in this API key's allow-list"),
+            function,
+            code: Self::CODE.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for FunctionAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for FunctionAccessError {}
 
 /// Identity for a single authenticated request in cluster mode.
 ///
@@ -100,6 +147,41 @@ impl UserContext {
     pub fn allowed_functions(&self) -> Option<&BTreeSet<String>> {
         self.allowed_functions.as_deref()
     }
+
+    /// Result-returning twin of [`Self::may_call`]. Prefer this in
+    /// MCP / RPC handlers: `ctx.require_may_call("cypher.execute")?`
+    /// bubbles the 403 path up without a hand-rolled `if !may_call`
+    /// branch at every call site.
+    pub fn require_may_call(&self, name: &str) -> Result<(), FunctionAccessError> {
+        if self.may_call(name) {
+            Ok(())
+        } else {
+            Err(FunctionAccessError::forbidden(name))
+        }
+    }
+
+    /// Filter an iterator of canonical function names down to those
+    /// this context may actually invoke. Useful when advertising
+    /// available tools on MCP / discovery endpoints so the client
+    /// only ever sees callable operations. Unrestricted contexts
+    /// get the full list back unchanged.
+    pub fn filter_callable<'a, I, S>(&self, names: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = &'a S>,
+        S: AsRef<str> + 'a,
+    {
+        names
+            .into_iter()
+            .filter_map(|n| {
+                let s = n.as_ref();
+                if self.may_call(s) {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -166,5 +248,77 @@ mod tests {
         let ctx = UserContext::unrestricted(ns(), "key-abc");
         assert_eq!(ctx.namespace().as_id(), "alice");
         assert_eq!(ctx.api_key_id(), "key-abc");
+    }
+
+    #[test]
+    fn require_may_call_is_ok_when_allowed() {
+        let ctx = UserContext::unrestricted(ns(), "key-1");
+        ctx.require_may_call("anything")
+            .expect("unrestricted must pass");
+
+        let scoped = UserContext::restricted(ns(), "key-1", ["cypher.execute".into()]);
+        scoped
+            .require_may_call("cypher.execute")
+            .expect("listed function must pass");
+    }
+
+    #[test]
+    fn require_may_call_returns_structured_error() {
+        // Contract: the error body shows the offending function
+        // and the stable CODE constant. SDK decoders match on
+        // `code`, never on `message` — change the message all you
+        // like, do not break the code without bumping SDKs.
+        let ctx = UserContext::restricted(ns(), "key-1", ["cypher.execute".into()]);
+        let err = ctx
+            .require_may_call("nexus.admin.drop_database")
+            .expect_err("unlisted function must reject");
+
+        assert_eq!(err.function, "nexus.admin.drop_database");
+        assert_eq!(err.code, FunctionAccessError::CODE);
+        assert!(
+            err.message.contains("not in this API key's allow-list"),
+            "message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn filter_callable_trims_to_allow_list() {
+        let ctx =
+            UserContext::restricted(ns(), "key-1", ["cypher.execute".into(), "kv.get".into()]);
+        let tools = vec![
+            "cypher.execute",
+            "kv.get",
+            "kv.set",
+            "nexus.admin.drop_database",
+        ];
+        let visible = ctx.filter_callable(&tools);
+        assert_eq!(
+            visible,
+            vec!["cypher.execute".to_string(), "kv.get".to_string()]
+        );
+    }
+
+    #[test]
+    fn filter_callable_passes_through_on_unrestricted() {
+        let ctx = UserContext::unrestricted(ns(), "key-1");
+        let tools = vec!["a", "b", "c"];
+        let visible = ctx.filter_callable(&tools);
+        assert_eq!(visible, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn function_access_error_round_trips_through_serde() {
+        // HTTP handlers serialise this into 403 bodies; the shape
+        // needs to survive `serde_json` untouched so SDKs can lean
+        // on their generated types.
+        let err = FunctionAccessError {
+            function: "nexus.admin.drop_database".into(),
+            code: FunctionAccessError::CODE.into(),
+            message: "x".into(),
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        let parsed: FunctionAccessError = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, err);
     }
 }
