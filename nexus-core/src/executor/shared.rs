@@ -53,6 +53,25 @@ pub struct ExecutorShared {
     pub(super) transaction_manager: Arc<parking_lot::Mutex<crate::transaction::TransactionManager>>,
     /// Database manager for multi-database support (optional for backward compatibility)
     pub(super) database_manager: std::sync::OnceLock<Arc<parking_lot::RwLock<DatabaseManager>>>,
+    /// One-shot override for the next `execute()` call. When populated,
+    /// the executor uses this AST verbatim instead of re-parsing
+    /// `Query.cypher`, and clears the slot afterwards so the override
+    /// cannot accidentally leak into an unrelated subsequent query.
+    ///
+    /// Set by `Engine::execute_cypher_with_context` when cluster mode
+    /// asks for a `CatalogPrefix` rewrite: the engine parses the
+    /// query, rewrites label / type strings through
+    /// `cluster::scope_query`, stashes the mutated AST here, and then
+    /// invokes the classic `execute` entry point. Without this
+    /// override the executor would parse the original unscoped
+    /// Cypher string back into fresh labels and silently discard the
+    /// tenant scope, defeating the isolation guarantee.
+    ///
+    /// The slot is a `Mutex<Option<_>>` rather than a `RwLock` because
+    /// the only interesting op is `take` (atomic swap-out), which
+    /// `RwLock::write().take()` would also serialise.
+    pub(super) preparsed_ast_override:
+        Arc<parking_lot::Mutex<Option<crate::executor::parser::CypherQuery>>>,
 }
 
 impl ExecutorShared {
@@ -90,6 +109,7 @@ impl ExecutorShared {
             relationship_property_index: Some(relationship_property_index),
             transaction_manager,
             database_manager: std::sync::OnceLock::new(),
+            preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
         })
     }
 
@@ -165,6 +185,7 @@ impl ExecutorShared {
             relationship_property_index: Some(relationship_property_index),
             transaction_manager,
             database_manager: std::sync::OnceLock::new(),
+            preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
         })
     }
 }

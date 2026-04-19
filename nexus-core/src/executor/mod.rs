@@ -113,8 +113,19 @@ impl Executor {
         // invisible to the rest of the Cypher front-end.
         let (cleaned_cypher, plan_hints) = planner::extract_plan_hints(&query.cypher);
 
-        // Parse the query into operators
-        let operators = self.parse_and_plan(&cleaned_cypher)?;
+        // Cluster-mode handoff: if the engine installed a pre-parsed
+        // AST for this call, consume it (one-shot, so we cannot leak
+        // the override into an unrelated subsequent query) and plan
+        // from that AST. Otherwise parse the cypher string the
+        // classic way. Without this override path, the executor
+        // would re-parse `Query.cypher` and silently discard the
+        // upstream label / type rewrite that produced tenant
+        // isolation in the first place.
+        let preparsed = self.shared.preparsed_ast_override.lock().take();
+        let operators = match preparsed {
+            Some(ast) => self.plan_ast(&ast)?,
+            None => self.parse_and_plan(&cleaned_cypher)?,
+        };
 
         // TODO: JIT and Parallel execution - implement after core optimizations
         // For now, focus on proven optimizations: columnar, SIMD, caching
@@ -955,9 +966,21 @@ impl Executor {
         // Use the parser to parse the query
         let mut parser = parser::CypherParser::new(cypher.to_string());
         let ast = parser.parse()?;
+        self.plan_ast(&ast)
+    }
 
-        // Clone index data instead of holding locks during planning
-        // This reduces lock contention and allows better parallelization
+    /// Plan a pre-parsed Cypher AST into physical operators.
+    ///
+    /// Shared tail of both [`Self::parse_and_plan`] (which parses
+    /// from a string) and the cluster-mode `preparsed_ast` handoff
+    /// (which lands here with an AST already rewritten for tenant
+    /// scoping). Both paths must produce identical plans for the
+    /// same AST — any divergence would be a cluster-mode
+    /// correctness bug, so there is no second code path that does
+    /// anything else.
+    pub fn plan_ast(&self, ast: &parser::CypherQuery) -> Result<Vec<Operator>> {
+        // Clone index data instead of holding locks during planning.
+        // This reduces lock contention and allows better parallelization.
         let label_index_snapshot = {
             let _guard = self.label_index();
             _guard.clone()
@@ -971,7 +994,7 @@ impl Executor {
         let mut planner =
             QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
 
-        let mut operators = planner.plan_query(&ast)?;
+        let mut operators = planner.plan_query(ast)?;
 
         // Optimize the operator order
         operators = planner.optimize_operator_order(operators)?;

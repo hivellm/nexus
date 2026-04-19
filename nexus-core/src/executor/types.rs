@@ -63,7 +63,7 @@ impl Default for ExecutorConfig {
 }
 
 /// Cypher query
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Query {
     /// Query string
     pub cypher: String,

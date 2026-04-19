@@ -42,6 +42,12 @@ pub fn scope_query(query: &mut CypherQuery, ns: &UserNamespace, mode: TenantIsol
         return;
     }
 
+    tracing::trace!(
+        namespace = %ns,
+        clauses = query.clauses.len(),
+        "cluster::scope_query: rewriting query in place"
+    );
+
     for clause in &mut query.clauses {
         scope_clause(clause, ns);
     }

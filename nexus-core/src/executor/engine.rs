@@ -209,6 +209,26 @@ impl Executor {
         &self.shared
     }
 
+    /// Install a one-shot pre-parsed AST that the next `execute()`
+    /// call will use in place of parsing `Query.cypher`. Returns the
+    /// previous override (if any) so callers doing nested cluster-
+    /// mode dispatches can save-and-restore.
+    ///
+    /// Used by the engine's cluster-mode path:
+    /// `execute_cypher_with_context` parses the query, rewrites
+    /// label / type strings through `cluster::scope_query`,
+    /// installs the rewritten AST via this method, then invokes the
+    /// classic `execute` entry point. The override is one-shot — the
+    /// executor clears the slot on each call so an override cannot
+    /// leak into a subsequent unrelated query.
+    pub(crate) fn install_preparsed_ast_override(
+        &self,
+        ast: Option<super::parser::CypherQuery>,
+    ) -> Option<super::parser::CypherQuery> {
+        let mut slot = self.shared.preparsed_ast_override.lock();
+        std::mem::replace(&mut *slot, ast)
+    }
+
     /// Phase 8: Get relationship storage manager (for synchronization)
     pub(crate) fn relationship_storage(
         &self,

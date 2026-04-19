@@ -1023,11 +1023,89 @@ impl Engine {
         self.async_wal_writer.as_ref().map(|w| w.stats())
     }
 
-    /// Execute a Cypher query
+    /// Execute a Cypher query with no tenant scoping — the
+    /// pre-cluster-mode entry point. Standalone deployments and the
+    /// internal test suite use this directly.
     pub fn execute_cypher(&mut self, query: &str) -> Result<executor::ResultSet> {
+        self.execute_cypher_with_context(query, None, crate::cluster::TenantIsolationMode::None)
+    }
+
+    /// Execute a Cypher query, optionally rewriting catalog-visible
+    /// names to the tenant's namespaced form before planning.
+    ///
+    /// `ctx = None` or `mode = None` short-circuits to the
+    /// pre-cluster-mode behaviour — the AST is not touched and the
+    /// catalog sees unprefixed names, preserving standalone
+    /// compatibility. When cluster mode is active and the
+    /// `CatalogPrefix` isolation mode is selected, every label and
+    /// relationship-type string in the parsed AST is rewritten
+    /// through [`cluster::scope::scope_query`] so the catalog ends
+    /// up with distinct IDs per tenant — data isolation follows
+    /// transparently through the existing planner and storage.
+    ///
+    /// This is the single integration point for Phase 2 multi-tenant
+    /// scoping. Every other code path inside the engine stays
+    /// tenant-oblivious.
+    ///
+    /// [`cluster::scope::scope_query`]: crate::cluster::scope::scope_query
+    pub fn execute_cypher_with_context(
+        &mut self,
+        query: &str,
+        ctx: Option<&crate::cluster::UserContext>,
+        mode: crate::cluster::TenantIsolationMode,
+    ) -> Result<executor::ResultSet> {
         // Parse query to check if it contains CREATE or DELETE clauses
         let mut parser = executor::parser::CypherParser::new(query.to_string());
-        let ast = parser.parse()?;
+        let mut ast = parser.parse()?;
+
+        // Cluster-mode scope rewrite. When a UserContext is present
+        // AND the isolation mode asks for catalog-level prefixing,
+        // rewrite every label / relationship-type in place, then
+        // stash the rewritten AST as a one-shot override on the
+        // executor. The executor's `execute()` consumes the override
+        // exactly once (via `.take()`), so downstream call sites that
+        // build a `Query { cypher: query.to_string(), .. }` don't
+        // have to pass the scoped AST explicitly — it rides a
+        // side-channel on `ExecutorShared`. Without this, the
+        // executor's internal re-parse would silently discard the
+        // tenant scope.
+        //
+        // Standalone deployments hit `should_rewrite(None) == false`
+        // and the entire block is a no-op — no clone, no mutex take.
+        let mut override_installed = false;
+        if let Some(user_ctx) = ctx {
+            if crate::cluster::scope::should_rewrite(mode) {
+                crate::cluster::scope::scope_query(&mut ast, user_ctx.namespace(), mode);
+                self.executor
+                    .install_preparsed_ast_override(Some(ast.clone()));
+                override_installed = true;
+            }
+        }
+        // Ensure the one-shot override slot is cleared even if an
+        // early-return path (EXPLAIN, PROFILE, admin command) skips
+        // the normal executor.execute() that would consume it. A
+        // stale override left on the slot would corrupt the NEXT
+        // caller's query — fatal in cluster mode, so the cleanup
+        // path uses an RAII guard. The guard owns a clone of the
+        // executor (cheap — `Executor` is a thin newtype around
+        // `Arc`'d `ExecutorShared`), which side-steps a borrow-
+        // checker collision with the `&mut self` methods called
+        // further down.
+        struct OverrideGuard {
+            executor: executor::Executor,
+            active: bool,
+        }
+        impl Drop for OverrideGuard {
+            fn drop(&mut self) {
+                if self.active {
+                    self.executor.install_preparsed_ast_override(None);
+                }
+            }
+        }
+        let _override_guard = OverrideGuard {
+            executor: self.executor.clone(),
+            active: override_installed,
+        };
 
         // Check for EXPLAIN command
         if let Some(executor::parser::Clause::Explain(explain_clause)) = ast.clauses.first() {
@@ -1279,7 +1357,9 @@ impl Engine {
             // Standalone CREATE - execute through executor only (not through Engine)
             // This prevents duplicate node creation
             // The executor will handle CREATE internally
-            // Just refresh after to see changes
+            // Just refresh after to see changes. Attach the scoped AST
+            // via `preparsed_ast` so cluster-mode label rewrites survive
+            // the executor's parse step.
             let query_obj = executor::Query {
                 cypher: query.to_string(),
                 params: std::collections::HashMap::new(),
@@ -1303,7 +1383,9 @@ impl Engine {
             return Ok(result);
         }
 
-        // Execute the query normally
+        // Execute the query normally. Attach the scoped AST so the
+        // cluster-mode label rewrite (performed at the top of this
+        // function) survives the executor's re-parse.
         let query_obj = executor::Query {
             cypher: query.to_string(),
             params: std::collections::HashMap::new(),
