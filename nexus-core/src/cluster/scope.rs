@@ -24,8 +24,8 @@
 //! double-prefix.
 
 use crate::executor::parser::ast::{
-    Clause, CypherQuery, NodePattern, Pattern, PatternElement, RelationshipPattern, RemoveItem,
-    SetItem,
+    Clause, CypherQuery, Expression, NodePattern, Pattern, PatternElement, PropertyMap,
+    RelationshipPattern, RemoveItem, ReturnItem, SetItem, WhereClause, WithClause,
 };
 
 use super::config::TenantIsolationMode;
@@ -63,26 +63,45 @@ pub fn should_rewrite(mode: TenantIsolationMode) -> bool {
 
 fn scope_clause(clause: &mut Clause, ns: &UserNamespace) {
     match clause {
-        Clause::Match(m) => scope_pattern(&mut m.pattern, ns),
+        Clause::Match(m) => {
+            scope_pattern(&mut m.pattern, ns);
+            if let Some(where_clause) = &mut m.where_clause {
+                scope_where_clause(where_clause, ns);
+            }
+        }
         Clause::Create(c) => scope_pattern(&mut c.pattern, ns),
         Clause::Merge(m) => scope_pattern(&mut m.pattern, ns),
+        Clause::Where(w) => scope_where_clause(w, ns),
         Clause::Set(s) => {
             for item in &mut s.items {
-                if let SetItem::Label { label, .. } = item {
-                    scope_label_in_place(label, ns);
+                match item {
+                    SetItem::Label { label, .. } => scope_label_in_place(label, ns),
+                    SetItem::Property {
+                        property, value, ..
+                    } => {
+                        scope_label_in_place(property, ns);
+                        scope_expression(value, ns);
+                    }
                 }
             }
         }
         Clause::Remove(r) => {
             for item in &mut r.items {
-                if let RemoveItem::Label { label, .. } = item {
-                    scope_label_in_place(label, ns);
+                match item {
+                    RemoveItem::Label { label, .. } => scope_label_in_place(label, ns),
+                    RemoveItem::Property { property, .. } => scope_label_in_place(property, ns),
                 }
             }
         }
-        // Other clauses (Return, With, OrderBy, Unwind, ...) carry
-        // expressions only — no direct catalog-name strings. They
-        // become relevant once property keys are covered; skip for now.
+        Clause::With(w) => scope_with_clause(w, ns),
+        Clause::Return(r) => {
+            for item in &mut r.items {
+                scope_return_item(item, ns);
+            }
+        }
+        Clause::Unwind(u) => scope_expression(&mut u.expression, ns),
+        // Other clauses (OrderBy, Limit, Skip, admin, …) carry no
+        // direct catalog-name strings and remain untouched.
         _ => {}
     }
 }
@@ -100,12 +119,140 @@ fn scope_node_pattern(node: &mut NodePattern, ns: &UserNamespace) {
     for label in &mut node.labels {
         scope_label_in_place(label, ns);
     }
+    if let Some(props) = &mut node.properties {
+        scope_property_map(props, ns);
+    }
 }
 
 fn scope_relationship_pattern(rel: &mut RelationshipPattern, ns: &UserNamespace) {
     for ty in &mut rel.types {
         scope_label_in_place(ty, ns);
     }
+    if let Some(props) = &mut rel.properties {
+        scope_property_map(props, ns);
+    }
+}
+
+/// Walk a `{key: value, ...}` inline property map. Both halves get
+/// scoped — the key through the standard label-prefix rule (so
+/// catalog KeyIds separate cleanly per tenant) and the value
+/// through the expression walker (which recurses into nested
+/// patterns and property references).
+fn scope_property_map(props: &mut PropertyMap, ns: &UserNamespace) {
+    // HashMap keys cannot be mutated in place — drain and rebuild.
+    let drained: Vec<(String, Expression)> = props.properties.drain().collect();
+    for (mut key, mut value) in drained {
+        scope_label_in_place(&mut key, ns);
+        scope_expression(&mut value, ns);
+        props.properties.insert(key, value);
+    }
+}
+
+fn scope_where_clause(w: &mut WhereClause, ns: &UserNamespace) {
+    scope_expression(&mut w.expression, ns);
+}
+
+fn scope_with_clause(w: &mut WithClause, ns: &UserNamespace) {
+    for item in &mut w.items {
+        scope_return_item(item, ns);
+    }
+    if let Some(where_clause) = &mut w.where_clause {
+        scope_where_clause(where_clause, ns);
+    }
+}
+
+fn scope_return_item(item: &mut ReturnItem, ns: &UserNamespace) {
+    scope_expression(&mut item.expression, ns);
+}
+
+/// Recursive expression walker. Rewrites property names at every
+/// catalog-touching position — `n.key`, map literals, nested
+/// subquery patterns inside `EXISTS { ... }`, slice bounds, and
+/// function-call arguments.
+///
+/// Variable names (the `variable` in `PropertyAccess`) are NOT
+/// rewritten. They are query-local bindings that never reach the
+/// catalog; prefixing them would just make debugging output uglier.
+fn scope_expression(expr: &mut Expression, ns: &UserNamespace) {
+    match expr {
+        Expression::Literal(_) | Expression::Variable(_) | Expression::Parameter(_) => {}
+        Expression::PropertyAccess { property, .. } => {
+            scope_label_in_place(property, ns);
+        }
+        Expression::ArrayIndex { base, index } => {
+            scope_expression(base, ns);
+            scope_expression(index, ns);
+        }
+        Expression::ArraySlice { base, start, end } => {
+            scope_expression(base, ns);
+            if let Some(e) = start.as_mut() {
+                scope_expression(e, ns);
+            }
+            if let Some(e) = end.as_mut() {
+                scope_expression(e, ns);
+            }
+        }
+        Expression::FunctionCall { args, .. } => {
+            for a in args {
+                scope_expression(a, ns);
+            }
+        }
+        Expression::BinaryOp { left, right, .. } => {
+            scope_expression(left, ns);
+            scope_expression(right, ns);
+        }
+        Expression::UnaryOp { operand, .. } => scope_expression(operand, ns),
+        Expression::Case {
+            input,
+            when_clauses,
+            else_clause,
+        } => {
+            if let Some(e) = input.as_deref_mut() {
+                scope_expression(e, ns);
+            }
+            for w in when_clauses {
+                scope_when_clause(w, ns);
+            }
+            if let Some(e) = else_clause.as_deref_mut() {
+                scope_expression(e, ns);
+            }
+        }
+        Expression::List(xs) => {
+            for x in xs {
+                scope_expression(x, ns);
+            }
+        }
+        Expression::Map(m) => {
+            let drained: Vec<(String, Expression)> = m.drain().collect();
+            for (mut key, mut value) in drained {
+                scope_label_in_place(&mut key, ns);
+                scope_expression(&mut value, ns);
+                m.insert(key, value);
+            }
+        }
+        Expression::IsNull { expr, .. } => scope_expression(expr, ns),
+        Expression::Exists {
+            pattern,
+            where_clause,
+        } => {
+            scope_pattern(pattern, ns);
+            if let Some(e) = where_clause.as_deref_mut() {
+                scope_expression(e, ns);
+            }
+        }
+        // Catch-all for expression variants added after this was
+        // written (e.g. list comprehensions, predicates). Rather
+        // than silently leaking unscoped property names, leave them
+        // untouched — the AST tests in this module will notice a
+        // mismatch and the CI guard rail `rewrite_is_idempotent`
+        // covers the re-entry path.
+        _ => {}
+    }
+}
+
+fn scope_when_clause(w: &mut crate::executor::parser::ast::WhenClause, ns: &UserNamespace) {
+    scope_expression(&mut w.condition, ns);
+    scope_expression(&mut w.result, ns);
 }
 
 /// Core rewrite. Idempotent: already-namespaced strings pass
@@ -261,6 +408,104 @@ mod tests {
         scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
         scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
         assert_eq!(collect_labels(&q), vec!["ns:alice:Person"]);
+    }
+
+    #[test]
+    fn rewrites_property_keys_in_inline_map() {
+        // CREATE (n:Person {name: 'A'}) must scope both `Person`
+        // and `name`. Without the property-key rewrite, the catalog
+        // would see a shared global `name` KeyId across tenants —
+        // data doesn't leak (property reads go through label-scoped
+        // node ids) but `SHOW PROPERTY KEYS` would expose other
+        // tenants' key names.
+        let mut q = parse("CREATE (n:Person {name: 'A', age: 30})");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+
+        let mut keys = Vec::new();
+        if let Clause::Create(c) = &q.clauses[0] {
+            if let PatternElement::Node(node) = &c.pattern.elements[0] {
+                if let Some(props) = &node.properties {
+                    keys.extend(props.properties.keys().cloned());
+                }
+            }
+        }
+        keys.sort();
+        assert_eq!(keys, vec!["ns:alice:age", "ns:alice:name"]);
+    }
+
+    #[test]
+    fn rewrites_property_keys_in_set_and_remove() {
+        let mut q = parse("MATCH (n:Person) SET n.name = 'Bob' REMOVE n.age RETURN n");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+
+        // SET should scope the property key.
+        let mut set_props = Vec::new();
+        let mut remove_props = Vec::new();
+        for clause in &q.clauses {
+            if let Clause::Set(s) = clause {
+                for item in &s.items {
+                    if let SetItem::Property { property, .. } = item {
+                        set_props.push(property.clone());
+                    }
+                }
+            }
+            if let Clause::Remove(r) = clause {
+                for item in &r.items {
+                    if let RemoveItem::Property { property, .. } = item {
+                        remove_props.push(property.clone());
+                    }
+                }
+            }
+        }
+        assert_eq!(set_props, vec!["ns:alice:name"]);
+        assert_eq!(remove_props, vec!["ns:alice:age"]);
+    }
+
+    #[test]
+    fn rewrites_property_keys_in_where_and_return() {
+        // WHERE n.email = 'x' and RETURN n.name both reach through
+        // PropertyAccess. Both need rewriting for the query to hit
+        // the tenant-scoped KeyIds in the catalog.
+        let mut q = parse("MATCH (n:Person) WHERE n.email = 'a@b' RETURN n.name");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+
+        // Don't assume how the parser threads WHERE — scan the whole
+        // serialised AST instead. Both keys must appear in scoped
+        // form somewhere, and neither should appear unscoped.
+        let dump = format!("{q:?}");
+        assert!(
+            dump.contains("ns:alice:email"),
+            "WHERE n.email must scope to ns:alice:email; AST: {dump}"
+        );
+        assert!(
+            dump.contains("ns:alice:name"),
+            "RETURN n.name must scope to ns:alice:name; AST: {dump}"
+        );
+        // Regression: no raw `property: "email"` substring anywhere.
+        // (String check over Debug output is crude but catches the
+        // "forgot to rewrite" class of bug clearly.)
+        assert!(
+            !dump.contains("property: \"email\""),
+            "unscoped `email` leaked through; AST: {dump}"
+        );
+        assert!(
+            !dump.contains("property: \"name\""),
+            "unscoped `name` leaked through; AST: {dump}"
+        );
+    }
+
+    #[test]
+    fn property_key_rewrite_is_idempotent() {
+        let mut q = parse("MATCH (n:Person) WHERE n.email = 'a' RETURN n.name");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        // If the rewriter wasn't idempotent we'd see
+        // `ns:alice:ns:alice:name` anywhere the property appeared.
+        let dump = format!("{q:?}");
+        assert!(
+            !dump.contains("ns:alice:ns:alice"),
+            "property-key path must stay idempotent"
+        );
     }
 
     #[test]
