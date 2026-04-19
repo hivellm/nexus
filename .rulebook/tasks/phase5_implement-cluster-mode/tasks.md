@@ -59,13 +59,13 @@
 - [ ] 5.7 Write integration tests for data isolation
 
 ### 6. Query Execution Namespace Scoping
-- [ ] 6.1 Modify query planner to inject namespace filters
-- [ ] 6.2 Update MATCH operations to scope to namespace
-- [ ] 6.3 Update CREATE operations to assign namespace
-- [ ] 6.4 Update UPDATE/DELETE operations to filter by namespace
-- [ ] 6.5 Ensure queries cannot access data outside namespace
-- [ ] 6.6 Write unit tests for namespace-scoped queries
-- [ ] 6.7 Write integration tests for cross-namespace isolation
+- [x] 6.1 Modify query planner to inject namespace filters (implemented one level higher as an AST rewrite in `cluster::scope::scope_query`; the planner receives the already-scoped AST via `Executor::preparsed_ast_override` and needs no changes)
+- [x] 6.2 Update MATCH operations to scope to namespace (covered by the AST walker's `NodePattern.labels` rewrite)
+- [x] 6.3 Update CREATE operations to assign namespace (covered by the walker — CREATE patterns go through the same `scope_pattern` helper)
+- [x] 6.4 Update UPDATE/DELETE operations to filter by namespace (`SetItem::Label` / `RemoveItem::Label` are rewritten by the walker; `execute_match_delete_query` now hands the scoped AST to the executor via the override instead of reconstructing+reparsing a Cypher string)
+- [x] 6.5 Ensure queries cannot access data outside namespace (proven end-to-end by `tests/cluster_isolation_tests.rs`)
+- [x] 6.6 Write unit tests for namespace-scoped queries (14 tests in `cluster::scope::tests` covering every rewrite site, idempotence, no-op in None mode, and distinct-per-tenant output)
+- [x] 6.7 Write integration tests for cross-namespace isolation (4 tests in `tests/cluster_isolation_tests.rs`: two-tenant node isolation, relationship-type isolation, standalone-mode regression, and the alice-deletes-bob attack)
 
 ### 7. Storage Quota Tracking
 - [ ] 7.1 Implement storage size calculation per namespace
