@@ -5,7 +5,7 @@
 - [ ] 1.4 Implement `RpcTransport` (wraps a persistent TCP connection, handles `hello` + `auth.required` + request correlation) in `nexus-cli/src/transport/rpc.rs`
 - [ ] 1.5 Implement `HttpTransport` in `nexus-cli/src/transport/http.rs` by extracting the current `client.rs` behaviour behind the same trait; keep it usable for commands without an RPC verb
 - [ ] 1.6 Replace the `http://localhost:3000` default in `nexus-cli/src/config.rs` with an `EndpointConfig { scheme: Rpc, host: "127.0.0.1", port: 15475 }`; update precedence loader (CLI flag > env var > config file > default)
-- [ ] 1.7 Add `--transport rpc|http` flag + `NEXUS_TRANSPORT` env var parsing in `nexus-cli/src/main.rs`; implement URL-scheme parsing (`nexus-rpc://`, `nexus+rpc://`, `http://`, `https://`, bare `host:port`)
+- [ ] 1.7 Add `--transport rpc|http` flag + `NEXUS_TRANSPORT` env var parsing in `nexus-cli/src/main.rs`; implement URL-scheme parsing with `nexus://` as the canonical Nexus binary-RPC scheme (not `nexus-rpc://`), plus `http://`, `https://`, and bare `host:port` (defaults to RPC on 15475)
 - [ ] 1.8 Route every `commands::*` entry point through `Transport`; for commands without an RPC verb emit an explicit `eprintln!("falling back to HTTP for <cmd>: no RPC verb yet")` before dispatching to `HttpTransport`
 - [ ] 1.9 `cargo +nightly fmt --all` + `cargo +nightly clippy -p nexus-cli --all-targets --all-features -- -D warnings` clean
 

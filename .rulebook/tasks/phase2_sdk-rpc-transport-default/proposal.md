@@ -39,17 +39,20 @@ commands:
 
 ```
 sdks/<lang>/src/transports/
-|- synap-rpc.ts         -> renamed nexus-rpc
+|- rpc.ts               # binary RPC implementation
 |- resp3.ts
 |- command-map.ts       # maps SDK dotted names to wire commands
 |- index.ts             # TransportMode enum + factory
 ```
 
-Public API addition: every SDK's `ClientConfig` grows a single field:
+Public API addition: every SDK's `ClientConfig` grows a single field.
+**Canonical string values for TransportMode stay single-token** so they
+line up with the `nexus://` URL scheme used by the CLI and with the
+`NEXUS_SDK_TRANSPORT` env var:
 
 ```ts
 enum TransportMode {
-  NexusRpc = 'nexus-rpc',   // default
+  NexusRpc = 'nexus',       // default — Nexus native binary RPC
   Resp3    = 'resp3',
   Http     = 'http',
 }
@@ -62,6 +65,11 @@ interface NexusConfig {
   ...
 }
 ```
+
+URLs passed to `ClientConfig.baseUrl` may use `nexus://host:15475` to
+force the RPC transport regardless of the `transport` field (the
+factory honours the URL scheme as a stronger signal than the config
+hint). There is no `nexus-rpc://` scheme — the token is `nexus`.
 
 All existing manager methods (`client.executeCypher()`,
 `client.schema.listLabels()`, `client.batch.ingest()`, …) keep their exact

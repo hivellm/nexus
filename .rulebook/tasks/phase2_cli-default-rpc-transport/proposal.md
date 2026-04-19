@@ -40,12 +40,15 @@ into REST for diagnostics or legacy servers.
     - `HttpTransport` — the existing `reqwest`-based client, refactored
       to sit behind the trait.
   - `Transport::connect(url, config)` factory that parses
-    `nexus-rpc://host:15475`, `nexus+rpc://…`, `http://…`, `https://…`
-    and the shorthand `host:port` (defaulting to RPC on `15475` when
-    no scheme is given).
+    `nexus://host:15475` (the canonical Nexus binary-RPC scheme —
+    note: **not** `nexus-rpc://`), plus `http://…`, `https://…`, and
+    the shorthand `host:port` (defaulting to RPC on `15475` when no
+    scheme is given). `nexus://` is deliberately unique to this
+    project — the RPC port is reserved for the Nexus wire format,
+    there is no generic `nexus-rpc` protocol.
 - **Default behaviour.**
   - Without `--server` / `NEXUS_SERVER`, assume
-    `nexus-rpc://127.0.0.1:15475`.
+    `nexus://127.0.0.1:15475`.
   - `--transport rpc|http` flag + `NEXUS_TRANSPORT` env var force the
     transport even if the URL scheme disagrees. `NEXUS_TRANSPORT=http`
     preserves today's behaviour for CI that cannot update immediately.

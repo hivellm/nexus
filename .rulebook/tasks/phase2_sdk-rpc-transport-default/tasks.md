@@ -1,6 +1,6 @@
 ## 1. Shared design — command map and types
 - [ ] 1.1 Define the canonical command-map table in `docs/specs/sdk-transport.md`: every SDK dotted name -> `{rawCmd, args}`
-- [ ] 1.2 Enumerate the full `TransportMode` contract: `NexusRpc` (default), `Resp3`, `Http`
+- [ ] 1.2 Enumerate the full `TransportMode` contract: `NexusRpc` (default, serialised as the string `"nexus"` — aligned with the `nexus://` URL scheme the CLI uses), `Resp3` (`"resp3"`), `Http` (`"http"`). There is no `"nexus-rpc"` token anywhere in the public API.
 - [ ] 1.3 Define `ClientConfig.transport`, `ClientConfig.rpcPort` (15475), `ClientConfig.resp3Port` (15476)
 - [ ] 1.4 Define the `NEXUS_SDK_TRANSPORT` env var fallback chain and a 500 ms connect-timeout auto-downgrade to HTTP
 - [ ] 1.5 Capture decisions via `rulebook_decision_create` (ADR: "SDK transport default is NexusRpc")
@@ -19,7 +19,7 @@
 - [ ] 2.11 Add unit tests for `WireValue` roundtrip, `map_command` coverage, and auto-downgrade on connect failure
 
 ## 3. TypeScript SDK
-- [ ] 3.1 Port Synap's `transports/synap-rpc.ts` to `transports/nexus-rpc.ts` (rename types, keep msgpackr framing)
+- [ ] 3.1 Port Synap's `transports/synap-rpc.ts` to `transports/rpc.ts` (single-token file name matching the `nexus://` URL scheme; rename the exported types, keep msgpackr framing)
 - [ ] 3.2 Port `transports/resp3.ts` (parser + inline writer)
 - [ ] 3.3 Port `transports/command-map.ts`, rewriting commands for Nexus vocabulary (cypher, node.*, rel.*, knn.*)
 - [ ] 3.4 Add `transports/index.ts` factory: picks transport from `NexusConfig.transport`
