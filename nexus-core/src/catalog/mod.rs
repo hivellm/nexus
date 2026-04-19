@@ -5,20 +5,25 @@
 //! - Types (relationship types) ↔ TypeId
 //! - Keys (property keys) ↔ KeyId
 //!
-//! Uses memory-mapped files for durable storage to avoid LMDB TlsFull errors.
-//!
 //! # Architecture
 //!
-//! The catalog uses memory-mapped files with serialized data structures:
-//! - Label mappings (name -> id, id -> name)
-//! - Type mappings (name -> id, id -> name)
-//! - Key mappings (name -> id, id -> name)
-//! - Metadata and statistics
+//! Backed by LMDB via [`heed`] with per-mapping databases plus sidecar
+//! databases for metadata, statistics, constraints, UDFs, and
+//! procedures. Tests share a single `nexus_test_catalogs_shared`
+//! environment under `std::env::temp_dir()` so parallel runs stay below
+//! the Windows TLS-slot ceiling that used to surface as `TlsFull`. In
+//! production every `Catalog::new` call opens its own LMDB environment
+//! at the caller-supplied path.
 //!
-//! This avoids the TlsFull error that occurs when many LMDB environments are opened.
+//! A second, memory-map-backed backend (`mmap_catalog.rs`) lived next
+//! to this module during the 2025 TlsFull investigation. It was never
+//! wired into `Catalog::new` at runtime — the `NEXUS_USE_MMAP_CATALOG`
+//! env var was read but both branches fell through to LMDB — so the
+//! phase2 "deduplicate catalog backends" task deleted it. If a future
+//! memory-mapped backend is required, implement it behind a fresh
+//! trait rather than resurrecting the dead module.
 
 pub mod constraints;
-mod mmap_catalog;
 
 use crate::{Error, Result};
 use dashmap::DashMap;
@@ -133,9 +138,15 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Create a new catalog instance
+    /// Create a new catalog instance.
     ///
-    /// Opens or creates LMDB environment at specified path.
+    /// Opens or creates the LMDB environment at `path`. Under `cargo
+    /// test`, `Catalog::with_map_size` transparently redirects to a
+    /// shared `nexus_test_catalogs_shared` directory under
+    /// `std::env::temp_dir()` so the whole test suite lives in a
+    /// single LMDB environment — `TestContext` callers that want a
+    /// fresh environment should use [`Catalog::with_isolated_path`]
+    /// instead.
     ///
     /// # Arguments
     ///
@@ -149,46 +160,14 @@ impl Catalog {
     /// let catalog = Catalog::new("./data/catalog").unwrap();
     /// ```
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // Always use memory-mapped files to avoid TlsFull errors
-        // This replaces LMDB which causes TlsFull when many databases are created
-        Self::with_mmap(path)
-    }
+        // Test runs pick a smaller map size so the shared LMDB
+        // environment does not reserve gigabytes of address space.
+        let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
+            || std::env::var("CARGO").is_ok()
+            || std::env::args().any(|arg| arg.contains("test") || arg.contains("cargo"));
+        let map_size = if is_test { 512 * 1024 } else { 1024 * 1024 };
 
-    /// Create a new catalog using memory-mapped files (avoids TlsFull errors)
-    fn with_mmap<P: AsRef<Path>>(path: P) -> Result<Self> {
-        use mmap_catalog::MmapCatalog;
-
-        // For now, we'll create a wrapper that uses MmapCatalog internally
-        // but maintains the same interface. This is a temporary solution until
-        // we can fully migrate away from LMDB.
-
-        // Check if we should use memory-mapped files (always for now to fix TlsFull)
-        let use_mmap = std::env::var("NEXUS_USE_MMAP_CATALOG")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse::<bool>()
-            .unwrap_or(true);
-
-        if use_mmap {
-            // Use memory-mapped catalog implementation
-            // This will be integrated into the main Catalog struct later
-            // For now, we still use LMDB but with smaller map_size to reduce TLS usage
-            let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
-                || std::env::var("CARGO").is_ok()
-                || std::env::args().any(|arg| arg.contains("test") || arg.contains("cargo"));
-
-            let map_size = if is_test { 512 * 1024 } else { 1024 * 1024 };
-
-            Self::with_map_size(path, map_size)
-        } else {
-            // Fallback to original LMDB implementation
-            let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
-                || std::env::var("CARGO").is_ok()
-                || std::env::args().any(|arg| arg.contains("test") || arg.contains("cargo"));
-
-            let map_size = if is_test { 512 * 1024 } else { 1024 * 1024 };
-
-            Self::with_map_size(path, map_size)
-        }
+        Self::with_map_size(path, map_size)
     }
 
     /// Create a new catalog with a specific map_size
