@@ -115,13 +115,13 @@
 ## Phase 4: Rate Limiting & Quota Enforcement (2-3 weeks)
 
 ### 12. Rate Limiting Implementation
-- [ ] 12.1 Implement per-user rate limiting using quotas
-- [ ] 12.2 Add rate limit tracking per user (requests per minute/hour)
-- [ ] 12.3 Implement rate limit headers (X-RateLimit-*)
-- [ ] 12.4 Add rate limit middleware for all endpoints
-- [ ] 12.5 Handle rate limit exceeded responses (429)
-- [ ] 12.6 Write unit tests for rate limiting
-- [ ] 12.7 Write integration tests for quota-based rate limiting
+- [x] 12.1 Implement per-user rate limiting using quotas (`LocalQuotaProvider::check_rate` with per-minute + per-hour windows)
+- [x] 12.2 Add rate limit tracking per user (requests per minute/hour) (`RateWindow` pair on `TenantState`)
+- [x] 12.3 Implement rate limit headers (X-RateLimit-*) (`attach_allow_headers` emits `X-RateLimit-Remaining` on Allow)
+- [x] 12.4 Add rate limit middleware for all endpoints (`cluster::middleware::quota_middleware_handler` layered in `main.rs` when `cluster.enabled`)
+- [x] 12.5 Handle rate limit exceeded responses (429) (`StatusCode::TOO_MANY_REQUESTS` + `QuotaError` body + `retry_after_seconds`)
+- [x] 12.6 Write unit tests for rate limiting (5 tests in `cluster::quota::tests` + 3 integration tests in `cluster::middleware::tests`)
+- [x] 12.7 Write integration tests for quota-based rate limiting (`rate_limit_exceeded_returns_429` drives a real `axum::Router` through the middleware)
 
 ### 13. Quota Enforcement Middleware
 - [ ] 13.1 Add quota check middleware for write operations
