@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] — 2026-04-19
 
+### Added — cluster mode (multi-tenant deployments)
+
+Nexus can now run as a shared multi-tenant service. One server
+instance hosts data for many tenants while guaranteeing that a
+tenant's nodes, relationships, property keys, and label names stay
+strictly isolated from every other tenant. See `docs/CLUSTER_MODE.md`
+for the operator guide.
+
+Enable with `NEXUS_CLUSTER_ENABLED=true` (opt-in; standalone mode
+remains the default and is byte-identical to the pre-cluster
+behaviour). Once on:
+
+- **Mandatory authentication on every URI.** Cluster mode removes
+  every public endpoint — `/`, `/health`, `/stats`, `/openapi.json`
+  all require a valid API key. A shared multi-tenant server must
+  identify every caller before exposing any surface.
+- **Per-tenant data isolation.** Labels / relationship types /
+  property keys registered by tenant A get different catalog IDs
+  than the same names registered by tenant B, so every downstream
+  layer (label bitmap index, KNN, record stores) sees tenant-
+  distinct state for free. Data leakage is structurally impossible
+  — not an invariant maintained by discipline. Proven end-to-end
+  by the integration tests in `nexus-core/tests/cluster_isolation_tests.rs`.
+- **Per-tenant rate limiting.** Every request is gated by
+  `LocalQuotaProvider` (per-minute + per-hour windows, configurable
+  via `ClusterConfig::default_quotas`). 429 responses carry
+  `Retry-After` and `X-RateLimit-Remaining` headers so SDK clients
+  can back off cleanly.
+- **Function-level MCP permissions.** API keys gain an optional
+  `allowed_functions` allow-list. Handlers can call
+  `UserContext::require_may_call("tool.name")?` to gate specific
+  MCP / RPC operations per-key, and discovery endpoints can use
+  `filter_callable` to advertise only callable tools.
+
+New public surface: `nexus_core::cluster::{ClusterConfig,
+TenantIsolationMode, UserNamespace, UserContext, QuotaProvider,
+LocalQuotaProvider, FunctionAccessError}`.
+
+New env var: `NEXUS_CLUSTER_ENABLED`. Architecturally documented in
+ADR-7 (catalog-prefix isolation over byte-level or per-database
+alternatives).
+
+### Changed — API key storage migrated from bincode to JSON
+
+`nexus-core/src/auth/storage.rs` switched from `SerdeBincode<ApiKey>`
+to `SerdeJson<ApiKey>` for the `api_keys` LMDB database. Bincode's
+default config is NOT forward-compatible for appended fields —
+adding cluster mode's new `allowed_functions: Option<Vec<String>>`
+field would have panicked on every existing record with
+`unexpected end of file`. JSON + `#[serde(default)]` gives us room
+to grow the schema without a migration script.
+
+**Operational note:** existing auth data is NOT automatically
+migrated on upgrade. Cluster-mode deployments should regenerate API
+keys from scratch; standalone deployments that already persist API
+keys should expect to re-seed on first boot under the new binary.
+The shared test-suite catalog was bumped to a new path
+(`nexus_test_auth_shared_v2`) so stale bincode records from earlier
+runs are orphaned cleanly instead of failing to decode.
+
 ### Fixed — parser no longer accepts standalone `WHERE` (Neo4j parity)
 
 Closes the last outlier in the 300-test Neo4j compat suite. Before

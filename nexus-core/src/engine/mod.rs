@@ -59,6 +59,18 @@ pub struct Engine {
     pub executor: executor::Executor,
     /// Multi-layer cache system for performance optimization
     pub cache: cache::MultiLayerCache,
+    /// Optional cluster-mode quota provider. When set AND a
+    /// `UserContext` is supplied to
+    /// [`Self::execute_cypher_with_context`], the engine gates
+    /// write queries on `check_storage` before execution and
+    /// records `record_usage` after a successful write. Standalone
+    /// deployments leave this `None` and pay zero overhead.
+    ///
+    /// Kept as a trait object so the same wire-up works for the
+    /// in-process `LocalQuotaProvider` and (eventually) a
+    /// HiveHub-backed implementation without touching any of the
+    /// code that consults it.
+    pub(crate) quota_provider: Option<Arc<dyn crate::cluster::QuotaProvider>>,
     /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
     _temp_dir: Option<tempfile::TempDir>,
 }
@@ -149,6 +161,7 @@ impl Engine {
             indexes,
             executor,
             cache,
+            quota_provider: None,
             _temp_dir: None,
         };
 
@@ -159,6 +172,44 @@ impl Engine {
         engine.rebuild_indexes_from_storage()?;
 
         Ok(engine)
+    }
+
+    /// Install a cluster-mode quota provider on this engine.
+    ///
+    /// When set, [`Self::execute_cypher_with_context`] will, for
+    /// every request that carries a `UserContext`:
+    ///
+    /// 1. If the query contains a write clause (CREATE / MERGE /
+    ///    SET / DELETE / REMOVE / UNWIND-that-writes), consult
+    ///    `provider.check_storage(ns, 0)` to see whether the tenant
+    ///    has already exhausted its storage budget. A denial is
+    ///    surfaced as [`Error::QuotaExceeded`] before the query
+    ///    runs — no wasted work, no partial write.
+    /// 2. After a successful execution, charge
+    ///    `provider.record_usage(ns, delta)` with a storage-byte
+    ///    estimate and a request count of 1.
+    ///
+    /// Read queries and standalone-mode queries (no `UserContext`)
+    /// skip both checks entirely — the Option field stays `None`
+    /// on the hot path for non-cluster deployments.
+    pub fn with_quota_provider(mut self, provider: Arc<dyn crate::cluster::QuotaProvider>) -> Self {
+        self.quota_provider = Some(provider);
+        self
+    }
+
+    /// Set (or clear) the quota provider after construction —
+    /// mirror of [`Self::with_quota_provider`] for callers that
+    /// already hold a `&mut Engine` (the server wires the provider
+    /// in after NexusServer bootstrapping, not at construction).
+    pub fn set_quota_provider(&mut self, provider: Option<Arc<dyn crate::cluster::QuotaProvider>>) {
+        self.quota_provider = provider;
+    }
+
+    /// Whether this engine has a quota provider installed.
+    /// Cheap accessor used by the write-path gate to short-circuit
+    /// the entire check when standalone.
+    pub fn has_quota_provider(&self) -> bool {
+        self.quota_provider.is_some()
     }
 
     /// Create engine with isolated catalog (bypasses test sharing)
@@ -220,6 +271,7 @@ impl Engine {
             indexes,
             executor,
             cache,
+            quota_provider: None,
             _temp_dir: None,
         };
 
@@ -1095,6 +1147,75 @@ impl Engine {
             active: override_installed,
         };
 
+        // Cluster-mode write-path quota gate (Phase 4 §13). Fires
+        // only when BOTH a UserContext AND a QuotaProvider are
+        // installed — standalone deployments short-circuit on the
+        // `has_quota_provider` check and never touch the provider.
+        //
+        // The check uses `check_storage(ns, 0)`: "is this tenant
+        // already at or past its storage ceiling?". We don't yet
+        // know the exact byte cost of the query (that's knowable
+        // only after planning + partial execution), so the gate is
+        // deliberately conservative — an already-exhausted tenant
+        // can't grow further, but a tenant right at the edge may
+        // sneak one more write in before the post-write
+        // `record_usage` pushes them over. That's the right
+        // trade-off for a first cut: never reject a write that
+        // fits, always reject one that definitely does not.
+        let is_write = crate::cluster::scope::is_write_query(&ast);
+        if is_write {
+            if let (Some(user_ctx), Some(provider)) = (ctx, self.quota_provider.as_ref()) {
+                let decision = provider.check_storage(user_ctx.namespace(), 0);
+                if let crate::cluster::QuotaDecision::Deny { reason, .. } = decision {
+                    return Err(Error::QuotaExceeded(reason));
+                }
+            }
+        }
+
+        // Run the actual dispatch. We separate the post-execution
+        // usage-recording step from the dispatch itself so every
+        // success path feeds through a single bookkeeping point —
+        // there are ~8 `return Ok(...)` sites inside the dispatcher
+        // and instrumenting each individually is brittle.
+        let dispatch_result = self.execute_cypher_dispatch(&ast, query);
+
+        // Post-write usage charge (Phase 4 §13 / §14.1). Runs once,
+        // after a successful write, once the RAII override guard
+        // has had its chance to clear state on the error path.
+        //
+        // `storage_bytes` is a rough fixed heuristic for the first
+        // cut: every write charges a baseline of 256 bytes against
+        // the tenant. Accurate per-operation accounting (exact
+        // record bytes written) needs the planner to thread a size
+        // hint back up, which is tracked as a follow-up — under-
+        // reporting is safer than over-reporting for the first
+        // deployment.
+        if is_write && dispatch_result.is_ok() {
+            if let (Some(user_ctx), Some(provider)) = (ctx, self.quota_provider.as_ref()) {
+                provider.record_usage(
+                    user_ctx.namespace(),
+                    crate::cluster::UsageDelta {
+                        storage_bytes: 256,
+                        requests: 1,
+                    },
+                );
+            }
+        }
+
+        dispatch_result
+    }
+
+    /// Internal dispatcher — the original body of
+    /// [`Self::execute_cypher_with_context`] minus the cluster-mode
+    /// pre-check and post-record. Split out so the outer function
+    /// can bracket every success path with a single
+    /// `record_usage` call instead of instrumenting each of the
+    /// ~8 `return Ok(...)` sites inside.
+    fn execute_cypher_dispatch(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+        query: &str,
+    ) -> Result<executor::ResultSet> {
         // Check for EXPLAIN command
         if let Some(executor::parser::Clause::Explain(explain_clause)) = ast.clauses.first() {
             // Use stored query string if available, otherwise convert from AST

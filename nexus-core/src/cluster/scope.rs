@@ -61,6 +61,39 @@ pub fn should_rewrite(mode: TenantIsolationMode) -> bool {
     matches!(mode, TenantIsolationMode::CatalogPrefix)
 }
 
+/// Whether a parsed query contains any clause that writes to the
+/// graph. Used by the cluster-mode write-path quota gate
+/// (`Engine::execute_cypher_with_context`) to decide whether to
+/// consult the `QuotaProvider` before execution.
+///
+/// Clauses that count as writes:
+///
+/// - `CREATE` / `MERGE` (new nodes and relationships).
+/// - `SET` / `REMOVE` (property and label mutations).
+/// - `DELETE` — not strictly "storage growth", but still a
+///   chargeable mutation that we want to meter in the same path.
+/// - `LOAD CSV` — bulk ingest writes, explicitly in scope for
+///   Phase 4 §13.3 ("storage quota check before data import").
+/// - `FOREACH` — always opens a sub-mutation block in Cypher.
+///
+/// Read-only clauses (MATCH / RETURN / WITH / UNWIND / WHERE /
+/// ORDER BY / LIMIT / SKIP / CALL-procedure) return `false` and
+/// skip the quota gate entirely.
+pub fn is_write_query(query: &CypherQuery) -> bool {
+    query.clauses.iter().any(|c| {
+        matches!(
+            c,
+            Clause::Create(_)
+                | Clause::Merge(_)
+                | Clause::Set(_)
+                | Clause::Remove(_)
+                | Clause::Delete(_)
+                | Clause::LoadCsv(_)
+                | Clause::Foreach(_)
+        )
+    })
+}
+
 fn scope_clause(clause: &mut Clause, ns: &UserNamespace) {
     match clause {
         Clause::Match(m) => {

@@ -124,11 +124,11 @@
 - [x] 12.7 Write integration tests for quota-based rate limiting (`rate_limit_exceeded_returns_429` drives a real `axum::Router` through the middleware)
 
 ### 13. Quota Enforcement Middleware
-- [ ] 13.1 Add quota check middleware for write operations
-- [ ] 13.2 Implement storage quota check before CREATE/UPDATE
-- [ ] 13.3 Implement storage quota check before data import
-- [ ] 13.4 Add quota exceeded error responses
-- [ ] 13.5 Write tests for quota enforcement
+- [x] 13.1 Add quota check middleware for write operations (`Engine::execute_cypher_with_context` gates every `is_write_query` query on `provider.check_storage(ns, 0)` before dispatch)
+- [x] 13.2 Implement storage quota check before CREATE/UPDATE (`is_write_query` returns true for CREATE / MERGE / SET / REMOVE / DELETE / FOREACH; the gate rejects with `Error::QuotaExceeded` if the tenant is already past budget)
+- [x] 13.3 Implement storage quota check before data import (LOAD CSV is in the `is_write_query` match, so bulk-ingest paths hit the same gate)
+- [x] 13.4 Add quota exceeded error responses (new `Error::QuotaExceeded(String)` variant; middleware layer's `QuotaError` with `code = "RATE_LIMIT_EXCEEDED"` / `code = "STORAGE_QUOTA_EXCEEDED"` handles the HTTP translation)
+- [x] 13.5 Write tests for quota enforcement (4 new tests in `tests/cluster_isolation_tests.rs`: writes-within-budget allowed, over-budget rejected with `Error::QuotaExceeded`, reads never quota-gated, standalone-mode ignores the provider)
 - [ ] 13.6 Write load tests for quota enforcement
 
 ### 14. Usage Tracking & Reporting
@@ -153,12 +153,12 @@
 - [ ] 15.7 Achieve ≥ 95% test coverage for cluster mode code
 
 ### 16. Documentation
-- [ ] 16.1 Create `docs/CLUSTER_MODE.md` user guide
+- [x] 16.1 Create `docs/CLUSTER_MODE.md` user guide (operator-facing doc: when to enable, migration path, config reference, observability, known limitations)
 - [ ] 16.2 Create `docs/specs/cluster-mode.md` technical specification
 - [ ] 16.3 Update `docs/AUTHENTICATION.md` with function permissions
 - [ ] 16.4 Update `docs/DEPLOYMENT_GUIDE.md` with cluster mode setup
-- [ ] 16.5 Create migration guide from standalone to cluster mode
-- [ ] 16.6 Update CHANGELOG.md with cluster mode features
+- [x] 16.5 Create migration guide from standalone to cluster mode (included as the "Migration path" section of `docs/CLUSTER_MODE.md`)
+- [x] 16.6 Update CHANGELOG.md with cluster mode features (Added / Changed entries under 1.0.0)
 - [ ] 16.7 Create HiveHub integration guide for operators
 
 ### 17. Code Quality & Review

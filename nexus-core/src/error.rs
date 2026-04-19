@@ -130,6 +130,14 @@ pub enum Error {
     /// Replication errors
     #[error("Replication error: {0}")]
     Replication(String),
+
+    /// Cluster-mode quota exceeded — surfaced when a tenant has
+    /// hit its per-namespace storage limit (or, in the future, a
+    /// per-namespace rate limit that the engine layer gates on).
+    /// Produced by `Engine::execute_cypher_with_context` when the
+    /// installed [`crate::cluster::QuotaProvider`] denies a write.
+    #[error("Quota exceeded: {0}")]
+    QuotaExceeded(String),
 }
 
 impl Error {

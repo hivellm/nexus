@@ -32,7 +32,7 @@ pub use config::{ClusterConfig, TenantDefaults, TenantIsolationMode};
 pub use context::{FunctionAccessError, UserContext};
 pub use namespace::UserNamespace;
 pub use quota::{LocalQuotaProvider, QuotaDecision, QuotaProvider, QuotaSnapshot, UsageDelta};
-pub use scope::{scope_query, should_rewrite};
+pub use scope::{is_write_query, scope_query, should_rewrite};
 
 #[cfg(feature = "axum")]
 pub use middleware::{QuotaError, QuotaMiddlewareState, quota_middleware_handler};
