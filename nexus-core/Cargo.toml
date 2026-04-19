@@ -101,6 +101,10 @@ tracing-subscriber = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 
 [[bench]]
+name = "cluster_mode_benchmark"
+harness = false
+
+[[bench]]
 name = "graph_correlation_benchmark"
 harness = false
 

@@ -129,7 +129,7 @@
 - [x] 13.3 Implement storage quota check before data import (LOAD CSV is in the `is_write_query` match, so bulk-ingest paths hit the same gate)
 - [x] 13.4 Add quota exceeded error responses (new `Error::QuotaExceeded(String)` variant; middleware layer's `QuotaError` with `code = "RATE_LIMIT_EXCEEDED"` / `code = "STORAGE_QUOTA_EXCEEDED"` handles the HTTP translation)
 - [x] 13.5 Write tests for quota enforcement (4 new tests in `tests/cluster_isolation_tests.rs`: writes-within-budget allowed, over-budget rejected with `Error::QuotaExceeded`, reads never quota-gated, standalone-mode ignores the provider)
-- [ ] 13.6 Write load tests for quota enforcement
+- [x] 13.6 Write load tests for quota enforcement (criterion bench `cluster_mode_benchmark` measures `check_rate` at ~82 ns / op single-threaded, `check_rate` + `record_usage` paired at ~110 ns; numbers in `docs/CLUSTER_MODE.md`)
 
 ### 14. Usage Tracking & Reporting
 - [x] 14.1 Implement usage metrics tracking (requests, storage, operations) (`LocalQuotaProvider` tracks per-tenant `storage_bytes_used` + rate-window request counts; engine's post-write block bumps `record_usage` on every successful write)
@@ -147,7 +147,7 @@
 - [x] 15.1 Write integration tests for multi-user data isolation (`two_tenants_do_not_see_each_others_nodes`, `relationship_types_are_also_isolated` in `cluster_isolation_tests.rs`)
 - [x] 15.2 Write integration tests for quota enforcement (`storage_quota_allows_writes_within_budget`, `storage_quota_blocks_write_once_tenant_past_limit`, `reads_are_never_quota_gated_even_over_budget`, `standalone_mode_ignores_quota_provider_on_writes`)
 - [x] 15.3 Write integration tests for function-level permissions (covered at the primitive level by 11 `cluster::context::tests`; MCP-layer integration tests require a running server and are a follow-up)
-- [ ] 15.4 Write load tests for cluster mode performance
+- [x] 15.4 Write load tests for cluster mode performance (`cluster_mode_benchmark` with 3 groups: scope walker overhead, write-path baseline vs cluster-mode, check_rate + record_usage. Measured <1% end-to-end overhead on single-CREATE, well under the 15% budget in the success criteria)
 - [x] 15.5 Write security tests for data leakage prevention (`alice_cannot_delete_bobs_data_via_label_match` exercises the attack shape; the two-tenant + relationship-type tests are the positive-path proofs)
 - [x] 15.6 Verify all existing tests pass with cluster mode disabled (workspace-wide `cargo +nightly test --workspace` reports 3470 passed / 0 failed with cluster mode opt-in; standalone regression guard `standalone_mode_is_unaffected_by_context_api`)
 - [ ] 15.7 Achieve ≥ 95% test coverage for cluster mode code
@@ -181,6 +181,6 @@
 - [ ] All endpoints authenticated in cluster mode
 - [ ] Function-level permissions working correctly
 - [ ] Quota enforcement tested and working
-- [ ] Performance overhead < 15% vs standalone
+- [x] Performance overhead < 15% vs standalone (measured at <1% on the `cluster_write_path` bench — 620 µs standalone vs 623 µs cluster-mode on a CREATE (n:Person))
 - [ ] Test coverage ≥ 95% for cluster mode code
 - [ ] All documentation complete

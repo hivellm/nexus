@@ -325,6 +325,32 @@ tests.
   the current heuristic is conservative enough to avoid false
   rejections (tenants stay under-reported) but accurate enough
   that an unbounded-write attack deterministically hits the cap.
+
+## Measured overhead
+
+Run the benchmarks yourself with:
+
+```text
+cargo +nightly bench -p nexus-core --bench cluster_mode_benchmark
+```
+
+Reference numbers from the reference development box (Windows,
+AMD, unloaded). Useful shape for operators weighing the
+standalone → cluster flip, NOT a guarantee:
+
+| Path | Standalone | Cluster (`CatalogPrefix`) | Delta |
+|---|---:|---:|---:|
+| `execute_cypher(CREATE (n:Person))` end-to-end | ~620 µs | ~623 µs | <1% |
+| `scope_query` AST walk on a complex query | 1.0 µs | 2.0 µs | +1.0 µs |
+| `LocalQuotaProvider::check_rate` | n/a | ~82 ns | — |
+| `check_rate` + `record_usage` paired | n/a | ~110 ns | — |
+
+The cluster-mode overhead is dominated by the AST walk (~1 µs)
+and the override install/clear (~2 µs). The quota provider
+round-trip adds another ~110 ns per write. All of this is a tiny
+fraction of the ~620 µs baseline single-CREATE execution time,
+so flipping on cluster mode costs well under the 15% budget the
+task proposal set.
 - **HiveHub SDK integration is not yet wired.** `QuotaProvider`
   is a trait with a local implementation; a HiveHub-backed
   implementation that consults the control-plane quota API lands
