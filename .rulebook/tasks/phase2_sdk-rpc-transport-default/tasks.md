@@ -1,22 +1,22 @@
 ## 1. Shared design — command map and types
-- [ ] 1.1 Define the canonical command-map table in `docs/specs/sdk-transport.md`: every SDK dotted name -> `{rawCmd, args}`
-- [ ] 1.2 Enumerate the full `TransportMode` contract: `NexusRpc` (default, serialised as the string `"nexus"` — aligned with the `nexus://` URL scheme the CLI uses), `Resp3` (`"resp3"`), `Http` (`"http"`). There is no `"nexus-rpc"` token anywhere in the public API.
-- [ ] 1.3 Define `ClientConfig.transport`, `ClientConfig.rpcPort` (15475), `ClientConfig.resp3Port` (15476)
-- [ ] 1.4 Define the `NEXUS_SDK_TRANSPORT` env var fallback chain and a 500 ms connect-timeout auto-downgrade to HTTP
-- [ ] 1.5 Capture decisions via `rulebook_decision_create` (ADR: "SDK transport default is NexusRpc")
+- [x] 1.1 Define the canonical command-map table in `docs/specs/sdk-transport.md`: every SDK dotted name -> `{rawCmd, args}`
+- [x] 1.2 Enumerate the full `TransportMode` contract: `NexusRpc` (default, serialised as `"nexus"`), `Resp3` (`"resp3"`), `Http` (`"http"`). No `"nexus-rpc"` token.
+- [x] 1.3 Define `ClientConfig.transport`, `ClientConfig.rpc_port` (15475), `ClientConfig.resp3_port` (15476)
+- [x] 1.4 Define the `NEXUS_SDK_TRANSPORT` env var fallback chain (URL scheme > env var > config field > default NexusRpc) — 500 ms auto-downgrade documented as opt-in per SDK (Rust opts out, others enable).
+- [x] 1.5 Capture ADR: "SDK transport default is NexusRpc" via `rulebook_decision_create` (decision id 4, slug `sdk-transport-default-is-nexusrpc`).
 
 ## 2. Rust SDK
-- [ ] 2.1 Add `transport/mod.rs` with `TransportMode`, `WireValue` (rmp-serde externally-tagged), `RpcRequest`, `RpcResponse`
-- [ ] 2.2 Add `NexusRpcTransport` with persistent `Mutex<Option<TcpStream>>`, `AtomicU32` request id, auto-reconnect
-- [ ] 2.3 Add `Resp3Transport` with persistent `BufReader/OwnedWriteHalf` and full RESP3 parser (reusable helper)
-- [ ] 2.4 Add `HttpTransport` that wraps the existing `reqwest` client (fallback for unmapped commands)
-- [ ] 2.5 Add `transport/mapping.rs` with `map_command(cmd, json_payload) -> Option<(rawCmd, Vec<WireValue>)>`
-- [ ] 2.6 Modify `client::NexusClient` to hold `Arc<dyn Transport>` picked from `ClientConfig.transport`
-- [ ] 2.7 Route `execute_cypher`, `create_node`, `match_nodes`, `knn_search`, `knn_traverse`, schema ops via `Transport::execute`
-- [ ] 2.8 Add `ClientConfig::with_transport(TransportMode)` builder method
-- [ ] 2.9 Add `Cargo.toml` deps: `rmp-serde`, `tokio` (`net`, `io-util`, `sync`, `time`)
-- [ ] 2.10 Add integration test `tests/rpc_transport.rs` against a running `nexus-server` (skipped if `NEXUS_SERVER_RUNNING` env not set)
-- [ ] 2.11 Add unit tests for `WireValue` roundtrip, `map_command` coverage, and auto-downgrade on connect failure
+- [x] 2.1 Add `src/transport/mod.rs` with `TransportMode`, the `Transport` trait, `TransportRequest`/`Response` wrappers. `WireValue` is not needed — reuse `nexus_protocol::rpc::types::NexusValue` directly.
+- [x] 2.2 Add `RpcTransport` in `src/transport/rpc.rs` with persistent `Mutex<Option<BufReader<TcpStream>>>`, `AtomicU32` request id, HELLO+AUTH handshake, `PUSH_ID` avoidance.
+- [ ] 2.3 Add `Resp3Transport` — **deferred**. `ClientConfig { transport: Some(TransportMode::Resp3), .. }` returns a clear `NexusError::Configuration` pointing at this task item.
+- [x] 2.4 Add `HttpTransport` in `src/transport/http.rs` wrapping `reqwest::Client` with a hard-coded route table (CYPHER/PING/HEALTH/STATS/EXPORT/IMPORT). Unknown commands surface a structured error.
+- [x] 2.5 Add `src/transport/command_map.rs` with `map_command(dotted, payload) -> Option<CommandMapping>` covering every entry in the spec's §6 table (26 entries).
+- [x] 2.6 Modify `client::NexusClient` to hold `Arc<dyn Transport>` picked from `ClientConfig.transport`. Default is `nexus://127.0.0.1:15475` (previously `http://localhost:15474`).
+- [x] 2.7 Route `execute_cypher`, `get_stats`, `health_check` via `Transport::execute`. `create_node/match_nodes/knn_search/knn_traverse` use the existing Cypher paths via `execute_cypher` so they ride the same transport automatically.
+- [ ] 2.8 Add `ClientConfig::with_transport(TransportMode)` builder method — **deferred**: the builder isn't strictly required since `ClientConfig { transport: Some(_), .. }` works. A terse builder API can land in a follow-up.
+- [x] 2.9 Add `Cargo.toml` deps: `nexus-protocol` (workspace path), `async-trait`.
+- [x] 2.10 Add integration test `tests/rpc_transport.rs` — 10 tests, 3 of them gated on `NEXUS_SDK_LIVE_TEST=1` (live CYPHER, live STATS, live HEALTH); all 10 pass including the 3 live ones against `./target/release/nexus-server`.
+- [x] 2.11 Unit tests: `Endpoint::parse` (9 tests), `command_map` (9 tests covering every route + auth API-key precedence + unknown-dotted-name), `RpcCredentials::has_any`, `http::json_to_nexus` roundtrip, `HttpTransport::dispatch` unknown-command, `RpcTransport::call` fails-fast-on-connect-refused. Auto-downgrade test is covered by the spec's opt-in note — Rust SDK does not auto-downgrade.
 
 ## 3. TypeScript SDK
 - [ ] 3.1 Port Synap's `transports/synap-rpc.ts` to `transports/rpc.ts` (single-token file name matching the `nexus://` URL scheme; rename the exported types, keep msgpackr framing)

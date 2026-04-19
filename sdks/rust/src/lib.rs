@@ -30,6 +30,7 @@ pub mod query;
 pub mod query_builder;
 pub mod schema;
 pub mod transaction;
+pub mod transport;
 
 pub use batch::*;
 pub use client::NexusClient;

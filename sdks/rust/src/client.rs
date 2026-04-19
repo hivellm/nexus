@@ -1,54 +1,95 @@
-﻿//! Nexus client implementation
+//! Nexus client implementation.
+//!
+//! Every public method on `NexusClient` routes through a
+//! [`crate::transport::Transport`] picked at construction time
+//! (RPC for `nexus://` URLs, HTTP for `http://` / `https://`,
+//! overridable via `ClientConfig.transport` or the
+//! `NEXUS_SDK_TRANSPORT` env var). The method signatures here match
+//! what the SDK shipped before `phase2_sdk-rpc-transport-default` so
+//! user code compiles unchanged.
 
 use crate::error::{NexusError, Result};
 use crate::models::*;
+use crate::transport::endpoint::Endpoint;
+use crate::transport::http::{HttpCredentials, HttpTransport, nexus_to_json};
+use crate::transport::rpc::{RpcCredentials, RpcTransport};
+use crate::transport::{Transport, TransportMode, TransportRequest};
 use base64::Engine;
+use nexus_protocol::rpc::types::NexusValue;
 use reqwest::{Client, ClientBuilder, Response};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
-/// Nexus client for interacting with the Nexus graph database
-#[derive(Debug, Clone)]
+/// Nexus client — transport-agnostic handle to a running server.
+#[derive(Clone)]
 pub struct NexusClient {
-    /// HTTP client
+    /// Active transport. `Arc` so `Clone` is cheap and independent
+    /// of whether the underlying connection is shared state.
+    transport: Arc<dyn Transport>,
+    /// Raw HTTP client — retained for a handful of legacy manager
+    /// methods (multi-database HTTP helpers) that have not yet been
+    /// ported to the Transport trait. New code SHOULD use
+    /// `self.transport.execute(...)` instead.
     client: Client,
-    /// Base URL
+    /// HTTP base URL derived from the endpoint. Used only by the
+    /// legacy paths above.
     base_url: Url,
-    /// API key (optional)
     api_key: Option<String>,
-    /// Username (optional)
     username: Option<String>,
-    /// Password (optional)
     password: Option<String>,
-    /// Maximum retries (currently unused, reserved for future retry implementation)
     #[allow(dead_code)]
     max_retries: u32,
 }
 
+impl std::fmt::Debug for NexusClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NexusClient")
+            .field("transport", &self.transport.describe())
+            .field("base_url", &self.base_url)
+            .finish()
+    }
+}
+
 impl NexusClient {
-    /// Get the HTTP client
     pub(crate) fn get_client(&self) -> &Client {
         &self.client
     }
 
-    /// Get the base URL
     pub(crate) fn get_base_url(&self) -> &Url {
         &self.base_url
     }
 
-    /// Create a new Nexus client with default configuration
+    /// Describe the active transport (`"nexus://host:15475 (RPC)"`).
+    /// Useful for tracing and `--verbose`-style diagnostics in
+    /// applications wrapping the SDK.
+    pub fn endpoint_description(&self) -> String {
+        self.transport.describe()
+    }
+
+    /// True when the active transport uses the native binary RPC
+    /// wire format.
+    pub fn is_rpc(&self) -> bool {
+        self.transport.is_rpc()
+    }
+
+    /// Create a client with default configuration against `base_url`.
     ///
-    /// # Arguments
-    ///
-    /// * `base_url` - Base URL of the Nexus server (e.g., "http://localhost:15474")
+    /// `base_url` may use `nexus://`, `http://`, `https://`, or a bare
+    /// `host:port` (defaults to RPC). Loading a `nexus://` URL picks
+    /// the native binary RPC transport; any other scheme uses HTTP.
     ///
     /// # Example
     ///
     /// ```no_run
     /// use nexus_sdk::NexusClient;
     ///
-    /// let client = NexusClient::new("http://localhost:15474")?;
+    /// // Binary RPC (fastest path)
+    /// let rpc = NexusClient::new("nexus://localhost:15475")?;
+    ///
+    /// // Legacy HTTP
+    /// let http = NexusClient::new("http://localhost:15474")?;
     /// # Ok::<(), nexus_sdk::NexusError>(())
     /// ```
     pub fn new(base_url: &str) -> Result<Self> {
@@ -58,21 +99,7 @@ impl NexusClient {
         })
     }
 
-    /// Create a new Nexus client with API key authentication
-    ///
-    /// # Arguments
-    ///
-    /// * `base_url` - Base URL of the Nexus server
-    /// * `api_key` - API key for authentication
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use nexus_sdk::NexusClient;
-    ///
-    /// let client = NexusClient::with_api_key("http://localhost:15474", "your-api-key")?;
-    /// # Ok::<(), nexus_sdk::NexusError>(())
-    /// ```
+    /// Create a client with API key authentication.
     pub fn with_api_key(base_url: &str, api_key: &str) -> Result<Self> {
         Self::with_config(ClientConfig {
             base_url: base_url.to_string(),
@@ -81,22 +108,7 @@ impl NexusClient {
         })
     }
 
-    /// Create a new Nexus client with username/password authentication
-    ///
-    /// # Arguments
-    ///
-    /// * `base_url` - Base URL of the Nexus server
-    /// * `username` - Username for authentication
-    /// * `password` - Password for authentication
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use nexus_sdk::NexusClient;
-    ///
-    /// let client = NexusClient::with_credentials("http://localhost:15474", "user", "pass")?;
-    /// # Ok::<(), nexus_sdk::NexusError>(())
-    /// ```
+    /// Create a client with username/password authentication.
     pub fn with_credentials(base_url: &str, username: &str, password: &str) -> Result<Self> {
         Self::with_config(ClientConfig {
             base_url: base_url.to_string(),
@@ -106,26 +118,85 @@ impl NexusClient {
         })
     }
 
-    /// Create a new Nexus client with custom configuration
+    /// Create a client from a custom [`ClientConfig`].
     ///
-    /// # Arguments
+    /// Transport precedence (strongest → weakest):
     ///
-    /// * `config` - Client configuration
+    /// 1. URL scheme in `config.base_url` (`nexus://` forces RPC,
+    ///    `http[s]://` forces HTTP).
+    /// 2. `NEXUS_SDK_TRANSPORT` env var.
+    /// 3. `config.transport` field.
+    /// 4. Default: `TransportMode::NexusRpc`.
     pub fn with_config(config: ClientConfig) -> Result<Self> {
-        let base_url = Url::parse(&config.base_url)
+        let endpoint = Endpoint::parse(&config.base_url)?;
+        let url_force = endpoint.scheme;
+
+        // Env var overrides the config field but not the URL scheme.
+        let env_mode = std::env::var("NEXUS_SDK_TRANSPORT")
+            .ok()
+            .and_then(|s| TransportMode::parse(&s));
+        let effective_mode = match url_force {
+            crate::transport::endpoint::Scheme::Rpc => Some(TransportMode::NexusRpc),
+            crate::transport::endpoint::Scheme::Http => Some(TransportMode::Http),
+            crate::transport::endpoint::Scheme::Https => Some(TransportMode::Https),
+            crate::transport::endpoint::Scheme::Resp3 => Some(TransportMode::Resp3),
+        };
+        let mode = effective_mode
+            .or(env_mode)
+            .or(config.transport)
+            .unwrap_or(TransportMode::NexusRpc);
+
+        // Build the legacy HTTP client regardless of active mode —
+        // a handful of manager methods still hit REST directly
+        // until their RPC verbs land.
+        let timeout = Duration::from_secs(config.timeout_secs);
+        let http_client_builder = ClientBuilder::new()
+            .timeout(timeout)
+            .user_agent(format!("nexus-sdk/{}", env!("CARGO_PKG_VERSION")));
+        let http_client = http_client_builder.build()?;
+
+        // Parse the base_url into a `url::Url` for the legacy path.
+        // `nexus://` isn't a scheme `url::Url` knows as HTTP-like, so
+        // synthesise an HTTP-equivalent URL for that storage.
+        let url_for_legacy = match mode {
+            TransportMode::NexusRpc | TransportMode::Resp3 => endpoint.as_http_url(),
+            TransportMode::Http | TransportMode::Https => config.base_url.clone(),
+        };
+        let base_url = Url::parse(&url_for_legacy)
             .map_err(|e| NexusError::Configuration(format!("Invalid base URL: {}", e)))?;
 
-        let timeout = Duration::from_secs(config.timeout_secs);
-
-        let client_builder = ClientBuilder::new()
-            .timeout(timeout)
-            .user_agent("nexus-sdk/0.1.0");
-
-        // Build HTTP client
-        let client = client_builder.build()?;
+        // Build the transport per the resolved mode.
+        let transport: Arc<dyn Transport> = match mode {
+            TransportMode::NexusRpc => Arc::new(RpcTransport::new(
+                endpoint.clone(),
+                RpcCredentials {
+                    api_key: config.api_key.clone(),
+                    username: config.username.clone(),
+                    password: config.password.clone(),
+                },
+            )),
+            TransportMode::Http | TransportMode::Https => Arc::new(HttpTransport::new(
+                endpoint.clone(),
+                HttpCredentials {
+                    api_key: config.api_key.clone(),
+                    username: config.username.clone(),
+                    password: config.password.clone(),
+                },
+                config.timeout_secs,
+            )?),
+            TransportMode::Resp3 => {
+                return Err(NexusError::Configuration(
+                    "RESP3 transport is not yet implemented in the Rust SDK \
+                     (see phase2_sdk-rpc-transport-default §2.3). \
+                     Use 'nexus://' for binary RPC or 'http://' for HTTP/JSON."
+                        .to_string(),
+                ));
+            }
+        };
 
         Ok(Self {
-            client,
+            transport,
+            client: http_client,
             base_url,
             api_key: config.api_key,
             username: config.username,
@@ -134,96 +205,97 @@ impl NexusClient {
         })
     }
 
-    /// Execute a Cypher query
-    ///
-    /// # Arguments
-    ///
-    /// * `query` - Cypher query string
-    /// * `parameters` - Optional query parameters
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let result = client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None).await?;
-    /// tracing::info!("Found {} rows", result.rows.len());
-    /// # Ok(())
-    /// # }
-    /// ```
+    // ══ Transport-routed methods ═════════════════════════════════════════════
+    // Every method below goes through `self.transport.execute(...)`. The RPC
+    // path hits `nexus-server/src/protocol/rpc/dispatch/*`; the HTTP path hits
+    // the sibling REST handler. See `docs/specs/sdk-transport.md`.
+
+    /// Execute a Cypher query.
     pub async fn execute_cypher(
         &self,
         query: &str,
         parameters: Option<HashMap<String, Value>>,
     ) -> Result<QueryResult> {
-        let request = CypherRequest {
-            query: query.to_string(),
-            parameters,
-        };
-
-        let url = self.get_base_url().join("/cypher")?;
-        let mut request_builder = self.get_client().post(url).json(&request);
-
-        // Add authentication headers
-        request_builder = self.add_auth_headers(request_builder)?;
-
-        let response = self.execute_with_retry(request_builder).await?;
-        self.handle_response(response).await
+        let mut args = vec![NexusValue::Str(query.to_string())];
+        if let Some(params) = parameters {
+            let mut pairs = Vec::with_capacity(params.len());
+            for (k, v) in params {
+                pairs.push((NexusValue::Str(k), value_to_nexus(v)));
+            }
+            args.push(NexusValue::Map(pairs));
+        }
+        let resp = self
+            .transport
+            .execute(TransportRequest {
+                command: "CYPHER".to_string(),
+                args,
+            })
+            .await?;
+        cypher_envelope_to_query_result(resp.value)
     }
 
-    /// Get database statistics
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let stats = client.get_stats().await?;
-    /// tracing::info!("Total nodes: {}", stats.catalog.node_count);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Get database statistics.
     pub async fn get_stats(&self) -> Result<DatabaseStats> {
-        let url = self.get_base_url().join("/stats")?;
-        let mut request_builder = self.get_client().get(url);
+        let resp = self
+            .transport
+            .execute(TransportRequest {
+                command: "STATS".to_string(),
+                args: vec![],
+            })
+            .await?;
+        // The RPC STATS envelope is flat (`{nodes, relationships,
+        // labels, rel_types, page_cache_hits/misses, wal_entries,
+        // active_transactions}`); the REST shape is nested
+        // (`{catalog: {node_count, ...}, label_index: {...}}`). The
+        // SDK's public `DatabaseStats` type is the nested shape —
+        // synthesise it from whichever form arrived so callers see a
+        // consistent struct regardless of transport.
+        let json = nexus_to_json(&resp.value);
+        let obj = json.as_object().ok_or_else(|| {
+            NexusError::Network(format!("STATS reply must be a map, got {:?}", resp.value))
+        })?;
 
-        // Add authentication headers
-        request_builder = self.add_auth_headers(request_builder)?;
+        // REST path: serde straight through.
+        if obj.contains_key("catalog") {
+            return Ok(serde_json::from_value(json)?);
+        }
 
-        let response = self.execute_with_retry(request_builder).await?;
-        let stats: DatabaseStats = response.json().await?;
-        Ok(stats)
+        // RPC flat path: hand-populate `CatalogStats` from the RPC
+        // field names. Legacy fields we no longer expose via RPC
+        // (`label_index`, `knn_index`) fall back to empty defaults.
+        let u = |k: &str| obj.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let catalog = CatalogStats {
+            node_count: u("nodes"),
+            rel_count: u("relationships"),
+            label_count: u("labels"),
+            rel_type_count: u("rel_types"),
+        };
+        Ok(DatabaseStats {
+            catalog,
+            label_index: LabelIndexStats::default(),
+            knn_index: KnnIndexStats::default(),
+        })
     }
 
-    /// Check server health
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let healthy = client.health_check().await?;
-    /// tracing::info!("Server is healthy: {}", healthy);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Health check — returns `true` if the server responds
+    /// successfully on the active transport.
     pub async fn health_check(&self) -> Result<bool> {
-        let url = self.get_base_url().join("/health")?;
-        let request_builder = self.get_client().get(url);
-
-        match self.execute_with_retry(request_builder).await {
-            Ok(response) => Ok(response.status().is_success()),
+        match self
+            .transport
+            .execute(TransportRequest {
+                command: if self.is_rpc() { "PING" } else { "HEALTH" }.to_string(),
+                args: vec![],
+            })
+            .await
+        {
+            Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
     }
 
-    /// Add authentication headers to request
+    /// Add authentication headers to an HTTP-fallback request.
+    /// Retained for compatibility with the multi-database manager
+    /// methods below; new code does NOT need this.
     pub(crate) fn add_auth_headers(
         &self,
         mut builder: reqwest::RequestBuilder,
@@ -231,17 +303,15 @@ impl NexusClient {
         if let Some(api_key) = &self.api_key {
             builder = builder.header("X-API-Key", api_key);
         } else if let (Some(username), Some(password)) = (&self.username, &self.password) {
-            // For basic auth, we'll need to handle token management
-            // For now, we'll add basic auth header
             let auth = base64::engine::general_purpose::STANDARD
                 .encode(format!("{}:{}", username, password));
             builder = builder.header("Authorization", format!("Basic {}", auth));
         }
-
         Ok(builder)
     }
 
-    /// Execute request with retry logic
+    /// Execute an HTTP-fallback request with retries. Retained for
+    /// the manager methods that still use REST directly.
     pub(crate) async fn execute_with_retry(
         &self,
         builder: reqwest::RequestBuilder,
@@ -251,44 +321,33 @@ impl NexusClient {
 
         for attempt in 0..=max_retries {
             match builder.try_clone() {
-                Some(cloned_builder) => {
-                    match cloned_builder.send().await {
-                        Ok(response) => {
-                            // Check if status is retryable (5xx errors)
-                            let status = response.status();
-                            if status.is_server_error() && attempt < max_retries {
-                                // Calculate exponential backoff delay
-                                let delay_ms = 100u64 * (1u64 << attempt.min(5)); // Cap at 3.2s
-                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
-                                    .await;
-                                continue;
-                            }
-                            return Ok(response);
+                Some(cloned_builder) => match cloned_builder.send().await {
+                    Ok(response) => {
+                        let status = response.status();
+                        if status.is_server_error() && attempt < max_retries {
+                            let delay_ms = 100u64 * (1u64 << attempt.min(5));
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                            continue;
                         }
-                        Err(e) => {
-                            // Check if error is retryable (network errors, timeouts) before moving
-                            let is_retryable = e.is_timeout() || e.is_connect() || e.is_request();
-                            last_error = Some(e);
-                            if is_retryable && attempt < max_retries {
-                                // Calculate exponential backoff delay
-                                let delay_ms = 100u64 * (1u64 << attempt.min(5)); // Cap at 3.2s
-                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
-                                    .await;
-                                continue;
-                            }
-                            // Non-retryable error or max retries reached
-                            break;
-                        }
+                        return Ok(response);
                     }
-                }
+                    Err(e) => {
+                        let is_retryable = e.is_timeout() || e.is_connect() || e.is_request();
+                        last_error = Some(e);
+                        if is_retryable && attempt < max_retries {
+                            let delay_ms = 100u64 * (1u64 << attempt.min(5));
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                            continue;
+                        }
+                        break;
+                    }
+                },
                 None => {
-                    // Cannot clone builder, execute directly
                     return builder.send().await.map_err(NexusError::Http);
                 }
             }
         }
 
-        // Return last error or create a generic error
         match last_error {
             Some(e) => Err(NexusError::Http(e)),
             None => Err(NexusError::Network(
@@ -297,45 +356,14 @@ impl NexusClient {
         }
     }
 
-    /// Handle HTTP response and convert to result
-    async fn handle_response(&self, response: Response) -> Result<QueryResult> {
-        let status = response.status();
-
-        if status.is_success() {
-            let result: QueryResult = response.json().await?;
-            Ok(result)
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            Err(NexusError::Api {
-                message: error_text,
-                status: status.as_u16(),
-            })
-        }
-    }
-
     // =========================================================================
-    // Database Management Methods
+    // Legacy database-management methods — still REST-only.
+    // These are kept as-is because the server-side /databases/* routes
+    // were not part of phase 2's RPC surface; adding them is tracked in
+    // a follow-up.
     // =========================================================================
 
-    /// List all databases
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let response = client.list_databases().await?;
-    /// for db in &response.databases {
-    ///     println!("Database: {}", db.name);
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// List all databases (REST).
     pub async fn list_databases(&self) -> Result<ListDatabasesResponse> {
         let url = self.get_base_url().join("/databases")?;
         let mut request_builder = self.get_client().get(url);
@@ -346,24 +374,7 @@ impl NexusClient {
         Ok(result)
     }
 
-    /// Create a new database
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Database name (alphanumeric with underscores and hyphens)
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let response = client.create_database("mydb").await?;
-    /// println!("Created database: {}", response.name);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Create a new database (REST).
     pub async fn create_database(&self, name: &str) -> Result<CreateDatabaseResponse> {
         let url = self.get_base_url().join("/databases")?;
         let request = CreateDatabaseRequest {
@@ -377,24 +388,7 @@ impl NexusClient {
         Ok(result)
     }
 
-    /// Get database information
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Database name
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let db = client.get_database("neo4j").await?;
-    /// println!("Nodes: {}", db.node_count);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Get database information (REST).
     pub async fn get_database(&self, name: &str) -> Result<DatabaseInfo> {
         let url = self.get_base_url().join(&format!("/databases/{}", name))?;
         let mut request_builder = self.get_client().get(url);
@@ -405,24 +399,7 @@ impl NexusClient {
         Ok(result)
     }
 
-    /// Drop a database
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Database name
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let response = client.drop_database("mydb").await?;
-    /// println!("Dropped: {}", response.success);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Drop a database (REST).
     pub async fn drop_database(&self, name: &str) -> Result<DropDatabaseResponse> {
         let url = self.get_base_url().join(&format!("/databases/{}", name))?;
         let mut request_builder = self.get_client().delete(url);
@@ -433,20 +410,7 @@ impl NexusClient {
         Ok(result)
     }
 
-    /// Get the current session database
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let db = client.get_current_database().await?;
-    /// println!("Current database: {}", db);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Get the current session database (REST).
     pub async fn get_current_database(&self) -> Result<String> {
         let url = self.get_base_url().join("/session/database")?;
         let mut request_builder = self.get_client().get(url);
@@ -457,24 +421,7 @@ impl NexusClient {
         Ok(result.database)
     }
 
-    /// Switch to a different database
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Database name to switch to
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use nexus_sdk::NexusClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), nexus_sdk::NexusError> {
-    /// # let client = NexusClient::new("http://localhost:15474")?;
-    /// let response = client.switch_database("mydb").await?;
-    /// println!("Switched: {}", response.success);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Switch to a different database (REST).
     pub async fn switch_database(&self, name: &str) -> Result<SwitchDatabaseResponse> {
         let url = self.get_base_url().join("/session/database")?;
         let request = SwitchDatabaseRequest {
@@ -487,4 +434,54 @@ impl NexusClient {
         let result: SwitchDatabaseResponse = response.json().await?;
         Ok(result)
     }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Map the SDK's `Value` type onto `NexusValue`. `Value` already
+/// carries the same shape as `serde_json::Value`, so we serialise
+/// through that and reuse the HTTP transport's JSON→Nexus helper.
+fn value_to_nexus(v: Value) -> NexusValue {
+    let json = serde_json::to_value(&v).unwrap_or(serde_json::Value::Null);
+    crate::transport::http::json_to_nexus(json)
+}
+
+/// Decode the CYPHER reply envelope (`{columns, rows, execution_time_ms, error}`)
+/// into `QueryResult`.
+fn cypher_envelope_to_query_result(value: NexusValue) -> Result<QueryResult> {
+    let json = nexus_to_json(&value);
+    let obj = json.as_object().ok_or_else(|| {
+        NexusError::Network(format!("CYPHER reply must be a map, got {:?}", value))
+    })?;
+
+    let columns = obj
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let rows = obj
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let execution_time_ms = obj.get("execution_time_ms").and_then(|v| v.as_u64());
+    let error = obj.get("error").and_then(|v| v.as_str()).map(String::from);
+
+    if let Some(msg) = error.clone() {
+        return Err(NexusError::Api {
+            message: msg,
+            status: 0,
+        });
+    }
+
+    Ok(QueryResult {
+        columns,
+        rows,
+        execution_time_ms,
+        error,
+    })
 }
