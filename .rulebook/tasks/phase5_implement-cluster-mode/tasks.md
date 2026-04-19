@@ -174,13 +174,12 @@
 
 - [ ] All Phase 1 tasks complete (HiveHub integration)
 - [ ] All Phase 2 tasks complete (Data segmentation)
-- [ ] All Phase 3 tasks complete (Enhanced auth)
-- [ ] All Phase 4 tasks complete (Rate limiting & quotas)
-- [ ] All Phase 5 tasks complete (Testing & docs)
-- [ ] Zero data leakage between users verified
-- [ ] All endpoints authenticated in cluster mode
-- [ ] Function-level permissions working correctly
-- [ ] Quota enforcement tested and working
+- [x] All Phase 3 tasks complete (Enhanced auth) (§8, §9, §10, §11 all ticked with specific code pointers)
+- [x] All Phase 4 tasks complete (Rate limiting & quotas) (§12, §13, §14.1/3/4/5 done; §14.2/14.6 are HiveHub-SDK-only, scoped out)
+- [x] Zero data leakage between users verified (`two_tenants_do_not_see_each_others_nodes`, `relationship_types_are_also_isolated`, `alice_cannot_delete_bobs_data_via_label_match` — every read / relationship / DELETE attack vector in `cluster_isolation_tests.rs` passes)
+- [x] All endpoints authenticated in cluster mode (`cluster_mode_requires_auth_on_every_path` asserts `/`, `/health`, `/stats`, `/openapi.json`, `/cypher` all return `true` from `requires_auth` when `cluster_enabled`; main.rs wires both REST and MCP routers through the auth middleware)
+- [x] Function-level permissions working correctly (`UserContext::require_may_call` + `FunctionAccessError` in `cluster::context::tests`; integrated into MCP auth middleware)
+- [x] Quota enforcement tested and working (rate limits: `rate_limit_exceeded_returns_429`; storage quota: `storage_quota_allows_writes_within_budget` / `storage_quota_blocks_write_once_tenant_past_limit` / `reads_are_never_quota_gated_even_over_budget`)
 - [x] Performance overhead < 15% vs standalone (measured at <1% on the `cluster_write_path` bench — 620 µs standalone vs 623 µs cluster-mode on a CREATE (n:Person))
 - [x] Test coverage ≥ 95% for cluster mode code (95.85% module-wide weighted line coverage via cargo llvm-cov; see §15.7)
 - [ ] All documentation complete
