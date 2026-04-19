@@ -35,7 +35,7 @@ impl CypherParser {
         while self.pos < self.input.len() {
             // Check if we're at a clause boundary
             if self.is_clause_boundary() {
-                let clause = self.parse_clause()?;
+                let clause = self.parse_clause(clauses.last())?;
                 clauses.push(clause);
 
                 // Skip whitespace
@@ -56,8 +56,42 @@ impl CypherParser {
         Ok(CypherQuery { clauses, params })
     }
 
+    /// Neo4j-style syntax error for a `WHERE` appearing as a
+    /// standalone top-level clause — i.e. not attached to a
+    /// `MATCH` / `OPTIONAL MATCH` / `WITH`. Mirrors the shape Neo4j
+    /// 2025.09.0 produces on the same input so the message is
+    /// actionable to callers coming from a Neo4j background.
+    ///
+    /// Migration: insert a `WITH <vars>` projection before the
+    /// predicate — e.g. `UNWIND [1,2,3] AS x WITH x WHERE x > 1
+    /// RETURN x`.
+    fn reject_standalone_where(&self) -> Error {
+        self.error(
+            "Invalid input 'WHERE': expected 'ORDER BY', 'CALL', 'CREATE', \
+             'LOAD CSV', 'DELETE', 'DETACH', 'FINISH', 'FOREACH', 'INSERT', \
+             'LIMIT', 'MATCH', 'MERGE', 'NODETACH', 'OFFSET', 'OPTIONAL', \
+             'REMOVE', 'RETURN', 'SET', 'UNION', 'UNWIND', 'USE', 'WITH' \
+             or <EOF>",
+        )
+    }
+
+    /// Whether a bare `WHERE` may appear at the current position.
+    ///
+    /// Nexus models WHERE as a top-level clause that attaches to the
+    /// previous `MATCH` / `OPTIONAL MATCH` / `WITH` during execution
+    /// (see `executor/mod.rs`'s `Clause::Where` handler). Cypher
+    /// grammar only allows WHERE immediately after those three
+    /// producers; anything else — `UNWIND … WHERE`, `CREATE … WHERE`,
+    /// chained `WHERE … WHERE` — is a syntax error in Neo4j
+    /// 2025.09.0 and must be in Nexus too.
+    fn where_is_valid_after(previous: Option<&Clause>) -> bool {
+        // `Clause::Match` covers both plain `MATCH` and `OPTIONAL MATCH`
+        // (differentiated by the `optional` flag on the AST node).
+        matches!(previous, Some(Clause::Match(_)) | Some(Clause::With(_)))
+    }
+
     /// Parse a single clause
-    pub(super) fn parse_clause(&mut self) -> Result<Clause> {
+    pub(super) fn parse_clause(&mut self, previous: Option<&Clause>) -> Result<Clause> {
         // Check for EXPLAIN or PROFILE first (must be at the beginning)
         if self.peek_keyword("EXPLAIN") {
             return self.parse_explain_clause();
@@ -179,6 +213,9 @@ impl CypherParser {
                 Ok(Clause::Union(union_clause))
             }
             "WHERE" => {
+                if !Self::where_is_valid_after(previous) {
+                    return Err(self.reject_standalone_where());
+                }
                 let where_clause = self.parse_where_clause()?;
                 Ok(Clause::Where(where_clause))
             }
@@ -1511,7 +1548,7 @@ impl CypherParser {
 
             // Check if this is a clause boundary
             if self.is_clause_boundary() {
-                let clause = self.parse_clause()?;
+                let clause = self.parse_clause(clauses.last())?;
                 clauses.push(clause);
             } else {
                 // No more clauses
@@ -2303,7 +2340,12 @@ impl CypherParser {
                         };
                         Clause::Union(UnionClause { union_type })
                     }
-                    "WHERE" => Clause::Where(self.parse_where_clause()?),
+                    "WHERE" => {
+                        if !Self::where_is_valid_after(clauses.last()) {
+                            return Err(self.reject_standalone_where());
+                        }
+                        Clause::Where(self.parse_where_clause()?)
+                    }
                     "RETURN" => Clause::Return(self.parse_return_clause()?),
                     "ORDER" => {
                         self.expect_keyword("BY")?;
@@ -2411,7 +2453,12 @@ impl CypherParser {
                         };
                         Clause::Union(UnionClause { union_type })
                     }
-                    "WHERE" => Clause::Where(self.parse_where_clause()?),
+                    "WHERE" => {
+                        if !Self::where_is_valid_after(clauses.last()) {
+                            return Err(self.reject_standalone_where());
+                        }
+                        Clause::Where(self.parse_where_clause()?)
+                    }
                     "RETURN" => Clause::Return(self.parse_return_clause()?),
                     "ORDER" => {
                         self.expect_keyword("BY")?;

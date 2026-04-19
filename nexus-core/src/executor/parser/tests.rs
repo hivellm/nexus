@@ -1625,3 +1625,122 @@ fn test_and_with_comparisons() {
         _ => panic!("Expected BinaryOp with AND, got: {:?}", expr),
     }
 }
+
+// ── Standalone-WHERE rejection (phase3_unwind-where-neo4j-parity §1) ──
+//
+// Neo4j 2025.09.0 rejects `WHERE` that isn't attached to a `MATCH` /
+// `OPTIONAL MATCH` / `WITH` with a syntax error listing the valid
+// follow-up clauses. Nexus now emits a message of the same shape so
+// queries that worked against the old permissive parser fail with an
+// actionable error pointing callers at the `WITH <vars>` migration.
+
+#[test]
+fn standalone_where_after_unwind_rejects() {
+    let mut parser = CypherParser::new("UNWIND [1, 2, 3] AS x WHERE x > 1 RETURN x".to_string());
+    let err = parser
+        .parse()
+        .expect_err("standalone WHERE after UNWIND must reject");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("Invalid input 'WHERE'"),
+        "expected Neo4j-style syntax error, got: {msg}"
+    );
+    assert!(
+        msg.contains("'WITH'"),
+        "error must point callers at the WITH migration, got: {msg}"
+    );
+}
+
+#[test]
+fn standalone_where_after_create_rejects() {
+    let mut parser = CypherParser::new("CREATE (n:X) WHERE n.x = 1 RETURN n".to_string());
+    let err = parser
+        .parse()
+        .expect_err("standalone WHERE after CREATE must reject");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("Invalid input 'WHERE'"),
+        "expected Neo4j-style syntax error, got: {msg}"
+    );
+}
+
+#[test]
+fn standalone_where_after_delete_rejects() {
+    let mut parser = CypherParser::new("MATCH (n) DELETE n WHERE n.x = 1 RETURN n".to_string());
+    let err = parser
+        .parse()
+        .expect_err("standalone WHERE after DELETE must reject");
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("Invalid input 'WHERE'"),
+        "expected Neo4j-style syntax error, got: {msg}"
+    );
+}
+
+#[test]
+fn match_where_still_parses() {
+    // In Nexus, WHERE after MATCH is emitted as a standalone
+    // `Clause::Where` that the executor attaches to the preceding
+    // MATCH at run time (see `executor::mod`'s dispatch loop).
+    // That path must keep working after the reject arm — it's the
+    // single most common Cypher shape.
+    let mut parser = CypherParser::new("MATCH (n:Person) WHERE n.age > 30 RETURN n".to_string());
+    let query = parser.parse().expect("MATCH … WHERE must parse");
+    assert_eq!(
+        query.clauses.len(),
+        3,
+        "expected MATCH + WHERE + RETURN clauses"
+    );
+    assert!(
+        matches!(query.clauses[0], Clause::Match(_)),
+        "first clause must be MATCH"
+    );
+    assert!(
+        matches!(query.clauses[1], Clause::Where(_)),
+        "second clause must be the standalone WHERE that MATCH accepts"
+    );
+}
+
+#[test]
+fn with_where_still_parses() {
+    // WITH absorbs its attached WHERE into its own struct via
+    // `parse_with_clause`, so the clause stream is UNWIND + WITH +
+    // RETURN (three clauses, not four). This is the canonical
+    // migration target for the previously-accepted shorthand.
+    let mut parser =
+        CypherParser::new("UNWIND [1, 2, 3, 4, 5] AS x WITH x WHERE x > 2 RETURN x".to_string());
+    let query = parser.parse().expect("UNWIND … WITH x WHERE must parse");
+    assert_eq!(
+        query.clauses.len(),
+        3,
+        "expected UNWIND + WITH + RETURN clauses"
+    );
+    match &query.clauses[1] {
+        Clause::With(w) => assert!(
+            w.where_clause.is_some(),
+            "WITH clause must own its attached WHERE"
+        ),
+        other => panic!("expected Clause::With, got {:?}", other),
+    }
+}
+
+#[test]
+fn optional_match_where_still_parses() {
+    // OPTIONAL MATCH produces a `Clause::Match` with `optional=true`
+    // (not a distinct variant), so the follow-up WHERE is accepted
+    // by the same context check MATCH uses. Result shape: MATCH +
+    // MATCH(optional) + WHERE + RETURN = four clauses.
+    let mut parser =
+        CypherParser::new("MATCH (a) OPTIONAL MATCH (b) WHERE b.x > 0 RETURN a, b".to_string());
+    let query = parser.parse().expect("OPTIONAL MATCH … WHERE must parse");
+    assert_eq!(
+        query.clauses.len(),
+        4,
+        "expected MATCH + OPTIONAL MATCH + WHERE + RETURN"
+    );
+    match &query.clauses[1] {
+        Clause::Match(m) => assert!(m.optional, "second clause is OPTIONAL MATCH"),
+        other => panic!("expected Clause::Match, got {:?}", other),
+    }
+    assert!(matches!(query.clauses[2], Clause::Where(_)));
+}

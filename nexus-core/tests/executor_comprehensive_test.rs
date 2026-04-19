@@ -389,8 +389,12 @@ fn test_unwind_with_where() {
     let mut params = HashMap::new();
     params.insert("list".to_string(), json!([1, 2, 3, 4, 5]));
 
+    // Standalone WHERE after UNWIND rejects post
+    // phase3_unwind-where-neo4j-parity — grammar matches Neo4j now.
+    // Insert a `WITH item` pass-through projection so the predicate
+    // attaches to an allowed clause.
     let query = Query {
-        cypher: "UNWIND $list AS item WHERE item > 2 RETURN item".to_string(),
+        cypher: "UNWIND $list AS item WITH item WHERE item > 2 RETURN item".to_string(),
         params,
     };
 

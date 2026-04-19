@@ -58,6 +58,23 @@ Type ::= Identifier
 
 ### WHERE Clause
 
+> **Clause-ordering rule** (Neo4j 2025.09.0 parity, enforced since
+> `phase3_unwind-where-neo4j-parity`): `WHERE` is only valid
+> immediately after a `MATCH`, `OPTIONAL MATCH`, or `WITH`. It is
+> **not** a standalone top-level clause — `UNWIND … AS x WHERE …`,
+> `CREATE (…) WHERE …`, and any other non-MATCH/WITH producer
+> followed by `WHERE` reject with a syntax error listing the
+> allowed follow-up clauses. Migrate by inserting a `WITH <vars>`
+> pass-through projection:
+>
+> ```cypher
+> -- reject: bare WHERE after UNWIND
+> UNWIND [1, 2, 3, 4, 5] AS x WHERE x > 2 RETURN x
+>
+> -- accept: WITH x projects through, WHERE attaches to WITH
+> UNWIND [1, 2, 3, 4, 5] AS x WITH x WHERE x > 2 RETURN x
+> ```
+
 ```cypher
 -- Property equality
 WHERE n.name = 'Alice'

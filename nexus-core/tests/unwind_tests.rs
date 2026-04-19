@@ -121,9 +121,13 @@ fn test_unwind_with_variable_reference() {
 fn test_unwind_with_where_filtering() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
+    // `UNWIND … AS x WHERE …` bare-WHERE shorthand rejects post
+    // phase3_unwind-where-neo4j-parity — insert an explicit `WITH num`
+    // pass-through so the predicate attaches to a clause Cypher grammar
+    // actually allows it after.
     let result = execute_query(
         &mut engine,
-        "UNWIND [1, 2, 3, 4, 5] AS num WHERE num > 2 RETURN num",
+        "UNWIND [1, 2, 3, 4, 5] AS num WITH num WHERE num > 2 RETURN num",
     )
     .unwrap();
     let json_result = result_to_json(&result);
@@ -339,13 +343,18 @@ fn test_unwind_creates_cartesian_product() {
 }
 
 #[test]
-#[ignore = "WHERE after UNWIND needs operator reordering - known limitation"]
 fn test_unwind_with_null_in_list() {
+    // Previously `#[ignore]`d with "WHERE after UNWIND needs operator
+    // reordering — known limitation"; the actual fix turned out to be
+    // grammar, not operator topology. Inserting a `WITH x` pass-through
+    // before the predicate routes the filter through the same MATCH /
+    // WITH / WHERE plumbing every other WHERE form uses, and the
+    // existing operator graph handles it unchanged.
     let (mut engine, _ctx) = setup_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
-        "UNWIND [1, null, 3, null, 5] AS x WHERE x IS NOT NULL RETURN x",
+        "UNWIND [1, null, 3, null, 5] AS x WITH x WHERE x IS NOT NULL RETURN x",
     )
     .unwrap();
     let json_result = result_to_json(&result);

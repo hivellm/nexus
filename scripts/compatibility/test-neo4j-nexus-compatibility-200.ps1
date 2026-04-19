@@ -734,7 +734,7 @@ Run-Test -Name "14.01 UNWIND basic array" -Query "UNWIND [1, 2, 3] AS x RETURN x
 Run-Test -Name "14.02 UNWIND strings" -Query "UNWIND ['a', 'b', 'c'] AS letter RETURN letter"
 Run-Test -Name "14.03 UNWIND with count" -Query "UNWIND [1, 2, 3, 4, 5] AS x RETURN count(x) AS cnt"
 Run-Test -Name "14.04 UNWIND with sum" -Query "UNWIND [1, 2, 3, 4, 5] AS x RETURN sum(x) AS total"
-Run-Test -Name "14.05 UNWIND with WHERE" -Query "UNWIND [1, 2, 3, 4, 5] AS x WHERE x > 2 RETURN x"
+Run-Test -Name "14.05 UNWIND with WHERE" -Query "UNWIND [1, 2, 3, 4, 5] AS x WITH x WHERE x > 2 RETURN x"
 Run-Test -Name "14.06 UNWIND with expression" -Query "UNWIND [1, 2, 3] AS x RETURN x * 2 AS doubled"
 Run-Test -Name "14.07 UNWIND empty array" -Query "UNWIND [] AS x RETURN x"
 Run-Test -Name "14.08 UNWIND with DISTINCT" -Query "UNWIND [1, 1, 2, 2, 3] AS x RETURN DISTINCT x"

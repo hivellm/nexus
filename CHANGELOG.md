@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] — 2026-04-19
 
+### Fixed — parser no longer accepts standalone `WHERE` (Neo4j parity)
+
+Closes the last outlier in the 300-test Neo4j compat suite. Before
+this change, Nexus accepted `UNWIND [1,2,3,4,5] AS x WHERE x > 2
+RETURN x` and returned `[3, 4, 5]`, while Neo4j 2025.09.0 rejects the
+same query with a syntax error (`Invalid input 'WHERE': expected
+'ORDER BY', 'CALL', ...`). Standard Cypher only allows `WHERE`
+attached to `MATCH` / `OPTIONAL MATCH` / `WITH` — never as a
+standalone top-level clause.
+
+The parser now matches Neo4j's grammar exactly: a bare `WHERE` after
+any clause other than those three rejects with the same error
+message shape Neo4j produces, pointing callers at the migration.
+
+**Breaking change — migration.** Any query that glued `WHERE`
+directly onto the output of `UNWIND` / `CREATE` / `DELETE` (or any
+other non-MATCH/WITH producer) must insert a `WITH <vars>`
+pass-through projection before the predicate:
+
+```cypher
+-- before
+UNWIND [1, 2, 3, 4, 5] AS x WHERE x > 2 RETURN x
+
+-- after
+UNWIND [1, 2, 3, 4, 5] AS x WITH x WHERE x > 2 RETURN x
+```
+
+The new syntax error points at the exact column and lists the
+valid clauses, so stale call sites surface immediately on the next
+request instead of going silent.
+
+**Result.** Neo4j compat suite now reports **300/300 passing**
+(previously 299/300 with 14.05 the one outlier). Every other test
+across all 17 sections — Basic Queries, Pattern Matching,
+Aggregations, Type Conversion, DELETE/SET, etc. — keeps its
+scalar-path parity.
+
 ### SDK + workspace version unification
 
 Every first-party crate and SDK bumped to **1.0.0** (previously a
