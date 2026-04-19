@@ -27,7 +27,7 @@ pub mod quota;
 #[cfg(feature = "axum")]
 pub mod middleware;
 
-pub use config::{ClusterConfig, TenantDefaults};
+pub use config::{ClusterConfig, TenantDefaults, TenantIsolationMode};
 pub use context::{FunctionAccessError, UserContext};
 pub use namespace::UserNamespace;
 pub use quota::{LocalQuotaProvider, QuotaDecision, QuotaProvider, QuotaSnapshot, UsageDelta};

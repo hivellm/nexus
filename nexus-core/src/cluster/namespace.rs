@@ -116,6 +116,40 @@ impl UserNamespace {
     pub fn owns(&self, storage_key: &str) -> bool {
         storage_key.starts_with(&self.prefix())
     }
+
+    /// Turn a tenant-visible catalog name (`"Person"`, `"LIKES"`,
+    /// `"name"`) into the prefixed form actually registered in the
+    /// catalog under [`TenantIsolationMode::CatalogPrefix`].
+    ///
+    /// This is the one place the prefix shape is built during
+    /// writes — keep it symmetric with [`Self::strip_prefix`] below.
+    ///
+    /// [`TenantIsolationMode::CatalogPrefix`]: super::config::TenantIsolationMode::CatalogPrefix
+    pub fn catalog_name(&self, logical_name: &str) -> String {
+        self.prefix_key(logical_name)
+    }
+
+    /// Inverse of [`Self::catalog_name`] — given a stored catalog
+    /// name, return the tenant-visible logical name if it belongs
+    /// to this namespace, or `None` otherwise.
+    ///
+    /// Used by discovery endpoints (SHOW LABELS, etc.) that need
+    /// to present names to the caller in the shape they registered
+    /// them with, stripping the `ns:<id>:` bookkeeping prefix. The
+    /// trailing-delimiter check prevents the `ns:abc` prefix from
+    /// accidentally matching `ns:abcd`.
+    pub fn strip_prefix<'a>(&self, stored: &'a str) -> Option<&'a str> {
+        let p = self.prefix();
+        stored.strip_prefix(&p)
+    }
+
+    /// Global catalog names never carry the `ns:` tag — exposed so
+    /// storage-layer scans can cheaply distinguish "legacy or
+    /// cross-tenant system entry" from "any tenant's scoped entry"
+    /// without reconstructing a namespace first.
+    pub fn is_namespaced_catalog_name(s: &str) -> bool {
+        s.starts_with("ns:")
+    }
 }
 
 impl fmt::Display for UserNamespace {
@@ -195,5 +229,51 @@ mod tests {
         let json = serde_json::to_string(&ns).unwrap();
         let parsed: UserNamespace = serde_json::from_str(&json).unwrap();
         assert_eq!(ns, parsed);
+    }
+
+    #[test]
+    fn catalog_name_matches_prefix_key_shape() {
+        // Contract: catalog_name and prefix_key produce identical
+        // output. They have different names only to document intent
+        // at call sites; the wire format MUST stay one thing. If
+        // this test ever diverges, rename one of the methods — do
+        // not diverge their output.
+        let ns = UserNamespace::new("abc").unwrap();
+        assert_eq!(ns.catalog_name("Person"), ns.prefix_key("Person"));
+        assert_eq!(ns.catalog_name("Person"), "ns:abc:Person");
+    }
+
+    #[test]
+    fn strip_prefix_roundtrips_owned_names() {
+        let ns = UserNamespace::new("abc").unwrap();
+        let stored = ns.catalog_name("Person");
+        assert_eq!(ns.strip_prefix(&stored), Some("Person"));
+    }
+
+    #[test]
+    fn strip_prefix_rejects_foreign_namespace() {
+        let ns_abc = UserNamespace::new("abc").unwrap();
+        let ns_xyz = UserNamespace::new("xyz").unwrap();
+        let stored = ns_xyz.catalog_name("Person");
+        assert_eq!(ns_abc.strip_prefix(&stored), None);
+    }
+
+    #[test]
+    fn strip_prefix_rejects_prefix_collision() {
+        // `abcd` must not strip as if it were `abc` — same guard
+        // `owns()` has, but exercised through the strip path.
+        let ns_abc = UserNamespace::new("abc").unwrap();
+        let ns_abcd = UserNamespace::new("abcd").unwrap();
+        let stored = ns_abcd.catalog_name("Person");
+        assert_eq!(ns_abc.strip_prefix(&stored), None);
+    }
+
+    #[test]
+    fn is_namespaced_catalog_name_detects_the_tag() {
+        assert!(UserNamespace::is_namespaced_catalog_name("ns:abc:Person"));
+        assert!(!UserNamespace::is_namespaced_catalog_name("Person"));
+        // Prefix not followed by delimiter is NOT a namespaced name.
+        // A catalog entry called "ns-something" is still global.
+        assert!(!UserNamespace::is_namespaced_catalog_name("ns-something"));
     }
 }

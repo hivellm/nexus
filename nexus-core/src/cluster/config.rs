@@ -21,6 +21,38 @@ const DEFAULT_REQUESTS_PER_MINUTE: u32 = 6_000;
 /// Default per-hour rate limit per tenant.
 const DEFAULT_REQUESTS_PER_HOUR: u32 = 300_000;
 
+/// How the server isolates tenant data at the storage / catalog layer.
+///
+/// Cluster mode bolts authentication and quota enforcement on top of
+/// the existing engine regardless of isolation mode — the enum only
+/// controls whether labels / types / property keys get per-tenant
+/// prefixes in the catalog.
+///
+/// Modelled after Vectorizer's `TenantIsolationMode` (`hub/mod.rs`),
+/// which has been running in production with HiveHub and validated
+/// the "prefix the addressable name" approach over full storage-
+/// layer isolation. The difference here is unit: Vectorizer prefixes
+/// collection names, Nexus prefixes catalog names.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TenantIsolationMode {
+    /// No catalog-level isolation. Tenants still authenticate and
+    /// each request still carries a `UserContext`, but all requests
+    /// share the same catalog / label index / record store. Useful
+    /// in tests, local-only dev, and when isolation is enforced by
+    /// an external layer (e.g. one Nexus instance per tenant).
+    #[default]
+    None,
+    /// Every label / relationship-type / property key is registered
+    /// into the catalog as `ns:<tenant>:<name>`, so two tenants who
+    /// both create a `Person` label get distinct catalog IDs and
+    /// therefore distinct label bitmap indexes. Record stores (32 B
+    /// node records, 48 B relationship records) do not change —
+    /// isolation is implicit because every query reaches storage
+    /// via a label ID, and label IDs are tenant-scoped.
+    CatalogPrefix,
+}
+
 /// Top-level cluster-mode configuration.
 ///
 /// When `enabled` is `false`, every field below is ignored and
@@ -34,6 +66,14 @@ pub struct ClusterConfig {
     /// for the whole process.
     pub enabled: bool,
 
+    /// How tenant data is isolated at the catalog / storage layer.
+    /// Defaults to [`TenantIsolationMode::None`] even when `enabled`
+    /// is flipped — operators must explicitly opt into prefixing,
+    /// because existing data will need a one-shot catalog rewrite
+    /// if they ever switch modes mid-deployment.
+    #[serde(default)]
+    pub isolation: TenantIsolationMode,
+
     /// Default quotas used when the in-process [`QuotaProvider`]
     /// has no explicit record for a tenant.
     ///
@@ -45,6 +85,7 @@ impl Default for ClusterConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            isolation: TenantIsolationMode::None,
             default_quotas: TenantDefaults::default(),
         }
     }
@@ -57,6 +98,7 @@ impl ClusterConfig {
     pub fn enabled_with_defaults() -> Self {
         Self {
             enabled: true,
+            isolation: TenantIsolationMode::None,
             default_quotas: TenantDefaults::default(),
         }
     }
@@ -124,5 +166,47 @@ mod tests {
             parsed.default_quotas.storage_mb,
             cfg.default_quotas.storage_mb
         );
+    }
+
+    #[test]
+    fn isolation_defaults_to_none() {
+        // Flipping `enabled` alone must NOT silently start
+        // rewriting catalog names — that would invalidate every
+        // existing piece of data in an upgrade. Isolation is an
+        // explicit opt-in even once cluster mode is on.
+        assert_eq!(
+            ClusterConfig::default().isolation,
+            TenantIsolationMode::None
+        );
+        assert_eq!(
+            ClusterConfig::enabled_with_defaults().isolation,
+            TenantIsolationMode::None
+        );
+    }
+
+    #[test]
+    fn isolation_mode_round_trips_through_serde() {
+        let cfg = ClusterConfig {
+            enabled: true,
+            isolation: TenantIsolationMode::CatalogPrefix,
+            default_quotas: TenantDefaults::default(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("\"catalogprefix\""),
+            "serde rename_all=lowercase must flatten the variant: {json}"
+        );
+        let parsed: ClusterConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.isolation, TenantIsolationMode::CatalogPrefix);
+    }
+
+    #[test]
+    fn isolation_mode_deserialises_missing_field_as_none() {
+        // Config files written before this field existed must keep
+        // working without a migration — `#[serde(default)]` is what
+        // lets that happen. Regression guard.
+        let json = r#"{"enabled": true, "default_quotas": {"storage_mb": 1, "requests_per_minute": 1, "requests_per_hour": 1}}"#;
+        let parsed: ClusterConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.isolation, TenantIsolationMode::None);
     }
 }
