@@ -4,21 +4,19 @@ import { ValidationError } from '../src/errors';
 
 describe('NexusClient', () => {
   describe('Configuration Validation', () => {
-    it('should throw error if baseUrl is missing', () => {
-      expect(() => {
-        new NexusClient({
-          baseUrl: '',
-          auth: { apiKey: 'test-key' },
-        });
-      }).toThrow(ValidationError);
+    it('defaults to nexus://127.0.0.1:15475 when baseUrl is omitted', () => {
+      const client = new NexusClient();
+      expect(client.getEndpoint().scheme).toBe('nexus');
+      expect(client.getEndpoint().port).toBe(15475);
     });
 
-    it('should throw error if auth is missing', () => {
+    it('accepts missing auth (local RPC has auth off by default)', () => {
+      expect(() => new NexusClient({ baseUrl: 'nexus://127.0.0.1:15475' })).not.toThrow();
+    });
+
+    it('rejects an empty apiKey', () => {
       expect(() => {
-        new NexusClient({
-          baseUrl: 'http://localhost:7687',
-          auth: {} as any,
-        });
+        new NexusClient({ baseUrl: 'nexus://127.0.0.1:15475', auth: { apiKey: '' } });
       }).toThrow(ValidationError);
     });
 

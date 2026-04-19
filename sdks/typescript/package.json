@@ -36,7 +36,7 @@
     "sdk"
   ],
   "author": "HiveLLM",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/hivellm/nexus.git",
@@ -48,7 +48,8 @@
   "homepage": "https://github.com/hivellm/nexus/tree/main/sdks/typescript#readme",
   "dependencies": {
     "axios": "^1.6.2",
-    "axios-retry": "^4.0.0"
+    "axios-retry": "^4.0.0",
+    "msgpackr": "^1.11.10"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
@@ -66,4 +67,3 @@
     "node": ">=16.0.0"
   }
 }
-

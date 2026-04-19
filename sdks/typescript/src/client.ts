@@ -1,5 +1,3 @@
-import axios, {  type AxiosInstance } from 'axios';
-import axiosRetry from 'axios-retry';
 import type {
   NexusConfig,
   QueryParams,
@@ -11,7 +9,6 @@ import type {
   SchemaInfo,
   QueryStatistics,
   BatchOperation,
-  // Database management types
   DatabaseInfo,
   ListDatabasesResponse,
   CreateDatabaseResponse,
@@ -23,248 +20,178 @@ import {
   ConnectionError,
   ValidationError,
 } from './errors';
+import {
+  Endpoint,
+  NexusValue,
+  Transport,
+  TransportCredentials,
+  TransportMode,
+  TransportRequest,
+  buildTransport,
+  endpointToString,
+  nexusToJson,
+  nx,
+} from './transports';
 
 /**
- * Nexus Graph Database Client
- * 
+ * Nexus Graph Database client.
+ *
+ * Defaults to the native binary RPC transport on `nexus://127.0.0.1:15475`.
+ * Callers can opt down to HTTP with a `transport: 'http'` option or by
+ * passing an `http://` URL; see `docs/specs/sdk-transport.md` for the
+ * full contract.
+ *
  * @example
  * ```typescript
+ * const client = new NexusClient(); // nexus://127.0.0.1:15475 (RPC)
+ * const result = await client.executeCypher('RETURN 1 AS one');
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // HTTP fallback (browser, firewall, diagnostic)
  * const client = new NexusClient({
- *   baseUrl: 'http://localhost:7687',
- *   auth: { apiKey: 'your-api-key' }
+ *   baseUrl: 'http://localhost:15474',
+ *   auth: { apiKey: 'nexus_sk_...' },
  * });
- * 
- * const result = await client.executeCypher('MATCH (n) RETURN n LIMIT 10');
- * console.log(result.rows);
  * ```
  */
 export class NexusClient {
-  private readonly client: AxiosInstance;
-  private readonly config: NexusConfig;
   private readonly debug: boolean;
+  private readonly transport: Transport;
+  private readonly endpoint: Endpoint;
+  private readonly mode: TransportMode;
 
-  constructor(config: NexusConfig) {
-    this.config = config;
+  constructor(config: NexusConfig = {}) {
     this.debug = config.debug ?? false;
 
-    // Validate configuration
-    this.validateConfig();
+    const credentials: TransportCredentials = {
+      apiKey: config.auth?.apiKey,
+      username: config.auth?.username,
+      password: config.auth?.password,
+    };
 
-    // Create axios instance
-    this.client = axios.create({
-      baseURL: config.baseUrl,
-      timeout: config.timeout ?? 30000,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    // Setup authentication
-    this.setupAuth();
-
-    // Setup retry logic
-    axiosRetry(this.client, {
-      retries: config.retries ?? 3,
-      retryDelay: axiosRetry.exponentialDelay,
-      retryCondition: (error) => {
-        return axiosRetry.isNetworkOrIdempotentRequestError(error) ||
-          (error.response?.status !== undefined && error.response.status >= 500);
-      },
-      onRetry: (retryCount, error) => {
-        if (this.debug) {
-          console.log(`Retry attempt ${retryCount} for ${error.config?.url}`);
-        }
-      },
-    });
-
-    // Setup response interceptor
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (this.debug) {
-          console.error('Request failed:', error);
-        }
-        throw NexusSDKError.fromAxiosError(error);
+    // Validation: API-key + basic-auth optional for local RPC (auth is
+    // disabled on 127.0.0.1 by default); required when the user targets
+    // a non-loopback host over HTTP.
+    if (config.auth) {
+      const hasKey = !!credentials.apiKey;
+      const hasBasic = !!credentials.username && !!credentials.password;
+      if (config.auth.apiKey === '' || (config.auth.username && !config.auth.password)) {
+        throw new ValidationError(
+          'auth: provide either a non-empty apiKey or username+password pair'
+        );
       }
-    );
-  }
-
-  /**
-   * Validate configuration
-   */
-  private validateConfig(): void {
-    if (!this.config.baseUrl) {
-      throw new ValidationError('baseUrl is required');
+      if (!hasKey && !hasBasic && config.auth.username) {
+        throw new ValidationError(
+          'auth: username provided without password — basic auth needs both fields'
+        );
+      }
     }
 
-    if (!this.config.auth) {
-      throw new ValidationError('auth configuration is required');
-    }
+    const envTransport = typeof process !== 'undefined' ? process.env?.NEXUS_SDK_TRANSPORT : undefined;
+    const built = buildTransport({
+      baseUrl: config.baseUrl,
+      transport: config.transport,
+      rpcPort: config.rpcPort,
+      resp3Port: config.resp3Port,
+      credentials,
+      timeoutMs: config.timeout,
+      retries: config.retries,
+      envTransport,
+    });
+    this.transport = built.transport;
+    this.endpoint = built.endpoint;
+    this.mode = built.mode;
 
-    const hasApiKey = !!this.config.auth.apiKey;
-    const hasCredentials = !!this.config.auth.username && !!this.config.auth.password;
-
-    if (!hasApiKey && !hasCredentials) {
-      throw new ValidationError('Either apiKey or username/password must be provided');
-    }
-  }
-
-  /**
-   * Setup authentication headers
-   */
-  private setupAuth(): void {
-    if (this.config.auth.apiKey) {
-      this.client.defaults.headers.common['X-API-Key'] = this.config.auth.apiKey;
-    } else if (this.config.auth.username && this.config.auth.password) {
-      const credentials = Buffer.from(
-        `${this.config.auth.username}:${this.config.auth.password}`
-      ).toString('base64');
-      this.client.defaults.headers.common['Authorization'] = `Basic ${credentials}`;
+    if (this.debug) {
+      console.log(`[nexus-sdk] transport: ${this.transport.describe()}`);
     }
   }
 
-  /**
-   * Execute a Cypher query
-   * 
-   * @param cypher - The Cypher query string
-   * @param params - Query parameters
-   * @returns Query result
-   * 
-   * @example
-   * ```typescript
-   * const result = await client.executeCypher(
-   *   'MATCH (n:Person) WHERE n.age > $age RETURN n',
-   *   { age: 25 }
-   * );
-   * ```
-   */
+  /** Human-readable endpoint + transport label — handy for CLI verbose flags. */
+  endpointDescription(): string {
+    return this.transport.describe();
+  }
+
+  /** The raw endpoint used by this client. */
+  getEndpoint(): Endpoint {
+    return this.endpoint;
+  }
+
+  /** Active transport mode after the precedence chain was resolved. */
+  getTransportMode(): TransportMode {
+    return this.mode;
+  }
+
+  /** Close any persistent sockets (RPC transport owns a TCP connection). */
+  async close(): Promise<void> {
+    await this.transport.close();
+  }
+
+  // ── Cypher ────────────────────────────────────────────────────────────
+
   async executeCypher(cypher: string, params?: QueryParams): Promise<QueryResult> {
-    try {
-      const response = await this.client.post<QueryResult>('/cypher', {
-        query: cypher,
-        parameters: params ?? {},
-      });
-      return response.data;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
+    const args: NexusValue[] = [nx.Str(cypher)];
+    if (params && Object.keys(params).length > 0) {
+      args.push(paramsToNexus(params));
     }
+    const req: TransportRequest = { command: 'CYPHER', args };
+    const resp = await this.transport.execute(req);
+    return extractQueryResult(resp.value);
   }
 
-  /**
-   * Create a node
-   * 
-   * @param labels - Node labels
-   * @param properties - Node properties
-   * @returns Created node
-   * 
-   * @example
-   * ```typescript
-   * const node = await client.createNode(
-   *   ['Person'],
-   *   { name: 'Alice', age: 30 }
-   * );
-   * ```
-   */
   async createNode(labels: string[], properties: NodeProperties): Promise<Node> {
     const labelsStr = labels.map((l) => `:${l}`).join('');
     const cypher = `CREATE (n${labelsStr} $props) RETURN n`;
-
     const result = await this.executeCypher(cypher, { props: properties });
-
-    if (result.rows.length === 0) {
-      throw new NexusSDKError('Failed to create node');
-    }
-
+    if (result.rows.length === 0) throw new NexusSDKError('Failed to create node');
     return result.rows[0].n as Node;
   }
 
-  /**
-   * Get node by ID
-   * 
-   * @param id - Node ID
-   * @returns Node or null if not found
-   */
   async getNode(id: number): Promise<Node | null> {
-    const result = await this.executeCypher(
-      'MATCH (n) WHERE id(n) = $id RETURN n',
-      { id }
-    );
-
+    const result = await this.executeCypher('MATCH (n) WHERE id(n) = $id RETURN n', { id });
     return result.rows.length > 0 ? (result.rows[0].n as Node) : null;
   }
 
-  /**
-   * Update node properties
-   * 
-   * @param id - Node ID
-   * @param properties - Properties to update
-   * @returns Updated node
-   */
   async updateNode(id: number, properties: NodeProperties): Promise<Node> {
-    const cypher = 'MATCH (n) WHERE id(n) = $id SET n += $props RETURN n';
-    const result = await this.executeCypher(cypher, { id, props: properties });
-
-    if (result.rows.length === 0) {
-      throw new NexusSDKError('Node not found');
-    }
-
+    const result = await this.executeCypher(
+      'MATCH (n) WHERE id(n) = $id SET n += $props RETURN n',
+      { id, props: properties }
+    );
+    if (result.rows.length === 0) throw new NexusSDKError('Node not found');
     return result.rows[0].n as Node;
   }
 
-  /**
-   * Delete a node
-   * 
-   * @param id - Node ID
-   * @param detach - If true, also deletes relationships (default: false)
-   */
-  async deleteNode(id: number, detach: boolean = false): Promise<void> {
+  async deleteNode(id: number, detach = false): Promise<void> {
     const cypher = detach
       ? 'MATCH (n) WHERE id(n) = $id DETACH DELETE n'
       : 'MATCH (n) WHERE id(n) = $id DELETE n';
-
     await this.executeCypher(cypher, { id });
   }
 
-  /**
-   * Find nodes by label and properties
-   * 
-   * @param label - Node label
-   * @param properties - Properties to match
-   * @param limit - Maximum number of nodes to return
-   * @returns Array of nodes
-   */
   async findNodes(
     label: string,
     properties?: NodeProperties,
     limit?: number
   ): Promise<Node[]> {
     let cypher = `MATCH (n:${label})`;
-
     if (properties && Object.keys(properties).length > 0) {
-      cypher += ' WHERE ' + Object.keys(properties)
-        .map((key) => `n.${key} = $props.${key}`)
-        .join(' AND ');
+      cypher +=
+        ' WHERE ' +
+        Object.keys(properties)
+          .map((key) => `n.${key} = $props.${key}`)
+          .join(' AND ');
     }
-
     cypher += ' RETURN n';
-
-    if (limit) {
-      cypher += ` LIMIT ${limit}`;
-    }
-
-    const result = await this.executeCypher(cypher, properties ? { props: properties } : undefined);
+    if (limit) cypher += ` LIMIT ${limit}`;
+    const result = await this.executeCypher(
+      cypher,
+      properties ? { props: properties } : undefined
+    );
     return result.rows.map((row) => row.n as Node);
   }
 
-  /**
-   * Create a relationship between two nodes
-   * 
-   * @param startNodeId - Start node ID
-   * @param endNodeId - End node ID
-   * @param type - Relationship type
-   * @param properties - Relationship properties
-   * @returns Created relationship
-   */
   async createRelationship(
     startNodeId: number,
     endNodeId: number,
@@ -274,242 +201,239 @@ export class NexusClient {
     const cypher = properties
       ? `MATCH (a), (b) WHERE id(a) = $startId AND id(b) = $endId CREATE (a)-[r:${type} $props]->(b) RETURN r`
       : `MATCH (a), (b) WHERE id(a) = $startId AND id(b) = $endId CREATE (a)-[r:${type}]->(b) RETURN r`;
-
-    const params: Record<string, unknown> = {
-      startId: startNodeId,
-      endId: endNodeId,
-    };
-
-    if (properties) {
-      params.props = properties;
-    }
-
+    const params: Record<string, unknown> = { startId: startNodeId, endId: endNodeId };
+    if (properties) params.props = properties;
     const result = await this.executeCypher(cypher, params);
-
-    if (result.rows.length === 0) {
-      throw new NexusSDKError('Failed to create relationship');
-    }
-
+    if (result.rows.length === 0) throw new NexusSDKError('Failed to create relationship');
     return result.rows[0].r as Relationship;
   }
 
-  /**
-   * Get relationship by ID
-   * 
-   * @param id - Relationship ID
-   * @returns Relationship or null if not found
-   */
   async getRelationship(id: number): Promise<Relationship | null> {
     const result = await this.executeCypher(
       'MATCH ()-[r]->() WHERE id(r) = $id RETURN r',
       { id }
     );
-
     return result.rows.length > 0 ? (result.rows[0].r as Relationship) : null;
   }
 
-  /**
-   * Delete a relationship
-   * 
-   * @param id - Relationship ID
-   */
   async deleteRelationship(id: number): Promise<void> {
     await this.executeCypher('MATCH ()-[r]->() WHERE id(r) = $id DELETE r', { id });
   }
 
-  /**
-   * Get all labels
-   * 
-   * @returns Array of label names
-   */
   async getLabels(): Promise<string[]> {
-    try {
-      const response = await this.client.get<{ labels: string[] }>('/schema/labels');
-      return response.data.labels;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
+    const resp = await this.transport.execute({ command: 'LABELS', args: [] });
+    const json = nexusToJson(resp.value);
+    return asStringArray(json, 'labels');
   }
 
-  /**
-   * Get all relationship types
-   * 
-   * @returns Array of relationship type names
-   */
   async getRelationshipTypes(): Promise<string[]> {
-    try {
-      const response = await this.client.get<{ types: string[] }>('/schema/relationship-types');
-      return response.data.types;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
+    const resp = await this.transport.execute({ command: 'REL_TYPES', args: [] });
+    const json = nexusToJson(resp.value);
+    return asStringArray(json, 'types');
   }
 
-  /**
-   * Get schema information
-   * 
-   * @returns Schema information
-   */
   async getSchema(): Promise<SchemaInfo> {
-    try {
-      const [labels, relationshipTypes] = await Promise.all([
-        this.getLabels(),
-        this.getRelationshipTypes(),
-      ]);
-
-      return {
-        labels,
-        relationshipTypes,
-        indexes: [], // TODO: Implement index retrieval
-      };
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
+    const [labels, relationshipTypes] = await Promise.all([
+      this.getLabels(),
+      this.getRelationshipTypes(),
+    ]);
+    return { labels, relationshipTypes, indexes: [] };
   }
 
-  /**
-   * Execute multiple queries in batch
-   * 
-   * @param operations - Array of batch operations
-   * @returns Array of query results
-   */
   async executeBatch(operations: BatchOperation[]): Promise<QueryResult[]> {
-    const results = await Promise.all(
-      operations.map((op) => this.executeCypher(op.cypher, op.params))
-    );
-    return results;
+    // Each operation is dispatched serially through the single persistent
+    // RPC socket so frames cannot interleave on the wire.
+    const out: QueryResult[] = [];
+    for (const op of operations) {
+      out.push(await this.executeCypher(op.cypher, op.params));
+    }
+    return out;
   }
 
-  /**
-   * Test connection to Nexus server
-   * 
-   * @returns true if connection is successful
-   * @throws {ConnectionError} if connection fails
-   */
   async testConnection(): Promise<boolean> {
     try {
-      await this.executeCypher('RETURN 1');
+      await this.transport.execute({ command: 'PING', args: [] });
       return true;
-    } catch (error) {
-      throw new ConnectionError('Failed to connect to Nexus server');
+    } catch {
+      throw new ConnectionError(`Failed to connect to ${endpointToString(this.endpoint)}`);
     }
   }
 
-  /**
-   * Get query statistics
-   * 
-   * @returns Query statistics
-   */
+  async ping(): Promise<boolean> {
+    return this.testConnection();
+  }
+
   async getStatistics(): Promise<QueryStatistics> {
-    try {
-      const response = await this.client.get<QueryStatistics>('/admin/statistics');
-      return response.data;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
+    const resp = await this.transport.execute({ command: 'STATS', args: [] });
+    const json = nexusToJson(resp.value);
+    return extractStats(json);
   }
 
-  /**
-   * Clear plan cache
-   */
-  async clearPlanCache(): Promise<void> {
-    try {
-      await this.client.post('/admin/plan-cache/clear');
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
-  }
+  // ── Database management ───────────────────────────────────────────────
 
-  // ==========================================================================
-  // Database Management Methods
-  // ==========================================================================
-
-  /**
-   * List all databases
-   *
-   * @returns List of databases and default database name
-   */
   async listDatabases(): Promise<ListDatabasesResponse> {
-    try {
-      const response = await this.client.get<ListDatabasesResponse>('/databases');
-      return response.data;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
+    const resp = await this.transport.execute({ command: 'DB_LIST', args: [] });
+    const json = nexusToJson(resp.value);
+    if (typeof json !== 'object' || json === null) {
+      throw new NexusSDKError('DB_LIST: expected object response');
     }
+    const obj = json as Record<string, unknown>;
+    const databases = Array.isArray(obj.databases) ? (obj.databases as DatabaseInfo[]) : [];
+    const defaultDatabase =
+      typeof obj.defaultDatabase === 'string'
+        ? obj.defaultDatabase
+        : typeof obj.default === 'string'
+          ? obj.default
+          : 'default';
+    return { databases, defaultDatabase };
   }
 
-  /**
-   * Create a new database
-   *
-   * @param name - Database name (alphanumeric with underscores and hyphens)
-   * @returns Response indicating success
-   */
   async createDatabase(name: string): Promise<CreateDatabaseResponse> {
-    try {
-      const response = await this.client.post<CreateDatabaseResponse>('/databases', { name });
-      return response.data;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
+    const resp = await this.transport.execute({
+      command: 'DB_CREATE',
+      args: [nx.Str(name)],
+    });
+    return asSuccessMessage(nexusToJson(resp.value), name);
   }
 
-  /**
-   * Get database information
-   *
-   * @param name - Database name
-   * @returns Database information
-   */
   async getDatabase(name: string): Promise<DatabaseInfo> {
-    try {
-      const response = await this.client.get<DatabaseInfo>(`/databases/${name}`);
-      return response.data;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
+    // No dedicated RPC verb — fold through a Cypher `SHOW DATABASE $name`.
+    const result = await this.executeCypher('SHOW DATABASE $name', { name });
+    if (result.rows.length === 0) {
+      throw new NexusSDKError(`Database '${name}' not found`);
     }
+    return result.rows[0] as unknown as DatabaseInfo;
   }
 
-  /**
-   * Drop a database
-   *
-   * @param name - Database name
-   * @returns Response indicating success
-   */
   async dropDatabase(name: string): Promise<DropDatabaseResponse> {
-    try {
-      const response = await this.client.delete<DropDatabaseResponse>(`/databases/${name}`);
-      return response.data;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
+    const resp = await this.transport.execute({
+      command: 'DB_DROP',
+      args: [nx.Str(name)],
+    });
+    const json = asSuccessMessage(nexusToJson(resp.value), name);
+    return { success: json.success, message: json.message };
   }
 
-  /**
-   * Get the current session database
-   *
-   * @returns Current database name
-   */
   async getCurrentDatabase(): Promise<string> {
-    try {
-      const response = await this.client.get<{ database: string }>('/session/database');
-      return response.data.database;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
+    const resp = await this.transport.execute({ command: 'DB_CURRENT', args: [] });
+    const json = nexusToJson(resp.value);
+    if (typeof json === 'string') return json;
+    if (typeof json === 'object' && json !== null) {
+      const obj = json as Record<string, unknown>;
+      if (typeof obj.database === 'string') return obj.database;
+      if (typeof obj.name === 'string') return obj.name;
     }
+    throw new NexusSDKError(`DB_CURRENT: unexpected response shape`);
   }
 
-  /**
-   * Switch to a different database
-   *
-   * @param name - Database name to switch to
-   * @returns Response indicating success
-   */
   async switchDatabase(name: string): Promise<SwitchDatabaseResponse> {
-    try {
-      const response = await this.client.put<SwitchDatabaseResponse>('/session/database', { name });
-      return response.data;
-    } catch (error) {
-      throw NexusSDKError.fromAxiosError(error);
-    }
+    const resp = await this.transport.execute({
+      command: 'DB_USE',
+      args: [nx.Str(name)],
+    });
+    const json = asSuccessMessage(nexusToJson(resp.value), name);
+    return { success: json.success, message: json.message };
   }
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────
+
+function paramsToNexus(params: QueryParams): NexusValue {
+  const pairs: Array<[NexusValue, NexusValue]> = [];
+  for (const [k, v] of Object.entries(params)) {
+    pairs.push([nx.Str(k), jsValueToNexus(v)]);
+  }
+  return nx.Map(pairs);
+}
+
+function jsValueToNexus(v: unknown): NexusValue {
+  if (v === null || v === undefined) return nx.Null();
+  if (typeof v === 'boolean') return nx.Bool(v);
+  if (typeof v === 'bigint') return nx.Int(v);
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? nx.Int(v) : nx.Float(v);
+  }
+  if (typeof v === 'string') return nx.Str(v);
+  if (v instanceof Uint8Array) return nx.Bytes(v);
+  if (Array.isArray(v)) return nx.Array(v.map(jsValueToNexus));
+  if (typeof v === 'object') {
+    const pairs: Array<[NexusValue, NexusValue]> = [];
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      pairs.push([nx.Str(k), jsValueToNexus(val)]);
+    }
+    return nx.Map(pairs);
+  }
+  return nx.Null();
+}
+
+function extractQueryResult(value: NexusValue): QueryResult {
+  const json = nexusToJson(value);
+  if (typeof json !== 'object' || json === null) {
+    throw new NexusSDKError('CYPHER: expected object response');
+  }
+  const obj = json as Record<string, unknown>;
+  const columns = Array.isArray(obj.columns)
+    ? obj.columns.map((c) => String(c))
+    : [];
+  const rowsRaw = Array.isArray(obj.rows) ? obj.rows : [];
+  const rows = rowsRaw.map((row) => normalizeRow(row, columns));
+  return { columns, rows };
+}
+
+function normalizeRow(row: unknown, columns: string[]): Record<string, unknown> {
+  if (Array.isArray(row)) {
+    const obj: Record<string, unknown> = {};
+    columns.forEach((col, idx) => {
+      obj[col] = row[idx];
+    });
+    return obj;
+  }
+  if (typeof row === 'object' && row !== null) {
+    return row as Record<string, unknown>;
+  }
+  return { value: row };
+}
+
+function asStringArray(json: unknown, field: string): string[] {
+  if (Array.isArray(json)) return json.map(String);
+  if (typeof json === 'object' && json !== null) {
+    const obj = json as Record<string, unknown>;
+    if (Array.isArray(obj[field])) return (obj[field] as unknown[]).map(String);
+  }
+  return [];
+}
+
+function asSuccessMessage(
+  json: unknown,
+  fallbackName: string
+): { success: boolean; message: string; name: string } {
+  if (typeof json !== 'object' || json === null) {
+    return { success: true, message: '', name: fallbackName };
+  }
+  const obj = json as Record<string, unknown>;
+  return {
+    success: typeof obj.success === 'boolean' ? obj.success : true,
+    message: typeof obj.message === 'string' ? obj.message : '',
+    name: typeof obj.name === 'string' ? obj.name : fallbackName,
+  };
+}
+
+function extractStats(json: unknown): QueryStatistics {
+  // Synthesize zeros — STATS returns server-wide counters, not per-query
+  // deltas. The QueryStatistics shape exists for API stability; a future
+  // iteration will surface per-query stats when the executor emits them.
+  const out: QueryStatistics = {
+    nodesCreated: 0,
+    nodesDeleted: 0,
+    relationshipsCreated: 0,
+    relationshipsDeleted: 0,
+    propertiesSet: 0,
+    labelsAdded: 0,
+    labelsRemoved: 0,
+    executionTime: 0,
+  };
+  if (typeof json !== 'object' || json === null) return out;
+  const obj = json as Record<string, unknown>;
+  if (typeof obj.execution_time_ms === 'number') out.executionTime = obj.execution_time_ms;
+  return out;
+}

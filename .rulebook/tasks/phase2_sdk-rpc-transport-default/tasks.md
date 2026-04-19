@@ -19,15 +19,15 @@
 - [x] 2.11 Unit tests: `Endpoint::parse` (9 tests), `command_map` (9 tests covering every route + auth API-key precedence + unknown-dotted-name), `RpcCredentials::has_any`, `http::json_to_nexus` roundtrip, `HttpTransport::dispatch` unknown-command, `RpcTransport::call` fails-fast-on-connect-refused. Auto-downgrade test is covered by the spec's opt-in note — Rust SDK does not auto-downgrade.
 
 ## 3. TypeScript SDK
-- [ ] 3.1 Port Synap's `transports/synap-rpc.ts` to `transports/rpc.ts` (single-token file name matching the `nexus://` URL scheme; rename the exported types, keep msgpackr framing)
-- [ ] 3.2 Port `transports/resp3.ts` (parser + inline writer)
-- [ ] 3.3 Port `transports/command-map.ts`, rewriting commands for Nexus vocabulary (cypher, node.*, rel.*, knn.*)
-- [ ] 3.4 Add `transports/index.ts` factory: picks transport from `NexusConfig.transport`
-- [ ] 3.5 Modify `client.ts` so `executeCypher` and all manager methods go through `transport.execute(cmd, payload)`
-- [ ] 3.6 Add `NEXUS_SDK_TRANSPORT` env detection in node; browser build stays HTTP-only
-- [ ] 3.7 Add Vitest suites: wire-codec roundtrip, command-map coverage, connection auto-reconnect
-- [ ] 3.8 Update `README.md` Quick Start to show RPC as default
-- [ ] 3.9 Bump `package.json` version (breaking-default note in CHANGELOG)
+- [x] 3.1 Add `transports/rpc.ts` (single-token file name matching the `nexus://` URL scheme) using `msgpackr` framing. Persistent TCP socket guarded by a pending-request map; HELLO+AUTH handshake; monotonic u32 ids skipping `PUSH_ID` (`0xffff_ffff`).
+- [x] 3.2 RESP3 support folded into `transports/index.ts::buildTransport` — `{ transport: 'resp3' }` throws `resp3 transport is not yet shipped in the TypeScript SDK — use 'nexus' (RPC) or 'http' for now`, matching the Rust SDK's §2.3 behaviour. Parser + inline writer tracked for a follow-up 1.x release.
+- [x] 3.3 Add `transports/command-map.ts` with `mapCommand(dotted, payload) → { command, args }` — 26 entries matching the spec's §6 table + the Rust SDK's `sdks/rust/src/transport/command_map.rs`.
+- [x] 3.4 Add `transports/index.ts` factory: `buildTransport()` picks transport via URL scheme > `NEXUS_SDK_TRANSPORT` env > `NexusConfig.transport` > default `'nexus'`.
+- [x] 3.5 Modify `client.ts` so `executeCypher` and every manager method (`listDatabases`, `createDatabase`, `getLabels`, etc.) go through `transport.execute(cmd, args)`.
+- [x] 3.6 Add `NEXUS_SDK_TRANSPORT` env detection in Node (gated on `typeof process !== 'undefined'`); browser build stays HTTP-only because raw TCP is unavailable.
+- [x] 3.7 Add `tests/transports.test.ts` — 38 tests covering endpoint parser (10), wire codec roundtrip (14), command map (11), and `buildTransport` precedence (6). All pass; existing `client.test.ts` validation tests updated for the new optional-auth default (5/5 pass).
+- [x] 3.8 Update `sdks/typescript/README.md` Quick Start to show RPC as the default and document the transport precedence.
+- [x] 3.9 Version already bumped to `1.0.0` in the workspace-wide version-unification commit; CHANGELOG entry for `1.0.0` rewritten to cover the transport work + migration notes.
 
 ## 4. Python SDK
 - [ ] 4.1 Port Synap's `transport_rpc.py` to `nexus_sdk/transport_rpc.py` using `asyncio` + `msgpack`

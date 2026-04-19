@@ -17,6 +17,7 @@ export {
 export type {
     AuthConfig,
     NexusConfig,
+    TransportMode,
     QueryParams,
     ResultRow,
     QueryResult,
@@ -38,4 +39,9 @@ export type {
     SessionDatabaseResponse,
     SwitchDatabaseResponse,
 } from './types';
+
+export { defaultLocalEndpoint, parseEndpoint, endpointToString } from './transports/endpoint';
+export { mapCommand } from './transports/command-map';
+export type { Endpoint } from './transports/endpoint';
+export type { NexusValue, Transport, TransportRequest, TransportResponse } from './transports/types';
 
