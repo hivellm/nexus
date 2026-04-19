@@ -135,7 +135,7 @@ impl Executor {
                             let json_value = self.expression_to_json_value(value_expr)?;
                             json_props.insert(key.clone(), json_value);
                         }
-                        tracing::debug!(
+                        tracing::trace!(
                             "execute_create_pattern_internal: creating node with variable {:?}, labels {:?}, properties={:?}",
                             node.variable,
                             node.labels,
@@ -143,7 +143,7 @@ impl Executor {
                         );
                         serde_json::Value::Object(json_props)
                     } else {
-                        tracing::debug!(
+                        tracing::trace!(
                             "execute_create_pattern_internal: creating node with variable {:?}, labels {:?}, NO PROPERTIES",
                             node.variable,
                             node.labels
@@ -159,7 +159,7 @@ impl Executor {
                         .store_mut()
                         .create_node_with_label_bits(&mut tx, label_bits, properties)?;
 
-                    tracing::debug!(
+                    tracing::trace!(
                         "execute_create_pattern_internal: created node_id={}, variable={:?}",
                         node_id,
                         node.variable
@@ -582,6 +582,7 @@ impl Executor {
             _ => Ok("?".to_string()),
         }
     }
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(in crate::executor) fn execute_create_with_context(
         &self,
         context: &mut ExecutionContext,
@@ -595,7 +596,7 @@ impl Executor {
         // may contain only projected values (strings) without _nexus_id.
         // Only fall back to result_set.rows if variables are empty.
 
-        tracing::debug!(
+        tracing::trace!(
             "execute_create_with_context: variables={:?}, result_set.rows={}",
             context.variables.keys().collect::<Vec<_>>(),
             context.result_set.rows.len()
@@ -674,14 +675,14 @@ impl Executor {
                 .iter()
                 .map(|row| self.row_to_map(row, &columns))
                 .collect();
-            tracing::debug!(
+            tracing::trace!(
                 "execute_create_with_context: no variables, using {} rows from result_set.rows",
                 rows.len()
             );
             rows
         } else {
             // No variables and no rows
-            tracing::debug!("execute_create_with_context: no variables and no rows");
+            tracing::trace!("execute_create_with_context: no variables and no rows");
             Vec::new()
         };
 
@@ -859,7 +860,7 @@ impl Executor {
                                                             &mut tx, *source_id, *target_id,
                                                             type_id, properties,
                                                         )?;
-                                                    tracing::debug!(
+                                                    tracing::trace!(
                                                         "execute_create_with_context: relationship created successfully, rel_id={}",
                                                         rel_id
                                                     );

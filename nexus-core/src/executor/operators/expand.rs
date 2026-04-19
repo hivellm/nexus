@@ -16,6 +16,11 @@ use std::collections::HashMap;
 impl Executor {
     /// Execute Expand operator
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(
+        skip_all,
+        level = "debug",
+        fields(source_var, target_var, rel_var, optional, types = type_ids.len())
+    )]
     pub(in crate::executor) fn execute_expand(
         &self,
         context: &mut ExecutionContext,
@@ -45,7 +50,7 @@ impl Executor {
         // from previous operators (like NodeByLabel which creates multiple rows)
         let rows = if !context.result_set.rows.is_empty() {
             let rows_from_result_set = self.result_set_as_rows(context);
-            tracing::debug!(
+            tracing::trace!(
                 "Expand: result_set has {} rows, converted to {} row maps",
                 context.result_set.rows.len(),
                 rows_from_result_set.len()
@@ -64,7 +69,7 @@ impl Executor {
         // DEBUG: Log number of input rows for debugging relationship expansion issues
         // This helps identify if Expand is receiving all source nodes correctly
         if !rows.is_empty() && !source_var.is_empty() {
-            tracing::debug!(
+            tracing::trace!(
                 "Expand operator: processing {} input rows for source_var '{}'",
                 rows.len(),
                 source_var
@@ -73,14 +78,14 @@ impl Executor {
             for (idx, row) in rows.iter().enumerate() {
                 if let Some(source_value) = row.get(source_var) {
                     if let Some(source_id) = Self::extract_entity_id(source_value) {
-                        tracing::debug!(
+                        tracing::trace!(
                             "Expand input row {}: source_var '{}' = node_id {}",
                             idx,
                             source_var,
                             source_id
                         );
                     } else {
-                        tracing::debug!(
+                        tracing::trace!(
                             "Expand input row {}: source_var '{}' = {:?} (no entity ID)",
                             idx,
                             source_var,
@@ -88,7 +93,7 @@ impl Executor {
                         );
                     }
                 } else {
-                    tracing::debug!(
+                    tracing::trace!(
                         "Expand input row {}: source_var '{}' not found in row (keys: {:?})",
                         idx,
                         source_var,
@@ -226,7 +231,7 @@ impl Executor {
                             "Expand (optional, null source)",
                         )?;
                     } else {
-                        tracing::debug!(
+                        tracing::trace!(
                             "Expand: skipping row {} of {} - source_var '{}' is Null",
                             row_idx + 1,
                             rows.len(),
@@ -236,7 +241,7 @@ impl Executor {
                     continue;
                 }
 
-                tracing::debug!(
+                tracing::trace!(
                     "Expand: processing row {} of {}, source_var '{}' = {:?}",
                     row_idx + 1,
                     rows.len(),
@@ -274,7 +279,7 @@ impl Executor {
                     let source_id = match Self::extract_entity_id(source_value) {
                         Some(id) => id,
                         None => {
-                            tracing::debug!(
+                            tracing::trace!(
                                 "Expand: skipping source node {} (index {}) - no entity ID found",
                                 source_idx + 1,
                                 source_idx
@@ -283,7 +288,7 @@ impl Executor {
                         }
                     };
 
-                    tracing::debug!(
+                    tracing::trace!(
                         "Expand: processing source node {} (index {}) - node_id {} for source_var '{}' (row {}/{})",
                         source_idx + 1,
                         source_idx,
@@ -350,7 +355,7 @@ impl Executor {
                             self.find_relationships(source_id, type_ids, direction, cache)?
                         };
 
-                    tracing::debug!(
+                    tracing::trace!(
                         "Expand: found {} relationships for source node_id {}",
                         relationships.len(),
                         source_id
@@ -373,7 +378,7 @@ impl Executor {
                                 "Expand (optional, no match)",
                             )?;
                         } else {
-                            tracing::debug!(
+                            tracing::trace!(
                                 "Expand: source node_id {} has no relationships matching criteria, skipping",
                                 source_id
                             );
@@ -418,7 +423,7 @@ impl Executor {
                                 Self::extract_entity_id(existing_target_value)
                             {
                                 if existing_id != target_id {
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         "Expand: skipping relationship {} (rel_id: {}) - target_id {} does not match existing bound value {} in row",
                                         rel_idx + 1,
                                         rel_info.id,
@@ -433,7 +438,7 @@ impl Executor {
                         if let Some(ref allowed) = allowed_target_ids {
                             // Only filter if allowed set is non-empty and doesn't contain target
                             if !allowed.is_empty() && !allowed.contains(&target_id) {
-                                tracing::debug!(
+                                tracing::trace!(
                                     "Expand: skipping relationship {} (rel_id: {}) - target_id {} not in allowed set",
                                     rel_idx + 1,
                                     rel_info.id,
@@ -457,7 +462,7 @@ impl Executor {
                             new_row.insert(rel_var.to_string(), relationship_value);
                         }
 
-                        tracing::debug!(
+                        tracing::trace!(
                             "Expand: adding expanded row {} for source node_id {} (relationship {}: rel_id={}, source={}, target={})",
                             expanded_rows.len() + 1,
                             source_id,
@@ -472,7 +477,7 @@ impl Executor {
             }
         }
 
-        tracing::debug!(
+        tracing::trace!(
             "Expand: created {} expanded rows from {} input rows",
             expanded_rows.len(),
             rows.len()
@@ -480,7 +485,7 @@ impl Executor {
 
         // CRITICAL DEBUG: Log detailed information about expanded rows for debugging
         if !expanded_rows.is_empty() {
-            tracing::debug!(
+            tracing::trace!(
                 "Expand: Expanded rows summary - Total: {}, Source nodes processed: {}",
                 expanded_rows.len(),
                 rows.len()
@@ -488,7 +493,7 @@ impl Executor {
             // Log first few expanded rows for debugging
             for (idx, expanded_row) in expanded_rows.iter().take(5).enumerate() {
                 let row_keys: Vec<String> = expanded_row.keys().cloned().collect();
-                tracing::debug!(
+                tracing::trace!(
                     "Expand: Expanded row {} has variables: {:?}",
                     idx + 1,
                     row_keys
@@ -530,7 +535,7 @@ impl Executor {
             self.update_result_set_from_rows(context, &expanded_rows);
 
             // Verify that all expanded rows were added to result_set
-            tracing::debug!(
+            tracing::trace!(
                 "Expand: result_set had {} rows before clear, now has {} rows after update (expected {} expanded rows)",
                 rows_before_clear,
                 context.result_set.rows.len(),

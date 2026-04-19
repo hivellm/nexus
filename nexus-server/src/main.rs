@@ -85,15 +85,23 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
 
-    // Initialize tracing early (before async_main) to capture runtime logs
+    // Initialize tracing early (before async_main) to capture runtime logs.
+    //
+    // Default filter fragment pinned to our crates — anything else that
+    // hooks into `tracing` (notably `hnsw_rs`, whose `info!` firehose was
+    // flooding production logs with `Hnsw max_nb_connection 16 …
+    // entering PointIndexation drop` per index access) stays at `warn`
+    // until the operator explicitly asks for more.
     let verbose = args.verbose;
     let filter = if verbose {
-        tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "nexus_server=debug,tower_http=debug".into())
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            "nexus_server=debug,nexus_core=debug,tower_http=debug,hnsw_rs=warn".into()
+        })
     } else {
-        // Only show errors and warnings when not verbose
-        tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "nexus_server=error,tower_http=error".into())
+        // Only show errors and warnings when not verbose.
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            "nexus_server=error,nexus_core=warn,tower_http=error,hnsw_rs=warn".into()
+        })
     };
 
     tracing_subscriber::registry()

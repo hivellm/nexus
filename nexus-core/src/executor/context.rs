@@ -109,7 +109,7 @@ impl ExecutionContext {
         use crate::execution::joins::adaptive::AdaptiveJoinExecutor;
         use std::time::Instant;
 
-        tracing::info!(
+        tracing::trace!(
             "🎯 ADVANCED JOIN: Attempting optimized relationship expansion for {} relationships",
             type_ids.len()
         );
@@ -120,7 +120,7 @@ impl ExecutionContext {
         let source_data = match context.get_variable(source_var) {
             Some(Value::Array(nodes)) if nodes.len() > 10 => nodes, // Minimum threshold for columnar benefits
             _ => {
-                tracing::info!("ADVANCED JOIN: Not enough source data for columnar processing");
+                tracing::trace!("ADVANCED JOIN: Not enough source data for columnar processing");
                 return Ok(false);
             }
         };
@@ -192,7 +192,7 @@ impl ExecutionContext {
         }
 
         if rel_data.is_empty() {
-            tracing::info!("ADVANCED JOIN: No relationships found");
+            tracing::trace!("ADVANCED JOIN: No relationships found");
             return Ok(false);
         }
 
@@ -233,7 +233,7 @@ impl ExecutionContext {
             Direction::Incoming => "to_id",
             Direction::Both => {
                 // For both directions, we need to handle this differently
-                tracing::info!("ADVANCED JOIN: Both direction expansion not yet optimized");
+                tracing::trace!("ADVANCED JOIN: Both direction expansion not yet optimized");
                 return Ok(false);
             }
         };
@@ -254,7 +254,7 @@ impl ExecutionContext {
             &right_columns,
         ) {
             Ok(result) => {
-                tracing::info!(
+                tracing::trace!(
                     "🎯 ADVANCED JOIN: Successfully executed join in {:.2}ms, {} rows produced",
                     result.execution_time.as_millis(),
                     result.result.row_count
@@ -344,7 +344,7 @@ impl ExecutionContext {
         }
 
         let total_time = start_time.elapsed();
-        tracing::info!(
+        tracing::trace!(
             "🎯 ADVANCED JOIN: Completed in {:.2}ms, {} nodes, {} relationships",
             total_time.as_millis(),
             nodes_count,

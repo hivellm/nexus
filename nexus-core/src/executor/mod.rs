@@ -101,6 +101,7 @@ impl Executor {
     ///
     /// Takes `&self` so clones can execute concurrently; all mutable state
     /// lives behind `Arc`/`RwLock` inside [`ExecutorShared`].
+    #[tracing::instrument(skip_all, level = "debug", fields(cypher = %query.cypher))]
     pub fn execute(&self, query: &Query) -> Result<ResultSet> {
         // Increment query counter for lazy cache warming
         let current_count = self
@@ -132,28 +133,28 @@ impl Executor {
             if let Some(ref cache) = self.shared.query_cache {
                 let query_hash =
                     IntelligentQueryCache::generate_query_hash(&query.cypher, &query.params);
-                tracing::debug!(
+                tracing::trace!(
                     "Checking query cache for: {} (hash: {})",
                     &query.cypher,
                     query_hash
                 );
                 if let Some(cached_result) = cache.read().get(query_hash) {
                     // Cache hit - return cached result
-                    tracing::info!(
+                    tracing::trace!(
                         "Query cache HIT for query: {} (hash: {})",
                         &query.cypher,
                         query_hash
                     );
                     return Ok(cached_result.as_ref().clone());
                 } else {
-                    tracing::debug!(
+                    tracing::trace!(
                         "Query cache MISS for query: {} (hash: {})",
                         &query.cypher,
                         query_hash
                     );
                 }
             } else {
-                tracing::debug!("Query cache not available for query: {}", &query.cypher);
+                tracing::trace!("Query cache not available for query: {}", &query.cypher);
             }
         }
         */
@@ -180,7 +181,7 @@ impl Executor {
         // Try direct execution for simple queries (bypass operator overhead)
         if !is_write_query && self.is_simple_match_query(&query.cypher) {
             if let Ok(result) = self.execute_simple_match_directly(&query) {
-                tracing::info!("✅ Direct execution optimization used");
+                tracing::trace!("Direct execution optimization used");
                 return Ok(result);
             }
         }
@@ -342,7 +343,7 @@ impl Executor {
                 }
                 _ => format!("{:?}", std::mem::discriminant(operator)),
             };
-            tracing::debug!("EXECUTING OPERATOR #{}: {}", op_idx, op_name);
+            tracing::trace!("EXECUTING OPERATOR #{}: {}", op_idx, op_name);
             // Check if there's still an Aggregate operator ahead in the pipeline
             let has_aggregate_ahead = operators[op_idx + 1..]
                 .iter()
@@ -350,7 +351,7 @@ impl Executor {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
                     let nodes = self.execute_node_by_label(*label_id)?;
-                    tracing::debug!(
+                    tracing::trace!(
                         "NodeByLabel: found {} nodes for label_id {}, variable '{}'",
                         nodes.len(),
                         label_id,
@@ -421,7 +422,7 @@ impl Executor {
                             context.set_variable(col_name, Value::Array(expanded_values));
                         }
 
-                        tracing::debug!(
+                        tracing::trace!(
                             "NodeByLabel: cross-product with existing rows: {} x {} = {} rows",
                             existing_rows.len(),
                             nodes.len(),
@@ -434,7 +435,7 @@ impl Executor {
                     // Only materialize and update if we didn't already handle cross-product above
                     if !handled_cross_product {
                         let rows = self.materialize_rows_from_variables(&context);
-                        tracing::debug!(
+                        tracing::trace!(
                             "NodeByLabel: materialized {} rows from variables for '{}' (is_first={})",
                             rows.len(),
                             variable,
@@ -442,7 +443,7 @@ impl Executor {
                         );
                         self.update_result_set_from_rows(&mut context, &rows);
                     }
-                    tracing::debug!(
+                    tracing::trace!(
                         "NodeByLabel: result_set now has {} rows, {} columns",
                         context.result_set.rows.len(),
                         context.result_set.columns.len()
@@ -500,13 +501,13 @@ impl Executor {
                     if has_aggregate_ahead && !has_collect_args {
                         // Defer Project until after Aggregate to keep source columns (e.g., `r`) available.
                         // Aggregation operator will produce the correct final columns/rows.
-                        tracing::debug!(
+                        tracing::trace!(
                             "Deferring Project ({} items) because Aggregate exists later in pipeline",
                             items.len()
                         );
                     } else {
                         // Execute Project - either no Aggregate in pipeline, or this is post-aggregation projection
-                        tracing::debug!(
+                        tracing::trace!(
                             "Executing Project ({} items), aggregate_executed={}",
                             items.len(),
                             aggregate_executed
@@ -561,7 +562,7 @@ impl Executor {
                     // CRITICAL FIX: For MATCH...CREATE, we need to preserve variables even after Filter
                     // because CREATE needs the matched nodes. If result_set.rows is empty (e.g., after RETURN count(*)),
                     // we must use context.variables which should still contain the matched nodes.
-                    tracing::debug!(
+                    tracing::trace!(
                         "CREATE operator: checking for existing rows. result_set.rows={}, variables={:?}",
                         context.result_set.rows.len(),
                         context.variables.keys().collect::<Vec<_>>()
@@ -577,7 +578,7 @@ impl Executor {
                             .map(|row| self.row_to_map(row, &columns))
                             .collect();
 
-                        tracing::debug!(
+                        tracing::trace!(
                             "CREATE operator: converted {} rows from result_set.rows, columns={:?}",
                             rows.len(),
                             columns
@@ -594,7 +595,7 @@ impl Executor {
                             })
                         });
 
-                        tracing::debug!(
+                        tracing::trace!(
                             "CREATE operator: has_node_variables={}",
                             has_node_variables
                         );
@@ -611,7 +612,7 @@ impl Executor {
                             // and resolves property expressions (like
                             // `{id: id}` referencing the UNWIND variable)
                             // against the row bindings.
-                            tracing::debug!(
+                            tracing::trace!(
                                 "CREATE operator: using {} scalar rows from result_set (UNWIND / WITH projection)",
                                 rows.len()
                             );
@@ -621,18 +622,18 @@ impl Executor {
                             // or projection scalars; context.variables is
                             // the real binding source (e.g. MATCH (n)
                             // RETURN count(*) CREATE ...).
-                            tracing::debug!(
+                            tracing::trace!(
                                 "CREATE operator: result_set.rows has no node variables, materializing from variables"
                             );
                             self.materialize_rows_from_variables(&context)
                         }
                     } else {
                         // No rows in result_set - materialize from variables
-                        tracing::debug!(
+                        tracing::trace!(
                             "CREATE operator: result_set.rows is empty, materializing from variables"
                         );
                         let materialized = self.materialize_rows_from_variables(&context);
-                        tracing::debug!(
+                        tracing::trace!(
                             "CREATE operator: materialized {} rows from variables",
                             materialized.len()
                         );
@@ -651,7 +652,7 @@ impl Executor {
                         continue;
                     }
 
-                    tracing::debug!(
+                    tracing::trace!(
                         "CREATE operator: found {} existing rows from MATCH, proceeding with CREATE",
                         existing_rows.len()
                     );
@@ -827,7 +828,7 @@ impl Executor {
                 );
 
                 match cache_result {
-                    Ok(_) => tracing::info!(
+                    Ok(_) => tracing::trace!(
                         "Query cached successfully: {} (hash: {})",
                         &query.cypher,
                         IntelligentQueryCache::generate_query_hash(&query.cypher, &query.params)

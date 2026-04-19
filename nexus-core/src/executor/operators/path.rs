@@ -214,7 +214,7 @@ impl Executor {
             let mut rel_ptr = node_record.first_rel_ptr;
 
             // CRITICAL DEBUG: Log node reading and first_rel_ptr
-            tracing::debug!(
+            tracing::trace!(
                 "[find_relationships] Node {} read: first_rel_ptr={}, type_ids={:?}, direction={:?}",
                 node_id,
                 rel_ptr,
@@ -228,7 +228,7 @@ impl Executor {
             // When first_rel_ptr is 0, we scan for all relationships matching the direction
             // and then follow the linked list from each found relationship
             if rel_ptr == 0 {
-                tracing::debug!(
+                tracing::trace!(
                     "[find_relationships] Node {}: first_rel_ptr is 0 - attempting to find relationships by scanning",
                     node_id
                 );
@@ -286,7 +286,7 @@ impl Executor {
                 // If we found relationships via scan, add them and return
                 // (Skip linked list traversal since first_rel_ptr is 0 - linked list is broken)
                 if !scanned_rel_ids.is_empty() {
-                    tracing::debug!(
+                    tracing::trace!(
                         "[find_relationships] Node {}: Found {} relationships via scan (first_rel_ptr was 0)",
                         node_id,
                         scanned_rel_ids.len()
@@ -308,7 +308,7 @@ impl Executor {
                     // Return early - we found relationships via scan
                     return Ok(relationships);
                 } else {
-                    tracing::debug!(
+                    tracing::trace!(
                         "[find_relationships] Node {}: first_rel_ptr is 0 - no relationships found in linked list or scan",
                         node_id
                     );
@@ -341,7 +341,7 @@ impl Executor {
 
                         if !is_valid_for_direction {
                             // first_rel_ptr points to an invalid relationship - use scan instead
-                            tracing::debug!(
+                            tracing::trace!(
                                 "[find_relationships] Node {}: first_rel_ptr={} points to invalid relationship {} (src={}, dst={}) for direction {:?}, using scan",
                                 node_id,
                                 rel_ptr,
@@ -365,7 +365,7 @@ impl Executor {
             // If we should use scan (either for Direction::Both or because first_rel_ptr is invalid), do it now
             if should_use_scan_for_both || (should_use_scan && rel_ptr != 0) {
                 // first_rel_ptr is invalid - scan for relationships
-                tracing::debug!(
+                tracing::trace!(
                     "[find_relationships] Node {}: first_rel_ptr={} is invalid, scanning for relationships",
                     node_id,
                     rel_ptr
@@ -429,7 +429,7 @@ impl Executor {
                 }
 
                 if !scanned_rel_ids.is_empty() {
-                    tracing::debug!(
+                    tracing::trace!(
                         "[find_relationships] Node {}: Found {} relationships via scan",
                         node_id,
                         scanned_rel_ids.len()
@@ -451,7 +451,7 @@ impl Executor {
                     return Ok(relationships);
                 } else {
                     // Scan found nothing and first_rel_ptr is invalid - no relationships exist for this direction
-                    tracing::debug!(
+                    tracing::trace!(
                         "[find_relationships] Node {}: first_rel_ptr was invalid and scan found no relationships for direction {:?}",
                         node_id,
                         direction
@@ -490,7 +490,7 @@ impl Executor {
                 let current_rel_id = rel_ptr.saturating_sub(1);
 
                 // CRITICAL DEBUG: Log relationship traversal
-                tracing::debug!(
+                tracing::trace!(
                     "[find_relationships] Node {}: rel_ptr={}, current_rel_id={}",
                     node_id,
                     rel_ptr,
@@ -507,7 +507,7 @@ impl Executor {
                     let is_deleted = rel_record.is_deleted();
 
                     // CRITICAL DEBUG: Log relationship record details
-                    tracing::debug!(
+                    tracing::trace!(
                         "[find_relationships] Node {}: rel_id={}, src_id={}, dst_id={}, type_id={}, is_deleted={}, next_src_ptr={}, next_dst_ptr={}",
                         node_id,
                         current_rel_id,
@@ -537,7 +537,7 @@ impl Executor {
                     };
 
                     if matches_type && matches_direction {
-                        tracing::debug!(
+                        tracing::trace!(
                             "[find_relationships] Node {}: MATCHED relationship id={}, src={}, dst={}, type_id={}",
                             node_id,
                             current_rel_id,
@@ -552,7 +552,7 @@ impl Executor {
                             type_id: record_type_id,
                         });
                     } else {
-                        tracing::debug!(
+                        tracing::trace!(
                             "[find_relationships] Node {}: SKIPPED relationship id={} (matches_type={}, matches_direction={})",
                             node_id,
                             current_rel_id,
@@ -569,7 +569,7 @@ impl Executor {
                     };
 
                     // CRITICAL DEBUG: Log linked list traversal
-                    tracing::debug!(
+                    tracing::trace!(
                         "[find_relationships] Node {}: Moving from rel_id={} to next_ptr={} (src_id={}, node_id={}, using_next_src={})",
                         node_id,
                         current_rel_id,
@@ -580,13 +580,13 @@ impl Executor {
                     );
 
                     if rel_ptr == 0 {
-                        tracing::debug!(
+                        tracing::trace!(
                             "[find_relationships] Node {}: Reached end of linked list (rel_ptr=0)",
                             node_id
                         );
                     }
                 } else {
-                    tracing::debug!(
+                    tracing::trace!(
                         "[find_relationships] Node {}: Failed to read relationship record for rel_id={}",
                         node_id,
                         current_rel_id
@@ -1309,7 +1309,7 @@ impl Executor {
 
         let properties_value = self.store().load_node_properties(node_id)?;
 
-        tracing::debug!(
+        tracing::trace!(
             "read_node_as_value: node_id={}, properties_value={:?}",
             node_id,
             properties_value
@@ -1319,7 +1319,7 @@ impl Executor {
 
         let properties_map = match properties_value {
             Value::Object(map) => {
-                tracing::debug!(
+                tracing::trace!(
                     "read_node_as_value: node_id={}, properties_map has {} keys: {:?}",
                     node_id,
                     map.len(),
@@ -1328,7 +1328,7 @@ impl Executor {
                 map
             }
             other => {
-                tracing::debug!(
+                tracing::trace!(
                     "read_node_as_value: node_id={}, properties_value is not Object: {:?}",
                     node_id,
                     other
@@ -1344,7 +1344,7 @@ impl Executor {
         let mut node = properties_map;
         node.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
 
-        tracing::debug!(
+        tracing::trace!(
             "read_node_as_value: node_id={}, final node has {} keys: {:?}",
             node_id,
             node.len(),

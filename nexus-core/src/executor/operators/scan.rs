@@ -126,15 +126,16 @@ impl Executor {
 
                     // Log opportunity and suggest manual indexing for now
                     if *count % 10 == 0 {
-                        // Log every 10 accesses to avoid spam
-                        tracing::info!(
-                            "💡 INDEX OPPORTUNITY: Property '{}' accessed {} times in WHERE clauses without index",
+                        // Actionable tuning hint, not a hot-path event. `debug!`
+                        // keeps it reachable via `RUST_LOG=nexus_core=debug`
+                        // when the operator is investigating slow queries
+                        // without spamming default logs.
+                        tracing::debug!(
+                            prop = %prop_name,
+                            accesses = *count,
+                            "index opportunity: property seen in WHERE without index; \
+                             CREATE INDEX ON :<Label>({0}) to accelerate",
                             prop_name,
-                            count
-                        );
-                        tracing::info!(
-                            "💡 To optimize: CREATE INDEX ON :Person({}) for better performance",
-                            prop_name
                         );
                     }
 

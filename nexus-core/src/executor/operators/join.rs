@@ -46,8 +46,8 @@ impl Executor {
                 join_type,
                 condition,
             ) {
-                tracing::info!(
-                    "🚀 ADVANCED JOIN: Used optimized join algorithm ({}x{} rows)",
+                tracing::trace!(
+                    "advanced join: used optimized algorithm ({}x{} rows)",
                     left_size,
                     right_size
                 );

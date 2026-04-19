@@ -107,7 +107,7 @@ impl Executor {
                             // in case variables changed:
                             let retry_materialized = self.materialize_rows_from_variables(context);
                             if !retry_materialized.is_empty() {
-                                tracing::debug!(
+                                tracing::trace!(
                                     "Project: retry materialization succeeded, got {} rows",
                                     retry_materialized.len()
                                 );
@@ -201,7 +201,7 @@ impl Executor {
             return Ok(vec![]);
         }
 
-        tracing::debug!(
+        tracing::trace!(
             "Project: input_rows={}, items={:?}, result_set.rows={}, variables={:?}",
             rows.len(),
             items.iter().map(|i| i.alias.clone()).collect::<Vec<_>>(),
@@ -211,18 +211,18 @@ impl Executor {
 
         // DEBUG: Log variable contents for UNION context
         if rows.is_empty() && !context.variables.is_empty() {
-            tracing::debug!("Project: DEBUG - No input rows, checking variables:");
+            tracing::trace!("Project: DEBUG - No input rows, checking variables:");
             for (var, value) in &context.variables {
                 match value {
                     Value::Array(arr) => {
-                        tracing::debug!(
+                        tracing::trace!(
                             "Project: DEBUG - Variable '{}' has array with {} elements",
                             var,
                             arr.len()
                         );
                     }
                     _ => {
-                        tracing::debug!(
+                        tracing::trace!(
                             "Project: DEBUG - Variable '{}' has non-array value: {:?}",
                             var,
                             value
@@ -284,7 +284,7 @@ impl Executor {
             // CRITICAL: Don't deduplicate when:
             // 1. Rows contain relationships (same node with different relationships)
             // 2. Rows have different primitive values (e.g., from UNWIND)
-            tracing::debug!(
+            tracing::trace!(
                 "Project: skipping deduplication (has_relationships={}, has_varying_primitives={}), preserving {} rows",
                 has_relationships,
                 has_varying_primitives,
@@ -330,11 +330,11 @@ impl Executor {
                 if !is_duplicate {
                     deduplicated_rows.push(row_map.clone());
                 } else {
-                    tracing::debug!("Project: deduplicating row with key '{}'", row_key);
+                    tracing::trace!("Project: deduplicating row with key '{}'", row_key);
                 }
             }
 
-            tracing::debug!(
+            tracing::trace!(
                 "Project: deduplicated {} rows to {} unique rows (by row combination)",
                 rows.len(),
                 deduplicated_rows.len()
@@ -351,14 +351,14 @@ impl Executor {
                 values.push(value);
             }
             projected_rows.push(Row { values });
-            tracing::debug!(
+            tracing::trace!(
                 "Project: processed row {} of {}",
                 idx + 1,
                 unique_rows.len()
             );
         }
 
-        tracing::debug!("Project: output_rows={}", projected_rows.len());
+        tracing::trace!("Project: output_rows={}", projected_rows.len());
 
         context.result_set.columns = items.iter().map(|item| item.alias.clone()).collect();
         context.result_set.rows = projected_rows.clone();
@@ -380,7 +380,7 @@ impl Executor {
         items: &[ProjectionItem],
         distinct: bool,
     ) -> Result<()> {
-        tracing::debug!("execute_with: {} items, distinct={}", items.len(), distinct);
+        tracing::trace!("execute_with: {} items, distinct={}", items.len(), distinct);
 
         // Materialize current rows from variables
         let rows = if !context.result_set.rows.is_empty() {
@@ -395,7 +395,7 @@ impl Executor {
             self.materialize_rows_from_variables(context)
         };
 
-        tracing::debug!("execute_with: processing {} input rows", rows.len());
+        tracing::trace!("execute_with: processing {} input rows", rows.len());
 
         if rows.is_empty() {
             // No rows - nothing to project
@@ -431,7 +431,7 @@ impl Executor {
             });
         }
 
-        tracing::debug!("execute_with: produced {} output rows", new_rows.len());
+        tracing::trace!("execute_with: produced {} output rows", new_rows.len());
 
         // Clear old variables and set new ones
         context.variables.clear();

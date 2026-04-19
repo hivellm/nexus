@@ -21,14 +21,14 @@ impl Executor {
         // Execute left operator pipeline and collect its results
         let mut left_context = ExecutionContext::new(context.params.clone(), context.cache.clone());
         for (idx, operator) in left.iter().enumerate() {
-            tracing::debug!(
+            tracing::trace!(
                 "UNION: executing left operator {}/{}: {:?}",
                 idx + 1,
                 left.len(),
                 operator
             );
             self.execute_operator(&mut left_context, operator)?;
-            tracing::debug!(
+            tracing::trace!(
                 "UNION: after left operator {}, result_set.rows={}, columns={:?}, variables={:?}",
                 idx + 1,
                 left_context.result_set.rows.len(),
@@ -37,7 +37,7 @@ impl Executor {
             );
         }
 
-        tracing::debug!(
+        tracing::trace!(
             "UNION: left side completed - result_set.rows={}, columns={:?}",
             left_context.result_set.rows.len(),
             left_context.result_set.columns
@@ -47,14 +47,14 @@ impl Executor {
         let mut right_context =
             ExecutionContext::new(context.params.clone(), context.cache.clone());
         for (idx, operator) in right.iter().enumerate() {
-            tracing::debug!(
+            tracing::trace!(
                 "UNION: executing right operator {}/{}: {:?}",
                 idx + 1,
                 right.len(),
                 operator
             );
             self.execute_operator(&mut right_context, operator)?;
-            tracing::debug!(
+            tracing::trace!(
                 "UNION: after right operator {}, result_set.rows={}, columns={:?}, variables={:?}",
                 idx + 1,
                 right_context.result_set.rows.len(),
@@ -63,7 +63,7 @@ impl Executor {
             );
         }
 
-        tracing::debug!(
+        tracing::trace!(
             "UNION: right side completed - result_set.rows={}, columns={:?}",
             right_context.result_set.rows.len(),
             right_context.result_set.columns
@@ -194,7 +194,7 @@ impl Executor {
         // Normalize rows from both sides to use the same column order
         // CRITICAL FIX: If columns are empty but rows exist, use row order directly
         let mut left_rows = Vec::new();
-        tracing::debug!(
+        tracing::trace!(
             "UNION: left side - result_set.rows={}, columns={:?}, left_context.columns={:?}",
             left_context.result_set.rows.len(),
             columns,
@@ -203,7 +203,7 @@ impl Executor {
 
         if left_context.result_set.columns.is_empty() && !left_context.result_set.rows.is_empty() {
             // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
-            tracing::debug!("UNION: left side has no columns, using row values as-is");
+            tracing::trace!("UNION: left side has no columns, using row values as-is");
             for row in &left_context.result_set.rows {
                 left_rows.push(row.clone());
             }
@@ -226,7 +226,7 @@ impl Executor {
                         normalized_values.push(Value::Null);
                     }
                 }
-                tracing::debug!(
+                tracing::trace!(
                     "UNION: left row {} normalized: {:?}",
                     row_idx,
                     normalized_values
@@ -237,10 +237,10 @@ impl Executor {
             }
         }
 
-        tracing::debug!("UNION: left_rows after normalization: {}", left_rows.len());
+        tracing::trace!("UNION: left_rows after normalization: {}", left_rows.len());
 
         let mut right_rows = Vec::new();
-        tracing::debug!(
+        tracing::trace!(
             "UNION: right side - result_set.rows={}, columns={:?}, right_context.columns={:?}",
             right_context.result_set.rows.len(),
             columns,
@@ -250,7 +250,7 @@ impl Executor {
         if right_context.result_set.columns.is_empty() && !right_context.result_set.rows.is_empty()
         {
             // No columns defined - use row values as-is (shouldn't happen if Project ran correctly)
-            tracing::debug!("UNION: right side has no columns, using row values as-is");
+            tracing::trace!("UNION: right side has no columns, using row values as-is");
             for row in &right_context.result_set.rows {
                 right_rows.push(row.clone());
             }
@@ -273,7 +273,7 @@ impl Executor {
                         normalized_values.push(Value::Null);
                     }
                 }
-                tracing::debug!(
+                tracing::trace!(
                     "UNION: right row {} normalized: {:?}",
                     row_idx,
                     normalized_values
@@ -284,12 +284,12 @@ impl Executor {
             }
         }
 
-        tracing::debug!(
+        tracing::trace!(
             "UNION: right_rows after normalization: {}",
             right_rows.len()
         );
 
-        tracing::debug!(
+        tracing::trace!(
             "UNION: left_rows={}, right_rows={}, columns={:?}",
             left_rows.len(),
             right_rows.len(),
@@ -300,7 +300,7 @@ impl Executor {
         combined_rows.extend(left_rows);
         combined_rows.extend(right_rows);
 
-        tracing::debug!(
+        tracing::trace!(
             "UNION: combined_rows before dedup={}, distinct={}",
             combined_rows.len(),
             distinct
@@ -333,16 +333,16 @@ impl Executor {
                 if seen.insert(row_key.clone()) {
                     deduped_rows.push(row);
                 } else {
-                    tracing::debug!("UNION: duplicate row removed: {}", row_key);
+                    tracing::trace!("UNION: duplicate row removed: {}", row_key);
                 }
             }
             combined_rows = deduped_rows;
-            tracing::debug!("UNION: deduped_rows={}", combined_rows.len());
+            tracing::trace!("UNION: deduped_rows={}", combined_rows.len());
         }
 
         // Update the main context with combined results
         context.set_columns_and_rows(columns, combined_rows);
-        tracing::debug!(
+        tracing::trace!(
             "UNION: final result_set.rows={}",
             context.result_set.rows.len()
         );
