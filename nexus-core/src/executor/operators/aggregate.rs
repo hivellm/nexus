@@ -489,27 +489,45 @@ impl Executor {
                 Vec::new()
             });
             let mut result_row = group_key;
-            for agg in aggregations {
-                let agg_value = match agg {
-                    Aggregation::CountStarOptimized { .. } => {
-                        // 🚀 PARALLEL COUNT OPTIMIZATION: Use parallel counting for large datasets
-                        // This significantly improves COUNT(*) performance on large result sets
-                        let count = if effective_row_count > 1000 {
-                            use rayon::prelude::*;
-                            group_rows.par_iter().map(|_| 1u64).sum()
-                        } else {
-                            effective_row_count as u64
-                        };
-                        Value::Number(serde_json::Number::from(count))
-                    }
-                    Aggregation::Count {
-                        column, distinct, ..
-                    } => {
-                        if column.is_none() {
-                            // Phase 2.2.1: COUNT(*) pushdown optimization
-                            // Use metadata when: no GROUP BY, no WHERE filters, and we're counting all nodes
-                            let count =
-                                if group_by.is_empty() && effective_row_count == group_rows.len() {
+
+            // §4 columnar fast path: pre-compute SUM / MIN / MAX / AVG
+            // for groupless aggregations when the group is large
+            // enough that the per-batch materialisation cost
+            // amortises. `None` entries fall through to the scalar
+            // match arms unchanged. Group-by stays on the row path
+            // (see §4.1 — out of scope for this slice).
+            let columnar_cache: Vec<Option<Value>> =
+                if group_by.is_empty() && group_rows.len() >= self.config.columnar_threshold {
+                    self.compute_columnar_agg_cache(&group_rows, aggregations, columns_for_lookup)
+                } else {
+                    vec![None; aggregations.len()]
+                };
+
+            for (agg_idx, agg) in aggregations.iter().enumerate() {
+                let agg_value = if let Some(v) = columnar_cache[agg_idx].clone() {
+                    v
+                } else {
+                    match agg {
+                        Aggregation::CountStarOptimized { .. } => {
+                            // 🚀 PARALLEL COUNT OPTIMIZATION: Use parallel counting for large datasets
+                            // This significantly improves COUNT(*) performance on large result sets
+                            let count = if effective_row_count > 1000 {
+                                use rayon::prelude::*;
+                                group_rows.par_iter().map(|_| 1u64).sum()
+                            } else {
+                                effective_row_count as u64
+                            };
+                            Value::Number(serde_json::Number::from(count))
+                        }
+                        Aggregation::Count {
+                            column, distinct, ..
+                        } => {
+                            if column.is_none() {
+                                // Phase 2.2.1: COUNT(*) pushdown optimization
+                                // Use metadata when: no GROUP BY, no WHERE filters, and we're counting all nodes
+                                let count = if group_by.is_empty()
+                                    && effective_row_count == group_rows.len()
+                                {
                                     // Try to use catalog metadata for COUNT(*) optimization
                                     // This works when we're counting all nodes without filters
                                     match self.catalog().get_total_node_count() {
@@ -529,395 +547,400 @@ impl Executor {
                                 } else {
                                     effective_row_count as u64
                                 };
-                            Value::Number(serde_json::Number::from(count))
-                        } else {
-                            // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                            let col_name = column.as_ref().unwrap();
-                            let count = if *distinct {
-                                // COUNT(DISTINCT) - count unique non-null values
-                                let estimated_unique = (group_rows.len() / 2).max(1);
-                                let mut unique_values =
-                                    std::collections::HashSet::with_capacity(estimated_unique);
-                                for row in &group_rows {
-                                    if let Some(val) = self.extract_value_from_row(
-                                        row,
-                                        col_name,
-                                        columns_for_lookup,
-                                    ) {
-                                        if !val.is_null() {
-                                            unique_values.insert(val.to_string());
+                                Value::Number(serde_json::Number::from(count))
+                            } else {
+                                // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                                let col_name = column.as_ref().unwrap();
+                                let count = if *distinct {
+                                    // COUNT(DISTINCT) - count unique non-null values
+                                    let estimated_unique = (group_rows.len() / 2).max(1);
+                                    let mut unique_values =
+                                        std::collections::HashSet::with_capacity(estimated_unique);
+                                    for row in &group_rows {
+                                        if let Some(val) = self.extract_value_from_row(
+                                            row,
+                                            col_name,
+                                            columns_for_lookup,
+                                        ) {
+                                            if !val.is_null() {
+                                                unique_values.insert(val.to_string());
+                                            }
                                         }
                                     }
-                                }
-                                unique_values.len()
+                                    unique_values.len()
+                                } else {
+                                    // COUNT(col) - count non-null values
+                                    let mut count = 0;
+                                    for row in &group_rows {
+                                        if let Some(val) = self.extract_value_from_row(
+                                            row,
+                                            col_name,
+                                            columns_for_lookup,
+                                        ) {
+                                            if !val.is_null() {
+                                                count += 1;
+                                            }
+                                        }
+                                    }
+                                    count
+                                };
+                                Value::Number(serde_json::Number::from(count))
+                            }
+                        }
+                        Aggregation::Sum { column, .. } => {
+                            // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                            // This handles cases where column is "n.value" but rows only have "n" (the node object)
+                            // Handle empty group_rows with virtual row case
+                            if group_rows.is_empty() && needs_virtual_row {
+                                // Virtual row case - return the literal value (1)
+                                Value::Number(serde_json::Number::from(1))
                             } else {
-                                // COUNT(col) - count non-null values
+                                // Calculate sum using extract_value_from_row
+                                let sum: f64 = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        self.extract_value_from_row(row, column, columns_for_lookup)
+                                            .and_then(|v| self.value_to_number(&v).ok())
+                                    })
+                                    .sum();
+                                // Return sum as integer if whole number, otherwise as float
+                                if sum.fract() == 0.0 {
+                                    Value::Number(serde_json::Number::from(sum as i64))
+                                } else {
+                                    Value::Number(
+                                        serde_json::Number::from_f64(sum)
+                                            .unwrap_or(serde_json::Number::from(0)),
+                                    )
+                                }
+                            }
+                        }
+                        Aggregation::Avg { column, .. } => {
+                            // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                            // Handle empty group_rows with virtual row case
+                            if group_rows.is_empty() && needs_virtual_row {
+                                // Virtual row case - return the literal value (10 for avg(10))
+                                Value::Number(
+                                    serde_json::Number::from_f64(10.0)
+                                        .unwrap_or(serde_json::Number::from(10)),
+                                )
+                            } else {
+                                // Calculate sum and count using extract_value_from_row
+                                let mut sum = 0.0;
                                 let mut count = 0;
                                 for row in &group_rows {
-                                    if let Some(val) = self.extract_value_from_row(
-                                        row,
-                                        col_name,
-                                        columns_for_lookup,
-                                    ) {
-                                        if !val.is_null() {
+                                    if let Some(val) =
+                                        self.extract_value_from_row(row, column, columns_for_lookup)
+                                    {
+                                        if let Ok(num) = self.value_to_number(&val) {
+                                            sum += num;
                                             count += 1;
                                         }
                                     }
                                 }
-                                count
-                            };
-                            Value::Number(serde_json::Number::from(count))
-                        }
-                    }
-                    Aggregation::Sum { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        // This handles cases where column is "n.value" but rows only have "n" (the node object)
-                        // Handle empty group_rows with virtual row case
-                        if group_rows.is_empty() && needs_virtual_row {
-                            // Virtual row case - return the literal value (1)
-                            Value::Number(serde_json::Number::from(1))
-                        } else {
-                            // Calculate sum using extract_value_from_row
-                            let sum: f64 = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                        .and_then(|v| self.value_to_number(&v).ok())
-                                })
-                                .sum();
-                            // Return sum as integer if whole number, otherwise as float
-                            if sum.fract() == 0.0 {
-                                Value::Number(serde_json::Number::from(sum as i64))
-                            } else {
-                                Value::Number(
-                                    serde_json::Number::from_f64(sum)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
+
+                                if count == 0 {
+                                    Value::Null
+                                } else {
+                                    // Calculate average from sum and count
+                                    let avg = sum / count as f64;
+                                    Value::Number(
+                                        serde_json::Number::from_f64(avg)
+                                            .unwrap_or(serde_json::Number::from(0)),
+                                    )
+                                }
                             }
                         }
-                    }
-                    Aggregation::Avg { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        // Handle empty group_rows with virtual row case
-                        if group_rows.is_empty() && needs_virtual_row {
-                            // Virtual row case - return the literal value (10 for avg(10))
-                            Value::Number(
-                                serde_json::Number::from_f64(10.0)
-                                    .unwrap_or(serde_json::Number::from(10)),
-                            )
-                        } else {
-                            // Calculate sum and count using extract_value_from_row
-                            let mut sum = 0.0;
-                            let mut count = 0;
+                        Aggregation::Min { column, .. } => {
+                            // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                            let mut min_val: Option<Value> = None;
+                            let mut min_num: Option<f64> = None;
+
                             for row in &group_rows {
                                 if let Some(val) =
                                     self.extract_value_from_row(row, column, columns_for_lookup)
                                 {
-                                    if let Ok(num) = self.value_to_number(&val) {
-                                        sum += num;
-                                        count += 1;
-                                    }
-                                }
-                            }
-
-                            if count == 0 {
-                                Value::Null
-                            } else {
-                                // Calculate average from sum and count
-                                let avg = sum / count as f64;
-                                Value::Number(
-                                    serde_json::Number::from_f64(avg)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        }
-                    }
-                    Aggregation::Min { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        let mut min_val: Option<Value> = None;
-                        let mut min_num: Option<f64> = None;
-
-                        for row in &group_rows {
-                            if let Some(val) =
-                                self.extract_value_from_row(row, column, columns_for_lookup)
-                            {
-                                if !val.is_null() {
-                                    // Try to convert to number for efficient comparison
-                                    if let Ok(num) = self.value_to_number(&val) {
-                                        if min_num.is_none() || num < min_num.unwrap() {
-                                            min_num = Some(num);
-                                            min_val = Some(val);
-                                        }
-                                    } else {
-                                        // For non-numeric, fall back to value comparison
-                                        if min_val.is_none() {
-                                            min_val = Some(val);
-                                        } else {
-                                            // String comparison
-                                            let a_str = min_val.as_ref().unwrap().to_string();
-                                            let b_str = val.to_string();
-                                            if b_str < a_str {
+                                    if !val.is_null() {
+                                        // Try to convert to number for efficient comparison
+                                        if let Ok(num) = self.value_to_number(&val) {
+                                            if min_num.is_none() || num < min_num.unwrap() {
+                                                min_num = Some(num);
                                                 min_val = Some(val);
                                             }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        min_val.unwrap_or(Value::Null)
-                    }
-                    Aggregation::Max { column, .. } => {
-                        // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
-                        let mut max_val: Option<Value> = None;
-                        let mut max_num: Option<f64> = None;
-
-                        for row in &group_rows {
-                            if let Some(val) =
-                                self.extract_value_from_row(row, column, columns_for_lookup)
-                            {
-                                if !val.is_null() {
-                                    // Try to convert to number for efficient comparison
-                                    if let Ok(num) = self.value_to_number(&val) {
-                                        if max_num.is_none() || num > max_num.unwrap() {
-                                            max_num = Some(num);
-                                            max_val = Some(val);
-                                        }
-                                    } else {
-                                        // For non-numeric, fall back to value comparison
-                                        if max_val.is_none() {
-                                            max_val = Some(val);
                                         } else {
-                                            // String comparison
-                                            let a_str = max_val.as_ref().unwrap().to_string();
-                                            let b_str = val.to_string();
-                                            if b_str > a_str {
-                                                max_val = Some(val);
+                                            // For non-numeric, fall back to value comparison
+                                            if min_val.is_none() {
+                                                min_val = Some(val);
+                                            } else {
+                                                // String comparison
+                                                let a_str = min_val.as_ref().unwrap().to_string();
+                                                let b_str = val.to_string();
+                                                if b_str < a_str {
+                                                    min_val = Some(val);
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+                            min_val.unwrap_or(Value::Null)
                         }
-                        max_val.unwrap_or(Value::Null)
-                    }
-                    Aggregation::Collect {
-                        column, distinct, ..
-                    } => {
-                        // Use extract_value_from_row which correctly handles PropertyAccess (e.g., p.name)
-                        // Pre-size Vec for COLLECT (Phase 2.3 optimization)
-                        let estimated_collect_size = group_rows.len();
-                        let mut collected_values = Vec::with_capacity(estimated_collect_size);
+                        Aggregation::Max { column, .. } => {
+                            // CRITICAL FIX: Use extract_value_from_row to handle PropertyAccess columns
+                            let mut max_val: Option<Value> = None;
+                            let mut max_num: Option<f64> = None;
 
-                        // Handle virtual row case: if we have exactly one row and it's a virtual row,
-                        // collect that single value into an array
-                        if needs_virtual_row
-                            && (group_rows.len() == 1
-                                || (group_rows.is_empty() && !project_rows.is_empty()))
-                        {
-                            let row_to_use = if group_rows.len() == 1 {
-                                group_rows.first()
-                            } else if !project_rows.is_empty() {
-                                project_rows.first()
-                            } else {
-                                None
-                            };
-                            if let Some(row) = row_to_use {
+                            for row in &group_rows {
                                 if let Some(val) =
                                     self.extract_value_from_row(row, column, columns_for_lookup)
                                 {
                                     if !val.is_null() {
-                                        Value::Array(vec![val])
+                                        // Try to convert to number for efficient comparison
+                                        if let Ok(num) = self.value_to_number(&val) {
+                                            if max_num.is_none() || num > max_num.unwrap() {
+                                                max_num = Some(num);
+                                                max_val = Some(val);
+                                            }
+                                        } else {
+                                            // For non-numeric, fall back to value comparison
+                                            if max_val.is_none() {
+                                                max_val = Some(val);
+                                            } else {
+                                                // String comparison
+                                                let a_str = max_val.as_ref().unwrap().to_string();
+                                                let b_str = val.to_string();
+                                                if b_str > a_str {
+                                                    max_val = Some(val);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            max_val.unwrap_or(Value::Null)
+                        }
+                        Aggregation::Collect {
+                            column, distinct, ..
+                        } => {
+                            // Use extract_value_from_row which correctly handles PropertyAccess (e.g., p.name)
+                            // Pre-size Vec for COLLECT (Phase 2.3 optimization)
+                            let estimated_collect_size = group_rows.len();
+                            let mut collected_values = Vec::with_capacity(estimated_collect_size);
+
+                            // Handle virtual row case: if we have exactly one row and it's a virtual row,
+                            // collect that single value into an array
+                            if needs_virtual_row
+                                && (group_rows.len() == 1
+                                    || (group_rows.is_empty() && !project_rows.is_empty()))
+                            {
+                                let row_to_use = if group_rows.len() == 1 {
+                                    group_rows.first()
+                                } else if !project_rows.is_empty() {
+                                    project_rows.first()
+                                } else {
+                                    None
+                                };
+                                if let Some(row) = row_to_use {
+                                    if let Some(val) =
+                                        self.extract_value_from_row(row, column, columns_for_lookup)
+                                    {
+                                        if !val.is_null() {
+                                            Value::Array(vec![val])
+                                        } else {
+                                            Value::Array(Vec::new())
+                                        }
                                     } else {
                                         Value::Array(Vec::new())
                                     }
                                 } else {
                                     Value::Array(Vec::new())
                                 }
+                            } else if *distinct {
+                                // COLLECT(DISTINCT col) - collect unique values
+                                let mut seen = std::collections::HashSet::new();
+                                for row in &group_rows {
+                                    if let Some(val) =
+                                        self.extract_value_from_row(row, column, columns_for_lookup)
+                                    {
+                                        if !val.is_null() {
+                                            let val_str = val.to_string();
+                                            if seen.insert(val_str) {
+                                                collected_values.push(val);
+                                            }
+                                        }
+                                    }
+                                }
+                                Value::Array(collected_values)
                             } else {
-                                Value::Array(Vec::new())
-                            }
-                        } else if *distinct {
-                            // COLLECT(DISTINCT col) - collect unique values
-                            let mut seen = std::collections::HashSet::new();
-                            for row in &group_rows {
-                                if let Some(val) =
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                {
-                                    if !val.is_null() {
-                                        let val_str = val.to_string();
-                                        if seen.insert(val_str) {
+                                // COLLECT(col) - collect all non-null values
+                                for row in &group_rows {
+                                    if let Some(val) =
+                                        self.extract_value_from_row(row, column, columns_for_lookup)
+                                    {
+                                        if !val.is_null() {
                                             collected_values.push(val);
                                         }
                                     }
                                 }
+                                Value::Array(collected_values)
                             }
-                            Value::Array(collected_values)
-                        } else {
-                            // COLLECT(col) - collect all non-null values
-                            for row in &group_rows {
-                                if let Some(val) =
-                                    self.extract_value_from_row(row, column, columns_for_lookup)
-                                {
-                                    if !val.is_null() {
-                                        collected_values.push(val);
-                                    }
-                                }
-                            }
-                            Value::Array(collected_values)
                         }
-                    }
-                    Aggregation::PercentileDisc {
-                        column, percentile, ..
-                    } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let mut values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
+                        Aggregation::PercentileDisc {
+                            column, percentile, ..
+                        } => {
+                            let col_idx =
+                                self.get_column_index(column, &context.result_set.columns);
+                            if let Some(idx) = col_idx {
+                                let mut values: Vec<f64> = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() {
+                                            self.value_to_number(&row.values[idx]).ok()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
 
-                            if values.is_empty() {
-                                Value::Null
-                            } else {
-                                values.sort_by(|a, b| {
-                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                });
-                                // Discrete percentile: nearest value
-                                let index = ((*percentile * (values.len() - 1) as f64).round()
-                                    as usize)
-                                    .min(values.len() - 1);
-                                Value::Number(
-                                    serde_json::Number::from_f64(values[index])
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::PercentileCont {
-                        column, percentile, ..
-                    } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let mut values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            if values.is_empty() {
-                                Value::Null
-                            } else {
-                                values.sort_by(|a, b| {
-                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                });
-                                // Continuous percentile: linear interpolation
-                                let position = *percentile * (values.len() - 1) as f64;
-                                let lower_idx = position.floor() as usize;
-                                let upper_idx = position.ceil() as usize;
-
-                                let result = if lower_idx == upper_idx {
-                                    values[lower_idx]
+                                if values.is_empty() {
+                                    Value::Null
                                 } else {
-                                    let lower = values[lower_idx];
-                                    let upper = values[upper_idx];
-                                    let fraction = position - lower_idx as f64;
-                                    lower + (upper - lower) * fraction
-                                };
-
-                                Value::Number(
-                                    serde_json::Number::from_f64(result)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::StDev { column, .. } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            if values.len() < 2 {
-                                Value::Null
+                                    values.sort_by(|a, b| {
+                                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                    });
+                                    // Discrete percentile: nearest value
+                                    let index = ((*percentile * (values.len() - 1) as f64).round()
+                                        as usize)
+                                        .min(values.len() - 1);
+                                    Value::Number(
+                                        serde_json::Number::from_f64(values[index])
+                                            .unwrap_or(serde_json::Number::from(0)),
+                                    )
+                                }
                             } else {
-                                // Sample standard deviation (Bessel's correction: n-1)
-                                let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                let variance = values
-                                    .iter()
-                                    .map(|v| {
-                                        let diff = v - mean;
-                                        diff * diff
-                                    })
-                                    .sum::<f64>()
-                                    / (values.len() - 1) as f64;
-                                let std_dev = variance.sqrt();
-                                Value::Number(
-                                    serde_json::Number::from_f64(std_dev)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
-                            }
-                        } else {
-                            Value::Null
-                        }
-                    }
-                    Aggregation::StDevP { column, .. } => {
-                        let col_idx = self.get_column_index(column, &context.result_set.columns);
-                        if let Some(idx) = col_idx {
-                            let values: Vec<f64> = group_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    if idx < row.values.len() {
-                                        self.value_to_number(&row.values[idx]).ok()
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-
-                            if values.is_empty() {
                                 Value::Null
-                            } else {
-                                // Population standard deviation (divide by n)
-                                let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                let variance = values
-                                    .iter()
-                                    .map(|v| {
-                                        let diff = v - mean;
-                                        diff * diff
-                                    })
-                                    .sum::<f64>()
-                                    / values.len() as f64;
-                                let std_dev = variance.sqrt();
-                                Value::Number(
-                                    serde_json::Number::from_f64(std_dev)
-                                        .unwrap_or(serde_json::Number::from(0)),
-                                )
                             }
-                        } else {
-                            Value::Null
+                        }
+                        Aggregation::PercentileCont {
+                            column, percentile, ..
+                        } => {
+                            let col_idx =
+                                self.get_column_index(column, &context.result_set.columns);
+                            if let Some(idx) = col_idx {
+                                let mut values: Vec<f64> = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() {
+                                            self.value_to_number(&row.values[idx]).ok()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+
+                                if values.is_empty() {
+                                    Value::Null
+                                } else {
+                                    values.sort_by(|a, b| {
+                                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                    });
+                                    // Continuous percentile: linear interpolation
+                                    let position = *percentile * (values.len() - 1) as f64;
+                                    let lower_idx = position.floor() as usize;
+                                    let upper_idx = position.ceil() as usize;
+
+                                    let result = if lower_idx == upper_idx {
+                                        values[lower_idx]
+                                    } else {
+                                        let lower = values[lower_idx];
+                                        let upper = values[upper_idx];
+                                        let fraction = position - lower_idx as f64;
+                                        lower + (upper - lower) * fraction
+                                    };
+
+                                    Value::Number(
+                                        serde_json::Number::from_f64(result)
+                                            .unwrap_or(serde_json::Number::from(0)),
+                                    )
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        Aggregation::StDev { column, .. } => {
+                            let col_idx =
+                                self.get_column_index(column, &context.result_set.columns);
+                            if let Some(idx) = col_idx {
+                                let values: Vec<f64> = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() {
+                                            self.value_to_number(&row.values[idx]).ok()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+
+                                if values.len() < 2 {
+                                    Value::Null
+                                } else {
+                                    // Sample standard deviation (Bessel's correction: n-1)
+                                    let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                    let variance = values
+                                        .iter()
+                                        .map(|v| {
+                                            let diff = v - mean;
+                                            diff * diff
+                                        })
+                                        .sum::<f64>()
+                                        / (values.len() - 1) as f64;
+                                    let std_dev = variance.sqrt();
+                                    Value::Number(
+                                        serde_json::Number::from_f64(std_dev)
+                                            .unwrap_or(serde_json::Number::from(0)),
+                                    )
+                                }
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        Aggregation::StDevP { column, .. } => {
+                            let col_idx =
+                                self.get_column_index(column, &context.result_set.columns);
+                            if let Some(idx) = col_idx {
+                                let values: Vec<f64> = group_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        if idx < row.values.len() {
+                                            self.value_to_number(&row.values[idx]).ok()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+
+                                if values.is_empty() {
+                                    Value::Null
+                                } else {
+                                    // Population standard deviation (divide by n)
+                                    let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                    let variance = values
+                                        .iter()
+                                        .map(|v| {
+                                            let diff = v - mean;
+                                            diff * diff
+                                        })
+                                        .sum::<f64>()
+                                        / values.len() as f64;
+                                    let std_dev = variance.sqrt();
+                                    Value::Number(
+                                        serde_json::Number::from_f64(std_dev)
+                                            .unwrap_or(serde_json::Number::from(0)),
+                                    )
+                                }
+                            } else {
+                                Value::Null
+                            }
                         }
                     }
                 };
@@ -1702,6 +1725,386 @@ impl Executor {
             | Aggregation::StDev { alias, .. }
             | Aggregation::StDevP { alias, .. }
             | Aggregation::CountStarOptimized { alias, .. } => alias.clone(),
+        }
+    }
+
+    // ── §4 columnar-reduce helpers ────────────────────────────────────
+    //
+    // These power the fast path in `execute_aggregate_with_projections`
+    // for groupless `SUM` / `MIN` / `MAX` / `AVG` on dense numeric
+    // columns. The matching scalar arms stay the authoritative fallback
+    // for every other shape (strings, mixed dtypes, NULL columns, etc.)
+    // — the materialisers below return `None` on the first row that
+    // can't be coerced so the row path keeps its semantics untouched.
+
+    /// For each aggregation, return `Some(value)` when the SIMD
+    /// reduce kernel can handle it over `rows`, `None` when the caller
+    /// must fall through to the scalar path. The returned `Vec` is
+    /// positionally aligned with `aggregations`.
+    pub(in crate::executor) fn compute_columnar_agg_cache(
+        &self,
+        rows: &[Row],
+        aggregations: &[Aggregation],
+        columns_for_lookup: &[String],
+    ) -> Vec<Option<Value>> {
+        aggregations
+            .iter()
+            .map(|agg| match agg {
+                Aggregation::Sum { column, .. } => {
+                    self.try_columnar_sum(rows, column, columns_for_lookup)
+                }
+                Aggregation::Avg { column, .. } => {
+                    self.try_columnar_avg(rows, column, columns_for_lookup)
+                }
+                Aggregation::Min { column, .. } => {
+                    self.try_columnar_min(rows, column, columns_for_lookup)
+                }
+                Aggregation::Max { column, .. } => {
+                    self.try_columnar_max(rows, column, columns_for_lookup)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Materialise every row's value at `column` as `Vec<f64>`.
+    ///
+    /// Returns `None` the first time a row's value is missing,
+    /// `Value::Null`, or a JSON value that can't be coerced into
+    /// `f64` — matching the scalar executor's strictness. Integer
+    /// JSON numbers widen into `f64` to match `value_to_number`, so
+    /// SUM / AVG accumulate with the exact same precision regardless
+    /// of input dtype.
+    fn materialize_f64_column(
+        &self,
+        rows: &[Row],
+        column: &str,
+        columns_for_lookup: &[String],
+    ) -> Option<Vec<f64>> {
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let val = self.extract_value_from_row(row, column, columns_for_lookup)?;
+            let Value::Number(n) = &val else { return None };
+            let f = n.as_f64()?;
+            out.push(f);
+        }
+        Some(out)
+    }
+
+    /// Materialise every row's value at `column` as `Vec<i64>`.
+    ///
+    /// Strict — refuses the first row whose JSON number has a
+    /// fractional part (i.e. stored as `Number::from_f64`). This is
+    /// what makes the `MIN` / `MAX` fast path safe: when this
+    /// returns `Some`, every input was an integer-form `Value::Number`
+    /// and wrapping the `i64` kernel result via `Number::from(i64)`
+    /// produces byte-for-byte identical output to the scalar path
+    /// (which also keeps the original integer-form `Value`).
+    fn materialize_i64_column(
+        &self,
+        rows: &[Row],
+        column: &str,
+        columns_for_lookup: &[String],
+    ) -> Option<Vec<i64>> {
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let val = self.extract_value_from_row(row, column, columns_for_lookup)?;
+            let Value::Number(n) = &val else { return None };
+            let i = n.as_i64()?;
+            out.push(i);
+        }
+        Some(out)
+    }
+
+    fn try_columnar_sum(
+        &self,
+        rows: &[Row],
+        column: &str,
+        columns_for_lookup: &[String],
+    ) -> Option<Value> {
+        let floats = self.materialize_f64_column(rows, column, columns_for_lookup)?;
+        let sum = crate::simd::reduce::sum_f64(&floats);
+        // Mirror the scalar path: return an integer `Value::Number`
+        // when the sum has no fractional part, otherwise a float.
+        Some(if sum.fract() == 0.0 && sum.is_finite() {
+            Value::Number(serde_json::Number::from(sum as i64))
+        } else {
+            Value::Number(serde_json::Number::from_f64(sum).unwrap_or(serde_json::Number::from(0)))
+        })
+    }
+
+    fn try_columnar_avg(
+        &self,
+        rows: &[Row],
+        column: &str,
+        columns_for_lookup: &[String],
+    ) -> Option<Value> {
+        let floats = self.materialize_f64_column(rows, column, columns_for_lookup)?;
+        if floats.is_empty() {
+            return Some(Value::Null);
+        }
+        let sum = crate::simd::reduce::sum_f64(&floats);
+        let avg = sum / floats.len() as f64;
+        Some(Value::Number(
+            serde_json::Number::from_f64(avg).unwrap_or(serde_json::Number::from(0)),
+        ))
+    }
+
+    fn try_columnar_min(
+        &self,
+        rows: &[Row],
+        column: &str,
+        columns_for_lookup: &[String],
+    ) -> Option<Value> {
+        // Pure-integer column: scalar keeps the original integer
+        // `Value::Number`; wrapping the `i64` kernel result matches
+        // that exactly.
+        if let Some(ints) = self.materialize_i64_column(rows, column, columns_for_lookup) {
+            let min_i = crate::simd::reduce::min_i64(&ints)?;
+            return Some(Value::Number(serde_json::Number::from(min_i)));
+        }
+        // Float / mixed column: find the numeric minimum with the
+        // SIMD kernel, then do a second pass to recover the original
+        // `Value` from the first row that matches — mirrors the
+        // scalar's "first occurrence wins" strict-less-than loop.
+        let floats = self.materialize_f64_column(rows, column, columns_for_lookup)?;
+        let min_f = crate::simd::reduce::min_f64(&floats)?;
+        for row in rows {
+            let val = self.extract_value_from_row(row, column, columns_for_lookup)?;
+            if let Ok(num) = self.value_to_number(&val) {
+                if num == min_f {
+                    return Some(val);
+                }
+            }
+        }
+        None
+    }
+
+    fn try_columnar_max(
+        &self,
+        rows: &[Row],
+        column: &str,
+        columns_for_lookup: &[String],
+    ) -> Option<Value> {
+        if let Some(ints) = self.materialize_i64_column(rows, column, columns_for_lookup) {
+            let max_i = crate::simd::reduce::max_i64(&ints)?;
+            return Some(Value::Number(serde_json::Number::from(max_i)));
+        }
+        let floats = self.materialize_f64_column(rows, column, columns_for_lookup)?;
+        let max_f = crate::simd::reduce::max_f64(&floats)?;
+        for row in rows {
+            let val = self.extract_value_from_row(row, column, columns_for_lookup)?;
+            if let Ok(num) = self.value_to_number(&val) {
+                if num == max_f {
+                    return Some(val);
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! §4.4 byte-for-byte parity — the columnar SUM / MIN / MAX / AVG
+    //! fast path and the scalar row path must produce identical
+    //! `Value`s on 10 000-row numeric fixtures. Flip
+    //! `columnar_threshold` between `usize::MAX` (forces row path) and
+    //! `4096` (default — fast path fires) and assert equality.
+    //!
+    //! The fixture uses integer ages and half-step scores specifically
+    //! so every sum / average is exactly representable as an `f64` —
+    //! keeping the comparison strict rather than tolerance-based.
+
+    use super::*;
+    use crate::executor::context::ExecutionContext;
+    use crate::testing::create_test_executor;
+
+    fn build_person(id: u64, age: i64, score: f64) -> Value {
+        let mut node = serde_json::Map::new();
+        node.insert("_nexus_id".to_string(), Value::Number(id.into()));
+        node.insert("age".to_string(), Value::Number(age.into()));
+        node.insert(
+            "score".to_string(),
+            Value::Number(
+                serde_json::Number::from_f64(score).expect("fixture score is always finite"),
+            ),
+        );
+        Value::Object(node)
+    }
+
+    fn aggregate_with_threshold(
+        nodes: &[Value],
+        agg: Aggregation,
+        columnar_threshold: usize,
+    ) -> Value {
+        let (mut executor, _ctx) = create_test_executor();
+        executor.config.columnar_threshold = columnar_threshold;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("n", Value::Array(nodes.to_vec()));
+        executor
+            .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg))
+            .expect("aggregate should succeed");
+        context
+            .result_set
+            .rows
+            .first()
+            .and_then(|r| r.values.first())
+            .cloned()
+            .expect("aggregate must produce a row")
+    }
+
+    fn assert_parity(nodes: &[Value], agg: Aggregation, label: &str) {
+        let row_path = aggregate_with_threshold(nodes, agg.clone(), usize::MAX);
+        let columnar = aggregate_with_threshold(nodes, agg, 4096);
+        assert_eq!(
+            row_path, columnar,
+            "row/columnar parity broken for `{}`: row={:?} columnar={:?}",
+            label, row_path, columnar
+        );
+    }
+
+    fn agg_alias(op: &str, col: &str) -> String {
+        format!("{}({})", op, col)
+    }
+
+    #[test]
+    fn aggregate_columnar_matches_row_path_on_10k_i64() {
+        let nodes: Vec<Value> = (0..10_000)
+            .map(|i| build_person(i, i as i64, i as f64 * 0.5))
+            .collect();
+        assert!(nodes.len() > 4096, "fixture must exceed columnar threshold");
+
+        for (op, agg) in [
+            (
+                "sum",
+                Aggregation::Sum {
+                    column: "n.age".into(),
+                    alias: agg_alias("sum", "n.age"),
+                },
+            ),
+            (
+                "min",
+                Aggregation::Min {
+                    column: "n.age".into(),
+                    alias: agg_alias("min", "n.age"),
+                },
+            ),
+            (
+                "max",
+                Aggregation::Max {
+                    column: "n.age".into(),
+                    alias: agg_alias("max", "n.age"),
+                },
+            ),
+            (
+                "avg",
+                Aggregation::Avg {
+                    column: "n.age".into(),
+                    alias: agg_alias("avg", "n.age"),
+                },
+            ),
+        ] {
+            assert_parity(&nodes, agg, &format!("{}(n.age)", op));
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 20,
+            ..proptest::test_runner::Config::default()
+        })]
+
+        /// For randomised integer fixtures bigger than the columnar
+        /// threshold, every groupless `SUM`/`MIN`/`MAX`/`AVG` on both
+        /// the integer column (`n.age`) and the derived half-integer
+        /// float column (`n.score = age * 0.5`) must match the
+        /// scalar baseline bit-for-bit. The `a * 0.5` derivation
+        /// keeps every score exactly representable as `f64` so the
+        /// equality stays strict — no tolerance fudge required.
+        #[test]
+        fn prop_aggregate_columnar_matches_row_path(
+            ages in proptest::collection::vec(-10_000i64..10_000, 4100..4200usize)
+        ) {
+            let nodes: Vec<Value> = ages
+                .iter()
+                .enumerate()
+                .map(|(i, &a)| build_person(i as u64, a, a as f64 * 0.5))
+                .collect();
+
+            for op in ["sum", "min", "max", "avg"] {
+                for col in ["n.age", "n.score"] {
+                    let agg = match op {
+                        "sum" => Aggregation::Sum {
+                            column: col.into(),
+                            alias: agg_alias(op, col),
+                        },
+                        "min" => Aggregation::Min {
+                            column: col.into(),
+                            alias: agg_alias(op, col),
+                        },
+                        "max" => Aggregation::Max {
+                            column: col.into(),
+                            alias: agg_alias(op, col),
+                        },
+                        "avg" => Aggregation::Avg {
+                            column: col.into(),
+                            alias: agg_alias(op, col),
+                        },
+                        _ => unreachable!(),
+                    };
+                    let row_path = aggregate_with_threshold(&nodes, agg.clone(), usize::MAX);
+                    let columnar = aggregate_with_threshold(&nodes, agg, 4096);
+                    proptest::prop_assert_eq!(
+                        row_path,
+                        columnar,
+                        "parity broken for {}({})",
+                        op,
+                        col
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aggregate_columnar_matches_row_path_on_10k_f64() {
+        let nodes: Vec<Value> = (0..10_000)
+            .map(|i| build_person(i, i as i64, i as f64 * 0.5))
+            .collect();
+        assert!(nodes.len() > 4096, "fixture must exceed columnar threshold");
+
+        for (op, agg) in [
+            (
+                "sum",
+                Aggregation::Sum {
+                    column: "n.score".into(),
+                    alias: agg_alias("sum", "n.score"),
+                },
+            ),
+            (
+                "min",
+                Aggregation::Min {
+                    column: "n.score".into(),
+                    alias: agg_alias("min", "n.score"),
+                },
+            ),
+            (
+                "max",
+                Aggregation::Max {
+                    column: "n.score".into(),
+                    alias: agg_alias("max", "n.score"),
+                },
+            ),
+            (
+                "avg",
+                Aggregation::Avg {
+                    column: "n.score".into(),
+                    alias: agg_alias("avg", "n.score"),
+                },
+            ),
+        ] {
+            assert_parity(&nodes, agg, &format!("{}(n.score)", op));
         }
     }
 }
