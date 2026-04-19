@@ -384,6 +384,73 @@ Permissions are automatically checked by the authentication middleware. If a use
 | `DELETE /auth/api-keys/{id}` | ADMIN |
 | `POST /auth/users/{username}/permissions` | SUPER |
 
+### Function-level permissions (cluster mode)
+
+The `READ` / `WRITE` / `ADMIN` / ... enum above gates broad
+capability classes — it answers "can this key run a CREATE at
+all?". **Cluster mode** adds a second, orthogonal axis on top:
+an explicit allow-list of MCP / RPC function names the key may
+invoke. This is the difference between "has WRITE permission"
+(coarse) and "may call `cypher.execute` but NOT
+`nexus.admin.drop_database`" (fine).
+
+Model:
+
+```rust
+pub struct ApiKey {
+    // ... permissions: Vec<Permission>, ...
+    pub allowed_functions: Option<Vec<String>>,
+}
+```
+
+- `None` — unrestricted. Matches the pre-cluster-mode default;
+  the key can call every function its `Permission` set allows.
+- `Some(vec![…])` — the key can ONLY invoke functions whose
+  canonical name appears in the list. Comparison is
+  case-sensitive and exact; function-name canonicalisation
+  (casing, prefixing) is the caller's responsibility.
+- `Some(vec![])` — a deliberate third state. "May call NOTHING."
+  Useful for health-probe-only keys that exist to verify
+  uptime without any query capability.
+
+Enforcement happens in handlers via:
+
+```rust
+let ctx = nexus_core::auth::extract_user_context(&request)
+    .ok_or(StatusCode::UNAUTHORIZED)?;
+ctx.require_may_call("cypher.execute")?;
+```
+
+Rejections come back as `403 Forbidden` with a stable body:
+
+```json
+{
+  "function": "nexus.admin.drop_database",
+  "code": "FUNCTION_NOT_ALLOWED",
+  "message": "function 'nexus.admin.drop_database' is not in this API key's allow-list"
+}
+```
+
+SDK decoders should match on `code`, never on `message` —
+`FunctionAccessError::CODE` is the stable wire contract.
+
+Discovery endpoints (MCP tool listing, etc.) should pre-filter
+the advertised tools with `ctx.filter_callable(&tool_names)` so
+clients only ever see operations they can actually invoke. Saves
+a round-trip per "you can't call that" error.
+
+### Tenant binding (cluster mode)
+
+In cluster mode every API key **must** carry a `user_id`. The
+auth middleware rejects any key without one (or with one that
+fails `UserNamespace::new` validation — reserved `:` delimiter,
+control characters, overlong) with `401 INVALID_TOKEN`. There is
+no "global scope" fallback in cluster mode; a request that can't
+be routed to a tenant cannot execute.
+
+Standalone mode is unchanged: `user_id` stays optional, and
+legacy keys that never had one continue to work.
+
 ## Rate Limiting
 
 Rate limiting protects against brute force attacks and API abuse.

@@ -154,9 +154,9 @@
 
 ### 16. Documentation
 - [x] 16.1 Create `docs/CLUSTER_MODE.md` user guide (operator-facing doc: when to enable, migration path, config reference, observability, known limitations)
-- [ ] 16.2 Create `docs/specs/cluster-mode.md` technical specification
-- [ ] 16.3 Update `docs/AUTHENTICATION.md` with function permissions
-- [ ] 16.4 Update `docs/DEPLOYMENT_GUIDE.md` with cluster mode setup
+- [x] 16.2 Create `docs/specs/cluster-mode.md` technical specification (9 sections: goals/non-goals, config model, identity model, auth contract, data-isolation mechanism, quota model, wire contracts with stable error codes, test matrix, changelog)
+- [x] 16.3 Update `docs/security/AUTHENTICATION.md` with function permissions (new "Function-level permissions" + "Tenant binding" subsections under Permissions)
+- [x] 16.4 Update `docs/guides/DEPLOYMENT_GUIDE.md` with cluster mode setup (new "Cluster Mode Configuration" subsection under Environment Variables, incl. example production config)
 - [x] 16.5 Create migration guide from standalone to cluster mode (included as the "Migration path" section of `docs/CLUSTER_MODE.md`)
 - [x] 16.6 Update CHANGELOG.md with cluster mode features (Added / Changed entries under 1.0.0)
 - [ ] 16.7 Create HiveHub integration guide for operators

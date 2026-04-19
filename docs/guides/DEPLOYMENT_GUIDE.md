@@ -225,6 +225,55 @@ ENV NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password
 | `NEXUS_AUTH_REQUIRED_FOR_PUBLIC` | `true` | Require auth for 0.0.0.0 binding |
 | `NEXUS_AUTH_REQUIRE_HEALTH_AUTH` | `false` | Require auth for /health endpoint |
 
+### Cluster Mode Configuration
+
+Cluster mode turns Nexus into a shared multi-tenant service —
+one server instance hosts data for many tenants with mandatory
+per-endpoint authentication, per-tenant data isolation at the
+catalog layer, and per-tenant rate + storage quotas. See
+[`docs/CLUSTER_MODE.md`](../CLUSTER_MODE.md) for the full operator
+guide and [`ADR-7`](../../.rulebook/decisions/) for the
+architectural rationale.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXUS_CLUSTER_ENABLED` | `false` | Master switch. `1`, `true`, `TRUE`, or `yes` enables cluster mode. Everything else keeps standalone behaviour byte-for-byte identical. |
+
+When `NEXUS_CLUSTER_ENABLED=true`:
+
+- Every URI requires authentication — including `/`, `/health`,
+  `/stats`, `/openapi.json`.
+- Every API key must carry a `user_id` field that passes
+  `UserNamespace` validation. Keys without one get 401 rejected
+  at the middleware.
+- `ClusterConfig::enabled_with_defaults()` is installed
+  automatically: 1024 MiB storage per tenant, 6000 req/min,
+  300000 req/hour. Override by constructing the config
+  programmatically (there is currently no YAML override — tracked
+  as a follow-up).
+- `TenantIsolationMode::None` is the default even when cluster
+  mode is on. Flipping isolation to `CatalogPrefix` (tenant-
+  scoped label / rel-type / property-key names) is a separate
+  opt-in because switching mid-deployment requires a one-shot
+  catalog rewrite of every existing entry.
+
+Example production configuration with cluster mode:
+
+```bash
+export NEXUS_AUTH_ENABLED=true
+export NEXUS_AUTH_REQUIRED_FOR_PUBLIC=true
+export NEXUS_CLUSTER_ENABLED=true
+export NEXUS_ADDR=0.0.0.0:15474
+export NEXUS_DATA_DIR=/app/data
+export RUST_LOG=warn
+```
+
+Tenant-facing observability endpoint: `GET /cluster/stats/self`
+returns the authenticated tenant's current storage / rate-limit
+usage. Returns `404 CLUSTER_MODE_DISABLED` on standalone servers,
+`404 TENANT_UNKNOWN` for tenants that haven't touched the server
+yet.
+
 ### Server Configuration
 
 | Variable | Default | Description |
