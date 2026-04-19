@@ -2,6 +2,13 @@
 
 This document outlines the phased implementation plan for Nexus graph database.
 
+> **Current state (2026-04-19):** Phases 0, 1, and 2 are shipped in
+> `v1.0.0` (single-node engine, ~55 % openCypher coverage, 300/300
+> Neo4j diff-suite pass rate, native KNN, RPC-default SDKs, auth, multi-
+> database, replication, SIMD). Phases 3+ (distributed) are planned.
+> For release-by-release detail see [CHANGELOG.md](../CHANGELOG.md);
+> this document keeps the phase-level scope + success criteria.
+
 ## Status Legend
 
 - ✅ Completed
@@ -11,7 +18,7 @@ This document outlines the phased implementation plan for Nexus graph database.
 
 ---
 
-## Phase 0: Foundation (Current)
+## Phase 0: Foundation ✅ COMPLETED
 
 **Goal**: Architecture documentation and project scaffolding
 

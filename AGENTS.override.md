@@ -14,9 +14,12 @@ This file is never overwritten by `rulebook init` or `rulebook update`.
 
 # Nexus - Claude Code Development Guide
 
-> **Last Updated**: 2025-12-01
-> **Version**: 0.12.0
-> **Status**: ✅ Production Ready - 293/300 Neo4j Compatibility Tests Passing (97.99%)
+> **Last Updated**: 2026-04-19
+> **Version**: 1.0.0 (workspace)
+> **Status**: 300/300 Neo4j compatibility (Neo4j 2025.09.0 diff, matches the claim on line 81). Workspace
+> `cargo +nightly test --workspace` reports **2310 passed / 67 ignored / 0 failed**. Production-readiness
+> statement intentionally dropped from this header — see the "Production readiness" criterion section below
+> for the maintainers' explicit gate (auth + persistence + compat + RPC transport).
 
 ---
 
@@ -82,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts/compatibility/test-neo4j-nexus-
 - **Native Vector Search**: First-class HNSW KNN indexes per label
 - **ACID Transactions**: Simplified MVCC via epochs, single-writer model
 - **Multi-Database Support**: Isolated databases within single server instance
-- **Production Ready**: 2949+ tests passing, 70%+ coverage
+- **Test surface**: 2310 workspace tests passing on `cargo +nightly test --workspace` (0 failed, 67 ignored); 300/300 on the Neo4j diff suite. Re-run the numbers via `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` (diff) and `cargo +nightly test --workspace` (unit + integration). See [docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) for the canonical feature-by-feature status.
 
 ### Target Use Cases
 

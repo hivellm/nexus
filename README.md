@@ -21,7 +21,7 @@ Nexus is a **property graph database** built for **read-heavy workloads** with *
 
 ### Highlights (v1.0.0)
 
-- **Neo4j-compatible Cypher** — ~55% openCypher coverage across MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH and ~60 functions. **299/300** Neo4j compatibility tests pass.
+- **Neo4j-compatible Cypher** — ~55% openCypher coverage across MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH and ~60 functions. **300/300** Neo4j compatibility tests pass ([diffed against Neo4j 2025.09.0 on 2026-04-19](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md)).
 - **Native KNN** — per-label HNSW indexes with cosine / L2 / dot metrics. Bytes-native embeddings on the RPC wire (no base64 tax).
 - **Binary RPC default** — length-prefixed MessagePack on port `15475`; 3–10× lower latency and 40–60% smaller payloads vs HTTP/JSON. `nexus://host:15475` URL scheme used by CLI + every SDK.
 - **Full auth stack** — API keys, JWT, RBAC, rate limiting, audit log with fail-open policy.
@@ -384,7 +384,7 @@ ORDER BY confidence DESC
 - [`docs/specs/`](docs/specs/) — binary specs (storage format, Cypher subset, page cache, WAL/MVCC, KNN, RPC wire format, RESP3 vocabulary, SDK transport, SIMD dispatch).
 
 ### Compatibility
-- [`docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) — 299/300 tests, per-feature breakdown.
+- [`docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) — **300/300** tests (Neo4j 2025.09.0 diff), per-feature breakdown.
 
 ### Performance
 - [`docs/performance/PERFORMANCE_V1.md`](docs/performance/PERFORMANCE_V1.md) — throughput, latency, vs-Neo4j benchmark matrix.
@@ -401,7 +401,7 @@ ORDER BY confidence DESC
 - ✅ Multi-database.
 - ✅ Master-replica replication (async / sync).
 - ✅ SIMD kernels (AVX-512 / AVX2 / NEON) with runtime dispatch.
-- ✅ 3361+ unit tests, 299/300 Neo4j compatibility.
+- ✅ 2310 workspace tests passing on `cargo +nightly test --workspace` (0 failed, 67 ignored); **300/300** Neo4j diff suite.
 
 ### Queued on 1.x
 - 🧭 **Python / TypeScript / Go / C# / PHP RPC transport** — [`phase2_sdk-rpc-transport-default`](.rulebook/tasks/phase2_sdk-rpc-transport-default/) sections 3–8.

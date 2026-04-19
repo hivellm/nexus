@@ -1,23 +1,38 @@
 # Neo4j Compatibility Report
 
-**Version**: 0.12.0
-**Date**: 2025-12-01
-**Status**: 🎉 **100% Neo4j Compatibility Achieved** - 300/300 Tests Passing ✅
-**Milestone**: All compatibility bugs fixed - Production Ready!
+**Version**: 1.0.0 (workspace)
+**Last verified**: 2026-04-19 against Neo4j 2025.09.0 community
+**Status**: **300/300 Neo4j diff-suite tests passing** (verified
+via `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`
+against a live Neo4j container + release Nexus server; full
+runner output in the `phase3_unwind-where-neo4j-parity` archive,
+commit `aeb83038`).
 
 ---
 
 ## Executive Summary
 
-Nexus has achieved **100% Neo4j compatibility** (300/300 tests passing) in the comprehensive compatibility test suite. The implementation includes full support for Cypher queries, aggregation functions, WHERE clauses, mathematical operators, string functions, list operations, null handling, relationship traversal, variable-length paths, cyclic pattern matching, EXISTS subqueries, OPTIONAL MATCH, WITH clause, UNWIND, MERGE, type conversions, and DELETE/SET operations.
+Nexus matches Neo4j 2025.09.0 on the 300-test compatibility diff
+suite. Every query in the suite runs against both engines and the
+result sets are diffed row-for-row. Coverage spans core Cypher
+queries, aggregation functions, WHERE clauses, mathematical
+operators, string functions, list operations, null handling,
+relationship traversal, variable-length paths, cyclic pattern
+matching, EXISTS subqueries, OPTIONAL MATCH, WITH, UNWIND, MERGE,
+type conversions, and DELETE/SET operations.
 
 ### Test Coverage Summary
 
-- **Neo4j Compatibility Tests**: 300/300 (100%) ✅
-- **Direct Server Comparison Tests**: 20/20 (100%) ✅
-- **Relationship Tests**: 5/5 (100%) ✅
-- **Core Cargo Tests**: 2949+ (100%) ✅
-- **Total**: 3274+ tests passing ✅
+| Suite | Pass rate | Command |
+|-------|-----------|---------|
+| Neo4j diff suite | 300/300 | `powershell -ExecutionPolicy Bypass -File scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` |
+| Nexus workspace (`cargo +nightly test --workspace`) | 2310 passed / 67 ignored / 0 failed | `cargo +nightly test --workspace` |
+
+Run either one locally to reproduce the numbers. The diff suite
+needs Neo4j on `localhost:7474` (e.g. `docker run -d -p
+7474:7474 -p 7687:7687 --env NEO4J_AUTH=neo4j/password
+neo4j:latest`) and Nexus on `localhost:15474` before invoking the
+script.
 
 ### Test Suite Sections (17 total)
 
