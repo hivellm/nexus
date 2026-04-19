@@ -89,6 +89,37 @@ pub async fn mcp_auth_middleware_handler(
                 ));
             }
 
+            // In cluster mode, derive a UserContext from the key and
+            // make it available to MCP handlers on its own extension
+            // slot. Handlers can then do
+            // `request.extensions().get::<UserContext>().unwrap()
+            //     .require_may_call(tool_name)?` to enforce the
+            // per-key function allow-list. Legacy (non-cluster)
+            // deployments get `None` here and behave exactly as
+            // before.
+            if auth_middleware.is_cluster_mode() {
+                match AuthMiddleware::user_context_from_api_key(&verified_key) {
+                    Ok(Some(user_ctx)) => {
+                        request.extensions_mut().insert(user_ctx);
+                    }
+                    Ok(None) | Err(_) => {
+                        // Key is valid for auth but has no / invalid
+                        // user_id — we refuse it because in cluster
+                        // mode every request must route to a tenant.
+                        // The MCP surface has no global scope.
+                        return Err((
+                            StatusCode::UNAUTHORIZED,
+                            axum::Json(serde_json::json!({
+                                "error": {
+                                    "code": "INVALID_TOKEN",
+                                    "message": "API key is missing a valid tenant binding for cluster mode"
+                                }
+                            })),
+                        ));
+                    }
+                }
+            }
+
             // Store API key info in request extensions for use in handlers
             request.extensions_mut().insert(verified_key);
 
