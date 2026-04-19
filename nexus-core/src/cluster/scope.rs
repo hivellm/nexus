@@ -542,6 +542,150 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_property_keys_in_function_call_arguments() {
+        // toLower(n.email) must scope the `email` key so the
+        // catalog lookup uses the tenant-specific KeyId. Without
+        // this, function arguments that drill into a node would
+        // leak through the prefix.
+        let mut q = parse("MATCH (n:Person) RETURN toLower(n.email) AS email");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        let dump = format!("{q:?}");
+        assert!(
+            dump.contains("ns:alice:email"),
+            "function arg property must scope: {dump}"
+        );
+    }
+
+    #[test]
+    fn rewrites_property_keys_inside_binary_and_unary_ops() {
+        // BinaryOp / UnaryOp recurse into both operands. Pin both
+        // so a future refactor that forgets one side regresses
+        // deterministically.
+        let mut q = parse("MATCH (n:Person) WHERE NOT (n.score > 0) RETURN n.name");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        let dump = format!("{q:?}");
+        assert!(dump.contains("ns:alice:score"), "BinaryOp lhs: {dump}");
+        assert!(dump.contains("ns:alice:name"), "RETURN: {dump}");
+    }
+
+    #[test]
+    fn rewrites_property_keys_inside_is_null() {
+        let mut q = parse("MATCH (n:Person) WHERE n.email IS NULL RETURN n");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        let dump = format!("{q:?}");
+        assert!(
+            dump.contains("ns:alice:email"),
+            "IS NULL operand property must scope: {dump}"
+        );
+    }
+
+    #[test]
+    fn rewrites_property_keys_inside_list_and_map_expressions() {
+        // List and Map inline expressions both recurse into their
+        // elements / values. Map ALSO rewrites keys because inline
+        // map literals end up as property maps at pattern
+        // construction time.
+        let mut q =
+            parse("MATCH (n:Person) RETURN [n.first, n.last] AS parts, {name: n.email} AS row");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        let dump = format!("{q:?}");
+        assert!(dump.contains("ns:alice:first"), "List element: {dump}");
+        assert!(dump.contains("ns:alice:last"), "List element: {dump}");
+        assert!(dump.contains("ns:alice:name"), "Map key: {dump}");
+        assert!(dump.contains("ns:alice:email"), "Map value: {dump}");
+    }
+
+    #[test]
+    fn rewrites_property_keys_inside_case_expression() {
+        let mut q = parse(
+            "MATCH (n:Person) \
+             RETURN CASE WHEN n.score > 0 THEN n.active ELSE n.retired END AS state",
+        );
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        let dump = format!("{q:?}");
+        assert!(dump.contains("ns:alice:score"), "CASE when: {dump}");
+        assert!(dump.contains("ns:alice:active"), "CASE then: {dump}");
+        assert!(dump.contains("ns:alice:retired"), "CASE else: {dump}");
+    }
+
+    #[test]
+    fn rewrites_labels_and_property_keys_inside_exists_subquery() {
+        // EXISTS { MATCH ... } is the recursive case for patterns
+        // AND property access — both need scoping so a tenant can't
+        // probe another tenant's graph shape.
+        let mut q = parse(
+            "MATCH (a:Person) WHERE EXISTS { (a)-[:KNOWS]->(b:Friend {since: a.joined}) } \
+             RETURN a",
+        );
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        let dump = format!("{q:?}");
+        assert!(dump.contains("ns:alice:Person"), "outer label: {dump}");
+        assert!(dump.contains("ns:alice:KNOWS"), "EXISTS rel type: {dump}");
+        assert!(
+            dump.contains("ns:alice:Friend"),
+            "EXISTS node label: {dump}"
+        );
+        assert!(
+            dump.contains("ns:alice:since"),
+            "EXISTS inline prop key: {dump}"
+        );
+        assert!(
+            dump.contains("ns:alice:joined"),
+            "EXISTS property access in inline prop value: {dump}"
+        );
+    }
+
+    #[test]
+    fn rewrites_property_keys_inside_array_slices() {
+        // Array slicing recurses into the base and both bounds.
+        // Pins the one slice position in the walker that's easy
+        // to miss during a refactor.
+        let mut q = parse("MATCH (n:Person) RETURN n.tags[0..n.limit] AS first_n");
+        scope_query(&mut q, &ns(), TenantIsolationMode::CatalogPrefix);
+        let dump = format!("{q:?}");
+        assert!(dump.contains("ns:alice:tags"), "slice base: {dump}");
+        assert!(dump.contains("ns:alice:limit"), "slice end bound: {dump}");
+    }
+
+    #[test]
+    fn is_write_query_classifier_matches_every_mutating_clause() {
+        // The classifier gates `check_storage` — every clause we
+        // expect to cost storage must return true, and every read
+        // clause must return false. Both halves matter: a false
+        // positive over-charges tenants, a false negative leaks
+        // storage growth past the quota.
+        let writes = [
+            "CREATE (n:Person)",
+            "MERGE (n:Person {id: 1})",
+            "MATCH (n) SET n.name = 'x'",
+            "MATCH (n) REMOVE n:Tag",
+            "MATCH (n) DELETE n",
+            "MATCH (n) FOREACH (x IN [1,2,3] | SET n.mark = x)",
+        ];
+        for q in writes {
+            let parsed = parse(q);
+            assert!(
+                is_write_query(&parsed),
+                "classifier must flag `{q}` as a write"
+            );
+        }
+
+        let reads = [
+            "MATCH (n) RETURN n",
+            "MATCH (n:Person) WHERE n.age > 30 RETURN n.name",
+            "UNWIND [1,2,3] AS x RETURN x",
+            "WITH 1 AS x RETURN x",
+        ];
+        for q in reads {
+            let parsed = parse(q);
+            assert!(
+                !is_write_query(&parsed),
+                "classifier must NOT flag `{q}` as a write"
+            );
+        }
+    }
+
+    #[test]
     fn tenants_get_distinct_catalog_names() {
         // Core isolation claim: two tenants running the literal
         // same query produce distinct scoped strings. Their

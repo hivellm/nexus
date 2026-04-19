@@ -150,7 +150,7 @@
 - [x] 15.4 Write load tests for cluster mode performance (`cluster_mode_benchmark` with 3 groups: scope walker overhead, write-path baseline vs cluster-mode, check_rate + record_usage. Measured <1% end-to-end overhead on single-CREATE, well under the 15% budget in the success criteria)
 - [x] 15.5 Write security tests for data leakage prevention (`alice_cannot_delete_bobs_data_via_label_match` exercises the attack shape; the two-tenant + relationship-type tests are the positive-path proofs)
 - [x] 15.6 Verify all existing tests pass with cluster mode disabled (workspace-wide `cargo +nightly test --workspace` reports 3470 passed / 0 failed with cluster mode opt-in; standalone regression guard `standalone_mode_is_unaffected_by_context_api`)
-- [ ] 15.7 Achieve ≥ 95% test coverage for cluster mode code
+- [x] 15.7 Achieve ≥ 95% test coverage for cluster mode code (measured via `cargo +nightly llvm-cov --features axum`: cluster/config 100%, cluster/middleware 98.99%, cluster/context 98.16%, cluster/namespace 97.35%, cluster/quota 97.00%, cluster/scope 92.94% — module-wide weighted average 95.85%, above the 95% threshold)
 
 ### 16. Documentation
 - [x] 16.1 Create `docs/CLUSTER_MODE.md` user guide (operator-facing doc: when to enable, migration path, config reference, observability, known limitations)
@@ -182,5 +182,5 @@
 - [ ] Function-level permissions working correctly
 - [ ] Quota enforcement tested and working
 - [x] Performance overhead < 15% vs standalone (measured at <1% on the `cluster_write_path` bench — 620 µs standalone vs 623 µs cluster-mode on a CREATE (n:Person))
-- [ ] Test coverage ≥ 95% for cluster mode code
+- [x] Test coverage ≥ 95% for cluster mode code (95.85% module-wide weighted line coverage via cargo llvm-cov; see §15.7)
 - [ ] All documentation complete
