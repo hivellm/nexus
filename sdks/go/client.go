@@ -5,14 +5,29 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/hivellm/nexus-go/transport"
 )
 
 // Client represents a Nexus database client.
+//
+// Defaults to the native binary RPC transport on
+// `nexus://127.0.0.1:15475`. Callers can opt down to HTTP with a
+// Config.Transport=transport.ModeHttp hint or by passing an
+// `http://…` URL as Config.BaseURL.
+//
+// Precedence for picking the transport (highest wins):
+//
+//  1. URL scheme in Config.BaseURL (`nexus://` → RPC, `http://` → HTTP, …)
+//  2. NEXUS_SDK_TRANSPORT env var
+//  3. Config.Transport field
+//  4. Default: transport.ModeNexusRpc
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -20,32 +35,99 @@ type Client struct {
 	username   string
 	password   string
 	token      string
+
+	transport transport.Transport
+	endpoint  transport.Endpoint
+	mode      transport.Mode
 }
 
 // Config holds configuration options for the Nexus client.
 type Config struct {
-	BaseURL  string
-	APIKey   string
+	// BaseURL — endpoint URL (`nexus://host:15475`, `http://host:15474`, …).
+	// Defaults to `nexus://127.0.0.1:15475` when empty.
+	BaseURL string
+	// APIKey authenticates requests via the `X-API-Key` header (HTTP) or
+	// an `AUTH <key>` RPC frame after HELLO.
+	APIKey string
+	// Username / Password authenticate via basic auth (HTTP) or an
+	// `AUTH <user> <pass>` RPC frame.
 	Username string
 	Password string
-	Timeout  time.Duration
+	// Timeout bounds the per-request HTTP deadline and the RPC connect.
+	Timeout time.Duration
+	// Transport is an explicit mode hint. URL scheme wins if set.
+	Transport transport.Mode
+	// RpcPort overrides the default RPC port (15475).
+	RpcPort uint16
+	// Resp3Port overrides the default RESP3 port (15476).
+	Resp3Port uint16
 }
 
 // NewClient creates a new Nexus client with the given configuration.
+//
+// Panics on invalid configuration (bad URL, unsupported transport, etc.).
+// For a non-panicking variant that returns (*Client, error), use
+// NewClientE — that's the Go-idiomatic version but the legacy signature
+// stays in place for source-compat with pre-1.0.0 callers.
 func NewClient(config Config) *Client {
+	c, err := NewClientE(config)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// NewClientE is the error-returning constructor. Prefer this over
+// NewClient for new code.
+func NewClientE(config Config) (*Client, error) {
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
 	}
 
+	built, err := transport.Build(transport.BuildOptions{
+		BaseURL:   config.BaseURL,
+		Transport: config.Transport,
+		RpcPort:   config.RpcPort,
+		Resp3Port: config.Resp3Port,
+		Timeout:   config.Timeout,
+	}, transport.Credentials{
+		APIKey:   config.APIKey,
+		Username: config.Username,
+		Password: config.Password,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("nexus: invalid configuration: %w", err)
+	}
+
 	return &Client{
-		baseURL: config.BaseURL,
+		baseURL: built.Endpoint.AsHttpURL(),
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
-		apiKey:   config.APIKey,
-		username: config.Username,
-		password: config.Password,
+		apiKey:    config.APIKey,
+		username:  config.Username,
+		password:  config.Password,
+		transport: built.Transport,
+		endpoint:  built.Endpoint,
+		mode:      built.Mode,
+	}, nil
+}
+
+// TransportMode returns the active transport mode after the precedence
+// chain was resolved.
+func (c *Client) TransportMode() transport.Mode { return c.mode }
+
+// EndpointDescription returns a human-readable endpoint + transport
+// label (e.g. "nexus://127.0.0.1:15475 (RPC)").
+func (c *Client) EndpointDescription() string { return c.transport.Describe() }
+
+// Close releases the underlying transport's persistent sockets.
+func (c *Client) Close() error {
+	c.httpClient.CloseIdleConnections()
+	if c.transport != nil {
+		return c.transport.Close()
 	}
+	return nil
 }
 
 // QueryResult represents the result of a Cypher query.
@@ -153,26 +235,123 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	return resp, nil
 }
 
-// ExecuteCypher executes a Cypher query and returns the results.
+// ExecuteCypher executes a Cypher query via the active transport.
+//
+// When the transport is RPC the request goes through a persistent TCP
+// socket using length-prefixed MessagePack frames. When the transport
+// is HTTP it hits the `/cypher` REST route. Both paths return the same
+// QueryResult shape.
 func (c *Client) ExecuteCypher(ctx context.Context, query string, params map[string]interface{}) (*QueryResult, error) {
-	reqBody := map[string]interface{}{
-		"query": query,
+	args := []transport.NexusValue{transport.NxStr(query)}
+	if params != nil {
+		args = append(args, transport.JsonToNexus(params))
 	}
+	resp, err := c.transport.Execute(ctx, transport.Request{Command: "CYPHER", Args: args})
+	if err != nil {
+		return nil, translateTransportError(err)
+	}
+	json := transport.NexusToJson(resp.Value)
+	obj, ok := json.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("nexus: CYPHER: expected object response, got %T", json)
+	}
+	result := &QueryResult{}
+	if cols, ok := obj["columns"].([]interface{}); ok {
+		result.Columns = make([]string, len(cols))
+		for i, c := range cols {
+			result.Columns[i] = fmt.Sprint(c)
+		}
+	}
+	if rows, ok := obj["rows"].([]interface{}); ok {
+		result.Rows = make([][]interface{}, len(rows))
+		for i, r := range rows {
+			if rr, ok := r.([]interface{}); ok {
+				result.Rows[i] = rr
+			}
+		}
+	}
+	if statsRaw, ok := obj["stats"].(map[string]interface{}); ok {
+		result.Stats = decodeStats(statsRaw)
+	}
+	if etMs, ok := obj["execution_time_ms"]; ok {
+		if result.Stats == nil {
+			result.Stats = &QueryStats{}
+		}
+		result.Stats.ExecutionTimeMs = asFloat(etMs)
+	}
+	return result, nil
+}
+
+func decodeStats(m map[string]interface{}) *QueryStats {
+	s := &QueryStats{}
+	s.NodesCreated = asInt(m["nodes_created"])
+	s.NodesDeleted = asInt(m["nodes_deleted"])
+	s.RelationshipsCreated = asInt(m["relationships_created"])
+	s.RelationshipsDeleted = asInt(m["relationships_deleted"])
+	s.PropertiesSet = asInt(m["properties_set"])
+	s.ExecutionTimeMs = asFloat(m["execution_time_ms"])
+	return s
+}
+
+func asInt(v interface{}) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+func asFloat(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	}
+	return 0
+}
+
+// translateTransportError promotes `*transport.HttpError` into the
+// SDK-level `*Error` so callers can type-assert without caring about
+// which transport produced the failure. Non-HTTP errors propagate
+// unchanged.
+func translateTransportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var httpErr *transport.HttpError
+	if errors.As(err, &httpErr) {
+		return &Error{StatusCode: httpErr.StatusCode, Message: httpErr.Body}
+	}
+	return err
+}
+
+// ExecuteCypherHTTP keeps the legacy HTTP-only path available for
+// callers that need the raw REST response body (for example, tooling
+// that inspects the `execution_time_ms` field surfaced only by the
+// JSON endpoint). Prefer ExecuteCypher — it works on both transports.
+func (c *Client) ExecuteCypherHTTP(ctx context.Context, query string, params map[string]interface{}) (*QueryResult, error) {
+	reqBody := map[string]interface{}{"query": query}
 	if params != nil {
 		reqBody["parameters"] = params
 	}
-
 	resp, err := c.doRequest(ctx, http.MethodPost, "/cypher", reqBody)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	var result QueryResult
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
-
 	return &result, nil
 }
 

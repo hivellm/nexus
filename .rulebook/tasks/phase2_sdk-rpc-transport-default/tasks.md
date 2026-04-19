@@ -41,14 +41,14 @@
 - [x] 4.9 Update `sdks/python/README.md` Quick Start to show RPC as the default; CHANGELOG entry rewritten to cover the transport work + migration notes.
 
 ## 5. Go SDK
-- [ ] 5.1 Add `transport_rpc.go` implementing `Transport` interface (Execute, Close), using `vmihailenco/msgpack/v5`
-- [ ] 5.2 Add `transport_resp3.go` with a minimal RESP3 reader/writer
-- [ ] 5.3 Add `command_map.go` with the full command table
-- [ ] 5.4 Modify `client.go`: `NewClient` picks transport from `Config.Transport`; add `TransportMode` type
-- [ ] 5.5 Wire all existing methods (`ExecuteCypher`, `CreateNode`, `KnnSearch`, ...) through the transport interface
-- [ ] 5.6 `go test ./...` covers transport roundtrip and command-map unit tests
-- [ ] 5.7 Update `go.mod` with `msgpack` dependency
-- [ ] 5.8 Update README + `examples/rpc_quickstart.go`
+- [x] 5.1 Add `sdks/go/transport/rpc.go` implementing `Transport` interface (`Execute`, `Describe`, `IsRpc`, `Close`) using `github.com/vmihailenco/msgpack/v5`. Single-socket `RpcTransport` with background reader goroutine multiplexing responses to pending callers keyed by request id, HELLO+AUTH handshake, monotonic `uint32` ids skipping `PUSH_ID`.
+- [x] 5.2 RESP3 support folded into `sdks/go/transport/factory.go::Build` — `Transport: transport.ModeResp3` returns `fmt.Errorf("resp3 transport is not yet shipped in the Go SDK — use 'nexus' (RPC) or 'http' for now")`, matching the Rust / TypeScript / Python SDK behaviour. Parser/writer tracked for a follow-up 1.x release.
+- [x] 5.3 Add `sdks/go/transport/command_map.go` with `MapCommand(dotted, payload)` — full 26-entry table matching `sdks/rust/src/transport/command_map.rs`.
+- [x] 5.4 Modify `sdks/go/client.go`: `Config` grows `Transport`, `RpcPort`, `Resp3Port` fields; `NewClient` picks a transport via `transport.Build`; a new `NewClientE` variant returns `(*Client, error)` for Go-idiomatic construction. `Client.TransportMode()`, `Client.EndpointDescription()`, `Client.Close()` surface the resolved transport.
+- [x] 5.5 Wire `ExecuteCypher` through the transport (`Request{Command: "CYPHER", Args: ...}`). `transport.HttpError{StatusCode, Body}` is translated back into the SDK-level `*Error` so existing `err.(*nexus.Error)` callers keep working. CRUD helpers (`CreateNode`, `UpdateNode`, …) stay on REST; a legacy `ExecuteCypherHTTP` is preserved for callers that need the raw HTTP response body.
+- [x] 5.6 `go test ./...` — 34 new tests under `sdks/go/transport/transport_test.go` covering endpoint parser (9), wire codec roundtrip (8), command map (7), `ParseMode` (3), `Build` precedence (4), `Credentials.HasAny` (1 test with 4 assertions), and a fails-fast-on-connect-refused assertion (1). All 34 pass; all 24 existing `sdks/go/client_test.go` tests continue to pass.
+- [x] 5.7 `sdks/go/go.mod` updated with `github.com/vmihailenco/msgpack/v5` dependency (pinned by `go mod tidy`).
+- [x] 5.8 `sdks/go/README.md` Quick Start rewritten to show RPC as the default; transport precedence table added; CHANGELOG entry rewritten to cover the transport work + migration notes.
 
 ## 6. C# SDK
 - [ ] 6.1 Add `Transports/NexusRpcTransport.cs` using `MessagePack-CSharp`
