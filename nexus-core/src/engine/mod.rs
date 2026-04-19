@@ -171,8 +171,10 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
 
         // Initialize catalog with isolated path
-        let catalog =
-            catalog::Catalog::with_isolated_path(data_dir.join("catalog.mdb"), 100 * 1024 * 1024)?;
+        let catalog = catalog::Catalog::with_isolated_path(
+            data_dir.join("catalog.mdb"),
+            catalog::CATALOG_MMAP_INITIAL_SIZE,
+        )?;
 
         // Initialize record stores
         let storage = storage::RecordStore::new(data_dir)?;

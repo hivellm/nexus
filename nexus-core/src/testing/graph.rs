@@ -67,8 +67,11 @@ pub fn create_isolated_test_graph() -> (Graph, TestContext) {
 
     // Use isolated catalog to prevent interference from parallel tests
     let catalog = Arc::new(
-        Catalog::with_isolated_path(path.join("catalog.mdb"), 100 * 1024 * 1024)
-            .expect("Failed to create isolated catalog"),
+        Catalog::with_isolated_path(
+            path.join("catalog.mdb"),
+            crate::catalog::CATALOG_MMAP_INITIAL_SIZE,
+        )
+        .expect("Failed to create isolated catalog"),
     );
     let store = RecordStore::new(path).expect("Failed to create record store");
     let graph = Graph::new(store, catalog);

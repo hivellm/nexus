@@ -130,8 +130,11 @@ mod tests {
     /// Create an isolated catalog for tests that need data isolation
     fn create_isolated_test_catalog() -> (Arc<Catalog>, TestContext) {
         let ctx = TestContext::new();
-        let catalog =
-            Catalog::with_isolated_path(ctx.path().join("catalog.mdb"), 100 * 1024 * 1024).unwrap();
+        let catalog = Catalog::with_isolated_path(
+            ctx.path().join("catalog.mdb"),
+            crate::catalog::CATALOG_MMAP_INITIAL_SIZE,
+        )
+        .unwrap();
         (Arc::new(catalog), ctx)
     }
 

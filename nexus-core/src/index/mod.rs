@@ -18,6 +18,19 @@ pub mod btree;
 pub mod fulltext;
 pub mod pending_updates;
 
+/// Default dimensionality for `KnnIndex` when no per-call override is
+/// supplied.
+///
+/// 128 matches the output dimension of the smallest of the HiveLLM
+/// vectorizer profiles (see `hivellm/vectorizer`). It is also the
+/// default MiniLM dim, so SDK examples that embed with a generic
+/// off-the-shelf model round-trip without an explicit dimension
+/// argument. Tests that exercise specific dimensions (64, 256, 768,
+/// 1536) still pass their dimension explicitly to
+/// [`KnnIndex::new_default`] / [`KnnIndex::new`]; this constant only
+/// applies to the "give me a default index" path.
+pub const DEFAULT_VECTORIZER_DIMENSION: usize = 128;
+
 /// SIMD-backed cosine distance plugged into HNSW.
 ///
 /// Delegates to `crate::simd::distance::cosine_f32`, which resolves
@@ -65,7 +78,7 @@ impl IndexManager {
 
         Ok(Self {
             label_index: LabelIndex::new(),
-            knn_index: KnnIndex::new(128)?,
+            knn_index: KnnIndex::new(DEFAULT_VECTORIZER_DIMENSION)?,
             property_index: PropertyIndex::new(),
         })
     }
@@ -995,8 +1008,8 @@ mod tests {
 
     #[test]
     fn test_knn_index_creation() {
-        let index = KnnIndex::new(128).unwrap();
-        assert_eq!(index.dimension(), 128);
+        let index = KnnIndex::new(DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        assert_eq!(index.dimension(), DEFAULT_VECTORIZER_DIMENSION);
 
         let stats = index.get_stats();
         assert_eq!(stats.total_vectors, 0);

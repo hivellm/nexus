@@ -49,7 +49,8 @@ pub fn create_test_executor() -> (Executor, TestContext) {
     let store = RecordStore::new(path).expect("Failed to create record store");
 
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).expect("Failed to create KNN index");
+    let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION)
+        .expect("Failed to create KNN index");
 
     let executor = Executor::new(&catalog, &store, &label_index, &knn_index)
         .expect("Failed to create executor");
@@ -89,13 +90,17 @@ pub fn create_isolated_test_executor() -> (Executor, TestContext) {
     std::fs::create_dir_all(path).expect("Failed to create executor directory");
 
     // Use isolated catalog to prevent interference from parallel tests
-    let catalog = Catalog::with_isolated_path(path.join("catalog.mdb"), 100 * 1024 * 1024)
-        .expect("Failed to create isolated catalog");
+    let catalog = Catalog::with_isolated_path(
+        path.join("catalog.mdb"),
+        crate::catalog::CATALOG_MMAP_INITIAL_SIZE,
+    )
+    .expect("Failed to create isolated catalog");
 
     let store = RecordStore::new(path).expect("Failed to create record store");
 
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).expect("Failed to create KNN index");
+    let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION)
+        .expect("Failed to create KNN index");
 
     let executor = Executor::new(&catalog, &store, &label_index, &knn_index)
         .expect("Failed to create executor");
@@ -128,7 +133,8 @@ pub fn create_test_executor_with_path<P: AsRef<Path>>(path: P) -> (Executor, Tes
     let store = RecordStore::new(&executor_path).expect("Failed to create record store");
 
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).expect("Failed to create KNN index");
+    let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION)
+        .expect("Failed to create KNN index");
 
     let executor = Executor::new(&catalog, &store, &label_index, &knn_index)
         .expect("Failed to create executor");

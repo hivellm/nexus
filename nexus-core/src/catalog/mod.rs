@@ -25,6 +25,23 @@
 
 pub mod constraints;
 
+/// Default LMDB `map_size` for a catalog environment — 100 MiB.
+///
+/// Sized for the catalog's workload: label / type / key name strings
+/// plus their u32 ID mappings, metadata, statistics, constraints,
+/// UDFs, and procedures. Even a production deployment with tens of
+/// thousands of labels comfortably fits under this ceiling. LMDB
+/// reserves virtual address space up to `map_size` eagerly on
+/// `Env::open`, so picking this too large wastes address space on
+/// Windows where TLS-slot pressure grows with the number of opened
+/// environments; picking it too small surfaces as `MDB_MAP_FULL`
+/// under catalog churn. 100 MiB is the working compromise measured
+/// during the phase4 magic-constant audit.
+///
+/// Callers that need a larger map explicitly pass their own value to
+/// [`Catalog::with_map_size`] / [`Catalog::with_isolated_path`].
+pub const CATALOG_MMAP_INITIAL_SIZE: usize = 100 * 1024 * 1024;
+
 use crate::{Error, Result};
 use dashmap::DashMap;
 use heed::types::*;
@@ -185,7 +202,7 @@ impl Catalog {
     /// use nexus_core::catalog::Catalog;
     ///
     /// // Create catalog with 100MB map size for testing
-    /// let catalog = Catalog::with_map_size("./data/catalog", 100 * 1024 * 1024).unwrap();
+    /// let catalog = Catalog::with_map_size("./data/catalog", nexus_core::catalog::CATALOG_MMAP_INITIAL_SIZE).unwrap();
     /// ```
     pub fn with_map_size<P: AsRef<Path>>(path: P, map_size: usize) -> Result<Self> {
         use std::sync::OnceLock;
@@ -199,8 +216,8 @@ impl Catalog {
         // In test mode, use a fixed map_size to avoid BadOpenOptions errors
         // when multiple tests try to open the same environment with different options
         let actual_map_size = if is_test {
-            // Use a fixed map_size for all tests to allow sharing environments
-            100 * 1024 * 1024 // 100MB fixed size for tests
+            // Use a fixed map_size for all tests to allow sharing environments.
+            CATALOG_MMAP_INITIAL_SIZE
         } else {
             map_size
         };
@@ -1087,7 +1104,7 @@ mod tests {
     fn create_test_catalog() -> (Catalog, TestContext) {
         let ctx = TestContext::new();
         // Use shared catalog for most tests to avoid TlsFull
-        let catalog = Catalog::with_map_size(ctx.path(), 100 * 1024 * 1024).unwrap();
+        let catalog = Catalog::with_map_size(ctx.path(), CATALOG_MMAP_INITIAL_SIZE).unwrap();
         (catalog, ctx)
     }
 
@@ -1095,7 +1112,7 @@ mod tests {
     /// WARNING: Use sparingly - each call creates a new LMDB environment
     fn create_isolated_test_catalog() -> (Catalog, TestContext) {
         let ctx = TestContext::new();
-        let catalog = Catalog::with_isolated_path(ctx.path(), 100 * 1024 * 1024).unwrap();
+        let catalog = Catalog::with_isolated_path(ctx.path(), CATALOG_MMAP_INITIAL_SIZE).unwrap();
         (catalog, ctx)
     }
 
@@ -1182,7 +1199,7 @@ mod tests {
 
         // Create catalog and add data using isolated path
         {
-            let catalog = Catalog::with_isolated_path(&path, 100 * 1024 * 1024).unwrap();
+            let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
             catalog.get_or_create_label("Person").unwrap();
             catalog.get_or_create_type("KNOWS").unwrap();
             catalog.sync().unwrap();
@@ -1190,7 +1207,7 @@ mod tests {
 
         // Reopen and verify data persisted
         {
-            let catalog = Catalog::with_isolated_path(&path, 100 * 1024 * 1024).unwrap();
+            let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
             let person_id = catalog.get_or_create_label("Person").unwrap();
             let knows_id = catalog.get_or_create_type("KNOWS").unwrap();
 
@@ -1377,7 +1394,7 @@ mod tests {
 
         // Create catalog with data using isolated path
         {
-            let catalog = Catalog::with_isolated_path(&path, 100 * 1024 * 1024).unwrap();
+            let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
             catalog.get_or_create_label("Person").unwrap();
             catalog.get_or_create_label("Company").unwrap();
             catalog.get_or_create_type("KNOWS").unwrap();
@@ -1391,7 +1408,7 @@ mod tests {
 
         // Reopen and verify counters are correct
         {
-            let catalog = Catalog::with_isolated_path(&path, 100 * 1024 * 1024).unwrap();
+            let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
 
             // Should allocate next IDs correctly
             let location_id = catalog.get_or_create_label("Location").unwrap();

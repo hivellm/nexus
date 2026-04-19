@@ -16,8 +16,11 @@ use crate::testing::TestContext;
 /// Helper to create a test catalog with guaranteed directory existence
 fn create_test_catalog() -> (Catalog, TestContext) {
     let ctx = TestContext::new();
-    let catalog = Catalog::with_isolated_path(ctx.path().join("catalog.mdb"), 100 * 1024 * 1024)
-        .expect("Failed to create catalog");
+    let catalog = Catalog::with_isolated_path(
+        ctx.path().join("catalog.mdb"),
+        crate::catalog::CATALOG_MMAP_INITIAL_SIZE,
+    )
+    .expect("Failed to create catalog");
     (catalog, ctx)
 }
 
@@ -25,7 +28,7 @@ fn create_test_catalog() -> (Catalog, TestContext) {
 fn test_plan_simple_query() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {
@@ -77,7 +80,7 @@ fn test_plan_simple_query() {
 fn test_estimate_cost() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let operators = vec![
@@ -104,7 +107,7 @@ fn test_estimate_cost() {
 fn test_plan_query_with_where_clause() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {
@@ -174,7 +177,7 @@ fn test_plan_query_with_where_clause() {
 fn test_plan_query_with_limit() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {
@@ -221,7 +224,7 @@ fn test_plan_query_with_limit() {
 fn test_plan_query_with_relationship() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {
@@ -278,7 +281,7 @@ fn test_plan_query_with_relationship() {
 fn test_plan_query_with_variable_length_path() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {
@@ -346,7 +349,7 @@ fn test_plan_query_with_variable_length_path() {
 fn test_plan_query_with_range_quantifier() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {
@@ -409,7 +412,7 @@ fn test_plan_query_with_range_quantifier() {
 fn test_plan_query_empty_patterns() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {
@@ -425,7 +428,7 @@ fn test_plan_query_empty_patterns() {
 fn test_expression_to_string_variable() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let expr = Expression::Variable("test_var".to_string());
@@ -437,7 +440,7 @@ fn test_expression_to_string_variable() {
 fn test_expression_to_string_property_access() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let expr = Expression::PropertyAccess {
@@ -452,7 +455,7 @@ fn test_expression_to_string_property_access() {
 fn test_expression_to_string_literals() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     // Test string literal - use single quotes for Neo4j compatibility (fixed in Phase 1)
@@ -485,7 +488,7 @@ fn test_expression_to_string_literals() {
 fn test_expression_to_string_binary_operators() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let expr = Expression::BinaryOp {
@@ -509,7 +512,7 @@ fn test_expression_to_string_binary_operators() {
 fn test_expression_to_string_parameter() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let expr = Expression::Parameter("param1".to_string());
@@ -521,7 +524,7 @@ fn test_expression_to_string_parameter() {
 fn test_estimate_cost_all_operators() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let operators = vec![
@@ -601,7 +604,7 @@ fn test_estimate_cost_all_operators() {
 fn test_optimize_operator_order() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let operators = vec![
@@ -625,7 +628,7 @@ fn test_optimize_operator_order() {
 fn test_plan_query_with_return_alias() {
     let (catalog, _ctx) = create_test_catalog();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new(128).unwrap();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
     let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
 
     let query = CypherQuery {

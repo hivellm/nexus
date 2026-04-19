@@ -1097,7 +1097,8 @@ impl Default for Executor {
         let store = RecordStore::new(&path).expect("Failed to create record store");
         let catalog = Catalog::default();
         let label_index = LabelIndex::default();
-        let knn_index = KnnIndex::new_default(128).expect("Failed to create default KNN index");
+        let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION)
+            .expect("Failed to create default KNN index");
 
         Self::new(&catalog, &store, &label_index, &knn_index)
             .expect("Failed to create default executor")
@@ -1119,7 +1120,7 @@ mod tests {
         let catalog = Catalog::new(ctx.path()).unwrap();
         let store = RecordStore::new(ctx.path()).unwrap();
         let label_index = LabelIndex::new();
-        let knn_index = KnnIndex::new_default(128).unwrap();
+        let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
 
         let config = ExecutorConfig::default();
         let executor =

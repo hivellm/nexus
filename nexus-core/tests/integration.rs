@@ -196,7 +196,11 @@ fn test_full_transaction_lifecycle() {
     let dir = ctx.path();
 
     // Use isolated catalog to ensure label IDs start from 0
-    let catalog = Catalog::with_isolated_path(dir.join("catalog.mdb"), 100 * 1024 * 1024).unwrap();
+    let catalog = Catalog::with_isolated_path(
+        dir.join("catalog.mdb"),
+        nexus_core::catalog::CATALOG_MMAP_INITIAL_SIZE,
+    )
+    .unwrap();
     let mut store = RecordStore::new(dir).unwrap();
     let mut tx_mgr = TransactionManager::new().unwrap();
     let mut wal = Wal::new(dir.join("wal.log")).unwrap();

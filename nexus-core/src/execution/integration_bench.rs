@@ -111,7 +111,7 @@ pub fn benchmark_executor_creation() -> Result<()> {
     let catalog = Catalog::new(ctx.path()).unwrap();
     let store = RecordStore::new(ctx.path()).unwrap();
     let label_index = LabelIndex::new();
-    let knn_index = KnnIndex::new_default(128).unwrap();
+    let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
 
     let config_vectorized = ExecutorConfig {
         enable_vectorized_execution: true,
