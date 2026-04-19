@@ -89,9 +89,13 @@ impl Config {
 }
 
 impl Default for Profile {
+    /// Default profile points at the native Nexus RPC endpoint on the
+    /// loopback. Post `phase2_cli-default-rpc-transport` the CLI is
+    /// RPC-first — users who want HTTP pass `http://host:15474`
+    /// explicitly or set `--transport http`.
     fn default() -> Self {
         Self {
-            url: "http://localhost:3000".to_string(),
+            url: "nexus://127.0.0.1:15475".to_string(),
             api_key: None,
             username: None,
             password: None,

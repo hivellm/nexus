@@ -5,6 +5,8 @@ mod client;
 mod commands;
 mod config;
 mod cypher_helper;
+mod endpoint;
+mod rpc_transport;
 
 use commands::{admin, completion, config as config_cmd, data, db, key, query, schema, user};
 
@@ -36,6 +38,12 @@ pub struct Cli {
     /// Connection profile name
     #[arg(long, env = "NEXUS_PROFILE")]
     pub profile: Option<String>,
+
+    /// Wire transport: `rpc` (default, binary), `http`, `https`, or
+    /// `auto` (pick from URL scheme). Overrides the URL scheme when
+    /// the two disagree.
+    #[arg(long, env = "NEXUS_TRANSPORT")]
+    pub transport: Option<String>,
 
     /// Verbose output
     #[arg(short, long)]
@@ -92,7 +100,20 @@ async fn main() -> Result<()> {
         cli.api_key.as_deref().or(cfg.api_key.as_deref()),
         cli.username.as_deref().or(cfg.username.as_deref()),
         cli.password.as_deref().or(cfg.password.as_deref()),
+        cli.transport.as_deref(),
     )?;
+
+    if cli.verbose {
+        eprintln!(
+            "nexus: connected via {} ({})",
+            client.endpoint_description(),
+            if client.is_rpc() {
+                "binary RPC"
+            } else {
+                "HTTP/JSON"
+            }
+        );
+    }
 
     // Create output context
     let output = commands::OutputContext {

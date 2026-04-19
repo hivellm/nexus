@@ -17,15 +17,49 @@ Download the latest release from the [releases page](https://github.com/hivellm/
 ## Quick Start
 
 ```bash
-# Ping the server
-nexus --url http://localhost:3000 db ping
+# Ping the server (defaults to nexus://127.0.0.1:15475 — native RPC)
+nexus db ping
 
 # Execute a query
-nexus --url http://localhost:3000 query "MATCH (n) RETURN n LIMIT 5"
+nexus query "MATCH (n) RETURN n LIMIT 5"
 
 # Interactive mode
-nexus --url http://localhost:3000 query --interactive
+nexus query --interactive
+
+# Explicit RPC endpoint with credentials
+nexus --url nexus://db.internal:15475 \
+      --username alice --password secret \
+      query "RETURN 1"
+
+# Force the HTTP/JSON legacy transport (diagnostic or for servers that
+# only expose REST):
+nexus --transport http --url http://localhost:15474 query "RETURN 1"
 ```
+
+## Transports
+
+Since `phase2_cli-default-rpc-transport` the CLI is **RPC-first**. The
+default endpoint is `nexus://127.0.0.1:15475` (the native binary RPC
+listener). URLs accept three scheme forms:
+
+| Form                            | Transport  | Default port |
+|---------------------------------|------------|--------------|
+| `nexus://host[:port]`           | Binary RPC | `15475`      |
+| `http://host[:port]`            | HTTP/JSON  | `15474`      |
+| `https://host[:port]`           | HTTPS/JSON | `443`        |
+| `host[:port]` (no scheme)       | Binary RPC | `15475`      |
+
+`nexus-rpc://` and `nexus+rpc://` are **not** valid — the single
+canonical token is `nexus`.
+
+**Forcing a transport**: the `--transport` flag (or `NEXUS_TRANSPORT`
+env var) overrides whatever scheme the URL implies. Accepted values:
+`rpc` / `nexus`, `http`, `https`, `auto` (default — honour the URL).
+
+When RPC is active, only `nexus query` (CYPHER) and `nexus db ping`
+currently use it natively — every other subcommand auto-falls back to
+HTTP against the sibling `15474` port with a visible warning. Adding
+more RPC verbs is tracked in follow-up tasks.
 
 ## Configuration
 
@@ -34,23 +68,28 @@ nexus --url http://localhost:3000 query --interactive
 Create a configuration file at `~/.config/nexus/config.toml` (Linux/macOS) or `%APPDATA%\nexus\config.toml` (Windows):
 
 ```toml
-url = "http://localhost:3000"
+url = "nexus://127.0.0.1:15475"
 username = "root"
 password = "your-password"
 
 [profiles.production]
-url = "http://production:3000"
+url = "nexus://production.internal:15475"
 api_key = "your-api-key"
 
 [profiles.development]
-url = "http://localhost:3000"
+url = "nexus://127.0.0.1:15475"
 username = "dev"
 password = "dev-password"
+
+# Legacy HTTP profile (for servers without the RPC listener enabled)
+[profiles.legacy]
+url = "http://localhost:15474"
 ```
 
 ### Environment Variables
 
-- `NEXUS_URL` - Server URL
+- `NEXUS_URL` - Server URL (scheme picks the transport)
+- `NEXUS_TRANSPORT` - Force transport: `rpc`, `http`, `https`, or `auto`
 - `NEXUS_API_KEY` - API key for authentication
 - `NEXUS_USERNAME` - Username for authentication
 - `NEXUS_PASSWORD` - Password for authentication

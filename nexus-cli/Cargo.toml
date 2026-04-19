@@ -13,6 +13,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
 
 [lints.clippy]
 
+[lib]
+name = "nexus_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "nexus"
 path = "src/main.rs"
@@ -22,8 +26,11 @@ path = "src/main.rs"
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 
-# HTTP client
+# HTTP client (fallback transport + commands that have no RPC verb yet)
 reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+# Native binary RPC transport (default on `nexus://` URLs)
+nexus-protocol = { path = "../nexus-protocol" }
 
 # Async runtime
 tokio = { workspace = true }
