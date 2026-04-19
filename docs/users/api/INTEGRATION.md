@@ -34,7 +34,7 @@ async def get_users():
 
 ```javascript
 const express = require('express');
-const { NexusClient } = require('@hivellm/nexus-sdk');
+const { NexusClient } = require('@hivehub/nexus-sdk');
 
 const app = express();
 const nexus = new NexusClient({ baseUrl: 'http://localhost:15474' });

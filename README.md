@@ -207,7 +207,7 @@ Six first-party SDKs, all tracking the same 1.0.0 line. Every SDK shares the URL
 |----------------|--------------------------------------------|-----------------------------------------------|-----------------|
 | 🦀 Rust        | `nexus-sdk = "1.0.0"`                      | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped      |
 | 🐍 Python      | `pip install nexus-sdk`                    | [sdks/python/](sdks/python/README.md)         | 🧭 queued (§4)  |
-| 📘 TypeScript  | `npm install @hivellm/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | 🧭 queued (§3)  |
+| 📘 TypeScript  | `npm install @hivehub/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | 🧭 queued (§3)  |
 | 🐹 Go          | `go get github.com/hivellm/nexus-go`       | [sdks/go/](sdks/go/README.md)                 | 🧭 queued (§5)  |
 | 💜 C#          | `dotnet add package Nexus.SDK`             | [sdks/csharp/](sdks/csharp/README.md)         | 🧭 queued (§6)  |
 | 🐘 PHP         | `composer require hivellm/nexus-php`       | [sdks/php/](sdks/php/README.md)               | 🧭 queued (§8)  |
@@ -227,7 +227,7 @@ async with NexusClient("http://localhost:15474") as client:
 
 **TypeScript** (currently HTTP/JSON):
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 const client = new NexusClient({ baseUrl: 'http://localhost:15474' });
 const result = await client.executeCypher('MATCH (n:Person) RETURN n.name LIMIT 10');

@@ -14,13 +14,13 @@ Complete guide for the Nexus TypeScript/JavaScript SDK.
 ## Installation
 
 ```bash
-npm install @hivellm/nexus-sdk
+npm install @hivehub/nexus-sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 // Create client
 const client = new NexusClient({
@@ -40,7 +40,7 @@ console.log(result.rows);
 ### API Key
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 const client = new NexusClient({
   baseUrl: 'http://localhost:15474',
@@ -53,7 +53,7 @@ const client = new NexusClient({
 ### JWT Token
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 // Login first
 const client = new NexusClient({ baseUrl: 'http://localhost:15474' });
@@ -195,7 +195,7 @@ import {
   QueryResult, 
   Node, 
   Relationship 
-} from '@hivellm/nexus-sdk';
+} from '@hivehub/nexus-sdk';
 
 // Query result type
 const result: QueryResult = await client.executeCypher('...');
@@ -220,7 +220,7 @@ const rel: Relationship = {
 ## Error Handling
 
 ```typescript
-import { NexusClient, NexusError } from '@hivellm/nexus-sdk';
+import { NexusClient, NexusError } from '@hivehub/nexus-sdk';
 
 const client = new NexusClient({ baseUrl: 'http://localhost:15474' });
 
@@ -250,7 +250,7 @@ const client = new NexusClient({
 ### Retry Logic
 
 ```typescript
-import { NexusClient, RetryConfig } from '@hivellm/nexus-sdk';
+import { NexusClient, RetryConfig } from '@hivehub/nexus-sdk';
 
 const client = new NexusClient({
   baseUrl: 'http://localhost:15474',
@@ -306,7 +306,7 @@ const result = await client.executeCypher(
 
 ```typescript
 // Works in browser with fetch API
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 const client = new NexusClient({
   baseUrl: 'https://api.example.com',
