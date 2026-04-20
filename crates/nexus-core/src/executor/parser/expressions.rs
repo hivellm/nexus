@@ -388,7 +388,28 @@ impl CypherParser {
                 if self.peek_keyword("CASE") {
                     self.parse_case_expression()
                 } else if self.peek_keyword("EXISTS") {
-                    self.parse_exists_expression()
+                    // phase6_opencypher-quickwins §7 — disambiguate:
+                    //   EXISTS { pattern }     → pattern-existence predicate
+                    //   exists(expr)           → scalar function, routed
+                    //                             through parse_identifier_expression
+                    //                             which emits a FunctionCall.
+                    // The saved position lets us commit to the pattern-
+                    // exists branch only after confirming the next
+                    // non-whitespace token is `{`.
+                    let saved_pos = self.pos;
+                    let saved_line = self.line;
+                    let saved_col = self.column;
+                    self.parse_keyword()?; // consume EXISTS
+                    self.skip_whitespace();
+                    let next_is_brace = self.peek_char() == Some('{');
+                    self.pos = saved_pos;
+                    self.line = saved_line;
+                    self.column = saved_col;
+                    if next_is_brace {
+                        self.parse_exists_expression()
+                    } else {
+                        self.parse_identifier_expression()
+                    }
                 } else if self.peek_keyword("true") {
                     self.parse_boolean_literal(true)
                 } else if self.peek_keyword("false") {

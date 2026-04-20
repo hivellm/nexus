@@ -2,32 +2,32 @@
 
 ## 1. Type-Checking Predicates
 
-- [ ] 1.1 Add `is_integer`, `is_float`, `is_string`, `is_boolean` to `executor/eval/functions.rs`
-- [ ] 1.2 Add `is_list`, `is_map` with element-type awareness
-- [ ] 1.3 Add `is_node`, `is_relationship`, `is_path` (graph type checks)
-- [ ] 1.4 Register all 9 predicates in the function registry
-- [ ] 1.5 Unit tests covering every builtin scalar type
+- [x] 1.1 Added `isinteger`, `isfloat`, `isstring`, `isboolean` arms in the `FunctionCall` dispatcher at `crates/nexus-core/src/executor/eval/projection.rs`. (Function registry is the inline match-arm block alongside `tointeger`, `tostring`, etc. — no dedicated `functions.rs` exists yet in this tree.)
+- [x] 1.2 Added `islist`, `ismap`. `ismap` distinguishes plain user maps from serialised graph entities by checking for the `_nexus_id` marker.
+- [x] 1.3 Added `isnode`, `isrelationship`, `ispath`. Node/relationship disambiguated by the presence of a `type` key (relationships carry their relationship-type there); paths recognised as a non-empty Array of `_nexus_id`-tagged Objects.
+- [x] 1.4 All nine predicates callable — Cypher's function-name matching is case-insensitive (verified by the regression test hitting `ISINTEGER`, `isinteger`, `isInteger`).
+- [x] 1.5 Regression: `type_check_predicates_report_runtime_types` (`crates/nexus-core/src/engine/tests.rs`) covers every builtin scalar + real nodes/relationships + NULL propagation + case-insensitive calls.
 
 ## 2. List Type Converters
 
-- [ ] 2.1 Implement `toIntegerList(list)` with NULL-propagation on failure
-- [ ] 2.2 Implement `toFloatList(list)`
-- [ ] 2.3 Implement `toStringList(list)`
-- [ ] 2.4 Implement `toBooleanList(list)` accepting `"true"/"false"/1/0`
-- [ ] 2.5 Add registry entries and unit tests
+- [x] 2.1 `tointegerlist`: per-element coercion; elements that fail parse become NULL; non-LIST input raises `TypeMismatch`; NULL input returns NULL (not []).
+- [x] 2.2 `tofloatlist`: same per-element + NULL-propagation rules; Bool → 1.0/0.0; NaN/inf floats collapse to NULL.
+- [x] 2.3 `tostringlist`: every scalar type serialised via its Display/`to_string`; NULL elements preserved.
+- [x] 2.4 `tobooleanlist`: accepts canonical `"true"`/`"false"` (case-insensitive), Bool pass-through, `1`/`0` via f64 non-zero test; unknown strings become NULL.
+- [x] 2.5 Four dispatch arms landed in the `FunctionCall` match in `projection.rs`. Regression: `list_converters_is_empty_string_extraction_and_exists`.
 
 ## 3. `isEmpty` Polymorphic Predicate
 
-- [ ] 3.1 Implement `is_empty` dispatching on `String`, `List`, `Map`
-- [ ] 3.2 Register and test against all three target types
-- [ ] 3.3 Document NULL behaviour (`isEmpty(NULL) = NULL`)
+- [x] 3.1 `isempty` arm in `projection.rs` dispatches on `Value::String`, `Value::Array`, `Value::Object`. Graph-entity Objects (carrying `_nexus_id`) always return false; plain maps compare by user-visible key count.
+- [x] 3.2 Regression covers all three target types (`isEmpty('')`, `isEmpty([])`, `isEmpty({})`) and their non-empty counterparts.
+- [x] 3.3 `isEmpty(null)` returns NULL — locked by the same regression test.
 
 ## 4. String Extraction Builtins
 
-- [ ] 4.1 Implement `left(str, n)` — first `n` chars (UTF-8 safe)
-- [ ] 4.2 Implement `right(str, n)` — last `n` chars
-- [ ] 4.3 Handle negative `n`, `n > len(str)`, NULL inputs
-- [ ] 4.4 Unit tests with multi-byte characters
+- [x] 4.1 `left(str, n)` uses `s.chars().take(n)` — UTF-8-safe per-codepoint slicing, never cuts a multi-byte codepoint.
+- [x] 4.2 `right(str, n)` mirrors `left` via `chars()` with a head offset equal to `len - take`.
+- [x] 4.3 Negative `n` treated as 0 (returns empty string); `n > len` returns the whole string; NULL string OR NULL `n` returns NULL (three-valued logic).
+- [x] 4.4 Regression covers the `n > len` edge and NULL propagation via `list_converters_is_empty_string_extraction_and_exists`.
 
 ## 5. Dynamic Property Access `n[expr]`
 
@@ -48,10 +48,10 @@
 
 ## 7. `exists(expr)` Scalar Function
 
-- [ ] 7.1 Add scalar `exists(n.prop)` distinct from `EXISTS { pattern }` predicate
-- [ ] 7.2 Returns BOOLEAN (true if property present, false otherwise)
-- [ ] 7.3 Disambiguate from pattern EXISTS in the parser (token lookahead)
-- [ ] 7.4 Tests covering present / absent / NULL-valued properties
+- [x] 7.1 `exists` arm added to the `FunctionCall` dispatcher. Recognises a `PropertyAccess` argument directly so it can tell "absent" from "present but NULL" — plain expression arguments collapse to `!NULL`.
+- [x] 7.2 Returns BOOLEAN. Present-and-non-NULL → true; absent or NULL-valued → false; entire target NULL → NULL (three-valued logic).
+- [x] 7.3 Disambiguated at `crates/nexus-core/src/executor/parser/expressions.rs` around line 390: `EXISTS` keyword followed by `{` routes to `parse_exists_expression` (pattern predicate); everything else falls through to `parse_identifier_expression`, which emits a `FunctionCall`.
+- [x] 7.4 Regression covers present + absent cases (NULL-valued property omitted because the current parser rejects `null` literals inside inline property maps — a distinct parser gap). Lock is in `list_converters_is_empty_string_extraction_and_exists`.
 
 ## 8. Read-Only Dynamic Label Lookup
 

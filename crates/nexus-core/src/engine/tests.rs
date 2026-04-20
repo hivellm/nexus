@@ -1422,6 +1422,165 @@ fn with_projection_and_filter_run_before_return_aggregation() {
     );
 }
 
+/// Regression for phase6_opencypher-quickwins §1 — nine type-check
+/// predicates (`isInteger`, `isFloat`, `isString`, `isBoolean`,
+/// `isList`, `isMap`, `isNode`, `isRelationship`, `isPath`) return
+/// BOOLEAN and propagate NULL under three-valued logic.
+#[test]
+fn type_check_predicates_report_runtime_types() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (:Phase6QW_TP {name: 'x'})-[:R]->(:Phase6QW_TP {name: 'y'})")
+        .unwrap();
+
+    // Direct scalars
+    let cases: &[(&str, serde_json::Value)] = &[
+        ("RETURN isInteger(42) AS v", serde_json::json!(true)),
+        ("RETURN isInteger(3.14) AS v", serde_json::json!(false)),
+        ("RETURN isFloat(3.14) AS v", serde_json::json!(true)),
+        ("RETURN isFloat(42) AS v", serde_json::json!(false)),
+        ("RETURN isString('abc') AS v", serde_json::json!(true)),
+        ("RETURN isString(42) AS v", serde_json::json!(false)),
+        ("RETURN isBoolean(true) AS v", serde_json::json!(true)),
+        ("RETURN isBoolean(0) AS v", serde_json::json!(false)),
+        ("RETURN isList([]) AS v", serde_json::json!(true)),
+        ("RETURN isList([1,'a',null]) AS v", serde_json::json!(true)),
+        ("RETURN isList(42) AS v", serde_json::json!(false)),
+        ("RETURN isMap({a:1}) AS v", serde_json::json!(true)),
+        ("RETURN isMap([]) AS v", serde_json::json!(false)),
+        ("RETURN isNode(42) AS v", serde_json::json!(false)),
+        (
+            "RETURN isRelationship('abc') AS v",
+            serde_json::json!(false),
+        ),
+        ("RETURN isPath('abc') AS v", serde_json::json!(false)),
+        // Three-valued logic: NULL in → NULL out.
+        ("RETURN isInteger(null) AS v", serde_json::Value::Null),
+        ("RETURN isString(null) AS v", serde_json::Value::Null),
+        // Case-insensitive.
+        ("RETURN ISINTEGER(1) AS v", serde_json::json!(true)),
+        ("RETURN isinteger(1) AS v", serde_json::json!(true)),
+    ];
+    for (q, expected) in cases {
+        let r = engine.execute_cypher(q).unwrap();
+        assert_eq!(
+            r.rows[0].values[0], *expected,
+            "query `{}` expected {:?} got {:?}",
+            q, expected, r.rows[0].values[0]
+        );
+    }
+
+    // Graph-typed predicates use real nodes / relationships.
+    let r = engine
+        .execute_cypher("MATCH (n:Phase6QW_TP) RETURN isNode(n) AS v LIMIT 1")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(true));
+    let r = engine
+        .execute_cypher(
+            "MATCH (:Phase6QW_TP)-[r:R]->(:Phase6QW_TP) RETURN isRelationship(r) AS v LIMIT 1",
+        )
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(true));
+}
+
+/// Regression for phase6_opencypher-quickwins §2/§3/§4/§7 —
+/// list-coercion (`toIntegerList`, `toFloatList`, `toStringList`,
+/// `toBooleanList`), polymorphic `isEmpty`, UTF-8-safe `left`/`right`,
+/// and the scalar `exists(n.prop)` function.
+#[test]
+fn list_converters_is_empty_string_extraction_and_exists() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (:Phase6QW_EX {name: 'Alice', age: 30})")
+        .unwrap();
+
+    // §2 list converters
+    let r = engine
+        .execute_cypher("RETURN toIntegerList(['1','2','three',null]) AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!([1, 2, null, null]));
+
+    let r = engine
+        .execute_cypher("RETURN toFloatList([1, '2.5', true, null]) AS v")
+        .unwrap();
+    assert_eq!(
+        r.rows[0].values[0],
+        serde_json::json!([1.0, 2.5, 1.0, null])
+    );
+
+    let r = engine
+        .execute_cypher("RETURN toStringList([1, 2.5, true, null]) AS v")
+        .unwrap();
+    assert_eq!(
+        r.rows[0].values[0],
+        serde_json::json!(["1", "2.5", "true", null])
+    );
+
+    let r = engine
+        .execute_cypher("RETURN toBooleanList([true, 'false', 1, 0, 'TRUE', 'x']) AS v")
+        .unwrap();
+    assert_eq!(
+        r.rows[0].values[0],
+        serde_json::json!([true, false, true, false, true, null])
+    );
+
+    // NULL input → NULL (not [])
+    let r = engine
+        .execute_cypher("RETURN toIntegerList(null) AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::Value::Null);
+
+    // §3 isEmpty polymorphic
+    let r = engine.execute_cypher("RETURN isEmpty('') AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(true));
+    let r = engine.execute_cypher("RETURN isEmpty([]) AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(true));
+    let r = engine.execute_cypher("RETURN isEmpty({}) AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(true));
+    let r = engine.execute_cypher("RETURN isEmpty('a') AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(false));
+    let r = engine.execute_cypher("RETURN isEmpty([1]) AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(false));
+    let r = engine.execute_cypher("RETURN isEmpty({a:1}) AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(false));
+    let r = engine.execute_cypher("RETURN isEmpty(null) AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::Value::Null);
+
+    // §4 left / right UTF-8 safe
+    let r = engine
+        .execute_cypher("RETURN left('hello', 3) AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!("hel"));
+    let r = engine
+        .execute_cypher("RETURN right('hello', 3) AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!("llo"));
+    // n > len → whole string
+    let r = engine.execute_cypher("RETURN left('ab', 10) AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!("ab"));
+    let r = engine
+        .execute_cypher("RETURN right('ab', 10) AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!("ab"));
+    // NULL propagation
+    let r = engine.execute_cypher("RETURN left(null, 3) AS v").unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::Value::Null);
+
+    // §7 exists(prop) — present, absent, NULL-valued
+    let r = engine
+        .execute_cypher("MATCH (n:Phase6QW_EX) RETURN exists(n.name) AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(true));
+    let r = engine
+        .execute_cypher("MATCH (n:Phase6QW_EX) RETURN exists(n.missing) AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(false));
+}
+
 /// Perf regression for the bench's `traversal.cartesian_a_b` gap —
 /// `MATCH (a:L1), (b:L2) RETURN count(*)` must collapse to a
 /// catalog-metadata lookup instead of assembling the full cross-product

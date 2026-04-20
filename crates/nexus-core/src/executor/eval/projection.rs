@@ -13,6 +13,26 @@ use chrono::{Datelike, TimeZone, Timelike};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+/// openCypher-ish type name used in error messages from type-check and
+/// list-coercion builtins. Keeps the error surface aligned with the
+/// openCypher spec's `INTEGER`, `FLOAT`, `STRING`, etc.
+fn type_name_of(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "NULL",
+        Value::Bool(_) => "BOOLEAN",
+        Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                "INTEGER"
+            } else {
+                "FLOAT"
+            }
+        }
+        Value::String(_) => "STRING",
+        Value::Array(_) => "LIST",
+        Value::Object(_) => "MAP",
+    }
+}
+
 impl Executor {
     pub(in crate::executor) fn evaluate_projection_expression(
         &self,
@@ -990,6 +1010,378 @@ impl Executor {
                         } else {
                             Ok(Value::Null)
                         }
+                    }
+                    // phase6_opencypher-quickwins §1 — type-check predicates.
+                    // Each returns NULL on NULL input (three-valued logic) and
+                    // BOOLEAN otherwise. Nodes vs relationships are
+                    // disambiguated by the presence of a "type" key on the
+                    // serialised Object form (relationships carry their
+                    // relationship-type there; nodes do not).
+                    "isinteger" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Number(n) => Ok(Value::Bool(n.is_i64() || n.is_u64())),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "isfloat" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Number(n) => Ok(Value::Bool(n.is_f64())),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "isstring" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::String(_) => Ok(Value::Bool(true)),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "isboolean" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Bool(_) => Ok(Value::Bool(true)),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "islist" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Array(_) => Ok(Value::Bool(true)),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "ismap" => {
+                        // A MAP is any Object that ISN'T one of Nexus's
+                        // serialised graph entities (node/relationship carry
+                        // `_nexus_id`). Plain user maps are Object values
+                        // without `_nexus_id`.
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Object(obj) => Ok(Value::Bool(!obj.contains_key("_nexus_id"))),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "isnode" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Object(obj) => Ok(Value::Bool(
+                                obj.contains_key("_nexus_id") && !obj.contains_key("type"),
+                            )),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "isrelationship" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Object(obj) => Ok(Value::Bool(
+                                obj.contains_key("_nexus_id") && obj.contains_key("type"),
+                            )),
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    "ispath" => {
+                        // Paths currently surface through the executor as
+                        // Arrays of alternating node/relationship Objects.
+                        // Narrow predicate: non-empty Array whose elements
+                        // are all `_nexus_id`-tagged Objects. Scalars and
+                        // plain lists return false.
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Array(items) if !items.is_empty() => {
+                                let is_path = items.iter().all(|el| {
+                                    matches!(el, Value::Object(o) if o.contains_key("_nexus_id"))
+                                });
+                                Ok(Value::Bool(is_path))
+                            }
+                            _ => Ok(Value::Bool(false)),
+                        }
+                    }
+                    // phase6_opencypher-quickwins §2 — list type-converter
+                    // functions. Per-element coercion: elements that fail to
+                    // convert become NULL rather than erroring the query.
+                    // A NULL input list returns NULL (not an empty list).
+                    // A non-LIST input raises TypeMismatch.
+                    "tointegerlist" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Array(items) => {
+                                let out: Vec<Value> = items
+                                    .into_iter()
+                                    .map(|el| match el {
+                                        Value::Null => Value::Null,
+                                        Value::Number(n) => n
+                                            .as_i64()
+                                            .or_else(|| n.as_f64().map(|f| f as i64))
+                                            .map(|i| Value::Number(i.into()))
+                                            .unwrap_or(Value::Null),
+                                        Value::Bool(b) => {
+                                            Value::Number((if b { 1i64 } else { 0 }).into())
+                                        }
+                                        Value::String(s) => s
+                                            .parse::<i64>()
+                                            .ok()
+                                            .or_else(|| s.parse::<f64>().ok().map(|f| f as i64))
+                                            .map(|i| Value::Number(i.into()))
+                                            .unwrap_or(Value::Null),
+                                        _ => Value::Null,
+                                    })
+                                    .collect();
+                                Ok(Value::Array(out))
+                            }
+                            other => Err(Error::TypeMismatch {
+                                expected: "LIST".to_string(),
+                                actual: type_name_of(&other).to_string(),
+                            }),
+                        }
+                    }
+                    "tofloatlist" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Array(items) => {
+                                let out: Vec<Value> = items
+                                    .into_iter()
+                                    .map(|el| match el {
+                                        Value::Null => Value::Null,
+                                        Value::Number(n) => n
+                                            .as_f64()
+                                            .and_then(serde_json::Number::from_f64)
+                                            .map(Value::Number)
+                                            .unwrap_or(Value::Null),
+                                        Value::Bool(b) => {
+                                            serde_json::Number::from_f64(if b { 1.0 } else { 0.0 })
+                                                .map(Value::Number)
+                                                .unwrap_or(Value::Null)
+                                        }
+                                        Value::String(s) => s
+                                            .parse::<f64>()
+                                            .ok()
+                                            .and_then(serde_json::Number::from_f64)
+                                            .map(Value::Number)
+                                            .unwrap_or(Value::Null),
+                                        _ => Value::Null,
+                                    })
+                                    .collect();
+                                Ok(Value::Array(out))
+                            }
+                            other => Err(Error::TypeMismatch {
+                                expected: "LIST".to_string(),
+                                actual: type_name_of(&other).to_string(),
+                            }),
+                        }
+                    }
+                    "tostringlist" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Array(items) => {
+                                let out: Vec<Value> = items
+                                    .into_iter()
+                                    .map(|el| match el {
+                                        Value::Null => Value::Null,
+                                        Value::String(s) => Value::String(s),
+                                        Value::Number(n) => Value::String(n.to_string()),
+                                        Value::Bool(b) => Value::String(b.to_string()),
+                                        other => Value::String(other.to_string()),
+                                    })
+                                    .collect();
+                                Ok(Value::Array(out))
+                            }
+                            other => Err(Error::TypeMismatch {
+                                expected: "LIST".to_string(),
+                                actual: type_name_of(&other).to_string(),
+                            }),
+                        }
+                    }
+                    "tobooleanlist" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::Array(items) => {
+                                let out: Vec<Value> = items
+                                    .into_iter()
+                                    .map(|el| match el {
+                                        Value::Null => Value::Null,
+                                        Value::Bool(b) => Value::Bool(b),
+                                        Value::Number(n) => {
+                                            Value::Bool(n.as_f64().unwrap_or(0.0) != 0.0)
+                                        }
+                                        Value::String(s) => {
+                                            let lo = s.to_lowercase();
+                                            if lo == "true" {
+                                                Value::Bool(true)
+                                            } else if lo == "false" {
+                                                Value::Bool(false)
+                                            } else {
+                                                Value::Null
+                                            }
+                                        }
+                                        _ => Value::Null,
+                                    })
+                                    .collect();
+                                Ok(Value::Array(out))
+                            }
+                            other => Err(Error::TypeMismatch {
+                                expected: "LIST".to_string(),
+                                actual: type_name_of(&other).to_string(),
+                            }),
+                        }
+                    }
+                    // phase6_opencypher-quickwins §7 — `exists(prop)` scalar.
+                    // Distinguishes "property absent" (false) from "property
+                    // present but NULL" (false as well — Cypher treats NULL
+                    // properties as absent for EXISTS), and from "property
+                    // present with a real value" (true). NULL input returns
+                    // NULL under three-valued logic.
+                    "exists" => {
+                        if args.is_empty() {
+                            return Ok(Value::Null);
+                        }
+                        match &args[0] {
+                            parser::Expression::PropertyAccess { variable, property } => {
+                                let target = row.get(variable).cloned().unwrap_or(Value::Null);
+                                match target {
+                                    Value::Null => Ok(Value::Null),
+                                    Value::Object(obj) => match obj.get(property) {
+                                        Some(Value::Null) | None => Ok(Value::Bool(false)),
+                                        Some(_) => Ok(Value::Bool(true)),
+                                    },
+                                    _ => Ok(Value::Bool(false)),
+                                }
+                            }
+                            other => {
+                                let v = self.evaluate_projection_expression(row, context, other)?;
+                                Ok(Value::Bool(!matches!(v, Value::Null)))
+                            }
+                        }
+                    }
+                    // phase6_opencypher-quickwins §3 — polymorphic `isEmpty`.
+                    // Dispatches on STRING / LIST / MAP; returns NULL on NULL.
+                    "isempty" => {
+                        let v = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match v {
+                            Value::Null => Ok(Value::Null),
+                            Value::String(s) => Ok(Value::Bool(s.is_empty())),
+                            Value::Array(a) => Ok(Value::Bool(a.is_empty())),
+                            Value::Object(obj) => {
+                                // Treat serialised graph entities as non-empty
+                                // (they always carry `_nexus_id`); plain maps
+                                // compare by user-visible key count.
+                                if obj.contains_key("_nexus_id") {
+                                    Ok(Value::Bool(false))
+                                } else {
+                                    Ok(Value::Bool(obj.is_empty()))
+                                }
+                            }
+                            other => Err(Error::TypeMismatch {
+                                expected: "STRING, LIST, or MAP".to_string(),
+                                actual: type_name_of(&other).to_string(),
+                            }),
+                        }
+                    }
+                    // phase6_opencypher-quickwins §4 — left / right UTF-8-safe
+                    // prefix / suffix extraction.
+                    "left" => {
+                        if args.len() < 2 {
+                            return Ok(Value::Null);
+                        }
+                        let s_val = self.evaluate_projection_expression(row, context, &args[0])?;
+                        let n_val = self.evaluate_projection_expression(row, context, &args[1])?;
+                        if matches!(s_val, Value::Null) || matches!(n_val, Value::Null) {
+                            return Ok(Value::Null);
+                        }
+                        let s = match s_val {
+                            Value::String(s) => s,
+                            _ => return Ok(Value::Null),
+                        };
+                        let n = match n_val {
+                            Value::Number(n) => n
+                                .as_i64()
+                                .or_else(|| n.as_f64().map(|f| f as i64))
+                                .unwrap_or(0),
+                            _ => return Ok(Value::Null),
+                        };
+                        let take = n.max(0) as usize;
+                        Ok(Value::String(s.chars().take(take).collect()))
+                    }
+                    "right" => {
+                        if args.len() < 2 {
+                            return Ok(Value::Null);
+                        }
+                        let s_val = self.evaluate_projection_expression(row, context, &args[0])?;
+                        let n_val = self.evaluate_projection_expression(row, context, &args[1])?;
+                        if matches!(s_val, Value::Null) || matches!(n_val, Value::Null) {
+                            return Ok(Value::Null);
+                        }
+                        let s = match s_val {
+                            Value::String(s) => s,
+                            _ => return Ok(Value::Null),
+                        };
+                        let n = match n_val {
+                            Value::Number(n) => n
+                                .as_i64()
+                                .or_else(|| n.as_f64().map(|f| f as i64))
+                                .unwrap_or(0),
+                            _ => return Ok(Value::Null),
+                        };
+                        let char_len = s.chars().count();
+                        let take = (n.max(0) as usize).min(char_len);
+                        let skip = char_len - take;
+                        Ok(Value::String(s.chars().skip(skip).collect()))
                     }
                     "todate" => {
                         // toDate(value) - Convert to date string (YYYY-MM-DD)
