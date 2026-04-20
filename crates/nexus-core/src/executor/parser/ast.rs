@@ -201,6 +201,17 @@ pub enum SetItem {
         /// Label to add
         label: String,
     },
+    /// `SET lhs += mapExpr` — merge the map into the target's property
+    /// bag. Keys present in `map` with non-NULL values overwrite the
+    /// target's existing values; keys with NULL values are removed;
+    /// keys absent from `map` are preserved. Distinct from
+    /// `SET lhs = mapExpr` which replaces the entire bag.
+    MapMerge {
+        /// Target variable
+        target: String,
+        /// Map expression to merge
+        map: Expression,
+    },
 }
 
 /// DELETE clause for deleting nodes and relationships

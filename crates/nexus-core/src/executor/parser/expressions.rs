@@ -751,6 +751,46 @@ impl CypherParser {
             let items = self.parse_map_projection_items()?;
             Ok(Expression::MapProjection { source, items })
         }
+        // phase6_opencypher-quickwins §5 — `var[expr]` directly after
+        // an identifier (no intervening `.property`). The evaluator
+        // disambiguates node/map vs list at runtime; the parser just
+        // emits an `ArrayIndex` and lets runtime decide which lookup
+        // semantics to use.
+        else if self.peek_char() == Some('[') {
+            self.consume_char(); // consume '['
+            self.skip_whitespace();
+            let index = Box::new(self.parse_expression()?);
+            self.skip_whitespace();
+            self.expect_char(']')?;
+            Ok(Expression::ArrayIndex {
+                base: Box::new(Expression::Variable(identifier)),
+                index,
+            })
+        }
+        // phase6_opencypher-quickwins §8 — label predicate `var:Label`
+        // or `var:$param` in WHERE/RETURN expression position. Re-uses
+        // the Filter operator's text-mode short-circuit by emitting a
+        // synthetic `FunctionCall` whose `expression_to_string` render
+        // reproduces the `variable:label` shape the short-circuit
+        // understands. (No dedicated AST variant — the filter path
+        // already pattern-matches on the rendered string.)
+        else if self.peek_char() == Some(':') && self.peek_char_at(1) != Some(':') {
+            self.consume_char(); // consume ':'
+            self.skip_whitespace();
+            let label_source = if self.peek_char() == Some('$') {
+                self.consume_char();
+                format!("${}", self.parse_identifier()?)
+            } else {
+                self.parse_identifier()?
+            };
+            Ok(Expression::FunctionCall {
+                name: "__label_predicate__".to_string(),
+                args: vec![
+                    Expression::Variable(identifier),
+                    Expression::Literal(Literal::String(label_source)),
+                ],
+            })
+        }
         // Check for property access
         else if self.peek_char() == Some('.') {
             self.consume_char();

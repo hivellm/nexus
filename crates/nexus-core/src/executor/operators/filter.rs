@@ -25,16 +25,37 @@ impl Executor {
         }
 
         // Fall back to regular filter execution
-        // Check for label check pattern: variable:Label
+        // Check for label check pattern: variable:Label OR variable:$param
         if predicate.contains(':') && !predicate.contains("::") {
             let parts: Vec<&str> = predicate.split(':').collect();
             if parts.len() == 2 && !parts[0].contains(' ') && !parts[1].contains(' ') {
                 // This is a label check: variable:Label
                 let variable = parts[0].trim();
-                let label_name = parts[1].trim();
+                let mut label_name = parts[1].trim().to_string();
+
+                // phase6_opencypher-quickwins §8 — read-only dynamic label.
+                // Resolve a `$param` reference from the execution context
+                // at runtime. The parameter must bind to a non-empty
+                // STRING; anything else reduces the predicate to
+                // "no match" (empty filter) rather than erroring, which
+                // matches openCypher three-valued logic for NULL labels.
+                if let Some(name) = label_name.strip_prefix('$') {
+                    let resolved = context.params.get(name).cloned().unwrap_or(Value::Null);
+                    match resolved {
+                        Value::String(s) if !s.is_empty() => {
+                            label_name = s;
+                        }
+                        _ => {
+                            let empty: Vec<std::collections::HashMap<String, Value>> = Vec::new();
+                            self.update_variables_from_rows(context, &empty);
+                            self.update_result_set_from_rows(context, &empty);
+                            return Ok(());
+                        }
+                    }
+                }
 
                 // Get label ID
-                if let Ok(label_id) = self.catalog().get_label_id(label_name) {
+                if let Ok(label_id) = self.catalog().get_label_id(&label_name) {
                     // Filter rows where variable has this label
                     let rows = self.materialize_rows_from_variables(context);
                     let mut filtered_rows = Vec::new();

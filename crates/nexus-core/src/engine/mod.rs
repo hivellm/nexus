@@ -939,6 +939,22 @@ impl Engine {
                     _ => Ok(serde_json::Value::Null),
                 }
             }
+            // phase6_opencypher-quickwins §6 — Map literal in SET RHS.
+            // Needed for `SET n += {city: 'Berlin'}`; the merge operator
+            // evaluates the whole map first, then consults it key-by-key.
+            executor::parser::Expression::Map(entries) => {
+                let mut out = serde_json::Map::with_capacity(entries.len());
+                for (k, v) in entries.iter() {
+                    let val = self.evaluate_set_expression(v, target_var, node_props)?;
+                    out.insert(k.clone(), val);
+                }
+                Ok(serde_json::Value::Object(out))
+            }
+            // Parameter placeholders surface as NULL in this narrow
+            // evaluator — parameter-binding lives on the executor side.
+            // Treating them as NULL keeps `SET n += $missing` safely a
+            // no-op when the parameter is absent.
+            executor::parser::Expression::Parameter(_) => Ok(serde_json::Value::Null),
             _ => Err(Error::CypherExecution(
                 "Unsupported expression type in SET clause".to_string(),
             )),
@@ -2102,6 +2118,54 @@ impl Engine {
                     for node_id in node_ids {
                         let state = self.ensure_node_state(*node_id, &mut state_map)?;
                         state.labels.insert(label.clone());
+                    }
+                }
+                // phase6_opencypher-quickwins §6 — `SET lhs += mapExpr`.
+                executor::parser::SetItem::MapMerge { target, map } => {
+                    let node_ids = context.get(target).ok_or_else(|| {
+                        Error::CypherExecution(format!(
+                            "Unknown variable '{}' in SET clause",
+                            target
+                        ))
+                    })?;
+                    for node_id in node_ids.clone() {
+                        let state = self.ensure_node_state(node_id, &mut state_map)?;
+                        let evaluated =
+                            self.evaluate_set_expression(map, target, &state.properties)?;
+                        match evaluated {
+                            Value::Null => {
+                                // NULL RHS is a no-op — preserves current bag.
+                            }
+                            Value::Object(rhs) => {
+                                for (k, v) in rhs.into_iter() {
+                                    if matches!(v, Value::Null) {
+                                        state.properties.remove(&k);
+                                    } else {
+                                        state.properties.insert(k, v);
+                                    }
+                                }
+                            }
+                            other => {
+                                return Err(Error::CypherExecution(format!(
+                                    "ERR_SET_NON_MAP: SET {} += <rhs> requires a MAP or NULL \
+                                     (got {})",
+                                    target,
+                                    match other {
+                                        Value::Bool(_) => "BOOLEAN",
+                                        Value::Number(n) => {
+                                            if n.is_i64() || n.is_u64() {
+                                                "INTEGER"
+                                            } else {
+                                                "FLOAT"
+                                            }
+                                        }
+                                        Value::String(_) => "STRING",
+                                        Value::Array(_) => "LIST",
+                                        _ => "?",
+                                    }
+                                )));
+                            }
+                        }
                     }
                 }
             }

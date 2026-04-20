@@ -115,6 +115,11 @@ fn scope_clause(clause: &mut Clause, ns: &UserNamespace) {
                         scope_label_in_place(property, ns);
                         scope_expression(value, ns);
                     }
+                    // phase6_opencypher-quickwins §6 — scope the RHS map
+                    // expression. Keys inside the map are user-visible
+                    // property names (not labels/types), so they need the
+                    // same treatment as `SET target.prop = value`.
+                    SetItem::MapMerge { map, .. } => scope_expression(map, ns),
                 }
             }
         }

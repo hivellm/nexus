@@ -142,8 +142,40 @@ impl Executor {
                     .unwrap_or(Value::Null))
             }
             parser::Expression::ArrayIndex { base, index } => {
-                // Evaluate the base expression (should return an array)
+                // Evaluate the base expression (may be an array, a node, a
+                // relationship, or a plain map).
                 let base_value = self.evaluate_projection_expression(row, context, base)?;
+
+                // phase6_opencypher-quickwins §5 — dynamic property access.
+                // When the base is a graph-entity Object OR a plain user map,
+                // `base[key]` is a property lookup (key must resolve to
+                // STRING or NULL). When the base is a list, it's the
+                // ordinary integer-indexed lookup. Lists take precedence
+                // because they're the pre-existing behaviour and the
+                // common case.
+                if let Value::Array(_) = &base_value {
+                    // fall through to the numeric-index path below
+                } else {
+                    let index_value = self.evaluate_projection_expression(row, context, index)?;
+                    if matches!(base_value, Value::Null) || matches!(index_value, Value::Null) {
+                        return Ok(Value::Null);
+                    }
+                    let key = match index_value {
+                        Value::String(s) => s,
+                        other => {
+                            return Err(Error::CypherExecution(format!(
+                                "ERR_INVALID_KEY: property key must be STRING (got {})",
+                                type_name_of(&other)
+                            )));
+                        }
+                    };
+                    match base_value {
+                        Value::Object(obj) => {
+                            return Ok(obj.get(&key).cloned().unwrap_or(Value::Null));
+                        }
+                        _ => return Ok(Value::Null),
+                    }
+                }
 
                 // Evaluate the index expression (should return an integer)
                 let index_value = self.evaluate_projection_expression(row, context, index)?;

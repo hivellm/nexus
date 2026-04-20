@@ -2514,6 +2514,21 @@ impl<'a> QueryPlanner<'a> {
                 Ok(format!("{{{}}}", pairs.join(", ")))
             }
             Expression::FunctionCall { name, args } => {
+                // phase6_opencypher-quickwins §8 — render the synthetic
+                // `__label_predicate__(var, 'Label')` back as the
+                // text-mode `variable:Label` shape that the Filter
+                // operator's fast path already understands (so static
+                // and dynamic label predicates share that code path
+                // instead of duplicating the has-label check).
+                if name == "__label_predicate__" && args.len() == 2 {
+                    if let (
+                        Expression::Variable(var),
+                        Expression::Literal(Literal::String(label)),
+                    ) = (&args[0], &args[1])
+                    {
+                        return Ok(format!("{}:{}", var, label));
+                    }
+                }
                 let arg_strs: Result<Vec<String>> =
                     args.iter().map(|a| self.expression_to_string(a)).collect();
                 Ok(format!("{}({})", name, arg_strs?.join(", ")))

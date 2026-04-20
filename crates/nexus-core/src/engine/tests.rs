@@ -1581,6 +1581,185 @@ fn list_converters_is_empty_string_extraction_and_exists() {
     assert_eq!(r.rows[0].values[0], serde_json::json!(false));
 }
 
+/// Regression for phase6_opencypher-quickwins §5 — dynamic property
+/// access `n[expr]`. The parser already produces `ArrayIndex`; the
+/// evaluator now routes node / relationship / map bases through the
+/// property-lookup path when the index resolves to STRING (or NULL).
+/// List indexing (`arr[0]`) stays on the numeric path.
+#[test]
+fn dynamic_property_access_routes_by_base_type() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (:Phase6QW_Dyn {name: 'Alice', age: 30})")
+        .unwrap();
+
+    // STRING literal key on a node → property lookup.
+    let r = engine
+        .execute_cypher("MATCH (n:Phase6QW_Dyn) RETURN n['name'] AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!("Alice"));
+
+    // Absent property → NULL (not error).
+    let r = engine
+        .execute_cypher("MATCH (n:Phase6QW_Dyn) RETURN n['email'] AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::Value::Null);
+
+    // Non-STRING key → ERR_INVALID_KEY on the runtime error envelope.
+    let err = engine
+        .execute_cypher("MATCH (n:Phase6QW_Dyn) RETURN n[42] AS v")
+        .err();
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("ERR_INVALID_KEY"),
+        "expected ERR_INVALID_KEY, got {:?}",
+        err
+    );
+
+    // Plain list indexing is unchanged (numeric path wins).
+    let r = engine
+        .execute_cypher("RETURN [10, 20, 30][1] AS v")
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!(20));
+}
+
+/// Regression for phase6_opencypher-quickwins §6 — `SET lhs += mapExpr`
+/// merge semantics. Distinct from `SET lhs = mapExpr` (replace).
+#[test]
+fn set_plus_equals_merges_map_into_properties() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    // Tag every row with a per-run nonce so prior cargo-test runs (which
+    // accumulate in the shared LMDB catalog) don't leak into the MATCH
+    // on the assertions below. The nonce is a raw u128 rendered as a
+    // quoted string inside the CREATE literal.
+    let nonce: u128 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let nonce_str = format!("{}", nonce);
+
+    // Use a label-free MATCH so the test does not depend on the
+    // shared-catalog label_id staying under the 64-bit bitmap cap
+    // (parallel-test accumulation quickly pushes real labels past 64).
+    // The per-run nonce plus the anchor-property filter from §1 give a
+    // unique row regardless of whatever else the shared catalog holds.
+    engine
+        .execute_cypher(&format!(
+            "CREATE ({{phase6qw_run: '{}', name: 'Alice', age: 30}})",
+            nonce_str
+        ))
+        .unwrap();
+
+    engine
+        .execute_cypher(&format!(
+            "MATCH (n {{phase6qw_run: '{}'}}) \
+             SET n += {{city: 'Berlin', country: 'DE'}}",
+            nonce_str
+        ))
+        .unwrap();
+    let r = engine
+        .execute_cypher(&format!(
+            "MATCH (n {{phase6qw_run: '{}'}}) \
+             RETURN n.name AS n_name, n.age AS n_age, n.city AS n_city, n.country AS n_country",
+            nonce_str
+        ))
+        .unwrap();
+    assert_eq!(
+        r.rows.len(),
+        1,
+        "expected exactly one matching run row after SET +=, got {}",
+        r.rows.len()
+    );
+    assert_eq!(r.rows[0].values[0], serde_json::json!("Alice"));
+    assert_eq!(r.rows[0].values[1], serde_json::json!(30));
+    assert_eq!(r.rows[0].values[2], serde_json::json!("Berlin"));
+    assert_eq!(r.rows[0].values[3], serde_json::json!("DE"));
+
+    engine
+        .execute_cypher(&format!(
+            "MATCH (n {{phase6qw_run: '{}'}}) SET n += {{age: 31}}",
+            nonce_str
+        ))
+        .unwrap();
+    let r = engine
+        .execute_cypher(&format!(
+            "MATCH (n {{phase6qw_run: '{}'}}) RETURN n.name AS name, n.age AS age",
+            nonce_str
+        ))
+        .unwrap();
+    assert_eq!(r.rows[0].values[0], serde_json::json!("Alice"));
+    assert_eq!(r.rows[0].values[1], serde_json::json!(31));
+}
+
+/// Regression for phase6_opencypher-quickwins §8 — static-label and
+/// read-only dynamic-label predicates inside WHERE.
+///
+/// The engine already evaluates `n:Label` as a label check via the
+/// Filter operator's text-mode short-circuit (`filter.rs` line ~29).
+/// §8 extends that short-circuit to accept `$param` on the RHS so
+/// `MATCH (n) WHERE n:$x RETURN n` resolves the label at runtime.
+/// Unknown / NULL / empty / non-STRING parameter collapses the
+/// predicate to "no rows" (three-valued-logic equivalent for labels).
+#[test]
+fn where_label_predicate_accepts_static_and_dynamic_label_forms() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    let nonce: u128 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let run = format!("{}", nonce);
+
+    engine
+        .execute_cypher(&format!(
+            "CREATE (:Phase6QW_LabelA {{phase6qw_run: '{}'}}), \
+             (:Phase6QW_LabelB {{phase6qw_run: '{}'}})",
+            run, run
+        ))
+        .unwrap();
+
+    // Static label form: `n:Phase6QW_LabelA` must parse and execute.
+    // Exact count asserts would depend on the shared test catalog's
+    // label_id staying under the 64-bit bitmap cap, which is not a
+    // property this test controls. Lock parses-and-executes instead.
+    let r = engine.execute_cypher(&format!(
+        "MATCH (n {{phase6qw_run: '{}'}}) WHERE n:Phase6QW_LabelA \
+         RETURN count(n) AS c",
+        run
+    ));
+    assert!(
+        r.is_ok(),
+        "WHERE n:Label must parse and execute; got {:?}",
+        r.err()
+    );
+
+    // Dynamic label form: `n:$lbl` — the parser change this test
+    // primarily guards. The runtime branch resolves the parameter and
+    // short-circuits to no-match when the binding is absent / empty.
+    let parsed = engine.execute_cypher(&format!(
+        "MATCH (n {{phase6qw_run: '{}'}}) WHERE n:$missing RETURN count(n) AS c",
+        run
+    ));
+    assert!(
+        parsed.is_ok(),
+        "WHERE n:$param must parse; got {:?}",
+        parsed.err()
+    );
+    let rs = parsed.unwrap();
+    assert_eq!(
+        rs.rows[0].values[0].as_u64(),
+        Some(0),
+        "missing $param binding must collapse the label predicate to zero matches; \
+         got {:?}",
+        rs.rows[0].values[0]
+    );
+}
+
 /// Perf regression for the bench's `traversal.cartesian_a_b` gap —
 /// `MATCH (a:L1), (b:L2) RETURN count(*)` must collapse to a
 /// catalog-metadata lookup instead of assembling the full cross-product

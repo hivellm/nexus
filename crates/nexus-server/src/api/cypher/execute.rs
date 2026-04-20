@@ -507,6 +507,29 @@ pub async fn execute_cypher(
                                                                 let _ = engine.update_node(node_id, labels, properties);
                                                             }
                                                         }
+                                                        // phase6_opencypher-quickwins §6 — SET lhs += mapExpr.
+                                                        // Merge the literal map into the target's property bag.
+                                                        // NULL-valued entries remove the key; absent keys are preserved.
+                                                        nexus_core::executor::parser::SetItem::MapMerge { target: _, map } => {
+                                                            let rhs = expression_to_json_value(map);
+                                                            if let serde_json::Value::Object(rhs_map) = rhs {
+                                                                let mut properties = match engine.storage.load_node_properties(node_id) {
+                                                                    Ok(Some(props)) => props.as_object().cloned().unwrap_or_default(),
+                                                                    _ => serde_json::Map::new(),
+                                                                };
+                                                                for (k, v) in rhs_map.into_iter() {
+                                                                    if matches!(v, serde_json::Value::Null) {
+                                                                        properties.remove(&k);
+                                                                    } else {
+                                                                        properties.insert(k, v);
+                                                                    }
+                                                                }
+                                                                if let Ok(Some(node_record)) = engine.get_node(node_id) {
+                                                                    let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                                                    let _ = engine.update_node(node_id, labels, serde_json::Value::Object(properties));
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -562,6 +585,27 @@ pub async fn execute_cypher(
                                                                     _ => serde_json::Value::Object(serde_json::Map::new()),
                                                                 };
                                                                 let _ = engine.update_node(*node_id, labels, properties);
+                                                            }
+                                                        }
+                                                        // phase6_opencypher-quickwins §6 — SET lhs += mapExpr in ON MATCH.
+                                                        nexus_core::executor::parser::SetItem::MapMerge { target: _, map } => {
+                                                            let rhs = expression_to_json_value(map);
+                                                            if let serde_json::Value::Object(rhs_map) = rhs {
+                                                                let mut properties = match engine.storage.load_node_properties(*node_id) {
+                                                                    Ok(Some(props)) => props.as_object().cloned().unwrap_or_default(),
+                                                                    _ => serde_json::Map::new(),
+                                                                };
+                                                                for (k, v) in rhs_map.into_iter() {
+                                                                    if matches!(v, serde_json::Value::Null) {
+                                                                        properties.remove(&k);
+                                                                    } else {
+                                                                        properties.insert(k, v);
+                                                                    }
+                                                                }
+                                                                if let Ok(Some(node_record)) = engine.get_node(*node_id) {
+                                                                    let labels = engine.catalog.get_labels_from_bitmap(node_record.label_bits).unwrap_or_default();
+                                                                    let _ = engine.update_node(*node_id, labels, serde_json::Value::Object(properties));
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -786,6 +830,45 @@ pub async fn execute_cypher(
                                     }
                                 } else {
                                     tracing::warn!("Variable {} not found in context", target);
+                                }
+                            }
+                            // phase6_opencypher-quickwins §6 — top-level
+                            // `SET lhs += mapExpr` on the /cypher path.
+                            nexus_core::executor::parser::SetItem::MapMerge { target, map } => {
+                                if let Some(node_ids) = variable_context.get(target) {
+                                    for node_id in node_ids {
+                                        let rhs = expression_to_json_value(map);
+                                        if let serde_json::Value::Object(rhs_map) = rhs {
+                                            let mut properties = match engine
+                                                .storage
+                                                .load_node_properties(*node_id)
+                                            {
+                                                Ok(Some(props)) => {
+                                                    props.as_object().cloned().unwrap_or_default()
+                                                }
+                                                _ => serde_json::Map::new(),
+                                            };
+                                            for (k, v) in rhs_map.into_iter() {
+                                                if matches!(v, serde_json::Value::Null) {
+                                                    properties.remove(&k);
+                                                } else {
+                                                    properties.insert(k, v);
+                                                }
+                                            }
+                                            if let Ok(Some(node_record)) = engine.get_node(*node_id)
+                                            {
+                                                let labels = engine
+                                                    .catalog
+                                                    .get_labels_from_bitmap(node_record.label_bits)
+                                                    .unwrap_or_default();
+                                                let _ = engine.update_node(
+                                                    *node_id,
+                                                    labels,
+                                                    serde_json::Value::Object(properties),
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

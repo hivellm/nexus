@@ -579,6 +579,15 @@ impl CypherParser {
                 self.consume_char();
                 let label = self.parse_identifier()?;
                 items.push(SetItem::Label { target, label });
+            } else if self.peek_char() == Some('+') && self.peek_char_at(1) == Some('=') {
+                // phase6_opencypher-quickwins §6 — `SET lhs += mapExpr`
+                // merge semantics. Distinct from `SET lhs = mapExpr`
+                // which replaces the entire bag.
+                self.consume_char(); // '+'
+                self.consume_char(); // '='
+                self.skip_whitespace();
+                let map = self.parse_expression()?;
+                items.push(SetItem::MapMerge { target, map });
             } else {
                 return Err(Error::storage(
                     "SET clause: expected property assignment or label".to_string(),
