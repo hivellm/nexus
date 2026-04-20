@@ -1,67 +1,19 @@
-//! HTTP benchmark client. Feature-gated on `live-bench`.
+//! HTTP bench client. Targets Nexus's `/cypher` REST endpoint.
 //!
-//! **Does NOT** instantiate a Nexus engine. It speaks HTTP/JSON to a
+//! Does not instantiate a Nexus engine. It speaks HTTP/JSON to a
 //! server the operator has already started. Every request is bounded
 //! by `tokio::time::timeout` — the client cannot hang the runtime.
-//! A startup `health_check` verifies the server is reachable before
+//! A startup health probe verifies the server is reachable before
 //! the harness runs any measured iterations.
 
 use std::time::Duration;
 
 use serde::Deserialize;
-use thiserror::Error;
 use tokio::runtime::Handle;
 
-use crate::harness::{BenchExecute, ExecResult};
+use super::{BenchClient, ClientError, ExecOutcome, Row};
 
-/// Row shape matching Nexus's `/cypher` REST response. Kept local so
-/// the no-live-bench build doesn't pull in anything extra.
-pub type Row = Vec<serde_json::Value>;
-
-/// Minimal outcome the client publishes; the harness converts to
-/// `ExecResult` internally.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExecOutcome {
-    /// Rows returned by the engine, in order.
-    pub rows: Vec<Row>,
-}
-
-/// Errors the HTTP client can surface.
-#[derive(Debug, Error)]
-pub enum ClientError {
-    /// Transport-level failure: connect refused, DNS, TLS.
-    #[error("transport error: {0}")]
-    Transport(String),
-    /// Server answered but with a non-200 status.
-    #[error("HTTP {status}: {body}")]
-    Http { status: u16, body: String },
-    /// The server returned JSON that didn't match the expected
-    /// shape.
-    #[error("malformed response: {0}")]
-    BadResponse(String),
-    /// Soft per-call timeout elapsed. The harness maps this to a
-    /// scenario failure rather than silently recording a huge
-    /// latency.
-    #[error("timeout after {0:?}")]
-    Timeout(Duration),
-    /// `/health` probe failed at startup.
-    #[error("server /health probe failed: {0}")]
-    HealthProbe(String),
-}
-
-/// Narrow trait every bench client must satisfy. The harness is
-/// generic over this, so the HTTP client + any future non-HTTP
-/// client (Bolt, …) plug in without touching the runner.
-pub trait BenchClient: Send + Sync {
-    /// Label reported in the engine column of the report.
-    fn engine_name(&self) -> &str;
-
-    /// Issue a single Cypher request. Must return within `timeout`
-    /// or surface [`ClientError::Timeout`].
-    fn execute(&mut self, cypher: &str, timeout: Duration) -> Result<ExecOutcome, ClientError>;
-}
-
-/// HTTP benchmark client that targets Nexus's `/cypher` endpoint.
+/// HTTP bench client that targets Nexus's `/cypher` endpoint.
 pub struct HttpClient {
     base_url: String,
     engine_label: String,
@@ -110,8 +62,8 @@ impl HttpClient {
         })
     }
 
-    /// Runtime handle used to bridge the sync `BenchExecute` contract
-    /// into async reqwest calls.
+    /// Runtime handle used to bridge the sync [`BenchClient`]
+    /// contract into async reqwest calls.
     pub fn runtime(&self) -> &Handle {
         &self.runtime
     }
@@ -170,39 +122,15 @@ impl BenchClient for HttpClient {
     }
 }
 
-/// Bridge from the rich [`BenchClient`] trait to the harness's
-/// narrower [`BenchExecute`] contract.
-impl<T: BenchClient + ?Sized> BenchExecute for &mut T {
-    fn execute(
-        &mut self,
-        cypher: &str,
-        timeout: Duration,
-    ) -> Result<ExecResult, Box<dyn std::error::Error + Send + Sync>> {
-        let out = BenchClient::execute(*self, cypher, timeout)
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-        Ok(ExecResult {
-            row_count: out.rows.len(),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Compile-time smoke that the trait bounds line up — the
-    /// `HttpClient` is `Send + Sync` and satisfies both traits.
+    /// `HttpClient` is `Send + Sync` and satisfies [`BenchClient`].
     #[test]
     fn http_client_is_send_sync_benchclient() {
         fn assert_traits<T: BenchClient + Send + Sync + 'static>() {}
         assert_traits::<HttpClient>();
-    }
-
-    #[test]
-    fn exec_outcome_row_count_matches_vec_len() {
-        let out = ExecOutcome {
-            rows: vec![vec![serde_json::Value::from(1)]; 4],
-        };
-        assert_eq!(out.rows.len(), 4);
     }
 }
