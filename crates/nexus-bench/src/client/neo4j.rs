@@ -140,19 +140,32 @@ impl BenchClient for Neo4jBoltClient {
 }
 
 /// Convert a Bolt row to the neutral `Vec<serde_json::Value>` shape
-/// the harness + divergence guard use. Relies on neo4rs's serde
-/// support: a row's data list deserialises directly into a JSON
-/// sequence, one entry per column in the order the `RETURN` clause
-/// declared. This is what §2.4 of the parent task means by "typed
-/// per-column row extraction, no Debug stand-in".
+/// the harness + divergence guard use.
+///
+/// neo4rs's `Row` serialises as a sequence of `(field_name, value)`
+/// pairs (not a bare value list), so we target `Vec<(String, Value)>`
+/// in the serde conversion and strip the keys before returning. The
+/// per-column JSON value is what §2.4 calls for — typed, not a
+/// `Debug` stand-in.
+///
+/// Column order is **not** preserved by neo4rs across all row
+/// shapes: it reflects the internal iteration order of the
+/// underlying Bolt structure, which need not match the `RETURN`
+/// clause. The harness's count-based divergence guard tolerates
+/// this; the richer row-content divergence guard (§3.4) will
+/// normalise keys + values on both sides before comparing.
 fn row_to_json(row: &BoltRow) -> Result<Row, ClientError> {
-    row.to::<Vec<serde_json::Value>>()
-        .map_err(|e| ClientError::BadResponse(format!("bolt row deserialisation failed: {e}")))
+    let pairs: Vec<(String, serde_json::Value)> = row
+        .to()
+        .map_err(|e| ClientError::BadResponse(format!("bolt row deserialisation failed: {e}")))?;
+    Ok(pairs.into_iter().map(|(_, v)| v).collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neo4rs::{BoltList, BoltType, Row as BoltRow};
+    use serde_json::{Value, json};
 
     /// Compile-time smoke that `Neo4jBoltClient` satisfies the same
     /// `Send + Sync + 'static` bounds the harness relies on.
@@ -160,5 +173,99 @@ mod tests {
     fn neo4j_client_is_send_sync_benchclient() {
         fn assert_traits<T: BenchClient + Send + Sync + 'static>() {}
         assert_traits::<Neo4jBoltClient>();
+    }
+
+    /// Build a synthetic `BoltRow` with given field names and values.
+    /// Tests the crate's own wire conversion — no server involved.
+    fn make_row(fields: &[&str], data: Vec<BoltType>) -> BoltRow {
+        let fields_list: BoltList = BoltList::from(
+            fields
+                .iter()
+                .map(|f| BoltType::from(*f))
+                .collect::<Vec<_>>(),
+        );
+        let data_list: BoltList = BoltList::from(data);
+        BoltRow::new(fields_list, data_list)
+    }
+
+    #[test]
+    fn row_to_json_empty_row() {
+        let row = make_row(&[], Vec::new());
+        let out = row_to_json(&row).expect("empty row deserialises");
+        assert!(out.is_empty(), "empty row should produce empty Vec");
+    }
+
+    #[test]
+    fn row_to_json_integer_and_string() {
+        let row = make_row(
+            &["id", "name"],
+            vec![BoltType::from(42_i64), BoltType::from("alice")],
+        );
+        let out = row_to_json(&row).expect("row deserialises");
+        assert_eq!(out.len(), 2);
+        // neo4rs does not preserve RETURN-clause order across its
+        // Row -> serde path, so check set membership rather than
+        // positional equality. The richer cross-engine comparison
+        // in §3.4 will normalise ordering on both sides.
+        assert!(out.contains(&json!(42)), "expected 42 in {out:?}");
+        assert!(out.contains(&json!("alice")), "expected 'alice' in {out:?}");
+    }
+
+    #[test]
+    fn row_to_json_float_and_bool() {
+        let row = make_row(
+            &["score", "ok"],
+            vec![BoltType::from(0.75_f64), BoltType::from(true)],
+        );
+        let out = row_to_json(&row).expect("row deserialises");
+        assert_eq!(out.len(), 2);
+        assert!(out.contains(&json!(0.75)));
+        assert!(out.contains(&json!(true)));
+    }
+
+    #[test]
+    fn row_to_json_preserves_null() {
+        // Null is a first-class Bolt value — it must come back as
+        // JSON null, not as an absent column or the string "null".
+        let row = make_row(
+            &["present", "absent"],
+            vec![BoltType::from(7_i64), BoltType::Null(neo4rs::BoltNull)],
+        );
+        let out = row_to_json(&row).expect("row deserialises");
+        assert_eq!(out.len(), 2);
+        assert!(out.contains(&json!(7)));
+        assert!(out.contains(&Value::Null));
+    }
+
+    #[test]
+    fn row_to_json_emits_one_entry_per_column() {
+        // Three columns in, three values out — asserts the key
+        // stripping did not merge / drop entries.
+        let row = make_row(
+            &["c", "a", "b"],
+            vec![
+                BoltType::from(3_i64),
+                BoltType::from(1_i64),
+                BoltType::from(2_i64),
+            ],
+        );
+        let out = row_to_json(&row).expect("row deserialises");
+        assert_eq!(out.len(), 3);
+        for expected in [json!(1), json!(2), json!(3)] {
+            assert!(out.contains(&expected), "expected {expected} in {out:?}");
+        }
+    }
+
+    #[test]
+    fn row_to_json_nested_list_column() {
+        let inner = BoltList::from(vec![
+            BoltType::from(1_i64),
+            BoltType::from(2_i64),
+            BoltType::from(3_i64),
+        ]);
+        let row = make_row(&["xs"], vec![BoltType::List(inner)]);
+        let out = row_to_json(&row).expect("row deserialises");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], json!([1, 2, 3]));
     }
 }
