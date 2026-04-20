@@ -1157,6 +1157,21 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
+        // Synthesise variables for anonymous source anchors that carry
+        // label or property filters (phase6 §1/§2). Without this, a pattern
+        // like `MATCH (:P {id: 0})-[:KNOWS]->(b)` leaves the Expand's
+        // source_var empty, so `execute_expand` takes its source-less
+        // fallback and scans every KNOWS edge in the store — returning
+        // every KNOWS edge instead of only the anchor's outgoing edges.
+        // Synthesising a variable here lets the NodeByLabel + property
+        // Filter path below constrain the source set correctly, and the
+        // Expand uses that variable as its source.
+        let mut patterns_local: Vec<(Pattern, bool)> = patterns.to_vec();
+        let mut anchor_counter: usize = 0;
+        for (pattern, _) in patterns_local.iter_mut() {
+            Self::synthesise_anonymous_source_anchors(pattern, &mut anchor_counter);
+        }
+
         // Process ALL patterns, not just the first one
         // Multiple patterns need Cartesian product (Join)
         let mut all_target_nodes = std::collections::HashSet::new();
@@ -1165,7 +1180,7 @@ impl<'a> QueryPlanner<'a> {
         // CRITICAL FIX: Include ALL nodes that are targets of relationships (Expand),
         // not just nodes without labels. Nodes that are targets of Expand will be populated
         // by the Expand operator and don't need a separate NodeByLabel.
-        for (pattern, _is_optional) in patterns {
+        for (pattern, _is_optional) in &patterns_local {
             for (idx, element) in pattern.elements.iter().enumerate() {
                 if let PatternElement::Relationship(_) = element {
                     if idx + 1 < pattern.elements.len() {
@@ -1183,7 +1198,7 @@ impl<'a> QueryPlanner<'a> {
         }
 
         // Process the first pattern (extract pattern from tuple)
-        let patterns_only: Vec<Pattern> = patterns.iter().map(|(p, _)| p.clone()).collect();
+        let patterns_only: Vec<Pattern> = patterns_local.iter().map(|(p, _)| p.clone()).collect();
         let start_pattern = self.select_start_pattern(&patterns_only)?;
 
         // Add NodeByLabel operators for nodes in first pattern
@@ -1310,7 +1325,7 @@ impl<'a> QueryPlanner<'a> {
         }
 
         // Add relationship traversal operators for first pattern
-        let first_is_optional = patterns.first().map(|(_, opt)| *opt).unwrap_or(false);
+        let first_is_optional = patterns_local.first().map(|(_, opt)| *opt).unwrap_or(false);
         self.add_relationship_operators(
             std::slice::from_ref(start_pattern),
             first_is_optional,
@@ -1331,7 +1346,7 @@ impl<'a> QueryPlanner<'a> {
 
         // Process additional patterns (for comma-separated MATCH patterns like (p1:...), (p2:...))
         // Each additional pattern needs its own NodeByLabel + Filter operators
-        for (pattern_idx, (pattern, is_optional)) in patterns.iter().enumerate() {
+        for (pattern_idx, (pattern, is_optional)) in patterns_local.iter().enumerate() {
             if pattern_idx == 0 {
                 continue; // Skip first pattern, already processed
             }
@@ -1931,16 +1946,8 @@ impl<'a> QueryPlanner<'a> {
                                 // same required_columns tracking as count/sum/avg so
                                 // Project retains the referenced column for Aggregate
                                 // to consume.
-                                "count"
-                                | "sum"
-                                | "avg"
-                                | "min"
-                                | "max"
-                                | "collect"
-                                | "stdev"
-                                | "stdevp"
-                                | "percentilecont"
-                                | "percentiledisc" => {
+                                "count" | "sum" | "avg" | "min" | "max" | "collect" | "stdev"
+                                | "stdevp" | "percentilecont" | "percentiledisc" => {
                                     // Skip DISTINCT marker if present
                                     let real_args =
                                         if let Some(Expression::Variable(var)) = args.first() {
@@ -2239,6 +2246,54 @@ impl<'a> QueryPlanner<'a> {
     }
 
     /// Select the most selective pattern to start execution
+    /// Give a synthetic variable to anonymous anchor nodes that would
+    /// otherwise leave an Expand / VariableLengthPath with an empty
+    /// `source_var`. Without this, `execute_expand` takes the source-less
+    /// fallback and scans every relationship of the matching type —
+    /// returning every edge in the store instead of only the anchor's
+    /// outgoing edges (phase6 bench §1, §2).
+    ///
+    /// Only synthesises for nodes that
+    /// - have no variable,
+    /// - carry at least one label or property (so the synthesis is worth
+    ///   the NodeByLabel + Filter pair the planner emits), and
+    /// - are the immediate predecessor of a Relationship element (i.e.
+    ///   they are the source of a hop, not a dangling tail).
+    fn synthesise_anonymous_source_anchors(pattern: &mut Pattern, counter: &mut usize) {
+        let len = pattern.elements.len();
+        for idx in 0..len {
+            // The anchor must be a source of a relationship: next element is a Rel.
+            if idx + 1 >= len {
+                continue;
+            }
+            if !matches!(pattern.elements[idx + 1], PatternElement::Relationship(_)) {
+                continue;
+            }
+            // And it must not itself be the target of a prior relationship —
+            // that case is handled by the Expand operator's target_var path.
+            if idx > 0 && matches!(pattern.elements[idx - 1], PatternElement::Relationship(_)) {
+                continue;
+            }
+            if let PatternElement::Node(node) = &mut pattern.elements[idx] {
+                if node.variable.is_some() {
+                    continue;
+                }
+                let has_filterable = !node.labels.is_empty()
+                    || node
+                        .properties
+                        .as_ref()
+                        .map(|m| !m.properties.is_empty())
+                        .unwrap_or(false);
+                if !has_filterable {
+                    continue;
+                }
+                let name = format!("__anchor_{}", *counter);
+                *counter += 1;
+                node.variable = Some(name);
+            }
+        }
+    }
+
     pub(super) fn select_start_pattern<'b>(&self, patterns: &'b [Pattern]) -> Result<&'b Pattern> {
         if patterns.is_empty() {
             return Err(Error::CypherSyntax(
@@ -3269,4 +3324,3 @@ impl<'a> QueryPlanner<'a> {
         Ok(result)
     }
 }
-

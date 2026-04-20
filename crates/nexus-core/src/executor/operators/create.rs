@@ -55,6 +55,13 @@ impl Executor {
             std::collections::HashMap::new();
         let mut label_count_updates: std::collections::HashMap<u32, u32> =
             std::collections::HashMap::new();
+        // Track exact (node_id, label_ids) pairs as we create them, so the
+        // post-commit label-index update doesn't have to reverse-engineer
+        // labels from `NodeRecord.label_bits`. The bitmap is a u64 and
+        // silently loses labels with `label_id >= 64` — a real bug when
+        // the catalog has accumulated many labels (phase6 §1). Carrying the
+        // original list sidesteps the cap entirely.
+        let mut created_nodes_with_labels: Vec<(u64, Vec<u32>)> = Vec::new();
 
         // Phase 1.5.2: Pre-allocate label/type IDs in batches
         // Collect all unique labels and types from the pattern first
@@ -182,8 +189,12 @@ impl Executor {
                     );
 
                     // Phase 1 Optimization: Batch catalog metadata updates (defer to end)
-                    for label_id in label_ids_for_update {
-                        *label_count_updates.entry(label_id).or_insert(0) += 1;
+                    for label_id in &label_ids_for_update {
+                        *label_count_updates.entry(*label_id).or_insert(0) += 1;
+                    }
+
+                    if !label_ids_for_update.is_empty() {
+                        created_nodes_with_labels.push((node_id, label_ids_for_update));
                     }
 
                     // Store node ID if variable exists
@@ -272,8 +283,13 @@ impl Executor {
                                     target_properties,
                                 )?;
 
-                                for label_id in target_label_ids_for_update {
-                                    *label_count_updates.entry(label_id).or_insert(0) += 1;
+                                for label_id in &target_label_ids_for_update {
+                                    *label_count_updates.entry(*label_id).or_insert(0) += 1;
+                                }
+
+                                if !target_label_ids_for_update.is_empty() {
+                                    created_nodes_with_labels
+                                        .push((tid, target_label_ids_for_update));
                                 }
 
                                 if let Some(var) = &target_node.variable {
@@ -423,49 +439,14 @@ impl Executor {
         // Memory barrier below ensures visibility across threads
         self.store_mut().flush_async()?;
 
-        // Update label index with created nodes
-        // Scan all nodes from the store that were created (iterate based on node IDs, not variables)
-        let start_node_id = if created_nodes.is_empty() {
-            // If no variables were tracked, we need to find the new nodes
-            // For now, just iterate over ALL nodes in the recent range
-            // This is a workaround - ideally we'd track all created IDs, not just those with variables
-            // For standalone CREATE without variables, we need a different approach
-            // Let's assume created nodes are at the end of the node_count range
-            let node_count = self.store().node_count();
-            // Get the expected number of nodes created (pattern elements count)
-            let expected_created = pattern
-                .elements
-                .iter()
-                .filter(|e| matches!(e, parser::PatternElement::Node(_)))
-                .count();
-            if node_count as usize >= expected_created {
-                node_count - expected_created as u64
-            } else {
-                0
-            }
-        } else {
-            // Use the tracked nodes
-            *created_nodes.values().min().unwrap_or(&0)
-        };
-
-        let end_node_id = self.store().node_count();
-
-        for node_id in start_node_id..end_node_id {
-            // Read the node to get its labels
-            if let Ok(node_record) = self.store().read_node(node_id) {
-                if node_record.is_deleted() {
-                    continue;
-                }
-                let mut label_ids = Vec::new();
-                for bit in 0..64 {
-                    if (node_record.label_bits & (1u64 << bit)) != 0 {
-                        label_ids.push(bit as u32);
-                    }
-                }
-                if !label_ids.is_empty() {
-                    self.label_index_mut().add_node(node_id, &label_ids)?;
-                }
-            }
+        // Update label index with created nodes. Use the list we accumulated
+        // during node creation rather than re-reading `NodeRecord.label_bits`:
+        // the bitmap is a u64 and drops every label with `label_id >= 64`,
+        // which silently breaks MATCH on those labels (phase6 §1). The
+        // tracked list carries the full set of label IDs, so labels above
+        // the 64-bitmap cap land in the index correctly.
+        for (node_id, label_ids) in &created_nodes_with_labels {
+            self.label_index_mut().add_node(*node_id, label_ids)?;
         }
 
         Ok(())

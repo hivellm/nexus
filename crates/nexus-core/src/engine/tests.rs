@@ -944,24 +944,15 @@ fn match_scopes_by_label_and_property_together() {
 /// anonymous anchor `(:P {id: 0})` with labels and properties on a
 /// database that also holds nodes of other labels with the same id.
 ///
-/// Symptom: `MATCH (:P {id: 0})-[:KNOWS]->(b) RETURN count(b)` returns
-/// too-many rows — Expand falls back to scanning every KNOWS edge in the
-/// store because the planner skips NodeByLabel/Filter for anonymous
-/// anchors whose variable is `None`, and `source_var` is the empty
-/// string.
-///
-/// **Marked `#[ignore]`**: investigation during phase6 surfaced a deeper
-/// pre-existing bug — labels whose `label_id >= 64` are never added to
-/// the `label_index` on CREATE (the rebuild pass at
-/// `crates/nexus-core/src/executor/operators/create.rs:460` iterates
-/// `node_record.label_bits` as a u64, so label IDs 64+ are silently
-/// dropped). The straightforward planner fix (synthesise a variable for
-/// the anonymous anchor so NodeByLabel + Filter are emitted) regresses
-/// correctness for those label IDs because the resulting `NodeByLabel`
-/// returns an empty bitmap. Fixing §1 therefore needs both the planner
-/// rewrite AND the label-index consistency fix — filed as follow-up.
+/// Pre-fix symptom: `MATCH (:P {id: 0})-[:KNOWS]->(b) RETURN count(b)`
+/// returned too-many rows — Expand fell back to scanning every KNOWS
+/// edge in the store because the planner skipped NodeByLabel/Filter for
+/// anonymous anchors whose variable was `None`, and `source_var` was the
+/// empty string. Fixed by synthesising a variable for the anchor in
+/// `plan_execution_strategy::synthesise_anonymous_source_anchors` so the
+/// NodeByLabel + Filter pair constrain the source set and the Expand's
+/// `source_var` resolves to the anchor instead of the source-less fallback.
 #[test]
-#[ignore = "phase6 §1 — blocked on label_index consistency for label_id >= 64; see create.rs:460"]
 fn match_anonymous_anchor_with_label_and_property_scopes_expand() {
     let ctx = crate::testing::TestContext::new();
     let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
@@ -1006,6 +997,43 @@ fn match_anonymous_anchor_with_label_and_property_scopes_expand() {
         "expected 5 (p0 has 5 outgoing); anonymous anchor label+property \
          filter silently dropped — bench's traversal.small_one_hop_hub \
          regression at bench scale"
+    );
+}
+
+/// Regression for phase6_nexus-bench-correctness-gaps §2 —
+/// variable-length path `*1..n` on an anonymous, label+property-anchored
+/// source.
+///
+/// Pre-fix symptom: `MATCH (:P {id: 0})-[:KNOWS*1..3]->(n) RETURN
+/// count(DISTINCT n)` returned 0 — `VariableLengthPath` inherits the
+/// same empty `source_var` that the §1 bug produced for single-hop
+/// Expand, and the variable-length operator's source-less fallback
+/// returns no rows (unlike Expand, which over-counts). Same root cause;
+/// the anchor-synthesis fix in `plan_execution_strategy` covers it.
+#[test]
+fn match_anonymous_anchor_var_length_expansion_is_bounded_by_filter() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    // SmallDataset-like topology: p0 → p1..p5 (5 at 1-hop), p1 → p2, p2 → p3.
+    // From p0 with *1..3, distinct reachable: {p1,p2,p3,p4,p5} = 5.
+    engine
+        .execute_cypher(
+            "CREATE \
+             (p0:P {id: 0}), (p1:P {id: 1}), (p2:P {id: 2}), (p3:P {id: 3}), (p4:P {id: 4}), (p5:P {id: 5}), \
+             (p0)-[:KNOWS]->(p1), (p0)-[:KNOWS]->(p2), (p0)-[:KNOWS]->(p3), (p0)-[:KNOWS]->(p4), (p0)-[:KNOWS]->(p5), \
+             (p1)-[:KNOWS]->(p2), (p2)-[:KNOWS]->(p3)",
+        )
+        .expect("seed must succeed");
+
+    let scoped = engine
+        .execute_cypher("MATCH (:P {id: 0})-[:KNOWS*1..3]->(n) RETURN count(DISTINCT n) AS c")
+        .unwrap();
+    assert_eq!(
+        scoped.rows[0].values[0].as_u64(),
+        Some(5),
+        "expected 5 distinct nodes reachable from p0 via *1..3; \
+         pre-fix returned 0 because the anchor carried no variable"
     );
 }
 
@@ -1054,9 +1082,7 @@ fn integer_only_arithmetic_stays_integer() {
     }
 
     // And conversely: any float operand must promote the whole result.
-    let mixed = engine
-        .execute_cypher("RETURN 1 + 2.0 AS n")
-        .unwrap();
+    let mixed = engine.execute_cypher("RETURN 1 + 2.0 AS n").unwrap();
     match &mixed.rows[0].values[0] {
         serde_json::Value::Number(num) => {
             assert!(
@@ -1308,9 +1334,7 @@ fn with_aggregation_then_return_expression_projects_correctly() {
 
     // §5.2 shape — RETURN wraps a collect alias in a non-aggregate call.
     let r2 = engine
-        .execute_cypher(
-            "MATCH (n:Phase6W) WITH collect(n.score) AS ids RETURN size(ids) AS s",
-        )
+        .execute_cypher("MATCH (n:Phase6W) WITH collect(n.score) AS ids RETURN size(ids) AS s")
         .unwrap();
     assert_eq!(
         r2.columns,

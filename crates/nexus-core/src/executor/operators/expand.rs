@@ -105,10 +105,19 @@ impl Executor {
 
         let mut expanded_rows = Vec::new();
 
-        // Special case: if source_var is empty or rows is empty, scan all relationships directly
-        // This handles queries like MATCH ()-[r:MENTIONS]->() RETURN count(r)
-        // Phase 3 Deep Optimization: Use catalog metadata for count queries when possible
-        if source_var.is_empty() || rows.is_empty() {
+        // Special case: if source_var is empty, scan all relationships directly.
+        // This handles queries like `MATCH ()-[r:MENTIONS]->() RETURN count(r)`
+        // where the pattern has no source anchor to constrain the expansion.
+        //
+        // IMPORTANT: we do NOT fall back to the source-less scan when the
+        // caller DID declare a `source_var` but its row set happens to be
+        // empty — that case means "the source anchor matched zero nodes",
+        // and the correct Cypher result is zero expanded rows, not
+        // "scan every relationship in the store". Falling back silently
+        // turns a correctly-empty result into an over-count. Before this
+        // guard, `MATCH (:UnknownLabel)-[:R]->(b) RETURN count(b)` returned
+        // every :R edge in the store instead of 0 (phase6 §1).
+        if source_var.is_empty() {
             // Phase 3 Optimization: For count-only queries, use catalog metadata if available
             // This is much faster than scanning all relationships
             if rel_var.is_empty() && !target_var.is_empty() {

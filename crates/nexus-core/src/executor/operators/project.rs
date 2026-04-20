@@ -520,10 +520,9 @@ impl Executor {
                 let asc = ascending.get(idx).copied().unwrap_or(true);
                 let left = a.values.get(col_idx).cloned().unwrap_or(Value::Null);
                 let right = b.values.get(col_idx).cloned().unwrap_or(Value::Null);
-                let ordering =
-                    cypher_null_aware_order(&left, &right, asc, |l, r| {
-                        self.compare_values_for_sort(l, r)
-                    });
+                let ordering = cypher_null_aware_order(&left, &right, asc, |l, r| {
+                    self.compare_values_for_sort(l, r)
+                });
                 if ordering != std::cmp::Ordering::Equal {
                     return ordering;
                 }
@@ -577,10 +576,9 @@ impl Executor {
                 let asc = ascending.get(idx).copied().unwrap_or(true);
                 let left = a.values.get(col_idx).cloned().unwrap_or(Value::Null);
                 let right = b.values.get(col_idx).cloned().unwrap_or(Value::Null);
-                let ordering =
-                    cypher_null_aware_order(&left, &right, asc, |l, r| {
-                        self.compare_values_for_sort(l, r)
-                    });
+                let ordering = cypher_null_aware_order(&left, &right, asc, |l, r| {
+                    self.compare_values_for_sort(l, r)
+                });
                 if ordering != std::cmp::Ordering::Equal {
                     return ordering;
                 }

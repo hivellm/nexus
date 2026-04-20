@@ -8,15 +8,15 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase5_hub-integration | 0/84 | hub integration |
-| 🔄 | phase5_implement-cluster-mode | 90/122 | implement cluster mode |
-| ⬚ | phase5_implement-v1-gui | 0/52 | implement v1 gui |
+| ⬚ | phase5_hub-integration | 0/87 | hub integration |
+| 🔄 | phase5_implement-cluster-mode | 90/125 | implement cluster mode |
+| ⬚ | phase5_implement-v1-gui | 0/55 | implement v1 gui |
 
 ## phase6
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| 🔄 | phase6_nexus-bench-correctness-gaps | 1/40 | nexus bench correctness gaps |
+| 🔄 | phase6_nexus-bench-correctness-gaps | 30/40 | nexus bench correctness gaps |
 | ⬚ | phase6_opencypher-advanced-types | 0/47 | opencypher advanced types |
 | ⬚ | phase6_opencypher-apoc-ecosystem | 0/75 | opencypher apoc ecosystem |
 | ⬚ | phase6_opencypher-constraint-enforcement | 0/54 | opencypher constraint enforcement |

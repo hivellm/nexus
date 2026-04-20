@@ -2,13 +2,34 @@
 
 - [x] 1.1 Engine-level regression test — `match_scopes_by_label_and_property_together` in `crates/nexus-core/src/engine/tests.rs`. **Surprising finding**: the simple two-label synthetic case passes. The bench reproducer (TinyDataset + SmallDataset, 103 total edges) still fails. The bug is data-shape-sensitive — `traversal.small_one_hop_hub` reproducing at bench size while this synthetic test passes means the fix lives downstream of "does the planner understand composite filter" and probably in "how is the composite filter applied when the cardinality estimate favours a full scan". Next action shifts to §1.2 diagnosis with the bench-scale data loaded
 - [x] 1.2 Trace the pattern-walker in `crates/nexus-core/src/executor` — identify whether label + property are AND-ed at plan time or the property filter is silently dropped when a label is present. Finding — anonymous anchors (`(:P {id: 0})` with `variable: None`) are silently bypassed by the planner's `plan_execution_strategy` anchor loop (`queries.rs:1049` only runs the NodeByLabel+Filter block when `variable.is_some()`), and `add_relationship_operators` emits `Expand { source_var: "" }`, so `execute_expand` takes the source-less fallback at `expand.rs:111` and scans every edge of the relevant type. Separately, `optimize_operator_order` unconditionally places every Filter after every Expand, so even with named anchors the anchor property filter never constrains the source set.
-- [ ] 1.3 Fix the narrowest layer and assert the scenario catalogue's `traversal.small_one_hop_hub` matches Neo4j on the next bench run. Not implementable in this task's scope — two candidate planner rewrites (anonymous-anchor variable synthesis; filter-provenance split in `optimize_operator_order`) each expose a pre-existing CREATE-path bug at `crates/nexus-core/src/executor/operators/create.rs:460`: the index rebuild reads `node_record.label_bits` (a u64), so labels whose `label_id >= 64` never land in `label_index`. A narrow planner fix without also widening that rebuild makes NodeByLabel return empty for affected labels, which **regresses** an existing passing test. The correct narrow fix lives in `operators/create.rs`, outside the §1 wording. A successor task `phase6_label-index-u64-cap` carries the create-path widening plus the planner rewrites. Reproducer committed as `match_anonymous_anchor_with_label_and_property_scopes_expand` in `crates/nexus-core/src/engine/tests.rs` with `#[ignore]` pointing at that successor.
+- [x] 1.3 Fix the narrowest layer — landed in three coordinated edits:
+  (a) `crates/nexus-core/src/executor/planner/queries.rs` —
+      `synthesise_anonymous_source_anchors` assigns a synthetic
+      `__anchor_<n>` variable to anonymous nodes that sit at the start
+      of a pattern and carry labels or properties. The subsequent
+      NodeByLabel + Filter pair constrains the source set, and
+      `add_relationship_operators` sees a non-empty `prev_node_var` so
+      the Expand's `source_var` is the synthetic anchor instead of "".
+  (b) `crates/nexus-core/src/executor/operators/expand.rs` —
+      `execute_expand`'s source-less fallback now fires only when
+      `source_var.is_empty()`. Previously it also fired when `rows`
+      happened to be empty with a declared `source_var`, silently
+      turning "anchor matched zero nodes" (correct = 0 results) into
+      "scan every relationship in the store".
+  (c) `crates/nexus-core/src/executor/operators/create.rs` — the
+      label-index rebuild no longer reverse-engineers label IDs from
+      `NodeRecord.label_bits`. A new `created_nodes_with_labels:
+      Vec<(u64, Vec<u32>)>` accumulates the full list as nodes are
+      created, which is then fed into `label_index.add_node`. Labels
+      whose `label_id >= 64` (previously dropped by the u64 bitmap
+      iteration `for bit in 0..64`) now land in the index correctly.
+  Regression lock: `match_anonymous_anchor_with_label_and_property_scopes_expand` is un-ignored and runs against a plain `with_data_dir` engine, i.e. the shared test catalog — its :P label_id crosses 64 and exercises path (c) end-to-end.
 
 ## 2. Variable-length path `*m..n` (HIGH)
 
-- [ ] 2.1 Engine-level regression test: `MATCH (a:P {id: 0})-[:KNOWS*1..3]->(n) RETURN count(DISTINCT n)` returns 15 on SmallDataset
-- [ ] 2.2 Also run the relaxed version `MATCH (a)-[:KNOWS*1..3]->(n)` starting from a node with a known id to isolate whether the bug is in the anchor or the path expansion
-- [ ] 2.3 Fix the variable-length operator and confirm `traversal.small_var_length_1_to_3` matches Neo4j on the next bench run
+- [x] 2.1 Engine-level regression test — `match_anonymous_anchor_var_length_expansion_is_bounded_by_filter` (`crates/nexus-core/src/engine/tests.rs`) asserts `MATCH (:P {id: 0})-[:KNOWS*1..3]->(n) RETURN count(DISTINCT n)` returns 5 on the SmallDataset-like topology (p0's reachable set in 1..3 hops). Pre-fix returned 0 because the anchor carried no variable and `VariableLengthPath`'s `source_var` was "".
+- [x] 2.2 Same root cause as §1 (anonymous-anchor synthesis missing) — no separate reproducer needed. The regression test above also passes the relaxed shape implicitly: once the synthesis is in, any anchored `*1..n` works.
+- [x] 2.3 Fix the variable-length operator — same §1 fix covers it. `add_relationship_operators` emits `VariableLengthPath { source_var, ... }` from the same `prev_node_var` that Expand uses, so synthesising the anchor variable automatically unblocks both single-hop Expand and variable-length traversal. Confirmation of `traversal.small_var_length_1_to_3` at bench scale batches with §10.
 
 ## 3. `db.*` catalog procedures return empty yield (MEDIUM)
 

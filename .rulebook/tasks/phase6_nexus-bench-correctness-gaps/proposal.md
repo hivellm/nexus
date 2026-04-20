@@ -55,24 +55,51 @@ fix here" unsafe without a wider refactor. The in-pass punch list:
 
 Not landed this pass (still open):
 
-- **§1 Composite `:Label {prop}` filter** — investigation surfaced a
-  deeper pre-existing bug: the CREATE path rebuilds the label_index
-  bitmap by iterating `node_record.label_bits` (a u64), so labels
-  with `label_id >= 64` are never added to the index. Two candidate
-  §1 planner fixes (anonymous-anchor variable synthesis; filter
-  provenance in `optimize_operator_order` so anchor-scoped Filters
-  run before Expand) each *surface* the label-index corruption
-  instead of hiding behind the old "scan-every-edge" fallback, so
-  landing §1 without also fixing the label_index requires making
-  NodeByLabel return non-empty for those label IDs. Bench-shape
-  reproducer committed as `match_anonymous_anchor_with_label_and_property_scopes_expand`
-  (`#[ignore]`, references `create.rs:460` as the label-index site
-  to fix).
-- **§2 Variable-length path** — downstream of §1 (same anchor shape).
 - **§5.3 `WITH ... WHERE ... RETURN count(*)`** — the
   WITH-without-aggregation + RETURN-with-aggregation path still
   leaks the WITH alias through as the final column. A separate
   planner path that wasn't touched by the §5.1 / §5.2 fix.
+
+Added to "DONE" after the third pass (2026-04-20, same day):
+
+- **§1 Composite `:Label {prop}` filter** — **DONE**. Three coordinated
+  edits in `crates/nexus-core`:
+  1. **Planner** (`executor/planner/queries.rs`) —
+     `synthesise_anonymous_source_anchors` assigns a synthetic
+     `__anchor_<n>` variable to anonymous source nodes that carry
+     labels or properties. The subsequent NodeByLabel + Filter pair
+     constrains the source set, and `add_relationship_operators`
+     resolves the Expand's `source_var` to the synthesised name
+     instead of leaving it empty.
+  2. **Expand** (`executor/operators/expand.rs`) — the source-less
+     fallback now fires only when `source_var.is_empty()`.
+     Previously it also fired when the declared `source_var` had no
+     rows (because NodeByLabel returned empty), silently turning
+     "anchor matched zero nodes" (correct = 0) into "scan every
+     relationship" (8-row over-count). This guard is independent of
+     §1's planner fix but necessary for it to hold correctness when
+     NodeByLabel legitimately returns zero.
+  3. **CREATE** (`executor/operators/create.rs`) — label-index
+     rebuild no longer reverse-engineers label IDs from
+     `NodeRecord.label_bits`. A new `created_nodes_with_labels`
+     list is populated during node creation and fed directly to
+     `label_index.add_node` post-commit. The old rebuild loop
+     iterated `for bit in 0..64`, dropping any `label_id >= 64`
+     — a real bug once the catalog accumulates enough labels. In
+     the test suite (shared catalog across parallel tests) :P gets
+     label_id = 134; this fix lets `NodeByLabel(134)` return the
+     actual :P nodes instead of an empty bitmap.
+  Regression lock:
+  `match_anonymous_anchor_with_label_and_property_scopes_expand`
+  (un-ignored), `match_anonymous_anchor_var_length_expansion_is_bounded_by_filter`
+  (new), and `match_scopes_by_label_and_property_together` all green.
+- **§2 Variable-length path** — **DONE**. Same root cause as §1
+  (anonymous anchor leaves `VariableLengthPath.source_var` empty).
+  Same planner fix covers it; no separate operator-level change
+  needed because `add_relationship_operators` feeds `source_var`
+  into both `Expand` and `VariableLengthPath` from the same
+  `prev_node_var`. Regression test:
+  `match_anonymous_anchor_var_length_expansion_is_bounded_by_filter`.
 
 Added to "DONE" after the second pass (2026-04-20, same day):
 
