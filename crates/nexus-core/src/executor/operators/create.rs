@@ -105,6 +105,22 @@ impl Executor {
                         continue;
                     }
 
+                    // Bound-variable reuse: if this node carries a
+                    // variable name that was already declared earlier
+                    // in the same CREATE, rebind to the existing node
+                    // instead of creating an unbound duplicate.
+                    // Repro: `CREATE (a:X),(b:X),(a)-[:R]->(b)` — the
+                    // `(a)` and `(b)` in the edge pattern must bind to
+                    // the first two nodes, not produce two extra
+                    // anonymous :X nodes. Tracked in
+                    // phase6_nexus-create-bound-var-duplication.
+                    if let Some(var) = &node.variable {
+                        if let Some(&existing_id) = created_nodes.get(var) {
+                            last_node_id = Some(existing_id);
+                            continue;
+                        }
+                    }
+
                     // Phase 1.5.2: Build label bitmap with pre-allocated IDs
                     // All labels should already be in label_cache from batch allocation
                     let mut label_bits = 0u64;
@@ -190,66 +206,84 @@ impl Executor {
                         ));
                     };
 
-                    // Get target node (next element should be a node)
+                    // Get target node (next element should be a node).
+                    // If the target's variable is already in
+                    // `created_nodes`, rebind instead of creating a
+                    // duplicate — mirrors the bound-variable fix in
+                    // the Node branch above. Without this branch the
+                    // source-side fix is asymmetric and still leaks
+                    // one unbound `:Label` node per edge.
+                    // Tracked in phase6_nexus-create-bound-var-duplication.
                     let target_id = if i + 1 < pattern.elements.len() {
                         if let parser::PatternElement::Node(target_node) = &pattern.elements[i + 1]
                         {
-                            // Phase 1 Optimization: Build label bitmap with cached lookups
-                            let mut target_label_bits = 0u64;
-                            let mut target_label_ids_for_update = Vec::new();
-                            for label in &target_node.labels {
-                                // Use cache if available, otherwise lookup and cache
-                                let label_id = if let Some(&cached_id) = label_cache.get(label) {
-                                    cached_id
+                            let bound_target_id = target_node
+                                .variable
+                                .as_ref()
+                                .and_then(|var| created_nodes.get(var).copied());
+
+                            if let Some(existing_id) = bound_target_id {
+                                // Skip the duplicate node creation —
+                                // the outer loop still needs to
+                                // advance past this pattern element
+                                // in the next iteration, so the
+                                // skip-flag contract stays intact.
+                                last_node_id = Some(existing_id);
+                                skip_next_node = true;
+                                existing_id
+                            } else {
+                                // Phase 1 Optimization: Build label bitmap with cached lookups
+                                let mut target_label_bits = 0u64;
+                                let mut target_label_ids_for_update = Vec::new();
+                                for label in &target_node.labels {
+                                    let label_id = if let Some(&cached_id) = label_cache.get(label)
+                                    {
+                                        cached_id
+                                    } else {
+                                        let id = self.catalog().get_or_create_label(label)?;
+                                        label_cache.insert(label.clone(), id);
+                                        id
+                                    };
+
+                                    if label_id < 64 {
+                                        target_label_bits |= 1u64 << label_id;
+                                    }
+                                    target_label_ids_for_update.push(label_id);
+                                }
+
+                                let target_properties = if let Some(props_map) =
+                                    &target_node.properties
+                                {
+                                    let prop_count = props_map.properties.len();
+                                    let mut json_props = serde_json::Map::with_capacity(prop_count);
+                                    for (key, value_expr) in &props_map.properties {
+                                        let json_value =
+                                            self.expression_to_json_value(value_expr)?;
+                                        json_props.insert(key.clone(), json_value);
+                                    }
+                                    serde_json::Value::Object(json_props)
                                 } else {
-                                    let id = self.catalog().get_or_create_label(label)?;
-                                    label_cache.insert(label.clone(), id);
-                                    id
+                                    serde_json::Value::Null
                                 };
 
-                                if label_id < 64 {
-                                    target_label_bits |= 1u64 << label_id;
+                                let tid = self.store_mut().create_node_with_label_bits(
+                                    &mut tx,
+                                    target_label_bits,
+                                    target_properties,
+                                )?;
+
+                                for label_id in target_label_ids_for_update {
+                                    *label_count_updates.entry(label_id).or_insert(0) += 1;
                                 }
-                                target_label_ids_for_update.push(label_id);
-                            }
 
-                            // Phase 1 Optimization: Pre-size properties Map
-                            let target_properties = if let Some(props_map) = &target_node.properties
-                            {
-                                let prop_count = props_map.properties.len();
-                                let mut json_props = serde_json::Map::with_capacity(prop_count);
-                                for (key, value_expr) in &props_map.properties {
-                                    let json_value = self.expression_to_json_value(value_expr)?;
-                                    json_props.insert(key.clone(), json_value);
+                                if let Some(var) = &target_node.variable {
+                                    created_nodes.insert(var.clone(), tid);
                                 }
-                                serde_json::Value::Object(json_props)
-                            } else {
-                                serde_json::Value::Null
-                            };
 
-                            // Create target node (we'll skip it in the next iteration)
-                            let tid = self.store_mut().create_node_with_label_bits(
-                                &mut tx,
-                                target_label_bits,
-                                target_properties,
-                            )?;
-
-                            // Phase 1 Optimization: Batch catalog metadata updates for target node
-                            for label_id in target_label_ids_for_update {
-                                *label_count_updates.entry(label_id).or_insert(0) += 1;
+                                last_node_id = Some(tid);
+                                skip_next_node = true;
+                                tid
                             }
-
-                            // Store target node ID if variable exists
-                            if let Some(var) = &target_node.variable {
-                                created_nodes.insert(var.clone(), tid);
-                            }
-
-                            last_node_id = Some(tid);
-
-                            // Set flag to skip this node in the next iteration
-                            skip_next_node = true;
-
-                            tid
                         } else {
                             return Err(Error::CypherExecution(
                                 "Relationship must be followed by a node".to_string(),

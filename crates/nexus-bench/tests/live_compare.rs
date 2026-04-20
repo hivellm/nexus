@@ -278,14 +278,52 @@ async fn isolation_between_tests_works() {
             "pass {pass}: neo4j reset did not clear"
         );
 
-        // Load succeeds on both. Asserting the exact post-load node
-        // count belongs to a separate CREATE invariant — do not
-        // couple this test to it.
         nexus
             .execute(load, timeout)
             .unwrap_or_else(|e| panic!("pass {pass}: nexus load failed: {e}"));
         neo4j
             .execute(load, timeout)
             .unwrap_or_else(|e| panic!("pass {pass}: neo4j load failed: {e}"));
+
+        // Both engines must report exactly 100 nodes + 50 edges
+        // after loading TinyDataset. The 100-node invariant
+        // regressed on Nexus under
+        // phase6_nexus-create-bound-var-duplication (the edge
+        // section re-created the declared variables as unbound
+        // duplicates); this both-engine assertion keeps the fix
+        // locked in for comparative runs too.
+        let n_nodes = nexus
+            .execute(count, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: nexus post-load count failed: {e}"));
+        let m_nodes = neo4j
+            .execute(count, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: neo4j post-load count failed: {e}"));
+        assert_eq!(
+            n_nodes.rows,
+            vec![vec![serde_json::json!(100)]],
+            "pass {pass}: nexus node count after load"
+        );
+        assert_eq!(
+            m_nodes.rows,
+            vec![vec![serde_json::json!(100)]],
+            "pass {pass}: neo4j node count after load"
+        );
+        let rel_q = "MATCH ()-[r]->() RETURN count(r) AS c";
+        let n_rels = nexus
+            .execute(rel_q, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: nexus rel count failed: {e}"));
+        let m_rels = neo4j
+            .execute(rel_q, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: neo4j rel count failed: {e}"));
+        assert_eq!(
+            n_rels.rows,
+            vec![vec![serde_json::json!(50)]],
+            "pass {pass}: nexus rel count after load"
+        );
+        assert_eq!(
+            m_rels.rows,
+            vec![vec![serde_json::json!(50)]],
+            "pass {pass}: neo4j rel count after load"
+        );
     }
 }

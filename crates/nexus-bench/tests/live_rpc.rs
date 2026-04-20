@@ -133,10 +133,8 @@ async fn isolation_between_loads_works() {
 
     for pass in 1..=2 {
         common::reset_single(&mut client);
-        // Verify the reset actually cleared everything — Nexus had a
-        // bug (phase6_nexus-delete-executor-bug) where DELETE parsed
-        // and returned Ok(0) but did not remove nodes. This
-        // assertion is the regression-test contract for that fix.
+        // Reset contract (phase6_nexus-delete-executor-bug) —
+        // post-reset count must be zero.
         let pre = client
             .execute("MATCH (n) RETURN count(n) AS c", timeout)
             .unwrap_or_else(|e| panic!("pass {pass}: pre-load count failed: {e}"));
@@ -145,12 +143,29 @@ async fn isolation_between_loads_works() {
             vec![vec![serde_json::json!(0)]],
             "pass {pass}: reset did not clear — DELETE regression?"
         );
-        // Load can happen; verifying the exact post-load count is
-        // a separate contract (CREATE with bound-variable edges
-        // currently over-creates unbound duplicates — tracked
-        // independently). Here we only assert the load succeeds.
         client
             .execute(load, timeout)
             .unwrap_or_else(|e| panic!("pass {pass}: load failed: {e}"));
+        // Load contract (phase6_nexus-create-bound-var-duplication) —
+        // TinyDataset produces exactly 100 nodes + 50 edges; if
+        // either number drifts the bound-variable binding in CREATE
+        // regressed and the edge section duplicated the declared
+        // nodes.
+        let post_n = client
+            .execute("MATCH (n) RETURN count(n) AS c", timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: post-load node count failed: {e}"));
+        assert_eq!(
+            post_n.rows,
+            vec![vec![serde_json::json!(100)]],
+            "pass {pass}: expected 100 nodes after load"
+        );
+        let post_r = client
+            .execute("MATCH ()-[r]->() RETURN count(r) AS c", timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: post-load rel count failed: {e}"));
+        assert_eq!(
+            post_r.rows,
+            vec![vec![serde_json::json!(50)]],
+            "pass {pass}: expected 50 relationships after load"
+        );
     }
 }

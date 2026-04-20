@@ -189,8 +189,15 @@ Arm them with the env vars + `-- --ignored`:
 ```bash
 NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
 NEO4J_BENCH_URL=bolt://127.0.0.1:17687 \
-  cargo test -p nexus-bench --features live-bench,neo4j -- --ignored
+  cargo test -p nexus-bench --features live-bench,neo4j -- --ignored --test-threads=1
 ```
+
+`--test-threads=1` serialises the suite so each test's `reset →
+load → assert` cycle sees its own state. Without it two tests
+can concurrently `CREATE` 100 nodes into the same backing
+database and the strict post-load count assertions (100 nodes +
+50 edges) race each other. True per-test parallel isolation is
+out of scope here — it would need a per-test scratch database.
 
 Each test short-circuits cleanly (`eprintln!` + `return`) when
 its env vars are missing, so arming only one side still lets the

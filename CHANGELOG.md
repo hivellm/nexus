@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] — 2026-04-20
 
+### Fixed — CREATE with bound-variable edges duplicated nodes (2026-04-20)
+
+`CREATE (a:X {id:1}), (b:X {id:2}), (a)-[:R]->(b)` produced 4
+nodes instead of 2 on Nexus: the edge pattern's `(a)` and `(b)`
+re-created the declared variables as anonymous `:X` duplicates
+instead of binding to the earlier declarations.
+
+Root cause in
+`crates/nexus-core/src/executor/operators/create.rs`'s
+`execute_create_pattern_internal`: the pattern-walker
+unconditionally created a new node every time it saw a
+`PatternElement::Node`, never checking whether that element's
+variable was already populated in the `created_nodes` map the
+same walker had just written to. Same problem on the target
+side of `PatternElement::Relationship`.
+
+Fix: before creating a new node, check if the pattern's variable
+is already in `created_nodes`. If so, rebind `last_node_id` to
+the existing id and continue — no duplicate record, no extra
+catalog update. Applied on both branches.
+
+Verified end-to-end:
+
+- `create_bound_variable_edge_does_not_duplicate_nodes` and
+  `create_bound_variable_chain_reuses_nodes` (new unit tests in
+  `crates/nexus-core/src/engine/tests.rs`) — single edge + chain
+  variant; cover 2-node / 3-node patterns.
+- `nexus-bench::TinyDataset.load_statement` now produces 100
+  nodes + 50 relationships on Nexus (was 200 + 50). Locked in by
+  strengthened assertions in `tests/live_rpc.rs` +
+  `tests/live_compare.rs`.
+- `cargo test --workspace` on `nexus-core`: 1722 passed, 0
+  failed (no regressions).
+
+Source task: `phase6_nexus-create-bound-var-duplication`.
+
 ### Fixed — RPC DELETE / DETACH DELETE no-op (2026-04-20)
 
 Queries like `MATCH (n) DETACH DELETE n` issued over the native

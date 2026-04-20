@@ -845,6 +845,96 @@ fn test_clear_all_data() {
     assert_eq!(stats_after.relationship_count, 0);
 }
 
+/// Regression test for phase6_nexus-create-bound-var-duplication.
+///
+/// A single CREATE that declares node variables and references
+/// those variables inside a relationship pattern *in the same
+/// CREATE* binds the variables instead of re-creating them as
+/// unbound duplicates. Neo4j 2025.09.0 honours this: the
+/// statement below produces exactly 2 nodes + 1 relationship.
+/// Before the fix Nexus was creating 4 nodes — the two declared
+/// plus two anonymous duplicates from the edge pattern.
+#[test]
+fn create_bound_variable_edge_does_not_duplicate_nodes() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (a:X {id: 1}), (b:X {id: 2}), (a)-[:R]->(b)")
+        .expect("CREATE must succeed");
+
+    let node_count = engine
+        .execute_cypher("MATCH (n) RETURN count(n) AS c")
+        .unwrap();
+    let cell = &node_count.rows[0].values[0];
+    assert_eq!(
+        cell.as_u64(),
+        Some(2),
+        "expected 2 nodes after CREATE with bound-variable edge, got {cell:?}"
+    );
+
+    let rel_count = engine
+        .execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
+        .unwrap();
+    let cell = &rel_count.rows[0].values[0];
+    assert_eq!(
+        cell.as_u64(),
+        Some(1),
+        "expected 1 relationship, got {cell:?}"
+    );
+}
+
+/// Multi-hop chain variant of the bound-variable CREATE fix —
+/// 3 nodes, 2 edges both referencing earlier declarations. Locks
+/// the invariant across more than one edge, which the single-edge
+/// reproducer above cannot prove.
+#[test]
+fn create_bound_variable_chain_reuses_nodes() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher(
+            "CREATE (a:X {id: 1}), (b:X {id: 2}), (c:X {id: 3}), \
+             (a)-[:R]->(b), (b)-[:R]->(c)",
+        )
+        .expect("CREATE must succeed");
+
+    let node_count = engine
+        .execute_cypher("MATCH (n) RETURN count(n) AS c")
+        .unwrap();
+    assert_eq!(
+        node_count.rows[0].values[0].as_u64(),
+        Some(3),
+        "expected 3 nodes, got {:?}",
+        node_count.rows[0].values[0]
+    );
+
+    let rel_count = engine
+        .execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
+        .unwrap();
+    assert_eq!(
+        rel_count.rows[0].values[0].as_u64(),
+        Some(2),
+        "expected 2 relationships, got {:?}",
+        rel_count.rows[0].values[0]
+    );
+
+    // Property preservation: every id still reaches exactly one
+    // node — guards against the fix accidentally collapsing
+    // genuinely distinct nodes.
+    for id in 1..=3 {
+        let r = engine
+            .execute_cypher(&format!("MATCH (n {{id: {id}}}) RETURN count(n) AS c"))
+            .unwrap();
+        assert_eq!(
+            r.rows[0].values[0].as_u64(),
+            Some(1),
+            "id={id} should match exactly one node"
+        );
+    }
+}
+
 /// Regression test for phase6_nexus-delete-executor-bug:
 /// `MATCH (n) DETACH DELETE n` via `engine.execute_cypher` must
 /// actually remove the nodes. The RPC dispatch used to bypass
