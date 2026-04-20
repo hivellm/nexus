@@ -39,15 +39,19 @@
 //! from serially.
 
 pub mod cluster;
+pub mod codec;
 pub mod log;
 pub mod node;
 pub mod state;
+pub mod tcp_transport;
 pub mod transport;
 pub mod types;
 
+pub use codec::{CodecError, FrameHeader, FrameIoError, decode_frame, encode_frame};
 pub use log::{LogEntry, RaftLog};
 pub use node::{RaftNode, RaftNodeConfig};
 pub use state::{LeaderState, RaftRole};
+pub use tcp_transport::{TcpRaftTransport, TcpRaftTransportConfig};
 pub use transport::{InMemoryTransport, RaftTransport, TransportError};
 pub use types::{
     AppendEntries, AppendEntriesReply, LogIndex, RaftMessage, Term, VoteReply, VoteRequest,

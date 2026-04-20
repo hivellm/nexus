@@ -32,6 +32,7 @@ pub mod cross_shard;
 pub mod merge;
 pub mod plan;
 pub mod scatter;
+pub mod tcp_client;
 
 pub use classify::{ClassifiedQuery, ClassifyHints, QueryScope};
 pub use cross_shard::{
@@ -43,4 +44,7 @@ pub use plan::{DecomposedPlan, DistributedPlan, Row};
 pub use scatter::{
     CoordinatorError, InMemoryShardClient, ScatterGather, ScatterGatherConfig, ShardClient,
     ShardResponse,
+};
+pub use tcp_client::{
+    LeaderCache, ShardRpcRequest, ShardRpcResponse, TcpShardClient, TcpShardClientConfig,
 };

@@ -1,17 +1,19 @@
 ## 1. Raft TCP Transport
 
-- [ ] 1.1 Implement `TcpRaftTransport` implementing `RaftTransport` on `tokio::net::TcpStream`
-- [ ] 1.2 Reuse `replication::protocol` framing with CRC32 + bincode payload
-- [ ] 1.3 Connection pool + reconnect-on-drop per peer
-- [ ] 1.4 Partition-safe backpressure (bounded channel per peer)
-- [ ] 1.5 Unit tests with a two-node loopback harness
+- [x] 1.1 Implement `TcpRaftTransport` implementing `RaftTransport` on `tokio::net::TcpStream` — `crates/nexus-core/src/sharding/raft/tcp_transport.rs`
+- [x] 1.2 Wire framing with CRC32 + bincode payload — `codec.rs` (`[shard_id:u32][type:u8=0x40][len:u32][payload][crc32]`, with header/body split + shard-mismatch detection)
+- [x] 1.3 Connection pool + reconnect-on-drop per peer — exponential backoff (min 100ms, max 5s); `add_peer` replaces prior writer
+- [x] 1.4 Partition-safe backpressure (bounded channel per peer) — default 1024-entry outbound queue; `try_send` drops on Full (Raft tolerates loss)
+- [x] 1.5 Unit tests with a two-node loopback harness — 19 tests total (12 codec + 7 tcp_transport including loopback, reconnect-after-restart, remove-peer, idempotent shutdown)
 
 ## 2. Coordinator TCP Client
 
-- [ ] 2.1 Implement `TcpShardClient` implementing `ShardClient`
-- [ ] 2.2 Leader-hint cache shared across scatter cycles
-- [ ] 2.3 Deadline-aware `tokio::select!` on response vs timeout
-- [ ] 2.4 Unit tests against a stub server using `tokio_test`
+- [x] 2.1 Implement `TcpShardClient` implementing `ShardClient` — `crates/nexus-core/src/coordinator/tcp_client.rs`. Syncronous `execute` bridges to async via `block_in_place + Handle::block_on` (requires multi-thread runtime; documented in module header)
+- [x] 2.2 Leader-hint cache shared across scatter cycles — `LeaderCache` (Arc-shared) with `update` / `invalidate` / `get`; `NotLeader` replies auto-update the cache
+- [x] 2.3 Deadline-aware `tokio::time::timeout` on connect / write / read — each phase budgets against the caller's `deadline: Instant`
+- [x] 2.4 Unit tests against a stub server — 7 tests: wire roundtrip, wrong-type rejection, full RPC round-trip, `NotLeader` cache update, empty members, past-deadline timeout, cache-first fan-out ordering
+
+Wire format: `rmp-serde` (MessagePack, chosen over bincode because `serde_json::Value` in `parameters` / `rows` requires `deserialize_any`, which bincode 1.x does not support) with the same `[shard_id:u32][type:u8][len:u32][payload][crc32]` frame as the Raft transport, type bytes `0x60` (request) / `0x61` (response).
 
 ## 3. Server Bootstrap
 
