@@ -34,6 +34,9 @@ pub mod scenario_catalog;
 #[cfg(feature = "live-bench")]
 pub mod client;
 
+#[cfg(feature = "live-bench")]
+pub mod divergence;
+
 pub use dataset::{Dataset, TinyDataset};
 pub use harness::{HarnessError, RunConfig, ScenarioResult};
 pub use report::{Classification, ComparativeRow, json::JsonReport, markdown::MarkdownReport};
@@ -41,6 +44,9 @@ pub use scenario::{Scenario, ScenarioBuilder};
 
 #[cfg(feature = "live-bench")]
 pub use client::{BenchClient, ClientError, ExecOutcome, NexusRpcClient, NexusRpcCredentials};
+
+#[cfg(feature = "live-bench")]
+pub use divergence::{ContentDivergence, compare_rows};
 
 #[cfg(feature = "neo4j")]
 pub use client::Neo4jBoltClient;

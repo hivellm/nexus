@@ -42,6 +42,9 @@ use nexus_bench::{
 };
 
 #[cfg(feature = "neo4j")]
+use nexus_bench::compare_rows;
+
+#[cfg(feature = "neo4j")]
 use nexus_bench::Neo4jBoltClient;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -247,6 +250,23 @@ async fn run(args: Args) -> anyhow::Result<()> {
         #[cfg(not(feature = "neo4j"))]
         let neo4j = None;
 
+        // §3.4 — cross-engine row-content divergence guard. One
+        // extra execute per side after the scenario so latency
+        // numbers stay untainted by the comparison probe. Warn but
+        // don't fail: a content mismatch is a signal the operator
+        // should investigate, not a reason to abort an otherwise
+        // useful latency report.
+        #[cfg(feature = "neo4j")]
+        if let Some(ref mut nc) = neo4j_client {
+            compare_engines_for_scenario(
+                &scen,
+                &mut nexus_client,
+                &args.engine_label,
+                nc,
+                &args.neo4j_engine_label,
+            );
+        }
+
         rows.push(ComparativeRow::new(nexus, neo4j));
     }
 
@@ -295,6 +315,35 @@ async fn connect_neo4j_if_requested(
     .await?;
     println!("\u{2713} neo4j server reachable.");
     Ok(Some(client))
+}
+
+#[cfg(feature = "neo4j")]
+fn compare_engines_for_scenario(
+    scen: &nexus_bench::Scenario,
+    nexus: &mut NexusRpcClient,
+    nexus_label: &str,
+    neo4j: &mut Neo4jBoltClient,
+    neo4j_label: &str,
+) {
+    // Probe both engines once each. Fail soft — any error is
+    // reported to stderr but does not abort the report.
+    let nexus_out = match nexus.execute(&scen.query, scen.timeout) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("  !! {}: {nexus_label} probe failed: {e}", scen.id);
+            return;
+        }
+    };
+    let neo4j_out = match neo4j.execute(&scen.query, scen.timeout) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("  !! {}: {neo4j_label} probe failed: {e}", scen.id);
+            return;
+        }
+    };
+    if let Err(div) = compare_rows(nexus_label, &nexus_out.rows, neo4j_label, &neo4j_out.rows) {
+        eprintln!("  !! {}: content divergence — {div}", scen.id);
+    }
 }
 
 #[cfg(feature = "neo4j")]
