@@ -152,8 +152,11 @@ Exact thresholds live in
 
 ## Integration tests
 
-Four `#[ignore]` tests live in
-[`crates/nexus-bench/tests/live_compare.rs`](../../crates/nexus-bench/tests/live_compare.rs):
+Two `#[ignore]` suites, nine tests total.
+
+[`tests/live_compare.rs`](../../crates/nexus-bench/tests/live_compare.rs)
+— five comparative tests, require both `NEXUS_BENCH_RPC_ADDR`
+and `NEO4J_BENCH_URL`:
 
 1. `both_health_probes_succeed` — HELLO + PING on Nexus, HELLO +
    `RETURN 1` on Neo4j.
@@ -164,20 +167,34 @@ Four `#[ignore]` tests live in
    `ratio_p50` + `classification`.
 4. `comparative_seed_catalogue_completes` — every seed scenario
    on both, per-scenario row-count parity.
+5. `isolation_between_tests_works` — two reset → load cycles on
+   both engines; asserts each reset zeroes the database. Locks
+   the `BenchClient::reset` contract that the whole suite
+   depends on for per-test fixture isolation.
 
-Arm them with both env vars + `-- --ignored`:
+[`tests/live_rpc.rs`](../../crates/nexus-bench/tests/live_rpc.rs)
+— four Nexus-only tests, require just `NEXUS_BENCH_RPC_ADDR`:
+`health_probe_succeeds`, `scalar_one_shot_returns_single_row`,
+`seed_catalog_run_completes`, `isolation_between_loads_works`.
+
+Each test calls `common::reset_single` / `common::reset_both`
+(from
+[`tests/common/mod.rs`](../../crates/nexus-bench/tests/common/mod.rs))
+up front before loading `TinyDataset`, so the whole batch runs
+cleanly in parallel against long-running servers without manual
+wipes between iterations.
+
+Arm them with the env vars + `-- --ignored`:
 
 ```bash
 NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
 NEO4J_BENCH_URL=bolt://127.0.0.1:17687 \
-    cargo test -p nexus-bench --features live-bench,neo4j --test live_compare -- --ignored
+  cargo test -p nexus-bench --features live-bench,neo4j -- --ignored
 ```
 
 Each test short-circuits cleanly (`eprintln!` + `return`) when
-either env var is missing, so arming only one side still lets
-the Nexus-only integration tests in
-[`tests/live_rpc.rs`](../../crates/nexus-bench/tests/live_rpc.rs)
-run without false failures.
+its env vars are missing, so arming only one side still lets the
+single-engine suite run without false failures.
 
 ## Troubleshooting
 

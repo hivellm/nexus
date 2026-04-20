@@ -51,7 +51,10 @@ cargo build -p nexus-bench --features live-bench --release --bin nexus-bench
 # CLI + RPC client + Bolt client (for --compare).
 cargo build -p nexus-bench --features live-bench,neo4j --release --bin nexus-bench
 
-# Integration tests against live servers (all #[ignore]).
+# Integration tests against live servers (all #[ignore], safe to
+# run as a single parallel batch — every test resets state via
+# `BenchClient::reset` before loading TinyDataset, so order does
+# not matter and concurrent tests don't stomp on each other).
 NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
     cargo test -p nexus-bench --features live-bench -- --ignored
 
@@ -147,6 +150,11 @@ multiplied rather than added.
   transport, feature-gated behind `live-bench`.
 - `Neo4jBoltClient` — Bolt via `neo4rs`, feature-gated behind
   `neo4j` (composable with `live-bench`).
+- `BenchClient::reset` — per-test fixture isolation hook. Each
+  `#[ignore]` integration test calls `common::reset_single` /
+  `common::reset_both` before loading `TinyDataset`, so the
+  full `--ignored` suite runs cleanly as a single parallel
+  batch regardless of scheduling order.
 - `compare_rows` — cross-engine row-content divergence guard
   (`nexus_bench::divergence`).
 - 25 seed scenarios across scalar / point-read / label-scan /
