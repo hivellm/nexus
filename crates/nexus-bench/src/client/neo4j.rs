@@ -137,6 +137,14 @@ impl BenchClient for Neo4jBoltClient {
                 .block_on(async { self.execute_async(&cypher, timeout).await })
         })
     }
+
+    fn reset(&mut self, timeout: Duration) -> Result<(), ClientError> {
+        // Same wipe the RPC client issues — parity on reset
+        // semantics so both engines of a comparative run start
+        // each #[ignore] test from an identical empty state.
+        self.execute("MATCH (n) DETACH DELETE n", timeout)
+            .map(|_| ())
+    }
 }
 
 /// Convert a Bolt row to the neutral `Vec<serde_json::Value>` shape

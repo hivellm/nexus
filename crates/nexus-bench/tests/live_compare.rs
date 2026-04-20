@@ -17,6 +17,11 @@
 //! missing, so arming only one engine still lets `--ignored` run
 //! the single-engine tests in `live_rpc.rs` without side effects
 //! here.
+//!
+//! State isolation: every test calls `common::reset_both` right
+//! after the connect handshake so the whole suite can run as a
+//! single `cargo test --ignored` pass without the second test
+//! duplicating the previous one's TinyDataset load.
 
 #![cfg(feature = "neo4j")]
 
@@ -24,53 +29,31 @@ use std::time::Duration;
 
 use nexus_bench::{
     ComparativeRow, Dataset,
-    client::{BenchClient, Neo4jBoltClient, NexusRpcClient, NexusRpcCredentials},
+    client::{BenchClient, Neo4jBoltClient, NexusRpcClient},
     harness::{RunConfig, run_scenario},
     scenario::ScenarioBuilder,
     scenario_catalog::seed_scenarios,
 };
 
-/// `(nexus_rpc_addr, neo4j_url)` when both env vars are set. `None`
-/// short-circuits the test body cleanly so missing env vars don't
-/// look like failures.
-fn both_endpoints() -> Option<(String, String)> {
-    let nexus = std::env::var("NEXUS_BENCH_RPC_ADDR").ok()?;
-    let neo4j = std::env::var("NEO4J_BENCH_URL").ok()?;
-    Some((nexus, neo4j))
-}
-
-/// Bolt credentials. Default to `neo4j` / `neo4j` — works with
-/// `NEO4J_AUTH=none` containers (they accept any HELLO) and with
-/// the stock-password setup.
-fn bolt_credentials() -> (String, String) {
-    (
-        std::env::var("NEO4J_BENCH_USER").unwrap_or_else(|_| "neo4j".into()),
-        std::env::var("NEO4J_BENCH_PASSWORD").unwrap_or_else(|_| "neo4j".into()),
-    )
-}
-
-/// Nexus RPC credentials built from the env vars the CLI + RPC
-/// integration tests already honour.
-fn nexus_rpc_credentials() -> NexusRpcCredentials {
-    NexusRpcCredentials {
-        api_key: std::env::var("NEXUS_BENCH_API_KEY").ok(),
-        username: std::env::var("NEXUS_BENCH_USER").ok(),
-        password: std::env::var("NEXUS_BENCH_PASSWORD").ok(),
-    }
-}
+mod common;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires both NEXUS_BENCH_RPC_ADDR and NEO4J_BENCH_URL to be set"]
 async fn both_health_probes_succeed() {
-    let Some((nexus_addr, neo4j_url)) = both_endpoints() else {
+    let Some((nexus_addr, neo4j_url)) = common::both_endpoints() else {
         eprintln!("skipping: NEXUS_BENCH_RPC_ADDR / NEO4J_BENCH_URL not set");
         return;
     };
-    let (user, password) = bolt_credentials();
+    let (user, password) = common::bolt_credentials();
     let rt = tokio::runtime::Handle::current();
 
-    let nexus =
-        NexusRpcClient::connect(nexus_addr, nexus_rpc_credentials(), "nexus", rt.clone()).await;
+    let nexus = NexusRpcClient::connect(
+        nexus_addr,
+        common::nexus_rpc_credentials(),
+        "nexus",
+        rt.clone(),
+    )
+    .await;
     assert!(
         nexus.is_ok(),
         "nexus RPC HELLO/PING probe failed: {:?}",
@@ -88,20 +71,25 @@ async fn both_engines_accept_tiny_dataset() {
     // must parse + apply it without error. Divergence here is a
     // loud signal that one of them disagrees on the Cypher dialect
     // the seed catalogue assumes.
-    let Some((nexus_addr, neo4j_url)) = both_endpoints() else {
+    let Some((nexus_addr, neo4j_url)) = common::both_endpoints() else {
         eprintln!("skipping: NEXUS_BENCH_RPC_ADDR / NEO4J_BENCH_URL not set");
         return;
     };
-    let (user, password) = bolt_credentials();
+    let (user, password) = common::bolt_credentials();
     let rt = tokio::runtime::Handle::current();
 
-    let mut nexus =
-        NexusRpcClient::connect(nexus_addr, nexus_rpc_credentials(), "nexus", rt.clone())
-            .await
-            .expect("nexus connect");
+    let mut nexus = NexusRpcClient::connect(
+        nexus_addr,
+        common::nexus_rpc_credentials(),
+        "nexus",
+        rt.clone(),
+    )
+    .await
+    .expect("nexus connect");
     let mut neo4j = Neo4jBoltClient::connect(neo4j_url, user, password, "neo4j", rt)
         .await
         .expect("neo4j connect");
+    common::reset_both(&mut nexus, &mut neo4j);
 
     let load = nexus_bench::dataset::TinyDataset.load_statement();
     let timeout = Duration::from_secs(30);
@@ -124,20 +112,25 @@ async fn comparative_scalar_one_shot() {
     // the smallest divergence check the suite performs; the richer
     // row-content comparison lives in §3.4 once the JSON
     // normalisation layer lands.
-    let Some((nexus_addr, neo4j_url)) = both_endpoints() else {
+    let Some((nexus_addr, neo4j_url)) = common::both_endpoints() else {
         eprintln!("skipping: NEXUS_BENCH_RPC_ADDR / NEO4J_BENCH_URL not set");
         return;
     };
-    let (user, password) = bolt_credentials();
+    let (user, password) = common::bolt_credentials();
     let rt = tokio::runtime::Handle::current();
 
-    let mut nexus =
-        NexusRpcClient::connect(nexus_addr, nexus_rpc_credentials(), "nexus", rt.clone())
-            .await
-            .expect("nexus connect");
+    let mut nexus = NexusRpcClient::connect(
+        nexus_addr,
+        common::nexus_rpc_credentials(),
+        "nexus",
+        rt.clone(),
+    )
+    .await
+    .expect("nexus connect");
     let mut neo4j = Neo4jBoltClient::connect(neo4j_url, user, password, "neo4j", rt)
         .await
         .expect("neo4j connect");
+    common::reset_both(&mut nexus, &mut neo4j);
 
     let scen = ScenarioBuilder::new(
         "integration.scalar",
@@ -185,20 +178,25 @@ async fn comparative_seed_catalogue_completes() {
     // caught by the harness itself via `expected_row_count`; this
     // test additionally asserts the two engines agree on every
     // scenario's row count.
-    let Some((nexus_addr, neo4j_url)) = both_endpoints() else {
+    let Some((nexus_addr, neo4j_url)) = common::both_endpoints() else {
         eprintln!("skipping: NEXUS_BENCH_RPC_ADDR / NEO4J_BENCH_URL not set");
         return;
     };
-    let (user, password) = bolt_credentials();
+    let (user, password) = common::bolt_credentials();
     let rt = tokio::runtime::Handle::current();
 
-    let mut nexus =
-        NexusRpcClient::connect(nexus_addr, nexus_rpc_credentials(), "nexus", rt.clone())
-            .await
-            .expect("nexus connect");
+    let mut nexus = NexusRpcClient::connect(
+        nexus_addr,
+        common::nexus_rpc_credentials(),
+        "nexus",
+        rt.clone(),
+    )
+    .await
+    .expect("nexus connect");
     let mut neo4j = Neo4jBoltClient::connect(neo4j_url, user, password, "neo4j", rt)
         .await
         .expect("neo4j connect");
+    common::reset_both(&mut nexus, &mut neo4j);
 
     let load = nexus_bench::dataset::TinyDataset.load_statement();
     nexus
@@ -223,6 +221,67 @@ async fn comparative_seed_catalogue_completes() {
             nexus_result.rows_returned, neo4j_result.rows_returned,
             "{}: row count divergence nexus={} vs neo4j={}",
             scen.id, nexus_result.rows_returned, neo4j_result.rows_returned
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires both NEXUS_BENCH_RPC_ADDR and NEO4J_BENCH_URL to be set"]
+async fn isolation_between_tests_works() {
+    // Load the dataset, count nodes, reset, load again, count
+    // again — on BOTH engines. If either reset hook is a no-op
+    // the second count comes back doubled and trips here.
+    let Some((nexus_addr, neo4j_url)) = common::both_endpoints() else {
+        eprintln!("skipping: NEXUS_BENCH_RPC_ADDR / NEO4J_BENCH_URL not set");
+        return;
+    };
+    let (user, password) = common::bolt_credentials();
+    let rt = tokio::runtime::Handle::current();
+
+    let mut nexus = NexusRpcClient::connect(
+        nexus_addr,
+        common::nexus_rpc_credentials(),
+        "nexus",
+        rt.clone(),
+    )
+    .await
+    .expect("nexus connect");
+    let mut neo4j = Neo4jBoltClient::connect(neo4j_url, user, password, "neo4j", rt)
+        .await
+        .expect("neo4j connect");
+
+    let load = nexus_bench::dataset::TinyDataset.load_statement();
+    let count = "MATCH (n) RETURN count(n) AS c";
+    let timeout = Duration::from_secs(30);
+
+    for pass in 1..=2 {
+        common::reset_both(&mut nexus, &mut neo4j);
+        nexus
+            .execute(load, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: nexus load failed: {e}"));
+        neo4j
+            .execute(load, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: neo4j load failed: {e}"));
+
+        // 100 nodes per engine — each load writes exactly that.
+        // If the count is >100, the previous pass's reset was a
+        // no-op (Nexus DELETE regression, or Neo4j connection
+        // leak). Assert on the value, not just the row shape.
+        let n = nexus
+            .execute(count, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: nexus count failed: {e}"));
+        let m = neo4j
+            .execute(count, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: neo4j count failed: {e}"));
+        assert_eq!(
+            n.rows,
+            vec![vec![serde_json::json!(100)]],
+            "pass {pass}: nexus count after load — reset did not clear?"
+        );
+        assert_eq!(
+            m.rows,
+            vec![vec![serde_json::json!(100)]],
+            "pass {pass}: neo4j count after load — reset did not clear?"
         );
     }
 }

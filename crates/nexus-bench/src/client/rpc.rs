@@ -184,6 +184,16 @@ impl BenchClient for NexusRpcClient {
             runtime.block_on(async { self.execute_async(&cypher, timeout).await })
         })
     }
+
+    fn reset(&mut self, timeout: Duration) -> Result<(), ClientError> {
+        // `MATCH (n) DETACH DELETE n` wipes every node + every
+        // attached relationship in a single statement — the same
+        // one the Bolt client uses, so both engines hit parity on
+        // reset semantics. Bounded by the caller-supplied timeout
+        // end-to-end via `execute_async`.
+        self.execute("MATCH (n) DETACH DELETE n", timeout)
+            .map(|_| ())
+    }
 }
 
 /// Write `req`, read the matching response, enforce a bounded

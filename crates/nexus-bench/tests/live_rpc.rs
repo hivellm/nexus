@@ -13,6 +13,12 @@
 //! cleanly if the server isn't reachable, so the worst that happens
 //! when someone runs these without a server is a clean error —
 //! never a hang.
+//!
+//! State isolation: every test calls `common::reset_single` right
+//! after the connect handshake so two tests can run back-to-back
+//! against the same Nexus server without the second one tripping
+//! the row-count divergence guard on the previous iteration's
+//! residual data.
 
 #![cfg(feature = "live-bench")]
 
@@ -20,33 +26,23 @@ use std::time::Duration;
 
 use nexus_bench::{
     Dataset,
-    client::{BenchClient, NexusRpcClient, NexusRpcCredentials},
+    client::{BenchClient, NexusRpcClient},
     harness::{RunConfig, run_scenario},
     scenario::ScenarioBuilder,
     scenario_catalog::seed_scenarios,
 };
 
-fn addr() -> Option<String> {
-    std::env::var("NEXUS_BENCH_RPC_ADDR").ok()
-}
-
-fn credentials() -> NexusRpcCredentials {
-    NexusRpcCredentials {
-        api_key: std::env::var("NEXUS_BENCH_API_KEY").ok(),
-        username: std::env::var("NEXUS_BENCH_USER").ok(),
-        password: std::env::var("NEXUS_BENCH_PASSWORD").ok(),
-    }
-}
+mod common;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a running Nexus RPC listener reachable at NEXUS_BENCH_RPC_ADDR"]
 async fn health_probe_succeeds() {
-    let Some(addr) = addr() else {
+    let Some(addr) = common::nexus_rpc_addr() else {
         eprintln!("skipping: NEXUS_BENCH_RPC_ADDR not set");
         return;
     };
     let rt = tokio::runtime::Handle::current();
-    let client = NexusRpcClient::connect(addr, credentials(), "nexus", rt).await;
+    let client = NexusRpcClient::connect(addr, common::nexus_rpc_credentials(), "nexus", rt).await;
     assert!(
         client.is_ok(),
         "HELLO + PING probe failed: {:?}",
@@ -57,14 +53,17 @@ async fn health_probe_succeeds() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a running Nexus RPC listener reachable at NEXUS_BENCH_RPC_ADDR"]
 async fn scalar_one_shot_returns_single_row() {
-    let Some(addr) = addr() else {
+    let Some(addr) = common::nexus_rpc_addr() else {
         eprintln!("skipping: NEXUS_BENCH_RPC_ADDR not set");
         return;
     };
     let rt = tokio::runtime::Handle::current();
-    let mut client = NexusRpcClient::connect(addr, credentials(), "nexus", rt)
+    let mut client = NexusRpcClient::connect(addr, common::nexus_rpc_credentials(), "nexus", rt)
         .await
         .expect("connect");
+    // Fresh state per test — this scenario does not load data but
+    // resetting keeps the suite order-independent.
+    common::reset_single(&mut client);
 
     let scen = ScenarioBuilder::new(
         "integration.scalar",
@@ -88,18 +87,19 @@ async fn scalar_one_shot_returns_single_row() {
 async fn seed_catalog_run_completes() {
     // Smoke that the whole seed catalogue finishes in a bounded
     // time against a live server. The scenarios all target the
-    // tiny dataset, which fits in one CREATE — load the dataset
-    // on entry via `BenchClient::execute`, then iterate.
-    let Some(addr) = addr() else {
+    // tiny dataset, which fits in one CREATE — reset + load on
+    // entry, then iterate.
+    let Some(addr) = common::nexus_rpc_addr() else {
         eprintln!("skipping: NEXUS_BENCH_RPC_ADDR not set");
         return;
     };
     let rt = tokio::runtime::Handle::current();
-    let mut client = NexusRpcClient::connect(addr, credentials(), "nexus", rt)
+    let mut client = NexusRpcClient::connect(addr, common::nexus_rpc_credentials(), "nexus", rt)
         .await
         .expect("connect");
 
-    // Load tiny dataset — single CREATE statement.
+    common::reset_single(&mut client);
+
     let load = nexus_bench::dataset::TinyDataset.load_statement();
     client.execute(load, Duration::from_secs(30)).unwrap();
 
@@ -111,4 +111,51 @@ async fn seed_catalog_run_completes() {
         ran += 1;
     }
     assert!(ran >= 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a running Nexus RPC listener reachable at NEXUS_BENCH_RPC_ADDR"]
+async fn isolation_between_loads_works() {
+    // Load the tiny dataset, count nodes, reset, load again, count
+    // again. Both counts must be 100 — if the reset hook is a
+    // no-op, the second count comes back as 200 and trips.
+    let Some(addr) = common::nexus_rpc_addr() else {
+        eprintln!("skipping: NEXUS_BENCH_RPC_ADDR not set");
+        return;
+    };
+    let rt = tokio::runtime::Handle::current();
+    let mut client = NexusRpcClient::connect(addr, common::nexus_rpc_credentials(), "nexus", rt)
+        .await
+        .expect("connect");
+
+    let load = nexus_bench::dataset::TinyDataset.load_statement();
+    let timeout = Duration::from_secs(30);
+
+    for pass in 1..=2 {
+        common::reset_single(&mut client);
+        // Verify the reset actually cleared everything — Nexus has
+        // a known executor bug where DELETE parses + returns Ok(0)
+        // but does not remove the nodes. If that regresses (or is
+        // never fixed), this test is the loud early-warning signal.
+        let pre = client
+            .execute("MATCH (n) RETURN count(n) AS c", timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: pre-load count failed: {e}"));
+        assert_eq!(
+            pre.rows,
+            vec![vec![serde_json::json!(0)]],
+            "pass {pass}: reset did not clear — Nexus DELETE regression?"
+        );
+        client
+            .execute(load, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: load failed: {e}"));
+        let post = client
+            .execute("MATCH (n) RETURN count(n) AS c", timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: post-load count failed: {e}"));
+        assert_eq!(
+            post.rows,
+            vec![vec![serde_json::json!(100)]],
+            "pass {pass}: expected 100 nodes after load, got {:?}",
+            post.rows
+        );
+    }
 }

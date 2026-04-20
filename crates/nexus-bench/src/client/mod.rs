@@ -77,6 +77,24 @@ pub trait BenchClient: Send + Sync {
     /// Issue a single Cypher request. Must return within `timeout`
     /// or surface [`ClientError::Timeout`].
     fn execute(&mut self, cypher: &str, timeout: Duration) -> Result<ExecOutcome, ClientError>;
+
+    /// Wipe all nodes + relationships from the database, returning
+    /// once the server confirms the delete. Used by integration
+    /// tests for per-test fixture isolation — without it, running
+    /// `cargo test --ignored` as a batch has the second test load
+    /// TinyDataset on top of the first and trip the row-count
+    /// divergence guard.
+    ///
+    /// Default impl returns [`ClientError::BadResponse`] so
+    /// implementations that genuinely cannot reset (read-only
+    /// transports) opt out explicitly rather than silently
+    /// succeeding.
+    fn reset(&mut self, timeout: Duration) -> Result<(), ClientError> {
+        let _ = timeout;
+        Err(ClientError::BadResponse(
+            "reset not supported by this client".into(),
+        ))
+    }
 }
 
 /// Bridge from the rich [`BenchClient`] trait to the harness's
@@ -105,6 +123,27 @@ mod tests {
             rows: vec![vec![serde_json::Value::from(1)]; 4],
         };
         assert_eq!(out.rows.len(), 4);
+    }
+
+    #[test]
+    fn default_reset_returns_unsupported_error() {
+        // A client that doesn't override `reset` must still
+        // compile against the trait — the default impl returns a
+        // clear error so a silent no-op can never slip through.
+        struct Dummy;
+        impl BenchClient for Dummy {
+            fn engine_name(&self) -> &str {
+                "dummy"
+            }
+            fn execute(&mut self, _: &str, _: Duration) -> Result<ExecOutcome, ClientError> {
+                unimplemented!()
+            }
+        }
+        let err = Dummy.reset(Duration::from_secs(1)).unwrap_err();
+        assert!(
+            matches!(err, ClientError::BadResponse(ref s) if s.contains("not supported")),
+            "got {err:?}"
+        );
     }
 
     #[test]
