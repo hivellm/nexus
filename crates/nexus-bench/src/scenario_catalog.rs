@@ -117,9 +117,14 @@ pub fn seed_scenarios() -> Vec<Scenario> {
         // --- Point reads over the tiny dataset -------------------
         ScenarioBuilder::new(
             "point_read.by_id",
-            "MATCH node with id = 42",
+            "MATCH node on label C with id = 42",
             DatasetKind::Tiny,
-            "MATCH (n {id: 42}) RETURN n.name AS name",
+            // Label-scoped so the scenario still returns exactly 1
+            // row when SmallDataset is loaded alongside — both
+            // fixtures use an `id` property in the 0..49 range and
+            // the harness must not see 2 matches. `n42` lives under
+            // `:C` per `TinyDataset::load_statement`.
+            "MATCH (n:C {id: 42}) RETURN n.name AS name",
         )
         .expected_rows(1)
         .build(),
@@ -239,6 +244,36 @@ pub fn seed_scenarios() -> Vec<Scenario> {
         )
         .expected_rows(1)
         .build(),
+        // --- Traversals on SmallDataset (hub-plus-chain) ---------
+        // Topology: 50 nodes `(:P {id: 0..49})`, KNOWS chain
+        // `p0→p1→…→p49`, plus hub branches `p0→p10`, `p0→p20`,
+        // `p0→p30`, `p0→p40`. Baseline counts are deterministic
+        // from the load literal — a regression shows up as a row
+        // count drift the harness's expected_rows guard catches.
+        ScenarioBuilder::new(
+            "traversal.small_one_hop_hub",
+            "1-hop KNOWS from the hub node p0 (expects 5 neighbours)",
+            DatasetKind::Small,
+            "MATCH (:P {id: 0})-[:KNOWS]->(b) RETURN count(b) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "traversal.small_two_hop_from_hub",
+            "2-hop KNOWS distinct targets from p0 (expects 5)",
+            DatasetKind::Small,
+            "MATCH (:P {id: 0})-[:KNOWS]->()-[:KNOWS]->(c) RETURN count(DISTINCT c) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "traversal.small_var_length_1_to_3",
+            "variable-length *1..3 from p0 (expects 15 distinct)",
+            DatasetKind::Small,
+            "MATCH (:P {id: 0})-[:KNOWS*1..3]->(n) RETURN count(DISTINCT n) AS c",
+        )
+        .expected_rows(1)
+        .build(),
     ]
 }
 
@@ -260,13 +295,38 @@ mod tests {
     }
 
     #[test]
-    fn every_scenario_targets_tiny_dataset() {
+    fn every_scenario_targets_a_known_dataset() {
+        // Whitelist widens as new datasets land. Anything outside
+        // this set is a typo or a stale reference to a fixture
+        // that was renamed.
         for s in seed_scenarios() {
-            assert_eq!(
-                s.dataset,
-                DatasetKind::Tiny,
-                "{} uses non-tiny dataset",
-                s.id
+            assert!(
+                matches!(s.dataset, DatasetKind::Tiny | DatasetKind::Small),
+                "{} uses unknown dataset {:?}",
+                s.id,
+                s.dataset
+            );
+        }
+    }
+
+    #[test]
+    fn small_dataset_scenarios_present() {
+        // A quick guard that the SmallDataset traversal block lands
+        // and does not regress if someone reorganises the catalogue.
+        let scenarios = seed_scenarios();
+        let ids: std::collections::HashSet<&str> = scenarios
+            .iter()
+            .filter(|s| matches!(s.dataset, DatasetKind::Small))
+            .map(|s| s.id.as_str())
+            .collect();
+        for expected in [
+            "traversal.small_one_hop_hub",
+            "traversal.small_two_hop_from_hub",
+            "traversal.small_var_length_1_to_3",
+        ] {
+            assert!(
+                ids.contains(expected),
+                "missing SmallDataset scenario {expected}"
             );
         }
     }

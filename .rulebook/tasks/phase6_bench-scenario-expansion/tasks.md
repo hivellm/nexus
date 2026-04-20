@@ -1,8 +1,8 @@
 ## 1. Dataset expansion
 
-- [ ] 1.1 `SmallDataset` — up to 500 nodes as a single CREATE literal (still ≤ 3 KiB, no fan-out)
-- [ ] 1.2 `VectorSmallDataset` — 50 nodes with 16-dim `score_vec` property
-- [ ] 1.3 Catalogue tests assert every new dataset's literal is a single CREATE statement (same guard as `TinyDataset`)
+- [x] 1.1 `SmallDataset` — 50 nodes + 53 edges as a single CREATE literal (~2 KiB). Hub-plus-chain topology over a single `:P` label and `KNOWS` type; supports deterministic 1-hop / 2-hop / `*1..3` traversal counts
+- [ ] 1.2 `VectorSmallDataset` — 50 nodes with 16-dim `score_vec` property **[blocked — HNSW KNN via Cypher not yet exposed]**
+- [x] 1.3 Catalogue tests assert every new dataset's literal is a single CREATE statement (same guard as `TinyDataset`) — `small_load_is_single_statement` + `small_load_has_fifty_three_knows_edges` + `small_load_binds_every_node_variable` + `small_load_fits_in_request_body_budget` + `small_load_is_uniform_label` in `crates/nexus-bench/src/dataset.rs`
 
 ## 2. Scenario catalogue — split into submodules
 
@@ -11,12 +11,12 @@
 
 ## 3. Traversals (§10)
 
-- [ ] 3.1 1-hop neighbour lookup on `SmallDataset`
-- [ ] 3.2 2-hop friend-of-friend
-- [ ] 3.3 Variable-length path `*1..3`
+- [x] 3.1 1-hop neighbour lookup on `SmallDataset` — `traversal.small_one_hop_hub`
+- [x] 3.2 2-hop friend-of-friend — `traversal.small_two_hop_from_hub`
+- [x] 3.3 Variable-length path `*1..3` — `traversal.small_var_length_1_to_3`
 - [ ] 3.4 Quantified path pattern `{1,5}` (once QPP ships)
-- [ ] 3.5 `shortestPath`
-- [ ] 3.6 MATCH with multiple patterns + cartesian join
+- [ ] 3.5 `shortestPath` — pending a separate verification that Nexus's shortest-path syntax matches Neo4j
+- [ ] 3.6 MATCH with multiple patterns + cartesian join — pending a non-ambiguous query on the shared fixture
 
 ## 4. Writes (§11)
 

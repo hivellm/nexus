@@ -9,12 +9,17 @@
 use serde::{Deserialize, Serialize};
 
 /// Dataset identifier for reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatasetKind {
     /// 100 nodes / 50 edges / 5 labels — fits in a single `CREATE`
-    /// statement. The default for all seed scenarios.
+    /// statement. The default for most seed scenarios.
     Tiny,
+    /// 50 nodes / 53 edges / 1 label — a hub-plus-chain topology
+    /// that supports non-trivial 1-hop / 2-hop / variable-length
+    /// traversal scenarios. Still a single `CREATE`, still ~2 KiB
+    /// literal, still no fan-out.
+    Small,
 }
 
 /// Contract every dataset implements.
@@ -102,6 +107,63 @@ const TINY_LOAD_STATEMENT: &str = "CREATE \
 (n30)-[:KNOWS]->(n31), (n31)-[:KNOWS]->(n32), (n32)-[:KNOWS]->(n33), (n33)-[:KNOWS]->(n34), (n34)-[:KNOWS]->(n35), (n35)-[:KNOWS]->(n36), (n36)-[:KNOWS]->(n37), (n37)-[:KNOWS]->(n38), (n38)-[:KNOWS]->(n39), (n39)-[:KNOWS]->(n40), \
 (n40)-[:KNOWS]->(n41), (n41)-[:KNOWS]->(n42), (n42)-[:KNOWS]->(n43), (n43)-[:KNOWS]->(n44), (n44)-[:KNOWS]->(n45), (n45)-[:KNOWS]->(n46), (n46)-[:KNOWS]->(n47), (n47)-[:KNOWS]->(n48), (n48)-[:KNOWS]->(n49), (n49)-[:KNOWS]->(n50)";
 
+/// 50-node "small" dataset. All nodes share the `P` label with an
+/// `id` property (`p0`..`p49`). Edges form a **hub-plus-chain**
+/// topology over a single `KNOWS` type:
+///
+/// * chain: `p0 → p1 → p2 → … → p49` (49 edges)
+/// * hub branches: `p0 → p10`, `p0 → p20`, `p0 → p30`, `p0 → p40`
+///   (4 extra edges out of p0)
+///
+/// Total: 50 nodes, 53 relationships. Every query in the
+/// traversal family has a predictable answer — `MATCH
+/// (:P {id:0})-[:KNOWS]->(n)` returns 5 rows; the two-hop
+/// distinct set is 5; `shortestPath` from p0 to p49 is 10 hops
+/// via the hub; `*1..3` from p0 reaches 13 distinct nodes.
+///
+/// Deliberately minimal: labels beyond `P` and a property graph
+/// beyond `id` only add literal weight without improving the
+/// traversal story. Richer fixtures belong in future datasets.
+pub struct SmallDataset;
+
+impl Dataset for SmallDataset {
+    fn kind(&self) -> DatasetKind {
+        DatasetKind::Small
+    }
+
+    fn name(&self) -> &'static str {
+        "small"
+    }
+
+    fn node_count(&self) -> usize {
+        50
+    }
+
+    fn rel_count(&self) -> usize {
+        53
+    }
+
+    fn load_statement(&self) -> &'static str {
+        SMALL_LOAD_STATEMENT
+    }
+}
+
+/// One Cypher statement — 50 node literals + a 53-edge hub-plus-
+/// chain `KNOWS` graph. Variables `p0`..`p49` are bound so the
+/// edge section can reference them in the same CREATE.
+const SMALL_LOAD_STATEMENT: &str = "CREATE \
+(p0:P {id: 0}), (p1:P {id: 1}), (p2:P {id: 2}), (p3:P {id: 3}), (p4:P {id: 4}), (p5:P {id: 5}), (p6:P {id: 6}), (p7:P {id: 7}), (p8:P {id: 8}), (p9:P {id: 9}), \
+(p10:P {id: 10}), (p11:P {id: 11}), (p12:P {id: 12}), (p13:P {id: 13}), (p14:P {id: 14}), (p15:P {id: 15}), (p16:P {id: 16}), (p17:P {id: 17}), (p18:P {id: 18}), (p19:P {id: 19}), \
+(p20:P {id: 20}), (p21:P {id: 21}), (p22:P {id: 22}), (p23:P {id: 23}), (p24:P {id: 24}), (p25:P {id: 25}), (p26:P {id: 26}), (p27:P {id: 27}), (p28:P {id: 28}), (p29:P {id: 29}), \
+(p30:P {id: 30}), (p31:P {id: 31}), (p32:P {id: 32}), (p33:P {id: 33}), (p34:P {id: 34}), (p35:P {id: 35}), (p36:P {id: 36}), (p37:P {id: 37}), (p38:P {id: 38}), (p39:P {id: 39}), \
+(p40:P {id: 40}), (p41:P {id: 41}), (p42:P {id: 42}), (p43:P {id: 43}), (p44:P {id: 44}), (p45:P {id: 45}), (p46:P {id: 46}), (p47:P {id: 47}), (p48:P {id: 48}), (p49:P {id: 49}), \
+(p0)-[:KNOWS]->(p1), (p1)-[:KNOWS]->(p2), (p2)-[:KNOWS]->(p3), (p3)-[:KNOWS]->(p4), (p4)-[:KNOWS]->(p5), (p5)-[:KNOWS]->(p6), (p6)-[:KNOWS]->(p7), (p7)-[:KNOWS]->(p8), (p8)-[:KNOWS]->(p9), (p9)-[:KNOWS]->(p10), \
+(p10)-[:KNOWS]->(p11), (p11)-[:KNOWS]->(p12), (p12)-[:KNOWS]->(p13), (p13)-[:KNOWS]->(p14), (p14)-[:KNOWS]->(p15), (p15)-[:KNOWS]->(p16), (p16)-[:KNOWS]->(p17), (p17)-[:KNOWS]->(p18), (p18)-[:KNOWS]->(p19), (p19)-[:KNOWS]->(p20), \
+(p20)-[:KNOWS]->(p21), (p21)-[:KNOWS]->(p22), (p22)-[:KNOWS]->(p23), (p23)-[:KNOWS]->(p24), (p24)-[:KNOWS]->(p25), (p25)-[:KNOWS]->(p26), (p26)-[:KNOWS]->(p27), (p27)-[:KNOWS]->(p28), (p28)-[:KNOWS]->(p29), (p29)-[:KNOWS]->(p30), \
+(p30)-[:KNOWS]->(p31), (p31)-[:KNOWS]->(p32), (p32)-[:KNOWS]->(p33), (p33)-[:KNOWS]->(p34), (p34)-[:KNOWS]->(p35), (p35)-[:KNOWS]->(p36), (p36)-[:KNOWS]->(p37), (p37)-[:KNOWS]->(p38), (p38)-[:KNOWS]->(p39), (p39)-[:KNOWS]->(p40), \
+(p40)-[:KNOWS]->(p41), (p41)-[:KNOWS]->(p42), (p42)-[:KNOWS]->(p43), (p43)-[:KNOWS]->(p44), (p44)-[:KNOWS]->(p45), (p45)-[:KNOWS]->(p46), (p46)-[:KNOWS]->(p47), (p47)-[:KNOWS]->(p48), (p48)-[:KNOWS]->(p49), \
+(p0)-[:KNOWS]->(p10), (p0)-[:KNOWS]->(p20), (p0)-[:KNOWS]->(p30), (p0)-[:KNOWS]->(p40)";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +242,71 @@ mod tests {
         // Compile-time — if the trait stops being object-safe, this
         // stops compiling.
         let _: &dyn Dataset = &TinyDataset;
+        let _: &dyn Dataset = &SmallDataset;
+    }
+
+    // ── SmallDataset ────────────────────────────────────────────
+
+    #[test]
+    fn small_metadata_matches_literal() {
+        let d = SmallDataset;
+        assert_eq!(d.kind(), DatasetKind::Small);
+        assert_eq!(d.name(), "small");
+        assert_eq!(d.node_count(), 50);
+        assert_eq!(d.rel_count(), 53);
+    }
+
+    #[test]
+    fn small_load_is_single_statement() {
+        let s = SmallDataset.load_statement();
+        // One `CREATE` — same guard the TinyDataset literal carries.
+        assert_eq!(s.matches("CREATE ").count(), 1, "must be a single CREATE");
+        assert!(!s.contains("MATCH"));
+    }
+
+    #[test]
+    fn small_load_has_fifty_three_knows_edges() {
+        let s = SmallDataset.load_statement();
+        let edge_count = s.matches("-[:KNOWS]->").count();
+        assert_eq!(
+            edge_count, 53,
+            "expected 53 KNOWS edges, found {edge_count}"
+        );
+    }
+
+    #[test]
+    fn small_load_binds_every_node_variable() {
+        let s = SmallDataset.load_statement();
+        for id in 0..50 {
+            let needle = format!("(p{id}:");
+            assert!(
+                s.contains(&needle),
+                "node variable {needle} missing from literal"
+            );
+        }
+    }
+
+    #[test]
+    fn small_load_fits_in_request_body_budget() {
+        let s = SmallDataset.load_statement();
+        // Upper bound mirrors TinyDataset's guard; the actual value
+        // is ~2 KiB, so a bloated edit trips this well before the
+        // server's default body limit would.
+        assert!(s.len() < 16 * 1024, "literal is {} bytes", s.len());
+    }
+
+    #[test]
+    fn small_load_is_uniform_label() {
+        // Every node carries `:P` and no other label; scenarios
+        // targeting this dataset can rely on that.
+        let s = SmallDataset.load_statement();
+        // 50 node literals should all contain `:P {`.
+        assert_eq!(s.matches(":P {").count(), 50, "all 50 nodes must carry :P");
+    }
+
+    #[test]
+    fn kind_serde_snake_case_small() {
+        let s = serde_json::to_string(&DatasetKind::Small).unwrap();
+        assert_eq!(s, "\"small\"");
     }
 }

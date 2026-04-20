@@ -32,10 +32,13 @@
 
 use std::path::PathBuf;
 
+use std::collections::HashSet;
+
 use clap::{Parser, ValueEnum};
 use nexus_bench::{
-    ComparativeRow, Dataset, RunConfig, TinyDataset,
+    ComparativeRow, Dataset, RunConfig, SmallDataset, TinyDataset,
     client::{BenchClient, NexusRpcClient, NexusRpcCredentials},
+    dataset::DatasetKind,
     harness::run_scenario,
     report::{json::JsonReport, markdown::MarkdownReport},
     scenario_catalog::seed_scenarios,
@@ -205,14 +208,6 @@ async fn run(args: Args) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if args.load_dataset {
-        load_tiny_dataset(&mut nexus_client, &args.engine_label)?;
-        #[cfg(feature = "neo4j")]
-        if let Some(ref mut c) = neo4j_client {
-            load_tiny_dataset(c, &args.neo4j_engine_label)?;
-        }
-    }
-
     let cfg = RunConfig {
         measured_multiplier: args.measured_multiplier,
     }
@@ -224,13 +219,31 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .map(|s| s.split(',').map(|x| x.trim().to_string()).collect());
 
     let scenarios = seed_scenarios();
-    let mut rows = Vec::new();
-    for scen in scenarios {
-        if let Some(ref w) = wanted {
-            if !w.iter().any(|id| id == &scen.id) {
-                continue;
+    let selected: Vec<_> = scenarios
+        .iter()
+        .filter(|s| match &wanted {
+            None => true,
+            Some(list) => list.iter().any(|id| id == &s.id),
+        })
+        .collect();
+
+    if args.load_dataset {
+        // Load every dataset kind referenced by the selected
+        // scenarios, once per engine. `HashSet` collapses
+        // duplicates so TinyDataset + SmallDataset each load once
+        // regardless of how many scenarios back-reference them.
+        let kinds: HashSet<DatasetKind> = selected.iter().map(|s| s.dataset).collect();
+        for kind in kinds {
+            load_dataset_kind(&mut nexus_client, kind, &args.engine_label)?;
+            #[cfg(feature = "neo4j")]
+            if let Some(ref mut c) = neo4j_client {
+                load_dataset_kind(c, kind, &args.neo4j_engine_label)?;
             }
         }
+    }
+    let mut rows = Vec::new();
+    for scen in &selected {
+        let scen = *scen;
         println!(
             "\u{25b6} {} ({} warmup / {} measured)",
             scen.id, scen.warmup_iters, scen.measured_iters
@@ -238,7 +251,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
 
         // Nexus first, always.
         let mut c = &mut nexus_client;
-        let nexus = run_scenario(&scen, &args.engine_label, &mut c, &cfg)?;
+        let nexus = run_scenario(scen, &args.engine_label, &mut c, &cfg)?;
         println!(
             "  {}: p50={}\u{00b5}s p95={}\u{00b5}s ({:.0} ops/s)",
             args.engine_label, nexus.p50_us, nexus.p95_us, nexus.ops_per_second
@@ -246,7 +259,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
 
         // Neo4j second, when comparative mode is wired in and armed.
         #[cfg(feature = "neo4j")]
-        let neo4j = run_neo4j_side(&scen, &cfg, neo4j_client.as_mut(), &args.neo4j_engine_label)?;
+        let neo4j = run_neo4j_side(scen, &cfg, neo4j_client.as_mut(), &args.neo4j_engine_label)?;
         #[cfg(not(feature = "neo4j"))]
         let neo4j = None;
 
@@ -259,7 +272,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
         #[cfg(feature = "neo4j")]
         if let Some(ref mut nc) = neo4j_client {
             compare_engines_for_scenario(
-                &scen,
+                scen,
                 &mut nexus_client,
                 &args.engine_label,
                 nc,
@@ -274,18 +287,33 @@ async fn run(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Issue the single-CREATE tiny dataset against `client`. Shared
-/// between the Nexus side and (when `neo4j` is enabled) the Neo4j
-/// side so both engines see an identical seed.
-fn load_tiny_dataset<C: BenchClient>(client: &mut C, label: &str) -> anyhow::Result<()> {
-    println!("\u{25b6} loading tiny dataset on {label} (1 CREATE statement)...");
-    let load = TinyDataset.load_statement();
+/// Issue the single-CREATE literal for `kind` against `client`.
+/// Shared between the Nexus side and (when `neo4j` is enabled)
+/// the Neo4j side so both engines see identical seed data.
+fn load_dataset_kind<C: BenchClient>(
+    client: &mut C,
+    kind: DatasetKind,
+    label: &str,
+) -> anyhow::Result<()> {
+    let (name, load, nodes, rels) = match kind {
+        DatasetKind::Tiny => (
+            TinyDataset.name(),
+            TinyDataset.load_statement(),
+            TinyDataset.node_count(),
+            TinyDataset.rel_count(),
+        ),
+        DatasetKind::Small => (
+            SmallDataset.name(),
+            SmallDataset.load_statement(),
+            SmallDataset.node_count(),
+            SmallDataset.rel_count(),
+        ),
+    };
+    println!("\u{25b6} loading {name} dataset on {label} (1 CREATE statement)...");
     let out = client.execute(load, std::time::Duration::from_secs(30))?;
     println!(
-        "\u{2713} {} loaded ({} nodes, {} edges expected; server returned {} rows)",
-        label,
-        TinyDataset.node_count(),
-        TinyDataset.rel_count(),
+        "\u{2713} {label} / {name} loaded ({nodes} nodes, {rels} edges expected; \
+         server returned {} rows)",
         out.rows.len()
     );
     Ok(())

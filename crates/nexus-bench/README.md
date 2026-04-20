@@ -142,7 +142,11 @@ multiplied rather than added.
 ## What ships
 
 - `TinyDataset` — 100-node + 50-edge static fixture, single
-  `CREATE` load.
+  `CREATE` load. Five labels `A`..`E`, 20 nodes each.
+- `SmallDataset` — 50-node + 53-edge hub-plus-chain fixture for
+  non-trivial traversal scenarios (1-hop, 2-hop, variable-length
+  `*1..3`). All nodes carry the `:P` label so queries can scope
+  cleanly when both datasets are loaded on the same server.
 - `Scenario` + `ScenarioBuilder` with clamped defaults.
 - `run_scenario` — generic over a narrow `BenchExecute` trait,
   with a divergence guard against expected row counts.
@@ -157,9 +161,12 @@ multiplied rather than added.
   batch regardless of scheduling order.
 - `compare_rows` — cross-engine row-content divergence guard
   (`nexus_bench::divergence`).
-- 25 seed scenarios across scalar / point-read / label-scan /
+- 28 seed scenarios across scalar / point-read / label-scan /
   aggregation / filter / order / traversal / subquery /
-  procedure categories.
+  procedure categories. Traversal scenarios cover both the
+  `TinyDataset` `KNOWS` chain (1-hop, 2-hop, all-edges) and the
+  `SmallDataset` hub-plus-chain (1-hop from hub, 2-hop distinct,
+  variable-length `*1..3`).
 - `MarkdownReport` + `JsonReport` — pure string / serde output.
 - `nexus-bench` CLI — dry-run by default, explicit flag to
   actually send traffic.

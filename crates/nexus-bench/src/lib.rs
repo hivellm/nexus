@@ -37,7 +37,7 @@ pub mod client;
 #[cfg(feature = "live-bench")]
 pub mod divergence;
 
-pub use dataset::{Dataset, TinyDataset};
+pub use dataset::{Dataset, SmallDataset, TinyDataset};
 pub use harness::{HarnessError, RunConfig, ScenarioResult};
 pub use report::{Classification, ComparativeRow, json::JsonReport, markdown::MarkdownReport};
 pub use scenario::{Scenario, ScenarioBuilder};

@@ -100,14 +100,29 @@ async fn seed_catalog_run_completes() {
 
     common::reset_single(&mut client);
 
-    let load = nexus_bench::dataset::TinyDataset.load_statement();
-    client.execute(load, Duration::from_secs(30)).unwrap();
+    let scenarios = seed_scenarios();
+    // Load every dataset kind the catalogue references — TinyDataset
+    // + SmallDataset + whatever future fixture shows up.
+    let kinds: std::collections::HashSet<nexus_bench::dataset::DatasetKind> =
+        scenarios.iter().map(|s| s.dataset).collect();
+    let timeout = Duration::from_secs(30);
+    for kind in kinds {
+        let load = match kind {
+            nexus_bench::dataset::DatasetKind::Tiny => {
+                nexus_bench::dataset::TinyDataset.load_statement()
+            }
+            nexus_bench::dataset::DatasetKind::Small => nexus_bench::SmallDataset.load_statement(),
+        };
+        client
+            .execute(load, timeout)
+            .unwrap_or_else(|e| panic!("load {kind:?}: {e}"));
+    }
 
     let cfg = RunConfig::default().clamped();
     let mut ran = 0;
-    for scen in seed_scenarios() {
+    for scen in &scenarios {
         let mut c = &mut client;
-        let _ = run_scenario(&scen, "nexus", &mut c, &cfg).unwrap();
+        let _ = run_scenario(scen, "nexus", &mut c, &cfg).unwrap();
         ran += 1;
     }
     assert!(ran >= 5);

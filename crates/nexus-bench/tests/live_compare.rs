@@ -198,24 +198,37 @@ async fn comparative_seed_catalogue_completes() {
         .expect("neo4j connect");
     common::reset_both(&mut nexus, &mut neo4j);
 
-    let load = nexus_bench::dataset::TinyDataset.load_statement();
-    nexus
-        .execute(load, Duration::from_secs(30))
-        .expect("nexus load");
-    neo4j
-        .execute(load, Duration::from_secs(30))
-        .expect("neo4j load");
+    // Load every dataset kind referenced by the seed catalogue.
+    // `HashSet` over `DatasetKind` keeps each dataset to a single
+    // load per engine, matching the CLI's de-dup loop.
+    let scenarios = seed_scenarios();
+    let kinds: std::collections::HashSet<nexus_bench::dataset::DatasetKind> =
+        scenarios.iter().map(|s| s.dataset).collect();
+    let timeout = Duration::from_secs(30);
+    for kind in kinds {
+        let load = match kind {
+            nexus_bench::dataset::DatasetKind::Tiny => {
+                nexus_bench::dataset::TinyDataset.load_statement()
+            }
+            nexus_bench::dataset::DatasetKind::Small => nexus_bench::SmallDataset.load_statement(),
+        };
+        nexus
+            .execute(load, timeout)
+            .unwrap_or_else(|e| panic!("nexus load {kind:?}: {e}"));
+        neo4j
+            .execute(load, timeout)
+            .unwrap_or_else(|e| panic!("neo4j load {kind:?}: {e}"));
+    }
 
     let cfg = RunConfig::default().clamped();
-    let scenarios = seed_scenarios();
     assert!(!scenarios.is_empty(), "seed catalogue must be non-empty");
 
-    for scen in scenarios {
+    for scen in &scenarios {
         let mut nc = &mut nexus;
-        let nexus_result = run_scenario(&scen, "nexus", &mut nc, &cfg)
+        let nexus_result = run_scenario(scen, "nexus", &mut nc, &cfg)
             .unwrap_or_else(|e| panic!("{}: nexus scenario failed: {e}", scen.id));
         let mut nc2 = &mut neo4j;
-        let neo4j_result = run_scenario(&scen, "neo4j", &mut nc2, &cfg)
+        let neo4j_result = run_scenario(scen, "neo4j", &mut nc2, &cfg)
             .unwrap_or_else(|e| panic!("{}: neo4j scenario failed: {e}", scen.id));
         assert_eq!(
             nexus_result.rows_returned, neo4j_result.rows_returned,
