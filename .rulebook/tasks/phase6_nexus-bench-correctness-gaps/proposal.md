@@ -25,7 +25,49 @@ Snapshots live under
 Nexus commit the bench ran against so a latency regression
 (or a fix) has a commit to point at.
 
-### Run 2 — 2026-04-20 · Nexus commit pending · 32 scenarios
+### Run 3 — 2026-04-20 · Nexus commit `6a9983f4` · 34 scenarios
+
+Catalogue grew to 34 after `procedure.db_indexes`,
+`subquery.unwind_sum`, `subquery.with_filter_count`,
+`subquery.size_of_collect` landed — spreading the surface
+across procedure / UNWIND / WITH-pipeline / list-function
+territory.
+
+| Bucket | Count |
+|---|---|
+| ⭐ Lead | 26 |
+| ✅ Parity | 4 |
+| ⚠️ Behind | 2 |
+| 🚨 Gap | 2 |
+| content-divergent | **13** |
+| bench-aborting errors | **1** |
+
+New findings vs Run 2:
+
+- `procedure.db_indexes` — Nexus's parser rejects
+  `CALL db.indexes() YIELD *` (column 25). Add `YIELD *`
+  support or rewrite the scenario with explicit yield
+  columns. Also independently the procedure is likely
+  broken the same way `db.labels()` is — §3 territory.
+- `subquery.with_filter_count` — `MATCH (n:A) WITH n.score AS s
+  WHERE s > 0.1 RETURN count(*) AS c` returns zero rows on
+  Nexus. Neo4j returns 1. Probably the same root as §5
+  (WITH → RETURN pipeline collapses) but with a WHERE in
+  between; if §5 fix covers it, this scenario turns green
+  automatically.
+- `subquery.size_of_collect` — `MATCH (n:A) WITH
+  collect(n.id) AS ids RETURN size(ids) AS s` returns the
+  raw list `[0..19]` instead of 20. `size()` call is not
+  being evaluated; the WITH projection leaks straight
+  through. Maps to §5.
+- `order.bottom_5_by_score` — the same null-positioning bug
+  from §7, but in the ASC direction: Nexus puts null first
+  in ASC, openCypher says null goes last. One fix covers
+  both directions.
+
+Snapshot: `docs/benchmarks/baselines/2026-04-20-run3.{md,json}`.
+
+### Run 2 — 2026-04-20 · Nexus commit `6a9983f4` · 32 scenarios
 
 Catalogue grew to 32 after `traversal.cartesian_a_b`,
 `write.create_singleton` (literal mark, not id), `write.merge_singleton`,
@@ -161,23 +203,43 @@ every integer result that happens to cross the expression
 evaluator. Real-world impact modest; test fixtures that
 compare against `json!(7)` trip.
 
-### 5. `WITH` → `RETURN bool` returns the WITH payload (MEDIUM)
+### 5. `WITH` → `RETURN <expr>` leaks WITH payload (MEDIUM — three scenarios)
+
+The post-WITH RETURN clause is being dropped — every scenario
+whose RETURN applies a function or boolean expression to
+WITH-projected variables gets the raw WITH payload back
+instead of the expression's value.
 
 Caught by:
+
 - `subquery.exists_high_score`: Nexus=**[0.99, 150]**,
   Neo4j=false
+  ```cypher
+  MATCH (n) WITH count(n) AS total, max(n.score) AS hi
+  RETURN hi > 0.99 AS any_high
+  -- expected: Bool(false) (0.99 is not strictly > 0.99)
+  -- observed: [hi, total] raw instead of evaluating
+  --           `hi > 0.99`
+  ```
+- `subquery.size_of_collect`: Nexus=**[0..19 list]**, Neo4j=20
+  ```cypher
+  MATCH (n:A) WITH collect(n.id) AS ids RETURN size(ids) AS s
+  -- expected: Number(20)
+  -- observed: the collect'ed list leaks through unchanged;
+  --           `size(ids)` is not evaluated
+  ```
+- `subquery.with_filter_count`: Nexus=**0 rows**, Neo4j=1 row
+  ```cypher
+  MATCH (n:A) WITH n.score AS s WHERE s > 0.1 RETURN count(*) AS c
+  -- expected: 1 row (count aggregation always produces one)
+  -- observed: zero rows — the aggregation after the WHERE
+  --           returned nothing, or the whole pipeline
+  --           short-circuited
+  ```
 
-```cypher
-MATCH (n) WITH count(n) AS total, max(n.score) AS hi
-RETURN hi > 0.99 AS any_high
--- expected: boolean false (0.99 is not strictly > 0.99)
--- observed: a row with the WITH projection [hi, total] instead
---           of the RETURN expression applied to it
-```
-
-Either the planner drops the computed-RETURN clause after a
-WITH, or the RETURN expression is not being evaluated and the
-WITH bindings leak out raw.
+All three strongly suggest the RETURN clause after a WITH is
+either not being planned or its expression is being silently
+replaced with the WITH column projection.
 
 ### 6. Float-accumulation order in `avg()` (LOW — diagnostic)
 
@@ -203,22 +265,27 @@ Fix direction: pick one of
 floats
 (c) leave as-is and declare the divergence informational.
 
-### 7. `ORDER BY <prop> DESC` puts nulls last, not first (MEDIUM)
+### 7. `ORDER BY` null-positioning inverted in both directions (MEDIUM — two scenarios)
 
-Surfaced in Run 2 by `order.top_5_by_score`:
+Caught by both `order.top_5_by_score` (DESC, Run 2) and
+`order.bottom_5_by_score` (ASC, Run 3):
 
 ```cypher
-MATCH (n) RETURN n.name AS name ORDER BY n.score DESC LIMIT 5
--- With TinyDataset + SmallDataset both loaded, SmallDataset
--- rows have null score.
--- Nexus top row: "n0" (a TinyDataset name — nulls sorted LAST)
--- Neo4j top row: null (SmallDataset rows sorted FIRST in DESC)
+-- DESC (openCypher: nulls first)
+MATCH (n) RETURN n.name ORDER BY n.score DESC LIMIT 5
+-- Nexus: "n0"   (nulls sorted LAST — wrong)
+-- Neo4j: null   (nulls sorted FIRST — correct)
+
+-- ASC (openCypher: nulls last)
+MATCH (n) RETURN n.name ORDER BY n.score ASC LIMIT 5
+-- Nexus: null   (nulls sorted FIRST — wrong)
+-- Neo4j: "n0"   (nulls sorted LAST — correct)
 ```
 
-openCypher semantics: in DESC, nulls come **first**; in ASC,
-nulls come **last**. Neo4j follows this; Nexus does not.
-Medium severity because `ORDER BY` is everywhere and
-null-sorting surprises trip real queries.
+Nexus sorts nulls with the wrong polarity in **both** DESC
+and ASC. openCypher: DESC → nulls first, ASC → nulls last.
+Medium severity because `ORDER BY` is everywhere; fix is a
+single polarity flip in the comparator.
 
 ### Methodology
 

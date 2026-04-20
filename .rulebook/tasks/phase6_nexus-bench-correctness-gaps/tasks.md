@@ -15,7 +15,8 @@
 - [ ] 3.1 Engine-level regression test for `db.labels()` — on a two-dataset load (TinyDataset + SmallDataset) it yields 6 labels (A, B, C, D, E, P)
 - [ ] 3.2 Same shape of test for `db.relationshipTypes()` (expects 1: KNOWS) and `db.propertyKeys()` (expects at least `id`, `name`, `score`)
 - [ ] 3.3 Walk the procedure dispatch and YIELD wiring; identify whether the procedure body emits no rows or the YIELD plumbing drops them
-- [ ] 3.4 Fix + re-run bench; `procedure.db_labels`, `procedure.db_relationship_types`, `procedure.db_property_keys` all content-match Neo4j
+- [ ] 3.4 Additionally: `CALL db.indexes() YIELD *` errors at parse time (column 25) — teach the parser `YIELD *` or accept the procedure's column list
+- [ ] 3.5 Fix + re-run bench; `procedure.db_labels`, `procedure.db_relationship_types`, `procedure.db_property_keys`, `procedure.db_indexes` all content-match Neo4j
 
 ## 4. Integer arithmetic promoted to float (LOW)
 
@@ -24,11 +25,13 @@
 - [ ] 4.3 Fix the expression evaluator so the result type follows Cypher rules (integer stays integer until a float operand is introduced)
 - [ ] 4.4 Re-run bench; `scalar.arithmetic` content-matches Neo4j
 
-## 5. `WITH` → `RETURN <expr>` projection drop (MEDIUM)
+## 5. `WITH` → `RETURN <expr>` projection drop (MEDIUM — three scenarios)
 
 - [ ] 5.1 Engine-level regression: `MATCH (n) WITH count(n) AS total, max(n.score) AS hi RETURN hi > 0.99 AS any_high` returns one `Bool(false)` row, not the WITH projection raw
-- [ ] 5.2 Trace the planner's WITH → RETURN chain — likely the RETURN expression is being discarded in favour of the WITH projection's column set
-- [ ] 5.3 Fix and confirm `subquery.exists_high_score` content-matches Neo4j
+- [ ] 5.2 Engine-level regression: `MATCH (n:A) WITH collect(n.id) AS ids RETURN size(ids) AS s` returns `Number(20)`, not the raw list
+- [ ] 5.3 Engine-level regression: `MATCH (n:A) WITH n.score AS s WHERE s > 0.1 RETURN count(*) AS c` returns one row, not zero
+- [ ] 5.4 Trace the planner's WITH → RETURN chain — likely the RETURN expression is being discarded in favour of the WITH projection's column set
+- [ ] 5.5 Fix and confirm `subquery.exists_high_score` + `subquery.size_of_collect` + `subquery.with_filter_count` all content-match Neo4j
 
 ## 6. Float-accumulation order in `avg()` (LOW — diagnostic)
 
@@ -36,11 +39,12 @@
 - [ ] 6.2 Apply the chosen direction; if Kahan, add a regression test asserting the `:A` label's avg score is numerically stable across run invocations
 - [ ] 6.3 Re-run bench; `aggregation.avg_score_a` content-matches Neo4j (or is normalised by the guard)
 
-## 7. `ORDER BY <prop> DESC` null positioning (MEDIUM)
+## 7. `ORDER BY` null-positioning inverted (MEDIUM — two scenarios)
 
-- [ ] 7.1 Engine-level regression: seed nodes with + without a `score` property, `MATCH (n) RETURN n.name ORDER BY n.score DESC` — null-score rows appear first
-- [ ] 7.2 Audit the planner's ORDER BY operator; adjust the comparison so nulls sort first in DESC and last in ASC per openCypher
-- [ ] 7.3 Re-run bench; `order.top_5_by_score` content-matches Neo4j
+- [ ] 7.1 Engine-level regression: seed nodes with + without a `score` property, `MATCH (n) RETURN n.name ORDER BY n.score DESC LIMIT 5` — null-score rows appear first
+- [ ] 7.2 Engine-level regression: same seed, `MATCH (n) RETURN n.name ORDER BY n.score ASC LIMIT 5` — null-score rows appear last
+- [ ] 7.3 Audit the planner's ORDER BY operator comparator; flip the null-polarity so DESC puts nulls first and ASC puts them last per openCypher
+- [ ] 7.4 Re-run bench; `order.top_5_by_score` AND `order.bottom_5_by_score` both content-match Neo4j
 
 ## 8. Re-run + publish
 

@@ -161,6 +161,14 @@ pub fn seed_scenarios() -> Vec<Scenario> {
         )
         .expected_rows(1)
         .build(),
+        ScenarioBuilder::new(
+            "procedure.db_indexes",
+            "db.indexes procedure — catalogue of indexes",
+            DatasetKind::Tiny,
+            "CALL db.indexes() YIELD * RETURN count(*) AS c",
+        )
+        .expected_rows(1)
+        .build(),
         // --- Scalar / evaluator fast path ------------------------
         ScenarioBuilder::new(
             "scalar.arithmetic",
@@ -208,6 +216,30 @@ pub fn seed_scenarios() -> Vec<Scenario> {
             "COLLECT subquery — names of label A",
             DatasetKind::Tiny,
             "MATCH (n:A) RETURN collect(n.name) AS names",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "subquery.unwind_sum",
+            "UNWIND + sum over a literal list (no graph read)",
+            DatasetKind::Tiny,
+            "UNWIND [1, 2, 3, 4, 5] AS x RETURN sum(x) AS s",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "subquery.with_filter_count",
+            "MATCH → WITH → WHERE → RETURN pipeline",
+            DatasetKind::Tiny,
+            "MATCH (n:A) WITH n.score AS s WHERE s > 0.1 RETURN count(*) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "subquery.size_of_collect",
+            "size() over a collected list",
+            DatasetKind::Tiny,
+            "MATCH (n:A) WITH collect(n.id) AS ids RETURN size(ids) AS s",
         )
         .expected_rows(1)
         .build(),
