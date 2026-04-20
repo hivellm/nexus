@@ -249,9 +249,19 @@ async fn run(args: Args) -> anyhow::Result<()> {
             scen.id, scen.warmup_iters, scen.measured_iters
         );
 
-        // Nexus first, always.
+        // Nexus first, always. A single scenario's failure logs and
+        // skips to the next entry rather than aborting the whole
+        // run — one broken query (unsupported syntax, a driver
+        // timeout, a transient network blip) should not destroy
+        // the report for the other 27 scenarios.
         let mut c = &mut nexus_client;
-        let nexus = run_scenario(scen, &args.engine_label, &mut c, &cfg)?;
+        let nexus = match run_scenario(scen, &args.engine_label, &mut c, &cfg) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  !! {}: {} error: {e}", scen.id, args.engine_label);
+                continue;
+            }
+        };
         println!(
             "  {}: p50={}\u{00b5}s p95={}\u{00b5}s ({:.0} ops/s)",
             args.engine_label, nexus.p50_us, nexus.p95_us, nexus.ops_per_second
@@ -259,7 +269,14 @@ async fn run(args: Args) -> anyhow::Result<()> {
 
         // Neo4j second, when comparative mode is wired in and armed.
         #[cfg(feature = "neo4j")]
-        let neo4j = run_neo4j_side(scen, &cfg, neo4j_client.as_mut(), &args.neo4j_engine_label)?;
+        let neo4j =
+            match run_neo4j_side(scen, &cfg, neo4j_client.as_mut(), &args.neo4j_engine_label) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("  !! {}: {} error: {e}", scen.id, args.neo4j_engine_label);
+                    None
+                }
+            };
         #[cfg(not(feature = "neo4j"))]
         let neo4j = None;
 

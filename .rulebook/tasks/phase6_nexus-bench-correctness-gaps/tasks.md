@@ -30,13 +30,25 @@
 - [ ] 5.2 Trace the planner's WITH → RETURN chain — likely the RETURN expression is being discarded in favour of the WITH projection's column set
 - [ ] 5.3 Fix and confirm `subquery.exists_high_score` content-matches Neo4j
 
-## 6. Re-run + publish
+## 6. Float-accumulation order in `avg()` (LOW — diagnostic)
+
+- [ ] 6.1 Decide the fix direction: Kahan summation in `sum()` / `avg()`, or a per-ULP epsilon in the divergence guard, or document-and-accept
+- [ ] 6.2 Apply the chosen direction; if Kahan, add a regression test asserting the `:A` label's avg score is numerically stable across run invocations
+- [ ] 6.3 Re-run bench; `aggregation.avg_score_a` content-matches Neo4j (or is normalised by the guard)
+
+## 7. `ORDER BY <prop> DESC` null positioning (MEDIUM)
+
+- [ ] 7.1 Engine-level regression: seed nodes with + without a `score` property, `MATCH (n) RETURN n.name ORDER BY n.score DESC` — null-score rows appear first
+- [ ] 7.2 Audit the planner's ORDER BY operator; adjust the comparison so nulls sort first in DESC and last in ASC per openCypher
+- [ ] 7.3 Re-run bench; `order.top_5_by_score` content-matches Neo4j
+
+## 8. Re-run + publish
 
 - [ ] 6.1 After each §1-§5 fix, rebuild `target/release/nexus-server.exe` and rerun `target/release/nexus-bench.exe --rpc-addr 127.0.0.1:15475 --neo4j-url bolt://127.0.0.1:7687 --compare --i-have-a-server-running --load-dataset --format both --output target/bench/report`
 - [ ] 6.2 Update the "Bench table" section of `proposal.md` with the fresh classification counts and the per-scenario p50s on the rows the fix touched; note which scenarios still diverge
 - [ ] 6.3 Final run: zero content-divergent scenarios. The harness's 9 `#[ignore]` comparative tests all still pass as a single `cargo test --features live-bench,neo4j -- --ignored --test-threads=1` batch
 
-## 7. Tail (mandatory — enforced by rulebook v5.3.0)
+## 9. Tail (mandatory — enforced by rulebook v5.3.0)
 
 - [ ] 7.1 Update or create documentation — CHANGELOG entry per fix under `1.0.0 → Fixed`; mention in `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` if any fix closes a documented gap
 - [ ] 7.2 Write tests covering the new behavior — §1.1 / §2.1 / §3.1-3.2 / §4.1 / §5.1 above

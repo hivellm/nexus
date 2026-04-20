@@ -274,6 +274,54 @@ pub fn seed_scenarios() -> Vec<Scenario> {
         )
         .expected_rows(1)
         .build(),
+        // `shortestPath((…)-[*]->(…))` is §3.5 territory but Nexus's
+        // parser errors on the `shortestPath(` token right now —
+        // tracked inside phase6_nexus-bench-correctness-gaps. Add
+        // back once the parser accepts the Neo4j syntax; leaving it
+        // out today keeps the bench run from aborting on that row.
+        ScenarioBuilder::new(
+            "traversal.cartesian_a_b",
+            "MATCH (a:A), (b:B) cartesian count (TinyDataset: 20 × 20 = 400)",
+            DatasetKind::Tiny,
+            "MATCH (a:A), (b:B) RETURN count(*) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        // --- Writes (idempotent or iteration-safe queries) -------
+        // Every scenario in this group either CREATE-s a node per
+        // iteration (count=1 each time) or MERGE-s/SET-s where the
+        // result shape is stable across iterations. Non-stable
+        // writes would trip the harness's divergence guard on
+        // iteration 2. BenchClient::reset() is not called between
+        // iterations — that would dominate latency.
+        ScenarioBuilder::new(
+            "write.create_singleton",
+            "CREATE a new :BenchTemp node and return a literal mark",
+            DatasetKind::Tiny,
+            // Return a literal instead of `id(n)` — Nexus and Neo4j
+            // allocate node ids independently, so the divergence
+            // guard would otherwise flag this row on every run
+            // even though both engines did the same work.
+            "CREATE (n:BenchTemp {mark: 'bench'}) RETURN n.mark AS mark",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "write.merge_singleton",
+            "MERGE a singleton :BenchSingleton — idempotent",
+            DatasetKind::Tiny,
+            "MERGE (n:BenchSingleton {key: 'bench'}) RETURN n.key AS k",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "write.set_property",
+            "SET n.bench_visited = true on n0:A — idempotent",
+            DatasetKind::Tiny,
+            "MATCH (n:A {id: 0}) SET n.bench_visited = true RETURN n.id AS id",
+        )
+        .expected_rows(1)
+        .build(),
     ]
 }
 
@@ -369,6 +417,7 @@ mod tests {
             "scalar",
             "subquery",
             "traversal",
+            "write",
         ] {
             assert!(
                 prefixes.contains(cat),
@@ -378,14 +427,23 @@ mod tests {
     }
 
     #[test]
-    fn every_query_avoids_write_clauses() {
-        // Writes are deliberately out of scope until the harness
-        // grows a per-iteration reset hook. Catch a regression at
-        // the seed-catalogue level rather than at run-time when a
-        // second iteration's CREATE fails the divergence guard.
+    fn write_scenarios_declare_write_prefix() {
+        // Writes now run — `BenchClient::reset()` shipped in
+        // phase6_bench-live-test-state-isolation and the harness's
+        // divergence guard catches a scenario whose per-iteration
+        // row count drifts from its `expected_row_count`. What
+        // remains is an author-intent marker: every write scenario
+        // must sit under the `write.` id prefix, and every
+        // non-`write.` scenario must stay pure-read. That way the
+        // prefix alone tells the operator whether a run will mutate
+        // state.
         for s in seed_scenarios() {
-            let q = s.query.to_uppercase();
-            for forbidden in [
+            // Pad with spaces so a keyword at the start or end of
+            // the query still matches the space-delimited search
+            // pattern — a query that opens with `CREATE (n...` would
+            // otherwise slip past ` CREATE `.
+            let q = format!(" {} ", s.query.to_uppercase());
+            let has_write = [
                 " CREATE ",
                 " MERGE ",
                 " SET ",
@@ -393,18 +451,16 @@ mod tests {
                 " REMOVE ",
                 " DETACH DELETE ",
                 " FOREACH ",
-            ] {
-                // Guard against false positives on procedures that
-                // contain the word inside a name, e.g. "DELETE" inside
-                // "DETACH DELETE" — the space-padded match above
-                // already avoids that.
-                assert!(
-                    !q.contains(forbidden),
-                    "{}: query contains forbidden write clause `{}`",
-                    s.id,
-                    forbidden.trim()
-                );
-            }
+            ]
+            .iter()
+            .any(|w| q.contains(w));
+            let is_declared_write = s.id.starts_with("write.");
+            assert_eq!(
+                has_write, is_declared_write,
+                "{}: write-clause presence ({has_write}) must match \
+                 id prefix ({is_declared_write})",
+                s.id
+            );
         }
     }
 }

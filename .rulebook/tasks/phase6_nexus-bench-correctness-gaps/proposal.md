@@ -18,12 +18,56 @@ lands, the bench is re-run, the numbers in this file's *current
 state* section move from "wrong" to "matched", and eventually
 the full catalogue runs content-clean.
 
-## Bench table (reference — rerun on every fix)
+## Bench runs (append-only log; one entry per re-run)
 
-Run date: 2026-04-20 21:00 UTC (local). Nexus commit
-`04b874c8`. Neo4j image `neo4j:latest`
-(Community 2025.09.0, `NEO4J_AUTH=neo4j/password`). 2 warmup +
-10 measured iterations, `RunConfig::default()`.
+Snapshots live under
+`docs/benchmarks/baselines/`. Every row references the exact
+Nexus commit the bench ran against so a latency regression
+(or a fix) has a commit to point at.
+
+### Run 2 — 2026-04-20 · Nexus commit pending · 32 scenarios
+
+Catalogue grew to 32 after `traversal.cartesian_a_b`,
+`write.create_singleton` (literal mark, not id), `write.merge_singleton`,
+`write.set_property` landed. Shortest-path scenario (§3.5)
+pulled temporarily — Nexus parser does not accept
+`shortestPath((…)-[*]->(…))` yet.
+
+| Bucket | Count |
+|---|---|
+| ⭐ Lead | 26 |
+| ✅ Parity | 4 |
+| ⚠️ Behind | 0 |
+| 🚨 Gap | **2** |
+| content-divergent | **10** |
+
+New divergences vs Run 1:
+
+- `aggregation.avg_score_a`: float-accumulation order drift
+  — Nexus `0.09499999999999999`, Neo4j `0.09500000000000003`.
+  Both are wrong to different ULPs. Classified as §6 below
+  (likely non-blocking, but documented).
+- `order.top_5_by_score`: with SmallDataset + TinyDataset
+  both loaded, SmallDataset nodes have a null `score`. Neo4j's
+  `ORDER BY n.score DESC` puts nulls first in DESC, so the
+  top 5 are null-named SmallDataset rows. Nexus returns
+  TinyDataset's `n0` instead — Nexus's null ordering differs.
+  Classified as §7 below.
+
+Gaps (performance, not correctness):
+
+- `traversal.cartesian_a_b`: Nexus **735 957 µs** vs Neo4j 2 559 µs
+  (**287× slower**). Cartesian (`MATCH (a:A), (b:B) RETURN count(*)`)
+  builds a 400-row intermediate on both engines but Nexus's
+  materialisation is dramatically slower. Not a correctness
+  bug; worth its own task if the comparison ever becomes a
+  priority.
+- `write.set_property`: 4 678 µs vs 2 174 µs (2.15×, just past
+  the Gap threshold). Within noise of ⚠️ Behind.
+
+### Run 1 — 2026-04-20 · Nexus commit `04b874c8` · 28 scenarios
+
+First real comparative run.
 
 | Bucket | Count |
 |---|---|
@@ -33,9 +77,11 @@ Run date: 2026-04-20 21:00 UTC (local). Nexus commit
 | 🚨 Gap | 0 |
 | content-divergent | **8** |
 
-The eight bugs sit below. Every entry names the exact scenario
-that caught it so the re-run after each fix points at the row
-that just turned green.
+Snapshot: `docs/benchmarks/baselines/2026-04-20-baseline.{md,json}`.
+
+The eight originally-surfaced bugs sit below. Every entry names
+the exact scenario that caught it so the re-run after each fix
+points at the row that just turned green.
 
 ## What Changes
 
@@ -132,6 +178,47 @@ RETURN hi > 0.99 AS any_high
 Either the planner drops the computed-RETURN clause after a
 WITH, or the RETURN expression is not being evaluated and the
 WITH bindings leak out raw.
+
+### 6. Float-accumulation order in `avg()` (LOW — diagnostic)
+
+Surfaced in Run 2 by `aggregation.avg_score_a`:
+
+```cypher
+MATCH (n:A) RETURN avg(n.score) AS s
+-- Nexus: 0.09499999999999999
+-- Neo4j: 0.09500000000000003
+```
+
+Both engines are within 4 ULPs of 0.095, so neither is
+"correct" in IEEE-754 terms — the difference is summation
+order. Classifying as LOW because the user-facing impact is
+minor (no sane test asserts on the 15th decimal). Worth
+documenting so nobody chases it as a "bug" — it's an
+engineering tradeoff (Nexus likely sums naively, Neo4j may
+use Kahan compensation or a different block order).
+
+Fix direction: pick one of
+(a) Nexus switches to Kahan summation in `sum()` / `avg()`
+(b) the divergence guard tolerates a per-ULP epsilon on
+floats
+(c) leave as-is and declare the divergence informational.
+
+### 7. `ORDER BY <prop> DESC` puts nulls last, not first (MEDIUM)
+
+Surfaced in Run 2 by `order.top_5_by_score`:
+
+```cypher
+MATCH (n) RETURN n.name AS name ORDER BY n.score DESC LIMIT 5
+-- With TinyDataset + SmallDataset both loaded, SmallDataset
+-- rows have null score.
+-- Nexus top row: "n0" (a TinyDataset name — nulls sorted LAST)
+-- Neo4j top row: null (SmallDataset rows sorted FIRST in DESC)
+```
+
+openCypher semantics: in DESC, nulls come **first**; in ASC,
+nulls come **last**. Neo4j follows this; Nexus does not.
+Medium severity because `ORDER BY` is everywhere and
+null-sorting surprises trip real queries.
 
 ### Methodology
 
