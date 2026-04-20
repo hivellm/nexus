@@ -1,0 +1,70 @@
+[package]
+name = "nexus-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Nexus ↔ Neo4j comparative benchmark harness (HTTP-only, sandboxed)"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+
+# ---- GUARD RAILS ----
+#
+# This crate was rebuilt after the first draft repeatedly saturated a
+# developer's workstation by spawning an in-process Nexus engine and
+# replaying hundreds of Cypher CREATEs on every `cargo test`. The new
+# design:
+#
+# * No `nexus-core` dependency. The harness speaks **only HTTP** to a
+#   server the operator has already started; it cannot instantiate an
+#   engine by itself.
+# * `default-features = []` compiles a pure-logic library. No HTTP
+#   client, no CLI binary, no integration tests. `cargo test -p
+#   nexus-bench` is a few-millisecond operation on unit tests that
+#   never touch the network.
+# * `live-bench` opts in to the HTTP client + CLI binary + the
+#   integration tests. The binary additionally requires a runtime
+#   `--i-have-a-server-running` flag (or the `NEXUS_BENCH_URL`
+#   env var) to do anything destructive.
+# * Debug-build guard: the binary refuses to run when compiled with
+#   `debug_assertions` on — measurements there are meaningless and
+#   10×–100× slower than release, which is what wedged the engine
+#   last time. Override with `NEXUS_BENCH_ALLOW_DEBUG=1`.
+
+[lib]
+name = "nexus_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nexus-bench"
+path = "src/bin/nexus-bench.rs"
+required-features = ["live-bench"]
+
+[features]
+default = []
+# Enables the HTTP BenchClient + CLI binary + all integration tests
+# that touch a running server. Off by default so `cargo build` and
+# `cargo test` stay cheap and sandboxed.
+live-bench = ["dep:reqwest", "dep:tokio"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+
+# Gated so the no-live-bench build is self-contained.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+], optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Only the pure-logic tests depend on this; the integration tests
+# under `tests/` are themselves feature-gated.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
