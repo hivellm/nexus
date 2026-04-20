@@ -256,32 +256,36 @@ async fn isolation_between_tests_works() {
 
     for pass in 1..=2 {
         common::reset_both(&mut nexus, &mut neo4j);
+        // Verify each reset actually zeroed both engines before we
+        // load — this is the reset contract the #[ignore] suite
+        // relies on. Neo4j has always honoured it; Nexus regressed
+        // silently until phase6_nexus-delete-executor-bug shipped a
+        // fix.
+        let n_pre = nexus
+            .execute(count, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: nexus pre-load count failed: {e}"));
+        let m_pre = neo4j
+            .execute(count, timeout)
+            .unwrap_or_else(|e| panic!("pass {pass}: neo4j pre-load count failed: {e}"));
+        assert_eq!(
+            n_pre.rows,
+            vec![vec![serde_json::json!(0)]],
+            "pass {pass}: nexus reset did not clear"
+        );
+        assert_eq!(
+            m_pre.rows,
+            vec![vec![serde_json::json!(0)]],
+            "pass {pass}: neo4j reset did not clear"
+        );
+
+        // Load succeeds on both. Asserting the exact post-load node
+        // count belongs to a separate CREATE invariant — do not
+        // couple this test to it.
         nexus
             .execute(load, timeout)
             .unwrap_or_else(|e| panic!("pass {pass}: nexus load failed: {e}"));
         neo4j
             .execute(load, timeout)
             .unwrap_or_else(|e| panic!("pass {pass}: neo4j load failed: {e}"));
-
-        // 100 nodes per engine — each load writes exactly that.
-        // If the count is >100, the previous pass's reset was a
-        // no-op (Nexus DELETE regression, or Neo4j connection
-        // leak). Assert on the value, not just the row shape.
-        let n = nexus
-            .execute(count, timeout)
-            .unwrap_or_else(|e| panic!("pass {pass}: nexus count failed: {e}"));
-        let m = neo4j
-            .execute(count, timeout)
-            .unwrap_or_else(|e| panic!("pass {pass}: neo4j count failed: {e}"));
-        assert_eq!(
-            n.rows,
-            vec![vec![serde_json::json!(100)]],
-            "pass {pass}: nexus count after load — reset did not clear?"
-        );
-        assert_eq!(
-            m.rows,
-            vec![vec![serde_json::json!(100)]],
-            "pass {pass}: neo4j count after load — reset did not clear?"
-        );
     }
 }

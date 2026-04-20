@@ -222,6 +222,33 @@ async fn execute_query(
         return admin_result;
     }
 
+    // Route mutating and MATCH queries through `engine.execute_cypher`
+    // — the only path that intercepts DELETE / DETACH DELETE / CREATE /
+    // MERGE / SET / REMOVE / FOREACH before they hit the executor's
+    // operator pipeline. The executor's `Operator::Delete` / `DetachDelete`
+    // handler is a no-op that relies on this upstream interception;
+    // calling `executor.execute` directly for a query with `DELETE`
+    // silently succeeds with zero rows and leaves the database
+    // untouched (see phase6_nexus-delete-executor-bug).
+    //
+    // Read-only queries (no MATCH, no mutation) keep using the
+    // parallel executor path because it supports params — MATCH-path
+    // already drops params today via `engine.execute_cypher(&str)`, so
+    // this split preserves the one capability the executor path has
+    // that engine.execute_cypher does not.
+    if needs_engine_interception(&ast) {
+        let engine_arc = state.server.engine.clone();
+        let result = {
+            let mut engine = engine_arc.write().await;
+            engine.execute_cypher(&query)
+        };
+        let elapsed_ms = started.elapsed().as_millis() as i64;
+        return match result {
+            Ok(rs) => Ok(result_set_to_nexus(rs, elapsed_ms)),
+            Err(e) => Err(format!("Cypher error: {e}")),
+        };
+    }
+
     let executor = state.server.executor.clone();
     let q = Query {
         cypher: query,
@@ -236,6 +263,27 @@ async fn execute_query(
         Ok(Err(e)) => Err(format!("Cypher error: {e}")),
         Err(join_err) => Err(format!("ERR internal join error: {join_err}")),
     }
+}
+
+/// True when a query must go through `engine.execute_cypher` instead
+/// of the direct executor path. Mirrors the REST handler's
+/// `is_match_query || is_create_query || is_merge_query` routing —
+/// any clause the engine intercepts before running the executor must
+/// go through the engine, or the interception is skipped and
+/// mutations silently no-op.
+fn needs_engine_interception(ast: &CypherQuery) -> bool {
+    ast.clauses.iter().any(|c| {
+        matches!(
+            c,
+            Clause::Match(_)
+                | Clause::Create(_)
+                | Clause::Delete(_)
+                | Clause::Merge(_)
+                | Clause::Set(_)
+                | Clause::Remove(_)
+                | Clause::Foreach(_)
+        )
+    })
 }
 
 /// Convert a `ResultSet` into the canonical NexusValue envelope described
