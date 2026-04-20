@@ -14,7 +14,7 @@
 - [x] 2.4 Typed per-column row extraction using `neo4rs::Row::get::<T>(...)` — no `Debug` stand-in
 - [x] 2.5 Hard `tokio::time::timeout` on every Bolt call
 - [x] 2.6 Health probe on `connect`: Bolt `RUN "RETURN 1"` inside 2 s, matching HTTP client contract
-- [ ] 2.7 Unit tests for wire conversions (no live server needed)
+- [x] 2.7 Unit tests for wire conversions (no live server needed)
 
 ## 3. Comparative CLI
 
