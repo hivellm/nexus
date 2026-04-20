@@ -157,6 +157,47 @@ Snapshots live under
 Nexus commit the bench ran against so a latency regression
 (or a fix) has a commit to point at.
 
+### Run 8 — 2026-04-20 · Nexus commit `34f38c87` · 51 catalog / 51 ran
+
+Second clean-Neo4j re-run (same `wipe → fresh server → bench` recipe).
+Confirms Run 7's classification held and improved:
+
+| Bucket | Count | Δ vs Run 7 |
+|---|---|---|
+| ⭐ Lead | 42 | +1 |
+| ✅ Parity | 6 | +1 |
+| ⚠️ Behind | 0 | -2 |
+| 🚨 Gap | 3 | same |
+| — n/a | 0 | same |
+| content-divergent (§1-§9) | 0 | same |
+
+§1-§9 rows (unchanged green):
+- `traversal.small_one_hop_hub` 428µs / 1730µs = 0.25× ⭐
+- `traversal.small_two_hop_from_hub` 683µs / 1677µs = 0.41× ⭐
+- `traversal.small_var_length_1_to_3` 281µs / 1746µs = 0.16× ⭐
+- `procedure.db_labels` 1483µs / 1603µs = 0.93× ✅
+- `procedure.db_relationship_types` 1542µs / 1581µs = 0.98× ✅
+- `procedure.db_property_keys` 110µs / 1699µs = 0.06× ⭐
+- `scalar.arithmetic` 96µs / 1491µs = 0.06× ⭐
+- `subquery.exists_high_score` 538µs / 1848µs = 0.29× ⭐
+- `subquery.size_of_collect` 184µs / 1723µs = 0.11× ⭐
+- `subquery.with_filter_count` 206µs / 1707µs = 0.12× ⭐
+- `aggregation.avg_score_a` 157µs / 1603µs = 0.10× ⭐
+- `aggregation.stdev_score` 160µs / 1600µs = 0.10× ⭐
+- `order.top_5_by_score` 572µs / 1500µs = 0.38× ⭐
+- `order.bottom_5_by_score` 564µs / 1585µs = 0.36× ⭐
+- `write.create_delete_cycle` 411µs / 1710µs = 0.24× ⭐
+
+Three 🚨 Gaps (all pre-existing perf, not correctness):
+- `traversal.cartesian_a_b` 551513µs / 1686µs = 327× (cartesian materialisation)
+- `constraint.not_null_set` 3571µs / 1615µs = 2.21×
+- `write.set_property` 3575µs / 1667µs = 2.14×
+
+Out-of-scope content divergences unchanged from Run 7 (QPP, shortestPath,
+EXISTS{}, temporal/spatial, COUNT{} subquery, UNWIND-before-CREATE).
+
+Snapshot: `docs/benchmarks/baselines/2026-04-20-run8.{md,json}`.
+
 ### Run 7 — 2026-04-20 · Nexus commit `edb331bc` · 51 catalog / 51 ran
 
 First bench run with the §1-§9 fixes all landed. Neo4j wiped clean
