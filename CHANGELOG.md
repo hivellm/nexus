@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] — 2026-04-20
 
+### Added — server admission control (2026-04-20)
+
+Third back-pressure layer on top of the existing per-key rate limiter
+and per-connection RPC semaphore. A global `AdmissionQueue`
+(`crates/nexus-server/src/middleware/admission.rs`) gates every
+query-bearing HTTP route (`/cypher`, `/ingest`, `/knn_traverse`,
+`/graphql`, `/umicp`) through a shared tokio semaphore. Callers that
+would push concurrency over `NEXUS_ADMISSION_MAX_CONCURRENT` (default
+CPU-count clamped to `[4, 32]`) wait in a FIFO queue up to
+`NEXUS_ADMISSION_QUEUE_TIMEOUT_MS` (default 5 s); after that they
+are rejected with `503 Service Unavailable + Retry-After`.
+
+Motivation: a single authenticated client can fan out tens of
+thousands of legitimate-looking `CREATE` statements through one
+HTTP keep-alive — enough to saturate the engine's single-writer
+discipline and wedge the process even though every request sat under
+the per-key rate limit. The new layer bounds **global** engine-facing
+concurrency rather than per-key volume.
+
+Light-weight endpoints (`/health`, `/prometheus`, `/auth`,
+`/schema/*`, `/stats`, `/cluster/status`) bypass the queue via a
+`HEAVY_PATH_PREFIXES` matcher so diagnostics stay reachable when
+the engine is saturated. RPC + RESP3 surfaces continue to rely on
+their per-connection semaphore; unified gating is a follow-up.
+
+Config knobs:
+
+- `NEXUS_ADMISSION_ENABLED` (bool, default `true`)
+- `NEXUS_ADMISSION_MAX_CONCURRENT` (u32, default CPU-clamped)
+- `NEXUS_ADMISSION_QUEUE_TIMEOUT_MS` (u64, default 5000)
+
+Prometheus metric names reserved (counters + histogram wiring ships
+in a subsequent patch):
+`nexus_admission_permits_granted_total`,
+`nexus_admission_permits_rejected_total`,
+`nexus_admission_in_flight`,
+`nexus_admission_wait_seconds`.
+
+Docs: [`docs/security/OVERLOAD_PROTECTION.md`](docs/security/OVERLOAD_PROTECTION.md).
+17 tests (unit + axum middleware) covering concurrency cap, timeout,
+FIFO progress under contention, light-path short-circuit, heavy-path
+rejection, counter integrity on drop.
+
 ### Added — V2 horizontal scaling (2026-04-20, commit `15715a24`)
 
 Nexus gains horizontal scalability through hash-based sharding, per-shard

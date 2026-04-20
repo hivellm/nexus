@@ -726,6 +726,17 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         // Add state to router (must be after all routes)
         .with_state(nexus_server.clone());
 
+    // Global admission queue — caps concurrent engine-facing work so a
+    // single client's burst can't wedge the process. Light-weight
+    // endpoints (/health, /prometheus, /auth, …) bypass the queue via
+    // `is_heavy_path`; only /cypher, /ingest, /knn_traverse, /graphql,
+    // /umicp actually acquire a permit. Configurable via
+    // NEXUS_ADMISSION_* env vars.
+    app = app.layer(axum_middleware::from_fn_with_state(
+        nexus_server.admission.clone(),
+        nexus_server::middleware::admission_middleware_handler,
+    ));
+
     // Cluster-mode quota gate. Layered BEFORE the auth middleware in
     // this block so it ends up INSIDE the auth layer at runtime (axum
     // composes layers outermost-first, last `.layer()` call → closest

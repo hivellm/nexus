@@ -117,6 +117,14 @@ pub struct NexusServer {
     /// [`nexus_core::sharding::controller::ClusterController::set_leader`].
     pub cluster_controller:
         Arc<tokio::sync::RwLock<Option<Arc<nexus_core::sharding::controller::ClusterController>>>>,
+
+    /// Global admission queue shared by every query-bearing endpoint
+    /// (`/cypher`, `/ingest`, RPC `CYPHER`). Back-pressure layer on
+    /// top of the per-key rate limiter and the per-connection RPC
+    /// semaphore — without it, a single client can fan out
+    /// unbounded Cypher through a single keep-alive connection and
+    /// wedge the engine.
+    pub admission: Arc<crate::middleware::AdmissionQueue>,
 }
 
 impl NexusServer {
@@ -219,6 +227,9 @@ impl NexusServer {
             metrics,
             quota_provider: Arc::new(tokio::sync::RwLock::new(None)),
             cluster_controller: Arc::new(tokio::sync::RwLock::new(None)),
+            admission: Arc::new(crate::middleware::AdmissionQueue::new(
+                crate::middleware::AdmissionConfig::from_env(),
+            )),
         }
     }
 
