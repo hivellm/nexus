@@ -72,6 +72,19 @@ Added to "DONE" after the third pass (2026-04-20, same day):
   Aggregate treated as a sink, WITH + Filter insert before it and
   the pipeline runs in the correct Cypher order. Regression test:
   `with_projection_and_filter_run_before_return_aggregation`.
+- **§8.2 `CREATE ... WITH ... DELETE ... RETURN <expr>`** — **DONE**.
+  Root cause was NOT a parser bug: the full shape
+  `CREATE (n:Phase6_82) WITH n DELETE n RETURN 'done' AS status`
+  parses on the first pass. The DELETE+RETURN branch in
+  `execute_cypher_ast` (`crates/nexus-core/src/engine/mod.rs`) detected
+  `is_count_only == false` and round-tripped the AST through
+  `query_to_string`, which emits `format!("{:?}", clause)` — Rust
+  debug output, not Cypher — and the executor's re-parse then failed
+  with `Expected identifier` at column 40 of that gibberish. Fix:
+  install the RETURN tail as a `preparsed_ast_override` on the
+  executor so the executor consumes the AST directly, skipping the
+  re-parse entirely. Regression test:
+  `create_with_delete_return_parses_and_executes`.
 
 - **§1 Composite `:Label {prop}` filter** — **DONE**. Three coordinated
   edits in `crates/nexus-core`:

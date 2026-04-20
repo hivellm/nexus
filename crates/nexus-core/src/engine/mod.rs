@@ -1498,11 +1498,36 @@ impl Engine {
                         }],
                     });
                 } else {
-                    // If there's a RETURN clause with other expressions, let the executor handle it
-                    // The executor will process the RETURN, but since nodes are deleted,
-                    // it will likely return empty results or handle it appropriately
+                    // phase6 §8.2 — build an AST for the RETURN tail and
+                    // install it as the executor's preparsed-AST override.
+                    // Previously this path round-tripped the full AST
+                    // through `query_to_string`, whose `format!("{:?}",
+                    // clause)` implementation emits the Rust debug shape
+                    // (`Create(CreateClause { pattern: ... })`), not
+                    // valid Cypher. The executor then re-parsed that
+                    // gibberish and failed with a mid-token syntax
+                    // error. By handing the executor a pre-built AST
+                    // we skip the re-parse entirely, so the CREATE +
+                    // DELETE + RETURN shape (bench's
+                    // `write.create_delete_cycle`) executes cleanly.
+                    let tail_ast = executor::parser::CypherQuery {
+                        clauses: vec![executor::parser::Clause::Return(return_clause.clone())],
+                        params: ast.params.clone(),
+                    };
+                    struct OverrideGuard {
+                        executor: executor::Executor,
+                    }
+                    impl Drop for OverrideGuard {
+                        fn drop(&mut self) {
+                            self.executor.install_preparsed_ast_override(None);
+                        }
+                    }
+                    self.executor.install_preparsed_ast_override(Some(tail_ast));
+                    let _guard = OverrideGuard {
+                        executor: self.executor.clone(),
+                    };
                     let query_obj = executor::Query {
-                        cypher: self.query_to_string(&ast),
+                        cypher: String::new(),
                         params: ast.params.clone(),
                     };
                     return self.executor.execute(&query_obj);

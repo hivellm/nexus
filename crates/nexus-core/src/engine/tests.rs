@@ -1225,11 +1225,6 @@ fn delete_accepts_create_bound_variable() {
         create_delete.err()
     );
 
-    // The bench's full `CREATE ... WITH ... DELETE ... RETURN` form
-    // exercises a parser path that is separately broken (§5 / parser);
-    // §8 targets the engine-level context check only. The simpler
-    // CREATE + DELETE above is the minimum the fix has to unblock.
-
     // Post-condition: nothing left tagged :BenchCycle.
     let surviving = engine
         .execute_cypher("MATCH (n:BenchCycle) RETURN count(n) AS c")
@@ -1239,6 +1234,39 @@ fn delete_accepts_create_bound_variable() {
         Some(0),
         "create-then-delete leaves no :BenchCycle nodes"
     );
+}
+
+/// Regression for phase6_nexus-bench-correctness-gaps §8.2 — the full
+/// bench form `CREATE (n:BenchCycle) WITH n DELETE n RETURN 'done' AS status`.
+/// Pre-fix: parser rejected the input because `parse_with_clause` did
+/// not recognise `DELETE` as the boundary between WITH's item list and
+/// the next clause, so `DELETE` was greedily absorbed into the expression
+/// parser and surfaced as `Expected identifier`. Fix widens the WITH /
+/// RETURN item-list terminator set to include the update keywords
+/// (DELETE, DETACH, SET, REMOVE, CREATE, MERGE, FOREACH) and the
+/// CALL / UNWIND / WHERE boundary keywords that can already legally
+/// follow a WITH.
+#[test]
+fn create_with_delete_return_parses_and_executes() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    let r = engine.execute_cypher("CREATE (n:Phase6_82) WITH n DELETE n RETURN 'done' AS status");
+    assert!(
+        r.is_ok(),
+        "CREATE + WITH + DELETE + RETURN must parse and execute; got {:?}",
+        r.err()
+    );
+    let rs = r.unwrap();
+    assert_eq!(rs.columns, vec!["status"]);
+    assert_eq!(rs.rows.len(), 1);
+    assert_eq!(rs.rows[0].values[0].as_str(), Some("done"));
+
+    // Post-condition: CREATE happened, DELETE happened, zero :Phase6_82 survive.
+    let surviving = engine
+        .execute_cypher("MATCH (n:Phase6_82) RETURN count(n) AS c")
+        .unwrap();
+    assert_eq!(surviving.rows[0].values[0].as_u64(), Some(0));
 }
 
 /// Regression for phase6_nexus-bench-correctness-gaps §3.4 —
