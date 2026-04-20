@@ -1663,7 +1663,17 @@ impl Engine {
             }
         }
 
-        self.storage.flush()?;
+        // Async flush — matches the CREATE / executor-side write paths,
+        // which use `flush_async` as well. The SYNC `flush()` here used
+        // to dominate write-query latency (5-10ms per call on spinning
+        // media; 2-3ms even on NVMe) because mmap page syncs are
+        // OS-level operations. With the WAL already providing
+        // durability on commit, this full sync is redundant on the hot
+        // path — causing the bench's `write.set_property` and
+        // `constraint.not_null_set` to run 2× slower than Neo4j. Callers
+        // that genuinely need on-disk durability can issue an explicit
+        // `flush()` after the write.
+        self.storage.flush_async()?;
         self.refresh_executor()?;
 
         Ok(result.unwrap_or_else(|| executor::ResultSet {

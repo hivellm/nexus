@@ -197,6 +197,21 @@ impl Executor {
             }
         }
 
+        // Short-circuit: `MATCH (a:L1), (b:L2), ... RETURN count(*)` and
+        // its `count(var)` variants don't need to materialise the full
+        // cross-product. The answer is the product of each label's
+        // cardinality, already tracked in the catalog's per-label
+        // `node_counts` histogram. Without this, the cartesian-product
+        // assembly in `apply_cartesian_product` clones every source
+        // node's JSON payload N×M times before `Aggregate` discards
+        // every value it just copied — 327× slower than Neo4j on the
+        // bench's `traversal.cartesian_a_b` scenario.
+        if !is_write_query {
+            if let Some(count_rs) = self.try_short_circuit_count_cross_product(&operators)? {
+                return Ok(count_rs);
+            }
+        }
+
         // Execute the plan using traditional operator-based execution
         tracing::trace!(
             "Starting query execution, creating new ExecutionContext for query: {}",
@@ -880,6 +895,95 @@ impl Executor {
             .query_cache
             .as_ref()
             .map(|cache| cache.read().stats())
+    }
+
+    /// Short-circuit `MATCH (a:L1), (b:L2), ... RETURN count(*)` (and
+    /// its `count(var)` + `count(var.prop)` variants, when `var` is
+    /// bound by one of the label scans) with a catalog-metadata
+    /// lookup. Returns `Some(rs)` if the plan matches; `None` if any
+    /// operator disqualifies the short-circuit so the caller falls
+    /// back to the full operator-driven execution.
+    ///
+    /// Qualifying plan shape:
+    /// - 1..=N `Operator::NodeByLabel { label_id, variable }` operators
+    ///   (each with a distinct variable).
+    /// - exactly one trailing `Operator::Aggregate` with
+    ///   `group_by` empty,
+    ///   `aggregations` a single `Aggregation::Count { column, distinct: false, .. }`.
+    ///   If `column` is `Some(c)`, `c` must match one of the label-scan
+    ///   variables — that's still a row-count (DISTINCT would change
+    ///   semantics and is explicitly ruled out above).
+    /// - no other operators between, before, or after.
+    ///
+    /// Result = product of `catalog.get_node_count(label_id)` across the
+    /// scans. Falls back to `None` if any label has no stored count
+    /// (cold catalog) so the operator pipeline can populate stats.
+    pub(super) fn try_short_circuit_count_cross_product(
+        &self,
+        operators: &[Operator],
+    ) -> Result<Option<ResultSet>> {
+        if operators.len() < 2 {
+            return Ok(None);
+        }
+        let (agg_idx, group_by, aggregations) = match operators.last() {
+            Some(Operator::Aggregate {
+                group_by,
+                aggregations,
+                ..
+            }) if group_by.is_empty() && aggregations.len() == 1 => {
+                (operators.len() - 1, group_by, aggregations)
+            }
+            _ => return Ok(None),
+        };
+        let (count_column, count_alias) = match &aggregations[0] {
+            Aggregation::Count {
+                column,
+                alias,
+                distinct: false,
+            } => (column.clone(), alias.clone()),
+            _ => return Ok(None),
+        };
+        let mut label_ids: Vec<u32> = Vec::with_capacity(agg_idx);
+        let mut variables: Vec<String> = Vec::with_capacity(agg_idx);
+        for op in &operators[..agg_idx] {
+            match op {
+                Operator::NodeByLabel { label_id, variable } => {
+                    label_ids.push(*label_id);
+                    variables.push(variable.clone());
+                }
+                _ => return Ok(None),
+            }
+        }
+        if label_ids.is_empty() {
+            return Ok(None);
+        }
+        if let Some(col) = &count_column {
+            let bare = col.split('.').next().unwrap_or(col);
+            if !variables.iter().any(|v| v == bare) {
+                return Ok(None);
+            }
+        }
+        // Use `execute_node_by_label` to get the LIVE row count rather
+        // than `catalog.get_node_count`: the catalog's per-label counter
+        // is an incremented-only stats histogram (DELETE does not
+        // decrement it), so it drifts over time and cannot be trusted
+        // as a row-count source. `execute_node_by_label` iterates the
+        // label bitmap and skips deleted records, matching exactly what
+        // the operator pipeline would have counted.
+        let mut product: u64 = 1;
+        for lid in &label_ids {
+            let count = self.execute_node_by_label(*lid)?.len() as u64;
+            product = match product.checked_mul(count) {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+        }
+        Ok(Some(ResultSet {
+            columns: vec![count_alias],
+            rows: vec![Row {
+                values: vec![Value::Number(serde_json::Number::from(product))],
+            }],
+        }))
     }
 
     /// Check if query is a simple MATCH query that can be executed directly

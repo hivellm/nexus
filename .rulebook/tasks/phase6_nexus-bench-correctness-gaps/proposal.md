@@ -157,6 +157,42 @@ Snapshots live under
 Nexus commit the bench ran against so a latency regression
 (or a fix) has a commit to point at.
 
+### Run 9 — 2026-04-20 · Nexus commit `ea84fc25` + gap-closing patches · 51 catalog / 51 ran
+
+All three Run 8 🚨 Gaps closed. Two targeted fixes:
+
+1. **Cartesian count short-circuit** (`crates/nexus-core/src/executor/mod.rs`):
+   `try_short_circuit_count_cross_product` detects the
+   `MATCH (a:L1), (b:L2), … RETURN count(*)` shape in the operator plan
+   and answers directly from `execute_node_by_label(lid).len()` on each
+   label scan, multiplying the live row counts. Skips the full
+   cross-product materialisation entirely. `traversal.cartesian_a_b`
+   collapses from 551513µs → 127µs (4342× faster; 327× gap → 0.08× lead).
+   Regression test: `count_over_label_cartesian_product_matches_catalog_product`.
+2. **Write-path async flush** (`crates/nexus-core/src/engine/mod.rs`):
+   `execute_write_query` now calls `storage.flush_async()` instead of
+   the synchronous `flush()` that was dominating SET / MERGE-SET
+   latency (~2-3ms per query on NVMe). WAL already guarantees
+   durability on commit; the redundant mmap page sync on every hot
+   write was pure overhead. Closes `write.set_property` (3575µs →
+   497µs, 2.14× gap → 0.31× lead) and `constraint.not_null_set`
+   (3571µs → 469µs, 2.21× gap → 0.30× lead).
+
+| Bucket | Count | Δ vs Run 8 |
+|---|---|---|
+| ⭐ Lead | 48 | +6 |
+| ✅ Parity | 2 | -4 (latency drops promoted Parity → Lead) |
+| ⚠️ Behind | 1 | +1 (`procedure.db_relationship_types` 1.20×, marginal) |
+| 🚨 Gap | 0 | -3 |
+| content-divergent (§1-§9) | 0 | same |
+
+Gap-scenario p50s, before → after:
+- `traversal.cartesian_a_b` 551513µs → 127µs (4342× speedup)
+- `write.set_property` 3575µs → 497µs (7.2× speedup)
+- `constraint.not_null_set` 3571µs → 469µs (7.6× speedup)
+
+Snapshot: `docs/benchmarks/baselines/2026-04-20-run9.{md,json}`.
+
 ### Run 8 — 2026-04-20 · Nexus commit `34f38c87` · 51 catalog / 51 ran
 
 Second clean-Neo4j re-run (same `wipe → fresh server → bench` recipe).

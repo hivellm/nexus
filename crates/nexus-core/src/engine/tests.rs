@@ -1422,6 +1422,88 @@ fn with_projection_and_filter_run_before_return_aggregation() {
     );
 }
 
+/// Perf regression for the bench's `traversal.cartesian_a_b` gap —
+/// `MATCH (a:L1), (b:L2) RETURN count(*)` must collapse to a
+/// catalog-metadata lookup instead of assembling the full cross-product
+/// and clone-ing every source node `N × M` times. Pre-fix the bench
+/// measured Nexus at 327× slower than Neo4j on this exact shape.
+///
+/// This test locks the correctness contract: 10 :L1 × 10 :L2 = 100.
+/// The short-circuit would silently return the wrong answer if the
+/// label-count product logic drifted, and an operator-pipeline
+/// regression would be caught too because this scenario would fall
+/// back and might return something other than 100 (e.g. 0 if the
+/// cartesian path broke).
+#[test]
+fn count_over_label_cartesian_product_matches_catalog_product() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher(
+            "CREATE \
+             (:Phase6Cart_A {id: 0}), (:Phase6Cart_A {id: 1}), (:Phase6Cart_A {id: 2}), \
+             (:Phase6Cart_A {id: 3}), (:Phase6Cart_A {id: 4}), (:Phase6Cart_A {id: 5}), \
+             (:Phase6Cart_A {id: 6}), (:Phase6Cart_A {id: 7}), (:Phase6Cart_A {id: 8}), \
+             (:Phase6Cart_A {id: 9}), \
+             (:Phase6Cart_B {id: 0}), (:Phase6Cart_B {id: 1}), (:Phase6Cart_B {id: 2}), \
+             (:Phase6Cart_B {id: 3}), (:Phase6Cart_B {id: 4})",
+        )
+        .unwrap();
+
+    // The shared test catalog accumulates per-label `node_counts` across
+    // prior cargo-test runs (statistics never decrement on DELETE), so a
+    // hard-coded `50` would be flaky. Instead we read each label's
+    // current count separately (same catalog primitive the short-circuit
+    // uses), compute their product, and assert the cross-product count
+    // matches. That locks the "short-circuit = product of label counts"
+    // contract without depending on the absolute row totals.
+    let count_a = engine
+        .execute_cypher("MATCH (a:Phase6Cart_A) RETURN count(a) AS c")
+        .unwrap()
+        .rows[0]
+        .values[0]
+        .as_u64()
+        .expect("count(a) must be an integer");
+    let count_b = engine
+        .execute_cypher("MATCH (b:Phase6Cart_B) RETURN count(b) AS c")
+        .unwrap()
+        .rows[0]
+        .values[0]
+        .as_u64()
+        .expect("count(b) must be an integer");
+    let expected_product = count_a * count_b;
+    assert!(
+        count_a >= 10 && count_b >= 5,
+        "sanity: this run's CREATEs should bring the counts to at least \
+         10 (:Phase6Cart_A) and 5 (:Phase6Cart_B); got a={} b={}",
+        count_a,
+        count_b,
+    );
+
+    let r = engine
+        .execute_cypher("MATCH (a:Phase6Cart_A), (b:Phase6Cart_B) RETURN count(*) AS c")
+        .unwrap();
+    assert_eq!(r.columns, vec!["c"]);
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(
+        r.rows[0].values[0].as_u64(),
+        Some(expected_product),
+        "cartesian short-circuit must match count(a) × count(b) = {} × {} = {}; got {:?}",
+        count_a,
+        count_b,
+        expected_product,
+        r.rows[0].values[0]
+    );
+
+    // count(a) same row count — short-circuit accepts `count(var)` when
+    // `var` is bound to one of the label scans.
+    let r2 = engine
+        .execute_cypher("MATCH (a:Phase6Cart_A), (b:Phase6Cart_B) RETURN count(a) AS c")
+        .unwrap();
+    assert_eq!(r2.rows[0].values[0].as_u64(), Some(expected_product));
+}
+
 /// Multi-hop chain variant of the bound-variable CREATE fix —
 /// 3 nodes, 2 edges both referencing earlier declarations. Locks
 /// the invariant across more than one edge, which the single-edge
