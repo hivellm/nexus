@@ -4,7 +4,7 @@
 - [x] 1.2 Isolated ports (7687 → 17687, 7474 → 17474) + dedicated data volume
 - [x] 1.3 Config: cache 512 MiB, no TLS, no external metrics
 - [x] 1.4 `scripts/bench/neo4j-up.sh` / `neo4j-down.sh` idempotent lifecycle
-- [ ] 1.5 Integration smoke: compose up → Bolt PING → compose down, all under 30 s
+- [x] 1.5 Integration smoke: compose up → Bolt PING → compose down, all under 30 s
 
 ## 2. `neo4rs`-based BenchClient
 
