@@ -16,7 +16,7 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase6_bench-neo4j-docker-harness | 0/25 | bench neo4j docker harness |
+| ⬚ | phase6_bench-live-test-state-isolation | 0/13 | bench live test state isolation |
 | ⬚ | phase6_bench-scenario-expansion | 0/45 | bench scenario expansion |
 | ⬚ | phase6_opencypher-advanced-types | 0/47 | opencypher advanced types |
 | ⬚ | phase6_opencypher-apoc-ecosystem | 0/75 | opencypher apoc ecosystem |
