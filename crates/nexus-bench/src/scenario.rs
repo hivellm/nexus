@@ -139,8 +139,7 @@ mod tests {
 
     #[test]
     fn defaults_are_conservative() {
-        let s =
-            ScenarioBuilder::new("a.b", "", DatasetKind::Tiny, "RETURN 1").build();
+        let s = ScenarioBuilder::new("a.b", "", DatasetKind::Tiny, "RETURN 1").build();
         assert_eq!(s.warmup_iters, 2);
         assert_eq!(s.measured_iters, 10);
         assert_eq!(s.timeout, Duration::from_secs(2));

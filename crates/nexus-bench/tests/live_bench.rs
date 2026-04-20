@@ -17,6 +17,7 @@
 use std::time::Duration;
 
 use nexus_bench::{
+    Dataset,
     client::{BenchClient, HttpClient},
     harness::{RunConfig, run_scenario},
     scenario::ScenarioBuilder,

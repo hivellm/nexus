@@ -52,7 +52,10 @@ pub fn render(rows: &[ComparativeRow]) -> String {
                 .ratio_p50
                 .map(|r| format!("{r:.2}\u{00d7}"))
                 .unwrap_or_else(|| "\u{2014}".into());
-            let banner = row.classification.map(Classification::emoji).unwrap_or("\u{2014}");
+            let banner = row
+                .classification
+                .map(Classification::emoji)
+                .unwrap_or("\u{2014}");
             let _ = writeln!(
                 out,
                 "| `{}` | {} | {} | {} | {} | {} |",

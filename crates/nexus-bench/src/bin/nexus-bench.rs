@@ -92,7 +92,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn enforce_release_build() -> anyhow::Result<()> {
-    if cfg!(debug_assertions) && std::env::var("NEXUS_BENCH_ALLOW_DEBUG").ok().as_deref() != Some("1") {
+    if cfg!(debug_assertions)
+        && std::env::var("NEXUS_BENCH_ALLOW_DEBUG").ok().as_deref() != Some("1")
+    {
         anyhow::bail!(
             "\nnexus-bench refuses to run in debug builds — the numbers would be meaningless.\n\
              Run with `cargo run --release --features live-bench --bin nexus-bench ...`.\n\

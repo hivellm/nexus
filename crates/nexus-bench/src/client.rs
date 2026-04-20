@@ -94,18 +94,12 @@ impl HttpClient {
             .map_err(|e| ClientError::Transport(e.to_string()))?;
 
         let health_url = format!("{}/health", base_url.trim_end_matches('/'));
-        let probe = tokio::time::timeout(
-            Duration::from_secs(2),
-            http.get(&health_url).send(),
-        )
-        .await
-        .map_err(|_| ClientError::HealthProbe("timed out after 2 s".into()))?
-        .map_err(|e| ClientError::HealthProbe(e.to_string()))?;
+        let probe = tokio::time::timeout(Duration::from_secs(2), http.get(&health_url).send())
+            .await
+            .map_err(|_| ClientError::HealthProbe("timed out after 2 s".into()))?
+            .map_err(|e| ClientError::HealthProbe(e.to_string()))?;
         if !probe.status().is_success() {
-            return Err(ClientError::HealthProbe(format!(
-                "HTTP {}",
-                probe.status()
-            )));
+            return Err(ClientError::HealthProbe(format!("HTTP {}", probe.status())));
         }
 
         Ok(Self {

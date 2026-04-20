@@ -109,9 +109,7 @@ pub enum HarnessError {
     /// count than the scenario declared. Typically means the engine
     /// hit a bug; surfaced loudly rather than silently affecting
     /// latency numbers.
-    #[error(
-        "ERR_BENCH_OUTPUT_DIVERGENCE({scenario}): expected {expected} rows, got {actual}"
-    )]
+    #[error("ERR_BENCH_OUTPUT_DIVERGENCE({scenario}): expected {expected} rows, got {actual}")]
     OutputDivergence {
         scenario: String,
         expected: usize,

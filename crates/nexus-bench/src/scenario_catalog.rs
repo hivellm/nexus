@@ -111,7 +111,12 @@ mod tests {
     #[test]
     fn every_scenario_targets_tiny_dataset() {
         for s in seed_scenarios() {
-            assert_eq!(s.dataset, DatasetKind::Tiny, "{} uses non-tiny dataset", s.id);
+            assert_eq!(
+                s.dataset,
+                DatasetKind::Tiny,
+                "{} uses non-tiny dataset",
+                s.id
+            );
         }
     }
 
