@@ -63,7 +63,7 @@ cargo +nightly build --release --workspace
 # └─────┴──────────┘
 ```
 
-The CLI defaults to `nexus://127.0.0.1:15475` (binary RPC). Every subcommand (`query`, `db`, `user`, `key`, `schema`, `data`) goes through RPC. See [`nexus-cli/README.md`](nexus-cli/README.md) for the full command reference.
+The CLI defaults to `nexus://127.0.0.1:15475` (binary RPC). Every subcommand (`query`, `db`, `user`, `key`, `schema`, `data`) goes through RPC. See [`crates/nexus-cli/README.md`](crates/nexus-cli/README.md) for the full command reference.
 
 ### First query from a SDK (Rust)
 
@@ -129,6 +129,7 @@ Every CLI and SDK reads a URL scheme, honours the `NEXUS_SDK_TRANSPORT` / `NEXUS
 - **Audit logging** — fail-open with `nexus_audit_log_failures_total` metric; never converts IO pressure into mass 500s. Rationale: [`docs/security/SECURITY_AUDIT.md §5`](docs/security/SECURITY_AUDIT.md).
 - **Prometheus metrics** — `/prometheus` endpoint exposes query / cache / connection / audit counters.
 - **Master-replica replication** — WAL streaming, async / sync modes, automatic failover.
+- **V2 sharded cluster (core)** — hash-partitioned shards with per-shard Raft consensus, distributed query coordinator, cross-shard traversal, `/cluster/*` management API. Opt-in via `[cluster.sharding]`. See [`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md).
 
 ## 🏗️ Architecture
 
@@ -203,38 +204,38 @@ Every SDK ships equivalent methods (`list_databases` / `listDatabases` / etc.). 
 
 Six first-party SDKs, all tracking the same 1.0.0 line. Every SDK shares the URL grammar, command-map table, and error semantics defined in [`docs/specs/sdk-transport.md`](docs/specs/sdk-transport.md).
 
-| SDK            | Install                                    | Docs                                          | RPC status      |
-|----------------|--------------------------------------------|-----------------------------------------------|-----------------|
-| 🦀 Rust        | `nexus-sdk = "1.0.0"`                      | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped      |
-| 🐍 Python      | `pip install nexus-sdk`                    | [sdks/python/](sdks/python/README.md)         | 🧭 queued (§4)  |
-| 📘 TypeScript  | `npm install @hivehub/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | 🧭 queued (§3)  |
-| 🐹 Go          | `go get github.com/hivellm/nexus-go`       | [sdks/go/](sdks/go/README.md)                 | 🧭 queued (§5)  |
-| 💜 C#          | `dotnet add package Nexus.SDK`             | [sdks/csharp/](sdks/csharp/README.md)         | 🧭 queued (§6)  |
-| 🐘 PHP         | `composer require hivellm/nexus-php`       | [sdks/php/](sdks/php/README.md)               | 🧭 queued (§8)  |
+| SDK            | Install                                    | Docs                                          | RPC status   |
+|----------------|--------------------------------------------|-----------------------------------------------|--------------|
+| 🦀 Rust        | `nexus-sdk = "1.0.0"`                      | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
+| 🐍 Python      | `pip install nexus-sdk`                    | [sdks/python/](sdks/python/README.md)         | ✅ shipped   |
+| 📘 TypeScript  | `npm install @hivehub/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | ✅ shipped   |
+| 🐹 Go          | `go get github.com/hivellm/nexus-go`       | [sdks/go/](sdks/go/README.md)                 | ✅ shipped   |
+| 💜 C#          | `dotnet add package Nexus.SDK`             | [sdks/csharp/](sdks/csharp/README.md)         | ✅ shipped   |
+| 🐘 PHP         | `composer require hivellm/nexus-php`       | [sdks/php/](sdks/php/README.md)               | ✅ shipped   |
 
-🧭 queued entries are on the [`phase2_sdk-rpc-transport-default`](.rulebook/tasks/phase2_sdk-rpc-transport-default/) implementation plan. Non-Rust SDKs currently ship HTTP/JSON and will gain RPC in a subsequent 1.x release.
+Every SDK defaults to `nexus://host:15475` (binary RPC) and falls back to HTTP/JSON when given an `http://` URL. RESP3 is a diagnostic port — SDKs refuse `resp3://` with a clear error pointing at the transport spec. Transport precedence across languages: **URL scheme > `NEXUS_SDK_TRANSPORT` env > config field > `nexus` default**.
 
 ### SDK quick examples
 
-**Python** (currently HTTP/JSON):
+**Python**:
 ```python
 from nexus_sdk import NexusClient
 
-async with NexusClient("http://localhost:15474") as client:
+async with NexusClient("nexus://127.0.0.1:15475") as client:
     result = await client.execute_cypher("MATCH (n:Person) RETURN n.name LIMIT 10")
-    print(f"Found {len(result.rows)} people")
+    print(f"Found {len(result.rows)} people via {client.endpoint_description()}")
 ```
 
-**TypeScript** (currently HTTP/JSON):
+**TypeScript**:
 ```typescript
 import { NexusClient } from '@hivehub/nexus-sdk';
 
-const client = new NexusClient({ baseUrl: 'http://localhost:15474' });
+const client = new NexusClient({ baseUrl: 'nexus://127.0.0.1:15475' });
 const result = await client.executeCypher('MATCH (n:Person) RETURN n.name LIMIT 10');
 console.log(`Found ${result.rows.length} people`);
 ```
 
-**Rust** (RPC-first):
+**Rust**:
 ```rust
 use nexus_sdk::NexusClient;
 let client = NexusClient::new("nexus://127.0.0.1:15475")?;
@@ -337,6 +338,55 @@ NEXUS_REPLICATION_MASTER_ADDR=master:15475 \
 
 Features: full sync via snapshot, incremental WAL streaming (circular buffer, 1M ops), async / sync modes, auto-reconnect with exponential backoff.
 
+## 🕸️ Sharded Cluster (V2)
+
+Nexus V2 adds horizontal scalability through **hash-based sharding** with
+**per-shard Raft consensus** and a **distributed query coordinator**.
+Standalone deployments are unaffected — sharding is opt-in via
+`[cluster.sharding]`.
+
+```toml
+# config.toml
+[cluster.sharding]
+mode = "bootstrap"        # "disabled" | "bootstrap" | "join"
+node_id = "node-a"
+listen_addr = "0.0.0.0:15480"
+peers = [
+  { node_id = "node-a", addr = "10.0.0.1:15480" },
+  { node_id = "node-b", addr = "10.0.0.2:15480" },
+  { node_id = "node-c", addr = "10.0.0.3:15480" },
+]
+num_shards = 3
+replica_factor = 3
+```
+
+| Endpoint                  | Method | Purpose                                   |
+|---------------------------|--------|-------------------------------------------|
+| `/cluster/status`         | GET    | Layout + generation + per-shard health.  |
+| `/cluster/add_node`       | POST   | Admin: register a node (leader-only).    |
+| `/cluster/remove_node`    | POST   | Admin: remove a node, `drain: true` opt. |
+| `/cluster/rebalance`      | POST   | Admin: trigger rebalancer.               |
+| `/cluster/shards/{id}`    | GET    | Per-shard detail.                        |
+
+Guarantees:
+
+- **Leader election** ≤ 3× election timeout (~900 ms default).
+- **Majority quorum replication** — 3-replica shard tolerates 1 loss,
+  5-replica tolerates 2.
+- **Atomic scatter/gather** — any shard failure fails the whole query
+  (no partial rows).
+- **Generation-tagged metadata** — stale coordinator caches detected
+  via `ERR_STALE_GEN` and refreshed once before retry.
+- **Leader-hint retry** — scatter RPCs retry up to 3× against the new
+  leader on `ERR_NOT_LEADER`.
+
+Full operator guide + failure-mode table:
+[`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md).
+Multi-host TCP transport between replicas is scheduled in the
+[`phase5_v2-tcp-transport-bridge`](.rulebook/tasks/phase5_v2-tcp-transport-bridge/)
+follow-up task; the current in-process transport covers single-host
+clusters and all integration scenarios.
+
 ## 📦 Use cases
 
 ### RAG (Retrieval-Augmented Generation)
@@ -402,18 +452,40 @@ ORDER BY confidence DESC
 - ✅ Master-replica replication (async / sync).
 - ✅ SIMD kernels (AVX-512 / AVX2 / NEON) with runtime dispatch.
 - ✅ 2310 workspace tests passing on `cargo +nightly test --workspace` (0 failed, 67 ignored); **300/300** Neo4j diff suite.
+- ✅ **V2 sharding core** (2026-04-20) — hash-based shards, per-shard Raft consensus, distributed query coordinator, `/cluster/*` API. +201 V2 tests, 2169 total passing on the restructured `crates/` workspace.
 
 ### Queued on 1.x
-- 🧭 **Python / TypeScript / Go / C# / PHP RPC transport** — [`phase2_sdk-rpc-transport-default`](.rulebook/tasks/phase2_sdk-rpc-transport-default/) sections 3–8.
-- 🧭 **Constraints + advanced indexes** — `UNIQUE`, `EXISTS`, full-text (Tantivy integration scaffolded), point indexes.
-- 🧭 **Streaming Cypher / live queries** — RPC push frame is reserved (`PUSH_ID = u32::MAX`); no SDK consumer yet.
-- 🧭 **Desktop GUI** — Electron + Vue 3 (early prototype).
 
-### V2 — distributed
-- 🔮 **Sharding** — hash partitioning, shard management, rebalancing.
-- 🔮 **Raft consensus** — openraft per shard, leader election, log replication.
-- 🔮 **Distributed queries** — coordinator, shard-aware planning, scatter/gather.
-- 🔮 **Cluster operations** — node discovery, rolling upgrades, DR.
+Every item below is an active rulebook task under [`.rulebook/tasks/`](.rulebook/tasks/). Pick one up via `rulebook_task_show <taskId>`.
+
+**openCypher coverage** (broadening Neo4j 5.x parity):
+- 🧭 [`phase6_opencypher-constraint-enforcement`](.rulebook/tasks/phase6_opencypher-constraint-enforcement/) — `UNIQUE` / `NODE KEY` / `EXISTS` constraints with pre-commit hook.
+- 🧭 [`phase6_opencypher-fulltext-search`](.rulebook/tasks/phase6_opencypher-fulltext-search/) — Tantivy-backed FTS, `db.index.fulltext.queryNodes`.
+- 🧭 [`phase6_opencypher-quantified-path-patterns`](.rulebook/tasks/phase6_opencypher-quantified-path-patterns/) — Neo4j 5.9 QPP syntax (`()-[]->{1,5}()`).
+- 🧭 [`phase6_opencypher-subquery-transactions`](.rulebook/tasks/phase6_opencypher-subquery-transactions/) — `CALL {} IN TRANSACTIONS OF N ROWS`.
+- 🧭 [`phase6_opencypher-advanced-types`](.rulebook/tasks/phase6_opencypher-advanced-types/) — byte arrays, dynamic labels on writes, composite B-tree indexes.
+- 🧭 [`phase6_opencypher-system-procedures`](.rulebook/tasks/phase6_opencypher-system-procedures/) — `db.schema.*`, `db.labels`, `db.indexes`, `db.indexDetails`.
+- 🧭 [`phase6_opencypher-geospatial-predicates`](.rulebook/tasks/phase6_opencypher-geospatial-predicates/) — R-tree index + point / polygon predicates.
+- 🧭 [`phase6_opencypher-quickwins`](.rulebook/tasks/phase6_opencypher-quickwins/) — type-checking predicates, `isEmpty` polymorphism, list converters, string extractors.
+- 🧭 [`phase6_opencypher-apoc-ecosystem`](.rulebook/tasks/phase6_opencypher-apoc-ecosystem/) — APOC-compatible `apoc.coll.*` / `apoc.map.*` / `apoc.date.*` procedures.
+
+**Infrastructure & ops**:
+- 🧭 [`phase5_v2-tcp-transport-bridge`](.rulebook/tasks/phase5_v2-tcp-transport-bridge/) — multi-host TCP transport for V2 Raft replicas (current in-process transport covers single-host + integration tests).
+- 🧭 [`phase5_implement-v1-gui`](.rulebook/tasks/phase5_implement-v1-gui/) — Electron + Vue 3 desktop app (`gui/` directory scaffolded; 0% implementation).
+- 🧭 [`phase5_hub-integration`](.rulebook/tasks/phase5_hub-integration/) — HiveHub SaaS multi-tenant control plane (billing, per-user databases).
+- 🧭 [`phase6_nexus-vs-neo4j-benchmark-suite`](.rulebook/tasks/phase6_nexus-vs-neo4j-benchmark-suite/) — Docker-based harness for apples-to-apples vs-Neo4j benchmarks.
+
+**Protocol polish**:
+- 🧭 **RESP3 in non-Rust SDKs** — every SDK accepts `resp3://` URLs and throws a clear error; parser/writer queued for a subsequent 1.x release.
+- 🧭 **Streaming Cypher / live queries** — RPC push frame is reserved (`PUSH_ID = u32::MAX`); no SDK consumer yet.
+
+### V2 — distributed ✅ core complete (2026-04-20)
+- ✅ **Sharding** — deterministic xxh3 hash partitioning, generation-tagged metadata, iterative rebalancer ([`crates/nexus-core/src/sharding/`](crates/nexus-core/src/sharding/)).
+- ✅ **Raft consensus** — purpose-built per-shard Raft with leader election, log replication, snapshot install, 5-node tolerates 2 failures ([`crates/nexus-core/src/sharding/raft/`](crates/nexus-core/src/sharding/raft/)).
+- ✅ **Distributed queries** — scatter/gather coordinator with atomic failure, leader-hint retry, COUNT/SUM/AVG decomposition, top-k merge ([`crates/nexus-core/src/coordinator/`](crates/nexus-core/src/coordinator/)).
+- ✅ **Cluster operations** — `/cluster/*` management API, admin-gated, 307 redirect on followers, drain semantics ([`crates/nexus-server/src/api/cluster.rs`](crates/nexus-server/src/api/cluster.rs)).
+- 🧭 **Multi-host TCP transport** — `phase5_v2-tcp-transport-bridge` follow-up (current in-process transport covers single-host + all integration tests).
+- 🧭 **Online re-sharding / cross-shard 2PC / geo-distribution** — V2.1 / V3.
 
 Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -445,14 +517,16 @@ Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ```
 nexus/
-├── nexus-core/         # 🧠 Graph engine library (catalog, storage, WAL, index, executor, MVCC)
-├── nexus-server/       # 🌐 Axum HTTP + RPC + RESP3 server
-├── nexus-protocol/     # 🔌 Shared wire types (rpc, resp3, mcp, rest, umicp)
-├── nexus-cli/          # 💻 `nexus` binary, RPC-default
-├── sdks/               # 📦 Six first-party SDKs (rust, python, typescript, go, csharp, php)
-├── tests/              # 🧪 Workspace integration + Neo4j compatibility
-├── docs/               # 📚 User guides, specs, compatibility, performance
-└── scripts/install/    # 🔧 install.sh / install.ps1
+├── crates/                # 🦀 Rust workspace crates (standard layout)
+│   ├── nexus-core/        # 🧠 Graph engine library (catalog, storage, WAL,
+│   │                      #    index, executor, MVCC, sharding, coordinator)
+│   ├── nexus-server/      # 🌐 Axum HTTP + RPC + RESP3 server
+│   ├── nexus-protocol/    # 🔌 Shared wire types (rpc, resp3, mcp, rest, umicp)
+│   └── nexus-cli/         # 💻 `nexus` binary, RPC-default
+├── sdks/                  # 📦 Six first-party SDKs (rust, python, typescript, go, csharp, php)
+├── tests/                 # 🧪 Workspace integration + Neo4j compatibility
+├── docs/                  # 📚 User guides, specs, compatibility, performance
+└── scripts/install/       # 🔧 install.sh / install.ps1
 ```
 
 ### Build + test

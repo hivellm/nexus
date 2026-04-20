@@ -5,44 +5,79 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — V2 Sharding (core complete 2026-04-20)
+## [1.0.0] — 2026-04-20
 
-### Added — V2 horizontal scaling
+### Added — V2 horizontal scaling (2026-04-20, commit `15715a24`)
 
 Nexus gains horizontal scalability through hash-based sharding, per-shard
 Raft consensus, and a distributed query coordinator. See
 [`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md)
 and [`.rulebook/tasks/phase5_implement-v2-sharding/design.md`](.rulebook/tasks/phase5_implement-v2-sharding/design.md).
 
-- **Sharding** (`nexus-core/src/sharding/`): deterministic xxh3-based
+- **Sharding** (`crates/nexus-core/src/sharding/`): deterministic xxh3-based
   shard assignment, generation-tagged cluster metadata, iterative
   rebalancer, per-shard health model. Standalone deployments are
   unchanged — sharding is opt-in via `[cluster.sharding]` config.
-- **Raft consensus per shard** (`nexus-core/src/sharding/raft/`):
+- **Raft consensus per shard** (`crates/nexus-core/src/sharding/raft/`):
   purpose-built Raft (openraft 0.10 is still alpha; its trait surface
   would require an adapter larger than the Raft itself). Leader
   election within 3× election timeout, §5.3 truncate-on-conflict,
   §5.4.2 leader-only current-term commit, snapshot install, bincode
   wire format with shard-id prefix. 5-node clusters tolerate 2
   replica failures.
-- **Distributed query coordinator** (`nexus-core/src/coordinator/`):
+- **Distributed query coordinator** (`crates/nexus-core/src/coordinator/`):
   scatter/gather with atomic per-query failure, leader-hint retry
   (3 attempts), stale-generation refresh, COUNT/SUM/AVG/MIN/MAX/
   COLLECT aggregation decomposition, ORDER BY + LIMIT top-k merge.
 - **Cross-shard traversal**: TTL + generation-aware LRU cache (10k
   entries default), per-query fetch budget (1k default) with
   `ERR_TOO_MANY_REMOTE_FETCHES` for runaway traversals.
-- **Cluster management API**: `GET /cluster/status`, `POST /cluster/
-  add_node | remove_node | rebalance`, `GET /cluster/shards/{id}`.
-  Admin-gated, `307 Temporary Redirect` on follower writes, drain
-  semantics for graceful node removal.
+- **Cluster management API** (`crates/nexus-server/src/api/cluster.rs`):
+  `GET /cluster/status`, `POST /cluster/{add_node,remove_node,rebalance}`,
+  `GET /cluster/shards/{id}`. Admin-gated, `307 Temporary Redirect` on
+  follower writes, drain semantics for graceful node removal.
+
+### Changed — workspace layout
+
+The four Rust crates moved from repo-root children into a single
+`crates/` directory, following the standard Rust workspace layout:
+
+```
+Nexus/
+├── crates/
+│   ├── nexus-core/      # was ./nexus-core/
+│   ├── nexus-server/    # was ./nexus-server/
+│   ├── nexus-protocol/  # was ./nexus-protocol/
+│   └── nexus-cli/       # was ./nexus-cli/
+├── docs/                # unchanged
+├── sdks/                # unchanged
+└── scripts/             # unchanged
+```
+
+Follow-up edits:
+
+- `Cargo.toml` root: `workspace.members` + `workspace.dependencies`
+  paths updated to `crates/…`.
+- `crates/nexus-core/Cargo.toml`: `[[example]]` paths `../examples/` →
+  `../../examples/`.
+- `crates/nexus-server/Cargo.toml` + `crates/nexus-cli/Cargo.toml`:
+  `[package.metadata.deb]` asset paths (`../LICENSE`, `../README.md`,
+  `../config.yml`, …) updated to `../../…`.
+- `.github/workflows/rust-lint.yml`, `release-server.yml`,
+  `release-cli.yml`: path filters + `manifest_path` point at `crates/…`.
+- `scripts/ci/check_no_unwrap_in_bin.sh`: `SCOPES` + repo-root detection
+  updated.
+- Inter-crate paths (`../nexus-protocol`) unchanged — both live under
+  `crates/` so the relative form still resolves.
+
+No functional change; no public API moved or renamed.
 
 ### Test coverage
 
 **201 V2-dedicated tests** — 143 sharding unit tests, 46 coordinator
 unit tests, 12 E2E integration scenarios
-(`nexus-core/tests/v2_sharding_e2e.rs`) covering every §Scenario in
-the specs:
+(`crates/nexus-core/tests/v2_sharding_e2e.rs`) covering every §Scenario
+in the specs:
 
 - Deterministic assignment across restarts
 - Metadata consistency after leader change
@@ -55,9 +90,11 @@ the specs:
 - Leader-redirect on followers
 - Stale-generation refresh round-trip
 
-Full workspace: **1694 nexus-core lib tests + 12 V2 E2E tests**, zero
-failures on `cargo +nightly test`. Zero warnings on `cargo clippy
---workspace --all-targets -- -D warnings`.
+Full workspace on nightly: **2169 tests passing, 0 failed** (1694
+nexus-core lib + 364 nexus-server lib + 83 nexus-protocol lib + 28
+nexus-cli lib + 12 V2 E2E). Zero warnings on `cargo clippy
+--workspace --all-targets -- -D warnings`. Release build (`cargo
++nightly build --release --workspace`) succeeds in ~3 minutes.
 
 ### Breaking changes (when sharding is enabled)
 
@@ -65,9 +102,15 @@ failures on `cargo +nightly test`. Zero warnings on `cargo clippy
   use deterministic defaults (`shard_id = 0`, `generation = 0`); a
   future `nexus migrate --to v2` CLI rewrites headers in place.
 
-## [1.0.0] — 2026-04-19
+### Follow-up
 
-### Added — cluster mode (multi-tenant deployments)
+- [`phase5_v2-tcp-transport-bridge`](.rulebook/tasks/phase5_v2-tcp-transport-bridge/)
+  — TCP transport between Raft replicas for multi-host deployments.
+  Current in-process transport covers single-host + all integration
+  scenarios; the TCP bridge is an I/O adapter over the already-stable
+  `RaftTransport` and `ShardClient` traits.
+
+### Added — cluster mode (multi-tenant deployments, 2026-04-19)
 
 Nexus can now run as a shared multi-tenant service. One server
 instance hosts data for many tenants while guaranteeing that a

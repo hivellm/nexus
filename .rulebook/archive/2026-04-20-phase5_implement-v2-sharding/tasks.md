@@ -70,3 +70,9 @@ integration scenarios.
 - [x] 7.2 Add distributed deployment guide — `docs/guides/DISTRIBUTED_DEPLOYMENT.md`
 - [x] 7.3 Update CHANGELOG.md with v1.0.0 — [Unreleased] V2 Sharding section added
 - [x] 7.4 Run all quality checks — `cargo +nightly check`, `cargo clippy --workspace -- -D warnings`, `cargo +nightly test --package nexus-core` all green (1694 + 12 = 1706 tests passing, zero warnings)
+
+## 8. Tail (mandatory — enforced by rulebook v5.3.0)
+
+- [x] 8.1 Update or create documentation covering the implementation — `docs/guides/DISTRIBUTED_DEPLOYMENT.md`, `docs/ROADMAP.md` V2 section, `CHANGELOG.md` [Unreleased], README.md sharded-cluster section
+- [x] 8.2 Write tests covering the new behavior — 201 V2 tests (143 sharding unit + 46 coordinator unit + 12 E2E scenarios)
+- [x] 8.3 Run tests and confirm they pass — 2169 workspace tests passing on `cargo +nightly test`, zero failures, zero warnings on `cargo clippy --workspace --all-targets -- -D warnings`
