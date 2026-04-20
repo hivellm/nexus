@@ -486,7 +486,10 @@ rather than serialisation overhead. Managed by
 markers is regenerated on every run.
 
 <!-- BEGIN bench-parity (managed by scripts/bench/update-parity.sh — DO NOT EDIT BY HAND) -->
-_No benchmark data yet. Run `./scripts/bench/update-parity.sh <report.json>` to populate._
+<!-- generated from report.json @ 2026-04-20T00:00:00Z (nexus-bench v1.0.0, schema 1, 0 scenario(s)) -->
+
+_No scenarios in the report. Nothing to render._
+
 <!-- END bench-parity -->
 
 ### GDS Procedures Available

@@ -29,8 +29,8 @@
 
 - [x] 4.1 `scripts/bench/update-parity.sh` consumes `report.json`
 - [x] 4.2 Rewrites the Nexus-vs-Neo4j section of `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` in place
-- [ ] 4.3 CI step ensures the report is up to date on each PR touching the bench crate
-- [ ] 4.4 Nightly job runs the harness + posts a summary comment
+- [x] 4.3 CI step ensures the report is up to date on each PR touching the bench crate
+- [x] 4.4 Nightly job runs the harness + posts a summary comment
 
 ## 5. Tail (mandatory — enforced by rulebook v5.3.0)
 
