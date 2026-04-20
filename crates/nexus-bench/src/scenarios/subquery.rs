@@ -47,6 +47,31 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
         .expected_rows(1)
         .build(),
         ScenarioBuilder::new(
+            "subquery.exists_block",
+            "EXISTS { } subquery predicate (§7.1; Cypher 5)",
+            DatasetKind::Tiny,
+            // Cypher 5 `EXISTS { }` syntax. Neo4j 2025.09
+            // supports it; Nexus may reject at parse time today.
+            "MATCH (n:A) WHERE EXISTS { MATCH (n)-[:KNOWS]->() } \
+             RETURN count(n) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "subquery.nested_call_2_deep",
+            "nested CALL { CALL { ... } } (§7.4; Cypher 5)",
+            DatasetKind::Tiny,
+            // Two-deep instead of three to keep the baseline
+            // meaningful on engines that cap CALL nesting
+            // depth; the shape still exercises the same planner
+            // path.
+            "CALL { MATCH (a:A) WITH count(a) AS ca \
+             CALL { MATCH (b:B) RETURN count(b) AS cb } \
+             RETURN ca, cb } RETURN ca + cb AS total",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
             "subquery.exists_high_score",
             "EXISTS — is there any node with score > 0.99",
             DatasetKind::Tiny,

@@ -24,7 +24,11 @@
 use crate::scenario::Scenario;
 
 pub(crate) mod aggregation;
+pub(crate) mod constraint;
+pub(crate) mod ecosystem;
 pub(crate) mod filter;
+pub(crate) mod hybrid;
+pub(crate) mod index;
 pub(crate) mod label_scan;
 pub(crate) mod order;
 pub(crate) mod point_read;
@@ -41,7 +45,11 @@ pub(crate) mod write;
 pub(crate) fn all() -> Vec<Scenario> {
     let mut out = Vec::new();
     out.extend(aggregation::scenarios());
+    out.extend(constraint::scenarios());
+    out.extend(ecosystem::scenarios());
     out.extend(filter::scenarios());
+    out.extend(hybrid::scenarios());
+    out.extend(index::scenarios());
     out.extend(label_scan::scenarios());
     out.extend(order::scenarios());
     out.extend(point_read::scenarios());

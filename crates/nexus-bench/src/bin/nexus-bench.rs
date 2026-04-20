@@ -230,14 +230,29 @@ async fn run(args: Args) -> anyhow::Result<()> {
     if args.load_dataset {
         // Load every dataset kind referenced by the selected
         // scenarios, once per engine. `HashSet` collapses
-        // duplicates so TinyDataset + SmallDataset each load once
-        // regardless of how many scenarios back-reference them.
+        // duplicates so each dataset loads at most once per
+        // engine regardless of how many scenarios back-reference
+        // it.
+        //
+        // A load failure (e.g. a list-typed property an engine
+        // has not shipped support for) logs and continues —
+        // same per-step tolerance the scenario loop applies.
+        // Scenarios that depend on the missing dataset will
+        // error in turn, which is the right signal; aborting
+        // the whole run would be worse.
         let kinds: HashSet<DatasetKind> = selected.iter().map(|s| s.dataset).collect();
         for kind in kinds {
-            load_dataset_kind(&mut nexus_client, kind, &args.engine_label)?;
+            if let Err(e) = load_dataset_kind(&mut nexus_client, kind, &args.engine_label) {
+                eprintln!("  !! {kind:?}: {} load skipped: {e}", args.engine_label);
+            }
             #[cfg(feature = "neo4j")]
             if let Some(ref mut c) = neo4j_client {
-                load_dataset_kind(c, kind, &args.neo4j_engine_label)?;
+                if let Err(e) = load_dataset_kind(c, kind, &args.neo4j_engine_label) {
+                    eprintln!(
+                        "  !! {kind:?}: {} load skipped: {e}",
+                        args.neo4j_engine_label
+                    );
+                }
             }
         }
     }

@@ -46,5 +46,20 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
         )
         .expected_rows(1)
         .build(),
+        ScenarioBuilder::new(
+            "scalar.point_within_distance",
+            "point.withinDistance predicate — §9.3 / index.rtree_*",
+            DatasetKind::Tiny,
+            // Standalone scalar form of `withinDistance`. The
+            // R-tree-backed form over property-indexed points
+            // lives in `index.rtree_within_distance`; this row
+            // measures the pure function-call cost.
+            "RETURN point.withinDistance(\
+             point({longitude: 0.0, latitude: 0.0}), \
+             point({longitude: 0.01, latitude: 0.01}), \
+             5000) AS inside",
+        )
+        .expected_rows(1)
+        .build(),
     ]
 }

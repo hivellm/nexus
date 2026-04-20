@@ -110,7 +110,11 @@ mod tests {
         // family trips this test.
         for cat in [
             "aggregation",
+            "constraint",
+            "ecosystem",
             "filter",
+            "hybrid",
+            "index",
             "label_scan",
             "order",
             "point_read",
@@ -128,21 +132,22 @@ mod tests {
     }
 
     #[test]
-    fn write_scenarios_declare_write_prefix() {
+    fn write_scenarios_declare_mutation_prefix() {
         // Writes now run — `BenchClient::reset()` shipped in
         // phase6_bench-live-test-state-isolation and the harness's
         // divergence guard catches a scenario whose per-iteration
         // row count drifts from its `expected_row_count`. What
-        // remains is an author-intent marker: every write scenario
-        // must sit under the `write.` id prefix, and every
-        // non-`write.` scenario must stay pure-read. That way the
-        // prefix alone tells the operator whether a run will mutate
-        // state.
+        // remains is an author-intent marker: every mutating
+        // scenario must live under a prefix that flags the intent
+        // (today: `write.`, `constraint.`, or `ecosystem.` — the
+        // last because CALL-in-transactions / APOC map-merge-style
+        // queries can still CREATE under the hood).
+        //
+        // Anything outside those prefixes must stay pure-read so a
+        // harness run without `--load-dataset` cannot surprise the
+        // operator by mutating state.
+        const MUTATION_PREFIXES: &[&str] = &["write.", "constraint.", "ecosystem."];
         for s in seed_scenarios() {
-            // Pad with spaces so a keyword at the start or end of
-            // the query still matches the space-delimited search
-            // pattern — a query that opens with `CREATE (n...` would
-            // otherwise slip past ` CREATE `.
             let q = format!(" {} ", s.query.to_uppercase());
             let has_write = [
                 " CREATE ",
@@ -155,11 +160,11 @@ mod tests {
             ]
             .iter()
             .any(|w| q.contains(w));
-            let is_declared_write = s.id.starts_with("write.");
-            assert_eq!(
-                has_write, is_declared_write,
-                "{}: write-clause presence ({has_write}) must match \
-                 id prefix ({is_declared_write})",
+            let is_declared_write = MUTATION_PREFIXES.iter().any(|p| s.id.starts_with(p));
+            assert!(
+                !has_write || is_declared_write,
+                "{}: query contains a write clause but its id prefix \
+                 is not in {MUTATION_PREFIXES:?}",
                 s.id
             );
         }

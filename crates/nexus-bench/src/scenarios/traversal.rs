@@ -61,11 +61,32 @@ pub(crate) fn scenarios() -> Vec<Scenario> {
         )
         .expected_rows(1)
         .build(),
-        // `shortestPath((…)-[*]->(…))` is §3.5 territory but Nexus's
-        // parser errors on the `shortestPath(` token right now —
-        // tracked inside phase6_nexus-bench-correctness-gaps. Add
-        // back once the parser accepts the Neo4j syntax; leaving it
-        // out today keeps the bench run from aborting on that row.
+        ScenarioBuilder::new(
+            "traversal.small_qpp_1_to_5",
+            "Quantified path pattern {1,5} from p0 (§3.4; Cypher 5)",
+            DatasetKind::Small,
+            // Cypher 5 quantified-path-pattern syntax. Neo4j
+            // 2025.09 supports it; Nexus does not yet. The CLI's
+            // per-scenario error tolerance keeps one parse
+            // rejection from aborting the batch, and the row
+            // turns green the day QPP lands in nexus-core.
+            "MATCH (:P {id: 0}) ((a)-[:KNOWS]->(b)){1,5} \
+             RETURN count(*) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "traversal.small_shortest_path_hub",
+            "shortestPath from p0 to p49 (§3.5; 10 hops via hub)",
+            DatasetKind::Small,
+            // Nexus's parser rejected this in Run 4 with
+            // `Expected '('` — kept as a progress marker; the
+            // bench logs the parse error and continues.
+            "MATCH p = shortestPath((:P {id: 0})-[:KNOWS*]->(:P {id: 49})) \
+             RETURN length(p) AS hops",
+        )
+        .expected_rows(1)
+        .build(),
         ScenarioBuilder::new(
             "traversal.cartesian_a_b",
             "MATCH (a:A), (b:B) cartesian count (TinyDataset: 20 × 20 = 400)",
