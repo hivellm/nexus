@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] — 2026-04-20
 
+### Fixed — RPC DELETE / DETACH DELETE no-op (2026-04-20)
+
+Queries like `MATCH (n) DETACH DELETE n` issued over the native
+MessagePack RPC protocol parsed and returned `Ok(0 rows)` but left
+the database untouched. Root cause: the RPC CYPHER dispatch in
+`crates/nexus-server/src/protocol/rpc/dispatch/cypher.rs` called
+`executor.execute(&q)` directly for every non-admin query. The
+operator pipeline's `Operator::Delete` / `Operator::DetachDelete`
+handlers are explicit no-ops — they rely on the engine's
+higher-level interception (`execute_cypher_with_context` at
+`crates/nexus-core/src/engine/mod.rs:1427`) to perform the actual
+mutation. REST always went through that path; RPC bypassed it.
+
+The fix adds a `needs_engine_interception(&ast)` router: any AST
+that carries `Match` / `Create` / `Delete` / `Merge` / `Set` /
+`Remove` / `Foreach` now routes through `engine.execute_cypher`,
+preserving parity with the REST transport. Read-only queries
+(no MATCH, no mutation) keep the parallel executor path —
+unchanged throughput, unchanged params handling.
+
+Verified end-to-end against a live Nexus RPC listener + docker
+Neo4j 2025.09.0: `nexus-bench`'s 9 `#[ignore]` integration tests
+now run cleanly as a single `cargo test -p nexus-bench
+--features live-bench,neo4j -- --ignored` parallel batch (used to
+require per-test manual wipes). A new engine-level regression
+test (`detach_delete_actually_clears_nodes_via_execute_cypher` in
+`crates/nexus-core/src/engine/tests.rs`) locks the interception
+contract.
+
+Source task: `phase6_nexus-delete-executor-bug`.
+
 ### Added — server admission control (2026-04-20)
 
 Third back-pressure layer on top of the existing per-key rate limiter

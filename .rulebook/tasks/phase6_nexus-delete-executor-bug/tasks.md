@@ -12,12 +12,12 @@
 
 ## 3. Regression coverage
 
-- [ ] 3.1 Executor-layer integration test (no server) asserts post-delete counts for nodes, relationships, properties
+- [x] 3.1 Executor-layer integration test (no server) asserts post-delete counts for nodes, relationships, properties — `detach_delete_actually_clears_nodes_via_execute_cypher` in `crates/nexus-core/src/engine/tests.rs`
 - [x] 3.2 RPC-layer test exercises `NexusRpcClient::reset` (from `nexus-bench`) against a live server and asserts the post-state — `tests/live_rpc::isolation_between_loads_works` + `tests/live_compare::isolation_between_tests_works` assert `count == 0` after reset
 - [x] 3.3 Re-run `phase6_bench-live-test-state-isolation`'s `isolation_between_loads_works` + `isolation_between_tests_works` against the patched server — both pass, plus all 9 `#[ignore]` tests run cleanly as a single `cargo test --ignored` parallel batch
 
 ## 4. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 4.1 Update or create documentation covering the implementation — mention the DELETE-no-op incident in `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` history, patch note in `CHANGELOG.md`
-- [x] 4.2 Write tests covering the new behavior — §3 above (3.1 remains open for an executor-layer unit test not gated on a live server)
+- [x] 4.1 Update or create documentation covering the implementation — `CHANGELOG.md` under `1.0.0 → Fixed — RPC DELETE / DETACH DELETE no-op (2026-04-20)`
+- [x] 4.2 Write tests covering the new behavior — §3 above (all three items ticked)
 - [x] 4.3 Run tests and confirm they pass — 9/9 `#[ignore]` tests pass against a live Nexus + docker Neo4j as a single `cargo test -p nexus-bench --features live-bench,neo4j -- --ignored` invocation

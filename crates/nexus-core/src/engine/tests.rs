@@ -844,3 +844,55 @@ fn test_clear_all_data() {
     assert_eq!(stats_after.node_count, 0);
     assert_eq!(stats_after.relationship_count, 0);
 }
+
+/// Regression test for phase6_nexus-delete-executor-bug:
+/// `MATCH (n) DETACH DELETE n` via `engine.execute_cypher` must
+/// actually remove the nodes. The RPC dispatch used to bypass
+/// this path by calling the operator pipeline directly, whose
+/// `Operator::DetachDelete` handler is an explicit no-op; the
+/// server-side fix landed in commit `d46e2cfc`. This test locks
+/// the engine-level contract the fix depends on so a future
+/// refactor cannot regress the interception silently.
+#[test]
+fn detach_delete_actually_clears_nodes_via_execute_cypher() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    // Seed a handful of nodes.
+    for _ in 0..5 {
+        engine
+            .create_node(
+                vec!["X".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+    }
+
+    // Confirm they exist — `execute_cypher` count before delete.
+    let before = engine
+        .execute_cypher("MATCH (n) RETURN count(n) AS c")
+        .unwrap();
+    assert_eq!(before.rows.len(), 1, "count query returns one row");
+    // `c` column — first cell should be the number 5.
+    let cell = &before.rows[0].values[0];
+    assert_eq!(cell.as_u64(), Some(5), "expected 5 nodes, got {cell:?}");
+
+    // Run the DETACH DELETE statement through the same high-level
+    // API a REST / RPC caller hits.
+    engine
+        .execute_cypher("MATCH (n) DETACH DELETE n")
+        .expect("DETACH DELETE must succeed");
+
+    // And now the count must be zero — the guard that catches a
+    // silent-no-op regression.
+    let after = engine
+        .execute_cypher("MATCH (n) RETURN count(n) AS c")
+        .unwrap();
+    assert_eq!(after.rows.len(), 1);
+    let cell = &after.rows[0].values[0];
+    assert_eq!(
+        cell.as_u64(),
+        Some(0),
+        "DETACH DELETE left {cell:?} nodes — DELETE regression"
+    );
+}
