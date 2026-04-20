@@ -47,7 +47,10 @@ mod tests {
         // that was renamed.
         for s in seed_scenarios() {
             assert!(
-                matches!(s.dataset, DatasetKind::Tiny | DatasetKind::Small),
+                matches!(
+                    s.dataset,
+                    DatasetKind::Tiny | DatasetKind::Small | DatasetKind::VectorSmall
+                ),
                 "{} uses unknown dataset {:?}",
                 s.id,
                 s.dataset

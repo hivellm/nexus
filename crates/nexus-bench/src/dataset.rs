@@ -20,6 +20,12 @@ pub enum DatasetKind {
     /// traversal scenarios. Still a single `CREATE`, still ~2 KiB
     /// literal, still no fan-out.
     Small,
+    /// 50 nodes / 0 edges / 1 label — each node carries a 16-dim
+    /// `score_vec` property. Shaped for KNN + hybrid RAG scenarios
+    /// (§5.4 / §10 of the parent task); the dataset itself ships
+    /// today even though the KNN / HNSW scenarios that consume it
+    /// are still blocked on the operator landing in nexus-core.
+    VectorSmall,
 }
 
 /// Contract every dataset implements.
@@ -163,6 +169,62 @@ const SMALL_LOAD_STATEMENT: &str = "CREATE \
 (p30)-[:KNOWS]->(p31), (p31)-[:KNOWS]->(p32), (p32)-[:KNOWS]->(p33), (p33)-[:KNOWS]->(p34), (p34)-[:KNOWS]->(p35), (p35)-[:KNOWS]->(p36), (p36)-[:KNOWS]->(p37), (p37)-[:KNOWS]->(p38), (p38)-[:KNOWS]->(p39), (p39)-[:KNOWS]->(p40), \
 (p40)-[:KNOWS]->(p41), (p41)-[:KNOWS]->(p42), (p42)-[:KNOWS]->(p43), (p43)-[:KNOWS]->(p44), (p44)-[:KNOWS]->(p45), (p45)-[:KNOWS]->(p46), (p46)-[:KNOWS]->(p47), (p47)-[:KNOWS]->(p48), (p48)-[:KNOWS]->(p49), \
 (p0)-[:KNOWS]->(p10), (p0)-[:KNOWS]->(p20), (p0)-[:KNOWS]->(p30), (p0)-[:KNOWS]->(p40)";
+
+/// 50-node vector fixture. Every node carries a 16-dim
+/// `score_vec` property whose values are `(i + j) / 64.0` for
+/// the node id `i` and dimension `j`. The shape is deterministic
+/// so downstream KNN scenarios can assert on the nearest
+/// neighbours of a probe vector without any random seed.
+///
+/// No edges — the dataset exists purely for
+/// vector-similarity scenarios (§5.4 / §10 of the parent task).
+/// Those scenarios remain blocked until Nexus exposes a
+/// KNN / HNSW operator over Cypher; the literal ships now so
+/// the ingestion path is exercisable (and the dataset is
+/// present in `DatasetKind`) the day the operator lands.
+pub struct VectorSmallDataset;
+
+impl Dataset for VectorSmallDataset {
+    fn kind(&self) -> DatasetKind {
+        DatasetKind::VectorSmall
+    }
+
+    fn name(&self) -> &'static str {
+        "vector_small"
+    }
+
+    fn node_count(&self) -> usize {
+        50
+    }
+
+    fn rel_count(&self) -> usize {
+        0
+    }
+
+    fn load_statement(&self) -> &'static str {
+        VECTOR_SMALL_LOAD_STATEMENT
+    }
+}
+
+/// One Cypher statement — 50 `:Vec` node literals with a 16-dim
+/// `score_vec` list property each. Total literal weight is
+/// ~8 KiB, well under the 16 KiB body budget the other datasets
+/// assert on. Generated once from a deterministic formula
+/// (`score_vec[j] = (i + j) / 64.0`) — do not edit by hand; the
+/// `generate-vector-small-literal` script at the top of the
+/// dataset module's history shows how to regenerate it if the
+/// shape ever needs to change.
+const VECTOR_SMALL_LOAD_STATEMENT: &str = "CREATE \
+(v0:Vec {id: 0, score_vec: [0.0000, 0.0156, 0.0312, 0.0469, 0.0625, 0.0781, 0.0938, 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344]}), (v1:Vec {id: 1, score_vec: [0.0156, 0.0312, 0.0469, 0.0625, 0.0781, 0.0938, 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500]}), (v2:Vec {id: 2, score_vec: [0.0312, 0.0469, 0.0625, 0.0781, 0.0938, 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656]}), (v3:Vec {id: 3, score_vec: [0.0469, 0.0625, 0.0781, 0.0938, 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812]}), (v4:Vec {id: 4, score_vec: [0.0625, 0.0781, 0.0938, 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969]}), \
+(v5:Vec {id: 5, score_vec: [0.0781, 0.0938, 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125]}), (v6:Vec {id: 6, score_vec: [0.0938, 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281]}), (v7:Vec {id: 7, score_vec: [0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438]}), (v8:Vec {id: 8, score_vec: [0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594]}), (v9:Vec {id: 9, score_vec: [0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750]}), \
+(v10:Vec {id: 10, score_vec: [0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906]}), (v11:Vec {id: 11, score_vec: [0.1719, 0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062]}), (v12:Vec {id: 12, score_vec: [0.1875, 0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219]}), (v13:Vec {id: 13, score_vec: [0.2031, 0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375]}), (v14:Vec {id: 14, score_vec: [0.2188, 0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531]}), \
+(v15:Vec {id: 15, score_vec: [0.2344, 0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688]}), (v16:Vec {id: 16, score_vec: [0.2500, 0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844]}), (v17:Vec {id: 17, score_vec: [0.2656, 0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000]}), (v18:Vec {id: 18, score_vec: [0.2812, 0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156]}), (v19:Vec {id: 19, score_vec: [0.2969, 0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312]}), \
+(v20:Vec {id: 20, score_vec: [0.3125, 0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469]}), (v21:Vec {id: 21, score_vec: [0.3281, 0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625]}), (v22:Vec {id: 22, score_vec: [0.3438, 0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781]}), (v23:Vec {id: 23, score_vec: [0.3594, 0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938]}), (v24:Vec {id: 24, score_vec: [0.3750, 0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094]}), \
+(v25:Vec {id: 25, score_vec: [0.3906, 0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250]}), (v26:Vec {id: 26, score_vec: [0.4062, 0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406]}), (v27:Vec {id: 27, score_vec: [0.4219, 0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562]}), (v28:Vec {id: 28, score_vec: [0.4375, 0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719]}), (v29:Vec {id: 29, score_vec: [0.4531, 0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875]}), \
+(v30:Vec {id: 30, score_vec: [0.4688, 0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031]}), (v31:Vec {id: 31, score_vec: [0.4844, 0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188]}), (v32:Vec {id: 32, score_vec: [0.5000, 0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344]}), (v33:Vec {id: 33, score_vec: [0.5156, 0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500]}), (v34:Vec {id: 34, score_vec: [0.5312, 0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656]}), \
+(v35:Vec {id: 35, score_vec: [0.5469, 0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812]}), (v36:Vec {id: 36, score_vec: [0.5625, 0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969]}), (v37:Vec {id: 37, score_vec: [0.5781, 0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125]}), (v38:Vec {id: 38, score_vec: [0.5938, 0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281]}), (v39:Vec {id: 39, score_vec: [0.6094, 0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438]}), \
+(v40:Vec {id: 40, score_vec: [0.6250, 0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594]}), (v41:Vec {id: 41, score_vec: [0.6406, 0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750]}), (v42:Vec {id: 42, score_vec: [0.6562, 0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906]}), (v43:Vec {id: 43, score_vec: [0.6719, 0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906, 0.9062]}), (v44:Vec {id: 44, score_vec: [0.6875, 0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906, 0.9062, 0.9219]}), \
+(v45:Vec {id: 45, score_vec: [0.7031, 0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906, 0.9062, 0.9219, 0.9375]}), (v46:Vec {id: 46, score_vec: [0.7188, 0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906, 0.9062, 0.9219, 0.9375, 0.9531]}), (v47:Vec {id: 47, score_vec: [0.7344, 0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906, 0.9062, 0.9219, 0.9375, 0.9531, 0.9688]}), (v48:Vec {id: 48, score_vec: [0.7500, 0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906, 0.9062, 0.9219, 0.9375, 0.9531, 0.9688, 0.9844]}), (v49:Vec {id: 49, score_vec: [0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, 0.8750, 0.8906, 0.9062, 0.9219, 0.9375, 0.9531, 0.9688, 0.9844, 1.0000]})";
 
 #[cfg(test)]
 mod tests {
@@ -308,5 +370,80 @@ mod tests {
     fn kind_serde_snake_case_small() {
         let s = serde_json::to_string(&DatasetKind::Small).unwrap();
         assert_eq!(s, "\"small\"");
+    }
+
+    // ── VectorSmallDataset ──────────────────────────────────────
+
+    #[test]
+    fn vector_small_metadata_matches_literal() {
+        let d = VectorSmallDataset;
+        assert_eq!(d.kind(), DatasetKind::VectorSmall);
+        assert_eq!(d.name(), "vector_small");
+        assert_eq!(d.node_count(), 50);
+        assert_eq!(d.rel_count(), 0);
+    }
+
+    #[test]
+    fn vector_small_load_is_single_statement() {
+        let s = VectorSmallDataset.load_statement();
+        assert_eq!(s.matches("CREATE ").count(), 1, "must be a single CREATE");
+        assert!(!s.contains("MATCH"), "must not contain MATCH");
+        // Sanity: no relationship section — VectorSmall carries
+        // only node literals.
+        assert!(
+            !s.contains("-[:"),
+            "VectorSmall must carry no relationships"
+        );
+    }
+
+    #[test]
+    fn vector_small_load_has_fifty_vec_nodes() {
+        let s = VectorSmallDataset.load_statement();
+        // Every node binds a `vN:Vec` variable — count those
+        // literally.
+        for id in 0..50 {
+            let needle = format!("(v{id}:Vec ");
+            assert!(
+                s.contains(&needle),
+                "node variable {needle} missing from literal"
+            );
+        }
+    }
+
+    #[test]
+    fn vector_small_load_has_score_vec_16_dim() {
+        // Every literal should list exactly 16 comma-separated
+        // floats inside its `score_vec: [...]` block. Counting
+        // commas in the whole literal is a weak proxy, so instead
+        // pick a known row and check its slice.
+        let s = VectorSmallDataset.load_statement();
+        // The v0 vector starts with 0.0000.
+        assert!(
+            s.contains(
+                "score_vec: [0.0000, 0.0156, 0.0312, 0.0469, 0.0625, 0.0781, 0.0938, \
+                 0.1094, 0.1250, 0.1406, 0.1562, 0.1719, 0.1875, 0.2031, 0.2188, 0.2344]"
+            ),
+            "v0 vector values or dimensionality drifted from the spec"
+        );
+        // And the v49 vector ends with 1.0000.
+        assert!(
+            s.contains(
+                "score_vec: [0.7656, 0.7812, 0.7969, 0.8125, 0.8281, 0.8438, 0.8594, \
+                 0.8750, 0.8906, 0.9062, 0.9219, 0.9375, 0.9531, 0.9688, 0.9844, 1.0000]"
+            ),
+            "v49 vector values or dimensionality drifted from the spec"
+        );
+    }
+
+    #[test]
+    fn vector_small_load_fits_in_request_body_budget() {
+        let s = VectorSmallDataset.load_statement();
+        assert!(s.len() < 16 * 1024, "literal is {} bytes", s.len());
+    }
+
+    #[test]
+    fn kind_serde_snake_case_vector_small() {
+        let s = serde_json::to_string(&DatasetKind::VectorSmall).unwrap();
+        assert_eq!(s, "\"vector_small\"");
     }
 }

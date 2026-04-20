@@ -36,7 +36,7 @@ use std::collections::HashSet;
 
 use clap::{Parser, ValueEnum};
 use nexus_bench::{
-    ComparativeRow, Dataset, RunConfig, SmallDataset, TinyDataset,
+    ComparativeRow, Dataset, RunConfig, SmallDataset, TinyDataset, VectorSmallDataset,
     client::{BenchClient, NexusRpcClient, NexusRpcCredentials},
     dataset::DatasetKind,
     harness::run_scenario,
@@ -324,6 +324,12 @@ fn load_dataset_kind<C: BenchClient>(
             SmallDataset.load_statement(),
             SmallDataset.node_count(),
             SmallDataset.rel_count(),
+        ),
+        DatasetKind::VectorSmall => (
+            VectorSmallDataset.name(),
+            VectorSmallDataset.load_statement(),
+            VectorSmallDataset.node_count(),
+            VectorSmallDataset.rel_count(),
         ),
     };
     println!("\u{25b6} loading {name} dataset on {label} (1 CREATE statement)...");

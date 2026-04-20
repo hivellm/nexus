@@ -1,7 +1,7 @@
 ## 1. Dataset expansion
 
 - [x] 1.1 `SmallDataset` — 50 nodes + 53 edges as a single CREATE literal (~2 KiB). Hub-plus-chain topology over a single `:P` label and `KNOWS` type; supports deterministic 1-hop / 2-hop / `*1..3` traversal counts
-- [ ] 1.2 `VectorSmallDataset` — 50 nodes with 16-dim `score_vec` property **[blocked — HNSW KNN via Cypher not yet exposed]**
+- [x] 1.2 `VectorSmallDataset` — 50 nodes with 16-dim `score_vec` property (all under `:Vec` label, 0 edges). Deterministic values `score_vec[j] = (i + j) / 64.0`, single CREATE, ~8 KiB literal. Scenarios *consuming* this dataset (§5.4 / §10) still depend on the KNN operator landing, but the fixture itself ships so the ingest path is exercisable today
 - [x] 1.3 Catalogue tests assert every new dataset's literal is a single CREATE statement (same guard as `TinyDataset`)
 
 ## 2. Scenario catalogue — split into submodules

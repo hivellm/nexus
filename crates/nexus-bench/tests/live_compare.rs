@@ -211,6 +211,9 @@ async fn comparative_seed_catalogue_completes() {
                 nexus_bench::dataset::TinyDataset.load_statement()
             }
             nexus_bench::dataset::DatasetKind::Small => nexus_bench::SmallDataset.load_statement(),
+            nexus_bench::dataset::DatasetKind::VectorSmall => {
+                nexus_bench::VectorSmallDataset.load_statement()
+            }
         };
         nexus
             .execute(load, timeout)
