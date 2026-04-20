@@ -52,10 +52,10 @@ cargo build -p nexus-bench --features live-bench --release --bin nexus-bench
 cargo build -p nexus-bench --features live-bench,neo4j --release --bin nexus-bench
 
 # Integration tests against live servers (all #[ignore]).
-NEXUS_BENCH_RPC_ADDR=127.0.0.1:7878 \
+NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
     cargo test -p nexus-bench --features live-bench -- --ignored
 
-NEXUS_BENCH_RPC_ADDR=127.0.0.1:7878 \
+NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
 NEO4J_BENCH_URL=bolt://127.0.0.1:17687 \
     cargo test -p nexus-bench --features live-bench,neo4j -- --ignored
 ```
@@ -69,11 +69,11 @@ NEO4J_BENCH_URL=bolt://127.0.0.1:17687 \
 ./target/release/nexus-server &
 
 # Dry run — HELLO + PING only, no Cypher sent:
-./target/release/nexus-bench --rpc-addr 127.0.0.1:7878
+./target/release/nexus-bench --rpc-addr 127.0.0.1:15475
 
 # Actual run — loads the tiny dataset, runs every seed scenario:
 ./target/release/nexus-bench \
-    --rpc-addr 127.0.0.1:7878 \
+    --rpc-addr 127.0.0.1:15475 \
     --i-have-a-server-running \
     --load-dataset
 ```
@@ -88,7 +88,7 @@ NEO4J_BENCH_URL=bolt://127.0.0.1:17687 \
 # runs every scenario against both, emits a Markdown report
 # with p50 / p95 / ratio / ⭐✅⚠️🚨 classification.
 ./target/release/nexus-bench \
-    --rpc-addr 127.0.0.1:7878 \
+    --rpc-addr 127.0.0.1:15475 \
     --neo4j-url bolt://127.0.0.1:17687 \
     --compare \
     --i-have-a-server-running \

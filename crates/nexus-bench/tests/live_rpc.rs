@@ -5,7 +5,7 @@
 //! nexus-bench` passes without touching the network. To run them:
 //!
 //! ```bash
-//! NEXUS_BENCH_RPC_ADDR=127.0.0.1:7878 \
+//! NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
 //!     cargo test -p nexus-bench --features live-bench -- --ignored
 //! ```
 //!

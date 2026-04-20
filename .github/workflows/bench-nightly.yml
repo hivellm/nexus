@@ -31,11 +31,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  NEXUS_RPC_ADDR: "127.0.0.1:7878"
+  NEXUS_RPC_ADDR: "127.0.0.1:15475"
   NEO4J_BENCH_URL: "bolt://127.0.0.1:17687"
   # Arms the comparative integration tests in tests/live_compare.rs
   # + the CLI's --compare flag without needing a custom step env.
-  NEXUS_BENCH_RPC_ADDR: "127.0.0.1:7878"
+  NEXUS_BENCH_RPC_ADDR: "127.0.0.1:15475"
 
 jobs:
   bench:
@@ -87,7 +87,7 @@ jobs:
           # at all. A simple TCP connect loop does the job without
           # dragging in extra tooling.
           for _ in $(seq 1 30); do
-            if bash -c "exec 3<>/dev/tcp/127.0.0.1/7878" 2>/dev/null; then
+            if bash -c "exec 3<>/dev/tcp/127.0.0.1/15475" 2>/dev/null; then
               echo "Nexus RPC listener reachable"
               exec 3>&-
               break

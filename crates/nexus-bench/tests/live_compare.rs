@@ -8,7 +8,7 @@
 //! point the harness at both engines and pass `-- --ignored`:
 //!
 //! ```bash
-//! NEXUS_BENCH_RPC_ADDR=127.0.0.1:7878 \
+//! NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
 //! NEO4J_BENCH_URL=bolt://127.0.0.1:17687 \
 //!     cargo test -p nexus-bench --features live-bench,neo4j -- --ignored
 //! ```

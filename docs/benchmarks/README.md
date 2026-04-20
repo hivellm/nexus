@@ -22,7 +22,7 @@ cargo build --release -p nexus-bench --features live-bench,neo4j --bin nexus-ben
 
 # 4. run the comparative harness
 ./target/release/nexus-bench \
-    --rpc-addr 127.0.0.1:7878 \
+    --rpc-addr 127.0.0.1:15475 \
     --neo4j-url bolt://127.0.0.1:17687 \
     --compare \
     --i-have-a-server-running \
@@ -67,7 +67,7 @@ The Neo4j container lives in `scripts/bench/`:
 
 | Service | Internal | Host |
 |---|---|---|
-| Nexus RPC | `:7878` (default) | `:7878` |
+| Nexus RPC | `:15475` (default per `RpcConfig::default()`) | `:15475` |
 | Neo4j Bolt | `:7687` | `:17687` |
 | Neo4j HTTP (admin) | `:7474` | `:17474` |
 
@@ -168,7 +168,7 @@ Four `#[ignore]` tests live in
 Arm them with both env vars + `-- --ignored`:
 
 ```bash
-NEXUS_BENCH_RPC_ADDR=127.0.0.1:7878 \
+NEXUS_BENCH_RPC_ADDR=127.0.0.1:15475 \
 NEO4J_BENCH_URL=bolt://127.0.0.1:17687 \
     cargo test -p nexus-bench --features live-bench,neo4j --test live_compare -- --ignored
 ```
