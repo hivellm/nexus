@@ -73,7 +73,7 @@
 - [x] 10.1 Grammar coverage recorded in this task's `tasks.md` + `proposal.md`. Full `cypher-subset.md` update batched with the parent task `phase6_opencypher-advanced-types` which will rewrite the whole matrix.
 - [x] 10.2 Coverage-table delta captured in `proposal.md`'s §7 rollout statement (55% → ~65%). The on-disk compatibility report updates lands when the parent advanced-types task ships.
 - [x] 10.3 CHANGELOG batch-line `"Added openCypher quickwins (type-check predicates, list converters, isEmpty, left/right, dynamic property access, SET +=, exists(prop), read-only dynamic labels)"` batched with the commit series rather than duplicated here.
-- [x] 10.4 Documentation-of-record is this task's proposal.md + tasks.md. Each new function has a brief doc comment on its `match` arm in `projection.rs` citing the § it implements and the error shape it returns.
-- [x] 10.5 Regression tests listed under §1–§8. All live in `crates/nexus-core/src/engine/tests.rs`.
-- [x] 10.6 `cargo +nightly test --package nexus-core --lib` reports 1741 pass / 0 fail / 12 ignored.
+- [x] 10.4 Update or create documentation covering the implementation — documentation-of-record is this task's proposal.md + tasks.md. Each new function has a brief doc comment on its `match` arm in `projection.rs` citing the § it implements and the error shape it returns.
+- [x] 10.5 Write tests covering the new behavior — regression tests listed under §1–§8. All live in `crates/nexus-core/src/engine/tests.rs`.
+- [x] 10.6 Run tests and confirm they pass — `cargo +nightly test --package nexus-core --lib` reports 1741 pass / 0 fail / 12 ignored.
 - [x] 10.7 `cargo +nightly fmt --all` and `cargo +nightly clippy --package nexus-core --lib --all-features -- -D warnings` both green.
