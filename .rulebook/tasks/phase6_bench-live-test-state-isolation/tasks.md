@@ -21,4 +21,4 @@
 
 - [ ] 4.1 Update or create documentation covering the implementation — crate README's "Integration tests" section, `docs/benchmarks/README.md` Integration-tests block
 - [x] 4.2 Write tests covering the new behavior — unit tests for each `reset` impl via the mock-client pattern already used by `harness.rs`, plus the `isolation_between_tests_works` ignored test
-- [ ] 4.3 Run tests and confirm they pass — `cargo +nightly test -p nexus-bench --features live-bench,neo4j -- --ignored` must pass in a single invocation against long-running servers **[BLOCKED on `phase6_nexus-delete-executor-bug` — Nexus's executor treats `MATCH (n) DETACH DELETE n` as a no-op, verified in commit `a6caa38e`. The reset infra + Neo4j side work; the Nexus side cannot pass until the underlying DELETE bug is fixed.]**
+- [x] 4.3 Run tests and confirm they pass — 9/9 `#[ignore]` tests pass against a live Nexus + docker Neo4j as a single `cargo test -p nexus-bench --features live-bench,neo4j -- --ignored` invocation (unblocked by `phase6_nexus-delete-executor-bug` fix, commit `d46e2cfc`)
