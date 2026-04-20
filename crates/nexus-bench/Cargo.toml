@@ -49,6 +49,10 @@ default = []
 # that touch a running server. Off by default so `cargo build` and
 # `cargo test` stay cheap and sandboxed.
 live-bench = ["dep:reqwest", "dep:tokio"]
+# Adds the Neo4j Bolt BenchClient on top of `live-bench`. Split out
+# so CI jobs that only care about the Nexus-only flow don't pull in
+# `neo4rs` + its tokio-based transport stack.
+neo4j = ["live-bench", "dep:neo4rs"]
 
 [dependencies]
 serde.workspace = true
@@ -63,6 +67,9 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ], optional = true }
 tokio = { workspace = true, optional = true }
+# Gated on `neo4j`. Pinned to 0.8 — the latest 0.x stable as of
+# 2026-04-20. 0.9.x is pre-release at time of writing.
+neo4rs = { version = "0.8", optional = true }
 
 [dev-dependencies]
 # Only the pure-logic tests depend on this; the integration tests

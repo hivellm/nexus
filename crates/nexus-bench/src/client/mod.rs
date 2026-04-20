@@ -4,13 +4,11 @@
 //! backend that satisfies the narrow contract (execute Cypher, return
 //! rows, honour the timeout) plugs in without touching the runner.
 //!
-//! Current implementation:
+//! Current implementations:
 //!
 //! * [`http::HttpClient`] — Nexus's REST `/cypher` endpoint.
-//!
-//! A Bolt client for Neo4j (`Neo4jBoltClient`) slots in as a sibling
-//! module behind a dedicated feature flag in a follow-up commit —
-//! the trait and shared types here are already shaped for it.
+//! * [`neo4j::Neo4jBoltClient`] — Neo4j over the Bolt protocol
+//!   (additionally gated on the `neo4j` feature).
 //!
 //! Every client wraps each RPC in `tokio::time::timeout` and performs
 //! a short health probe on connect so the harness fails fast when
@@ -24,6 +22,11 @@ use crate::harness::{BenchExecute, ExecResult};
 
 pub mod http;
 pub use http::HttpClient;
+
+#[cfg(feature = "neo4j")]
+pub mod neo4j;
+#[cfg(feature = "neo4j")]
+pub use neo4j::Neo4jBoltClient;
 
 /// Row shape — one cell per column, in column order. Matches the
 /// Neo4j-compatible array format Nexus's REST `/cypher` returns.

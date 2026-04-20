@@ -38,3 +38,6 @@ pub use scenario::{Scenario, ScenarioBuilder};
 
 #[cfg(feature = "live-bench")]
 pub use client::{BenchClient, ClientError, ExecOutcome, HttpClient};
+
+#[cfg(feature = "neo4j")]
+pub use client::Neo4jBoltClient;
