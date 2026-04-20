@@ -2,9 +2,12 @@
 //!
 //! # Contract
 //!
-//! * **HTTP-only**. No `nexus-core` dep. The client speaks to a Nexus
-//!   server the operator has started themselves; the harness cannot
-//!   instantiate an engine.
+//! * **Native RPC only**. No `nexus-core` dep, no HTTP. The Nexus
+//!   side speaks the length-prefixed MessagePack wire defined in
+//!   `nexus_protocol::rpc` to a server the operator has started
+//!   themselves; the harness cannot instantiate an engine. HTTP/JSON
+//!   is intentionally not supported — a Bolt↔HTTP comparison would
+//!   measure serialisation overhead rather than engine work.
 //! * **Unit tests never hit the network**. Every module here is
 //!   pure-logic — `Scenario`, `Classification`, `ComparativeRow`, the
 //!   Markdown / JSON emitters, the `TinyDataset` generator (which
@@ -37,7 +40,7 @@ pub use report::{Classification, ComparativeRow, json::JsonReport, markdown::Mar
 pub use scenario::{Scenario, ScenarioBuilder};
 
 #[cfg(feature = "live-bench")]
-pub use client::{BenchClient, ClientError, ExecOutcome, HttpClient};
+pub use client::{BenchClient, ClientError, ExecOutcome, NexusRpcClient, NexusRpcCredentials};
 
 #[cfg(feature = "neo4j")]
 pub use client::Neo4jBoltClient;

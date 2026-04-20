@@ -6,7 +6,11 @@
 //!
 //! Current implementations:
 //!
-//! * [`http::HttpClient`] — Nexus's REST `/cypher` endpoint.
+//! * [`rpc::NexusRpcClient`] — Nexus native length-prefixed
+//!   MessagePack RPC. This is the **only** Nexus-side transport
+//!   the bench speaks: HTTP/JSON is intentionally not an option so
+//!   comparative runs against Neo4j's Bolt side measure engine
+//!   work, not JSON serialisation overhead.
 //! * [`neo4j::Neo4jBoltClient`] — Neo4j over the Bolt protocol
 //!   (additionally gated on the `neo4j` feature).
 //!
@@ -20,16 +24,15 @@ use thiserror::Error;
 
 use crate::harness::{BenchExecute, ExecResult};
 
-pub mod http;
-pub use http::HttpClient;
+pub mod rpc;
+pub use rpc::{NexusRpcClient, NexusRpcCredentials};
 
 #[cfg(feature = "neo4j")]
 pub mod neo4j;
 #[cfg(feature = "neo4j")]
 pub use neo4j::Neo4jBoltClient;
 
-/// Row shape — one cell per column, in column order. Matches the
-/// Neo4j-compatible array format Nexus's REST `/cypher` returns.
+/// Row shape — one cell per column, in column order.
 pub type Row = Vec<serde_json::Value>;
 
 /// Minimal outcome a client publishes; the harness converts to
@@ -43,12 +46,9 @@ pub struct ExecOutcome {
 /// Errors a bench client can surface.
 #[derive(Debug, Error)]
 pub enum ClientError {
-    /// Transport-level failure: connect refused, DNS, TLS.
+    /// Transport-level failure: connect refused, DNS, I/O read/write.
     #[error("transport error: {0}")]
     Transport(String),
-    /// HTTP server answered but with a non-2xx status.
-    #[error("HTTP {status}: {body}")]
-    Http { status: u16, body: String },
     /// Bolt-level error from Neo4j. Kept distinct from
     /// [`Self::Transport`] so the harness can tell driver bugs apart
     /// from server rejections.
@@ -68,7 +68,7 @@ pub enum ClientError {
 }
 
 /// Narrow trait every bench client must satisfy. The harness is
-/// generic over this, so the HTTP client + the Bolt client + any
+/// generic over this, so the RPC client + the Bolt client + any
 /// future transport plug in without touching the runner.
 pub trait BenchClient: Send + Sync {
     /// Label reported in the engine column of the report.
@@ -114,10 +114,6 @@ mod tests {
         // error surfacing.
         let cases = [
             ClientError::Transport("x".into()),
-            ClientError::Http {
-                status: 500,
-                body: "y".into(),
-            },
             ClientError::Bolt("z".into()),
             ClientError::BadResponse("w".into()),
             ClientError::Timeout(Duration::from_secs(1)),

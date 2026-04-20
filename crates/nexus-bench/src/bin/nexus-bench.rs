@@ -1,7 +1,12 @@
 //! `nexus-bench` CLI — runs the seed catalogue against a
-//! **running** Nexus server over HTTP, and optionally against a
-//! Neo4j server in comparative mode. Never starts an engine by
-//! itself.
+//! **running** Nexus server over the native RPC protocol, and
+//! optionally against a Neo4j server in comparative mode. Never
+//! starts an engine by itself.
+//!
+//! Transport: Nexus-side goes over the native length-prefixed
+//! MessagePack RPC defined in `nexus_protocol::rpc`. HTTP is
+//! intentionally not a transport — see the crate docs for the
+//! Bolt↔HTTP fairness argument.
 //!
 //! Guard rails (see the crate docs for rationale):
 //!
@@ -9,17 +14,17 @@
 //!   the debug engine is 10–100× slower than release. Override with
 //!   `NEXUS_BENCH_ALLOW_DEBUG=1`.
 //! * **Explicit server flag** — `--i-have-a-server-running` is
-//!   required before any Cypher fires against the target URL.
-//!   Without it the CLI does a `/health` probe and exits 0 — a
+//!   required before any Cypher fires against the target server.
+//!   Without it the CLI does a HELLO+PING probe and exits 0 — a
 //!   no-op that verifies reachability.
-//! * **2 s `/health` probe** — fail fast if the server isn't up.
+//! * **2 s PING probe** — fail fast if the RPC listener isn't up.
 //! * **Hard per-scenario timeout** — the harness clamps both the
 //!   scenario timeout and the measured-iteration count to values the
 //!   shipped [`nexus_bench::scenario`] module enforces.
 //!
 //! Compiled features:
 //!
-//! * `live-bench` (required by this binary) — HTTP client + scenario
+//! * `live-bench` (required by this binary) — RPC client + scenario
 //!   runner.
 //! * `neo4j` (optional) — adds `--neo4j-url` + `--compare` so the
 //!   CLI can benchmark a Neo4j server alongside Nexus and emit a
@@ -30,7 +35,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use nexus_bench::{
     ComparativeRow, Dataset, RunConfig, TinyDataset,
-    client::{BenchClient, HttpClient},
+    client::{BenchClient, NexusRpcClient, NexusRpcCredentials},
     harness::run_scenario,
     report::{json::JsonReport, markdown::MarkdownReport},
     scenario_catalog::seed_scenarios,
@@ -49,19 +54,33 @@ enum OutputFormat {
 #[derive(Debug, Parser)]
 #[command(
     name = "nexus-bench",
-    about = "Nexus ↔ Neo4j comparative benchmark harness (HTTP-only for Nexus, Bolt for Neo4j).",
-    long_about = "Runs benchmark scenarios against a Nexus server that is already listening for HTTP requests.\n\
-                  Does NOT start a server or an engine. You must pass --i-have-a-server-running + a reachable --url.\n\
+    about = "Nexus ↔ Neo4j comparative benchmark harness (native RPC for Nexus, Bolt for Neo4j).",
+    long_about = "Runs benchmark scenarios against a Nexus RPC listener that is already bound on --rpc-addr.\n\
+                  Does NOT start a server or an engine. You must pass --i-have-a-server-running + a reachable --rpc-addr.\n\
                   With --compare + --neo4j-url (requires `neo4j` feature), each scenario additionally runs against Neo4j via Bolt."
 )]
 struct Args {
-    /// Base URL of a running Nexus HTTP server. Required.
-    #[arg(long, env = "NEXUS_BENCH_URL")]
-    url: String,
+    /// TCP address of the Nexus RPC listener (`host:port`). Required.
+    #[arg(long, env = "NEXUS_BENCH_RPC_ADDR")]
+    rpc_addr: String,
+
+    /// Optional API key for `AUTH` handshake. Skipped when the
+    /// server is running with authentication disabled.
+    #[arg(long, env = "NEXUS_BENCH_API_KEY")]
+    rpc_api_key: Option<String>,
+
+    /// Optional username for the `AUTH user pass` handshake form.
+    /// Paired with `--rpc-password`.
+    #[arg(long, env = "NEXUS_BENCH_USER")]
+    rpc_user: Option<String>,
+
+    /// Optional password paired with `--rpc-user`.
+    #[arg(long, env = "NEXUS_BENCH_PASSWORD")]
+    rpc_password: Option<String>,
 
     /// Explicit acknowledgement that this run WILL send Cypher
-    /// queries to the target URL. Without this flag the CLI only
-    /// performs a `/health` probe + exits 0 — a dry run.
+    /// queries to the target server. Without this flag the CLI only
+    /// performs the HELLO + PING probe + exits 0 — a dry run.
     #[arg(long)]
     i_have_a_server_running: bool,
 
@@ -148,13 +167,29 @@ fn enforce_release_build() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn rpc_credentials(args: &Args) -> NexusRpcCredentials {
+    NexusRpcCredentials {
+        api_key: args.rpc_api_key.clone(),
+        username: args.rpc_user.clone(),
+        password: args.rpc_password.clone(),
+    }
+}
+
 async fn run(args: Args) -> anyhow::Result<()> {
     let handle = tokio::runtime::Handle::current();
 
-    println!("\u{25b6} probing {} for /health ...", args.url);
-    let mut nexus_client =
-        HttpClient::connect(args.url.clone(), args.engine_label.clone(), handle.clone()).await?;
-    println!("\u{2713} nexus server reachable.");
+    println!(
+        "\u{25b6} probing Nexus RPC {} (HELLO + PING) ...",
+        args.rpc_addr
+    );
+    let mut nexus_client = NexusRpcClient::connect(
+        &args.rpc_addr,
+        rpc_credentials(&args),
+        args.engine_label.clone(),
+        handle.clone(),
+    )
+    .await?;
+    println!("\u{2713} nexus server reachable over RPC.");
 
     #[cfg(feature = "neo4j")]
     let mut neo4j_client = connect_neo4j_if_requested(&args, handle.clone()).await?;
@@ -223,10 +258,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
 /// between the Nexus side and (when `neo4j` is enabled) the Neo4j
 /// side so both engines see an identical seed.
 fn load_tiny_dataset<C: BenchClient>(client: &mut C, label: &str) -> anyhow::Result<()> {
-    println!(
-        "\u{25b6} loading tiny dataset on {} (1 CREATE statement)...",
-        label
-    );
+    println!("\u{25b6} loading tiny dataset on {label} (1 CREATE statement)...");
     let load = TinyDataset.load_statement();
     let out = client.execute(load, std::time::Duration::from_secs(30))?;
     println!(
@@ -252,10 +284,7 @@ async fn connect_neo4j_if_requested(
             "--compare requires --neo4j-url (or NEO4J_BENCH_URL) to point at a running Neo4j"
         )
     })?;
-    println!(
-        "\u{25b6} probing Neo4j {} for bolt HELLO + RETURN 1 ...",
-        url
-    );
+    println!("\u{25b6} probing Neo4j {url} for bolt HELLO + RETURN 1 ...");
     let client = Neo4jBoltClient::connect(
         url,
         &args.neo4j_user,
