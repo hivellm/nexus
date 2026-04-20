@@ -1,24 +1,24 @@
 {
-  "version": "5.3.3",
-  "installedAt": "2026-04-18T03:07:48.338Z",
-  "updatedAt": "2026-04-18T03:07:48.339Z",
-  "projectId": "6b0ccbf2-a5ec-4f26-94ca-c8ea42dfb196",
+  "version": "5.4.0",
+  "installedAt": "2026-04-20T18:20:32.487Z",
+  "updatedAt": "2026-04-20T18:20:32.488Z",
+  "projectId": "Nexus",
   "mode": "full",
   "features": {
-    "watcher": true,
-    "agent": true,
+    "watcher": false,
+    "agent": false,
     "logging": true,
-    "telemetry": true,
+    "telemetry": false,
     "notifications": false,
     "dryRun": false,
-    "gitHooks": false,
+    "gitHooks": true,
     "repl": false,
-    "templates": false,
-    "context": false,
-    "health": false,
+    "templates": true,
+    "context": true,
+    "health": true,
     "plugins": false,
-    "parallel": false,
-    "smartContinue": false
+    "parallel": true,
+    "smartContinue": true
   },
   "coverageThreshold": 95,
   "language": "en",
@@ -62,20 +62,6 @@
       "requireApprovalForStories": "all"
     }
   },
-  "agentsMode": "lean",
-  "monorepo": {
-    "detected": false,
-    "tool": null,
-    "packages": []
-  },
-  "languages": [
-    "rust",
-    "python"
-  ],
-  "frameworks": [],
-  "modules": [],
-  "modular": true,
-  "rulebookDir": ".rulebook",
   "skills": {
     "enabled": [
       "languages/rust",
@@ -115,5 +101,6 @@
       "core/token-optimization",
       "core/workspace"
     ]
-  }
+  },
+  "agentsMode": "lean"
 }

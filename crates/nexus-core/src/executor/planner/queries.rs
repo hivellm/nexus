@@ -221,6 +221,13 @@ impl<'a> QueryPlanner<'a> {
         let mut with_operators: Vec<(Vec<ReturnItem>, bool, Option<Expression>)> = Vec::new(); // Collect WITH clauses with optional WHERE
         let mut with_has_aggregation = false; // Track if WITH clause has aggregation
         let mut with_aggregation_where: Option<Expression> = None; // Track WHERE from WITH with aggregation
+        // phase6 §5 — When WITH carries the aggregation and RETURN only
+        // references the WITH aliases (optionally wrapping them in a
+        // non-aggregate expression like `hi > 0.99`), keep RETURN's
+        // items separately so we can emit a post-aggregation Project
+        // that evaluates them. Pre-fix the RETURN items were silently
+        // discarded and the WITH projection leaked through.
+        let mut post_aggregation_return_items: Option<Vec<ReturnItem>> = None;
         let mut match_hints = Vec::new(); // Collect hints from MATCH clauses
         let mut order_by_clause: Option<(Vec<String>, Vec<bool>)> = None; // Collect ORDER BY to add after projection
 
@@ -385,6 +392,15 @@ impl<'a> QueryPlanner<'a> {
                         tracing::debug!(
                             "WITH has aggregation, RETURN references aliases - keeping WITH items"
                         );
+                        // phase6 §5 — Stash RETURN's items so the planner
+                        // can emit a Project AFTER the Aggregate that
+                        // evaluates expressions like `hi > 0.99 AS any_high`
+                        // on top of the aggregated aliases. Previously
+                        // these items were silently dropped and the
+                        // aggregation's raw output shape leaked through
+                        // as the final result.
+                        post_aggregation_return_items = Some(return_clause.items.clone());
+                        return_distinct = return_clause.distinct || return_distinct;
                     } else {
                         return_items = return_clause.items.clone();
                         return_distinct = return_clause.distinct;
@@ -506,6 +522,48 @@ impl<'a> QueryPlanner<'a> {
                 &with_aggregation_where,
                 &mut operators,
             )?;
+        }
+
+        // phase6 §5 — append a Project for RETURN's items when WITH
+        // carried the aggregation. The aggregation planner built its
+        // operator tree from WITH's items (so `count(n) AS total` and
+        // `max(n.score) AS hi` are emitted correctly by the Aggregate
+        // operator), but the RETURN's expressions (e.g. `hi > 0.99 AS
+        // any_high`) still need to run on top of the aggregate's
+        // output. Without this step the bench's subquery.exists_high_score,
+        // subquery.size_of_collect, and subquery.with_filter_count
+        // scenarios returned the raw aggregation shape instead of the
+        // projected RETURN shape.
+        if let Some(ref final_items) = post_aggregation_return_items {
+            let projection_items: Vec<ProjectionItem> = final_items
+                .iter()
+                .map(|item| {
+                    let alias = item.alias.clone().unwrap_or_else(|| {
+                        self.expression_to_string(&item.expression)
+                            .unwrap_or_else(|_| "expr".to_string())
+                    });
+                    ProjectionItem {
+                        alias,
+                        expression: item.expression.clone(),
+                    }
+                })
+                .collect();
+
+            // Insert before LIMIT if it exists, otherwise append.
+            // Also keep it AFTER any ORDER BY Sort so sorting happens on
+            // pre-projection values (openCypher allows ORDER BY
+            // referencing WITH aliases that the RETURN projection might
+            // rename away).
+            let insert_pos = operators
+                .iter()
+                .position(|op| matches!(op, Operator::Limit { .. }))
+                .unwrap_or(operators.len());
+            operators.insert(
+                insert_pos,
+                Operator::Project {
+                    items: projection_items,
+                },
+            );
         }
 
         // Add UNWIND operators BEFORE WITH when there are no patterns AND there are WITH operators
@@ -803,6 +861,100 @@ impl<'a> QueryPlanner<'a> {
                                                 .alias
                                                 .clone()
                                                 .unwrap_or_else(|| "max".to_string()),
+                                        });
+                                    }
+                                }
+                                // phase6 §9 — statistical aggregations: same shape as
+                                // min / max / avg. Without these arms the planner fell
+                                // through to the "not an aggregate" branch and emitted
+                                // a per-row projection — so `MATCH (n:A) RETURN
+                                // stdev(n.score)` returned one row per node instead of
+                                // one aggregated row.
+                                "stdev" => {
+                                    has_aggregation = true;
+                                    if let Some(arg) = args.first() {
+                                        let column = match arg {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::StDev {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "stdev".to_string()),
+                                        });
+                                    }
+                                }
+                                "stdevp" => {
+                                    has_aggregation = true;
+                                    if let Some(arg) = args.first() {
+                                        let column = match arg {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::StDevP {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "stdevp".to_string()),
+                                        });
+                                    }
+                                }
+                                "percentilecont" => {
+                                    has_aggregation = true;
+                                    if args.len() >= 2 {
+                                        let column = match &args[0] {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            _ => continue,
+                                        };
+                                        let percentile = match &args[1] {
+                                            Expression::Literal(Literal::Float(f)) => *f,
+                                            Expression::Literal(Literal::Integer(i)) => *i as f64,
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::PercentileCont {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "percentileCont".to_string()),
+                                            percentile,
+                                        });
+                                    }
+                                }
+                                "percentiledisc" => {
+                                    has_aggregation = true;
+                                    if args.len() >= 2 {
+                                        let column = match &args[0] {
+                                            Expression::Variable(var) => var.clone(),
+                                            Expression::PropertyAccess { variable, property } => {
+                                                format!("{}.{}", variable, property)
+                                            }
+                                            _ => continue,
+                                        };
+                                        let percentile = match &args[1] {
+                                            Expression::Literal(Literal::Float(f)) => *f,
+                                            Expression::Literal(Literal::Integer(i)) => *i as f64,
+                                            _ => continue,
+                                        };
+                                        aggregations.push(Aggregation::PercentileDisc {
+                                            column,
+                                            alias: item
+                                                .alias
+                                                .clone()
+                                                .unwrap_or_else(|| "percentileDisc".to_string()),
+                                            percentile,
                                         });
                                     }
                                 }
@@ -1520,6 +1672,100 @@ impl<'a> QueryPlanner<'a> {
                                     });
                                 }
                             }
+                            // phase6 §9 — statistical aggregations on the MATCH+RETURN
+                            // path. Same shape as min/max/avg above; without them the
+                            // planner's `_ =>` arm dropped into the nested-aggregation
+                            // probe and emitted a scalar projection that returned zero
+                            // rows, so `MATCH (n:A) RETURN stdev(n.score)` yielded
+                            // nothing instead of one aggregated row.
+                            "stdev" => {
+                                has_aggregation = true;
+                                if let Some(arg) = args.first() {
+                                    let column = match arg {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
+                                    aggregations.push(Aggregation::StDev {
+                                        column,
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "stdev".to_string()),
+                                    });
+                                }
+                            }
+                            "stdevp" => {
+                                has_aggregation = true;
+                                if let Some(arg) = args.first() {
+                                    let column = match arg {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
+                                    aggregations.push(Aggregation::StDevP {
+                                        column,
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "stdevp".to_string()),
+                                    });
+                                }
+                            }
+                            "percentilecont" => {
+                                has_aggregation = true;
+                                if args.len() >= 2 {
+                                    let column = match &args[0] {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
+                                    let percentile = match &args[1] {
+                                        Expression::Literal(Literal::Float(f)) => *f,
+                                        Expression::Literal(Literal::Integer(i)) => *i as f64,
+                                        _ => continue,
+                                    };
+                                    aggregations.push(Aggregation::PercentileCont {
+                                        column,
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "percentileCont".to_string()),
+                                        percentile,
+                                    });
+                                }
+                            }
+                            "percentiledisc" => {
+                                has_aggregation = true;
+                                if args.len() >= 2 {
+                                    let column = match &args[0] {
+                                        Expression::Variable(var) => var.clone(),
+                                        Expression::PropertyAccess { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => continue,
+                                    };
+                                    let percentile = match &args[1] {
+                                        Expression::Literal(Literal::Float(f)) => *f,
+                                        Expression::Literal(Literal::Integer(i)) => *i as f64,
+                                        _ => continue,
+                                    };
+                                    aggregations.push(Aggregation::PercentileDisc {
+                                        column,
+                                        alias: item
+                                            .alias
+                                            .clone()
+                                            .unwrap_or_else(|| "percentileDisc".to_string()),
+                                        percentile,
+                                    });
+                                }
+                            }
                             _ => {
                                 // Not an aggregate function, but might contain nested aggregations
                                 // Check if any argument contains an aggregation
@@ -1681,7 +1927,20 @@ impl<'a> QueryPlanner<'a> {
                         Expression::FunctionCall { name, args } => {
                             let func_name = name.to_lowercase();
                             match func_name.as_str() {
-                                "count" | "sum" | "avg" | "min" | "max" | "collect" => {
+                                // phase6 §9 — statistical aggregations belong in the
+                                // same required_columns tracking as count/sum/avg so
+                                // Project retains the referenced column for Aggregate
+                                // to consume.
+                                "count"
+                                | "sum"
+                                | "avg"
+                                | "min"
+                                | "max"
+                                | "collect"
+                                | "stdev"
+                                | "stdevp"
+                                | "percentilecont"
+                                | "percentiledisc" => {
                                     // Skip DISTINCT marker if present
                                     let real_args =
                                         if let Some(Expression::Variable(var)) = args.first() {
@@ -1806,9 +2065,22 @@ impl<'a> QueryPlanner<'a> {
                     if let Expression::FunctionCall { name, .. } = &item.expression {
                         let func_name = name.to_lowercase();
                         // Check if this is a non-aggregate function that contains nested aggregations
+                        // phase6 §9 — statistical aggregations must be recognised here too,
+                        // otherwise the planner mistakes stdev/percentileCont for a
+                        // wrapper around an aggregate and emits a redundant
+                        // post-aggregation Project, which silently drops rows.
                         if !matches!(
                             func_name.as_str(),
-                            "count" | "sum" | "avg" | "min" | "max" | "collect"
+                            "count"
+                                | "sum"
+                                | "avg"
+                                | "min"
+                                | "max"
+                                | "collect"
+                                | "stdev"
+                                | "stdevp"
+                                | "percentilecont"
+                                | "percentiledisc"
                         ) && self.contains_aggregation(&item.expression)
                         {
                             // Replace nested aggregations with variable references
@@ -2315,9 +2587,27 @@ impl<'a> QueryPlanner<'a> {
             Expression::FunctionCall { name, args } => {
                 let func_name = name.to_lowercase();
                 // Check if this is an aggregation function
+                // phase6 §9 — statistical aggregations must trigger the
+                // same row-collapse path as count/sum/avg. Before adding
+                // these, `MATCH (n:A) RETURN stdev(n.score)` returned
+                // 20 rows (one per matched :A node) instead of one
+                // aggregated row because the planner didn't treat
+                // stdev/variance/percentile* as aggregations and so
+                // never introduced the Aggregate operator.
                 if matches!(
                     func_name.as_str(),
-                    "count" | "sum" | "avg" | "min" | "max" | "collect"
+                    "count"
+                        | "sum"
+                        | "avg"
+                        | "min"
+                        | "max"
+                        | "collect"
+                        | "stdev"
+                        | "stdevp"
+                        | "variance"
+                        | "variancep"
+                        | "percentilecont"
+                        | "percentiledisc"
                 ) {
                     return true;
                 }
@@ -2979,3 +3269,4 @@ impl<'a> QueryPlanner<'a> {
         Ok(result)
     }
 }
+

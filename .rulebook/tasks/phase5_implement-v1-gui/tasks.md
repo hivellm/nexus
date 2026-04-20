@@ -82,3 +82,7 @@
 - [ ] 8.4 Update CHANGELOG.md with v0.7.0
 - [ ] 8.5 Run all quality checks
 
+## 9. Tail (mandatory — enforced by rulebook v5.3.0)
+- [ ] 9.1 Update or create documentation covering the implementation
+- [ ] 9.2 Write tests covering the new behavior
+- [ ] 9.3 Run tests and confirm they pass

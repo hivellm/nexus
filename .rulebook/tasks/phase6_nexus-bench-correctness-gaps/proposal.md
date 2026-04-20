@@ -18,6 +18,87 @@ lands, the bench is re-run, the numbers in this file's *current
 state* section move from "wrong" to "matched", and eventually
 the full catalogue runs content-clean.
 
+## Progress log (partial landing, 2026-04-20)
+
+Not every bug in the catalogue landed in one pass — §1, §2, §3, §5
+carry dependencies into other subsystems that made "land the narrow
+fix here" unsafe without a wider refactor. The in-pass punch list:
+
+- **§4 Integer arithmetic** — **DONE**. `crates/nexus-core/src/executor/eval/arithmetic.rs`
+  now runs an integer-preserving fast path (with `checked_*` overflow
+  → f64 fallback) across add/subtract/multiply/divide/modulo.
+  Regression test: `integer_only_arithmetic_stays_integer` (`crates/nexus-core/src/engine/tests.rs`).
+- **§7 ORDER BY null polarity** — **DONE**. `execute_sort` /
+  `execute_top_k_sort` now consult a `cypher_null_aware_order` helper
+  that places NULLs last in ASC, first in DESC, without changing the
+  base predicate comparator (so `<` / `>` / WHERE evaluation keep
+  their existing contract). Regression test:
+  `order_by_null_positioning_matches_opencypher`. Caveat: the bench
+  query shape `RETURN n.name ORDER BY n.score DESC LIMIT 5` also
+  needs the sort-column-not-in-projection resolution, which is a
+  separate, pre-existing planner bug and not part of §7 — the bench
+  scenario will still diverge until that is closed. Regression test
+  projects `n.score` explicitly to isolate the null-polarity fix.
+- **§8 DELETE after CREATE (engine-level)** — **PARTIALLY DONE**. The
+  engine's "DELETE requires MATCH clause" check at
+  `crates/nexus-core/src/engine/mod.rs` now accepts CREATE-bound
+  variables too; `CREATE (n:BenchCycle) DELETE n` executes. The
+  bench's full `CREATE ... WITH n DELETE n RETURN ...` form hits a
+  separate **parser** limitation around WITH followed by DELETE —
+  tracked as a follow-up.
+- **§9 Statistical aggregations** — **DONE**. Planner's
+  `contains_aggregation`, the inline-aggregation matchers in both
+  the no-pattern and MATCH+RETURN paths, and the post-agg wrapper
+  matcher all now recognise `stdev`, `stdevp`, `percentileCont`,
+  `percentileDisc` as aggregations so they collapse the row set.
+  Regression test: `statistical_aggregations_collapse_to_one_row`.
+
+Not landed this pass (still open):
+
+- **§1 Composite `:Label {prop}` filter** — investigation surfaced a
+  deeper pre-existing bug: the CREATE path rebuilds the label_index
+  bitmap by iterating `node_record.label_bits` (a u64), so labels
+  with `label_id >= 64` are never added to the index. Two candidate
+  §1 planner fixes (anonymous-anchor variable synthesis; filter
+  provenance in `optimize_operator_order` so anchor-scoped Filters
+  run before Expand) each *surface* the label-index corruption
+  instead of hiding behind the old "scan-every-edge" fallback, so
+  landing §1 without also fixing the label_index requires making
+  NodeByLabel return non-empty for those label IDs. Bench-shape
+  reproducer committed as `match_anonymous_anchor_with_label_and_property_scopes_expand`
+  (`#[ignore]`, references `create.rs:460` as the label-index site
+  to fix).
+- **§2 Variable-length path** — downstream of §1 (same anchor shape).
+- **§5.3 `WITH ... WHERE ... RETURN count(*)`** — the
+  WITH-without-aggregation + RETURN-with-aggregation path still
+  leaks the WITH alias through as the final column. A separate
+  planner path that wasn't touched by the §5.1 / §5.2 fix.
+
+Added to "DONE" after the second pass (2026-04-20, same day):
+
+- **§3 `db.*` catalog procedures + `YIELD *`** — **DONE (parser +
+  engine-level)**. Parser widened at `parser/clauses.rs:1680` so
+  `YIELD *` short-circuits to `yield_columns = None`, which the
+  executor already treats as "project every column the procedure
+  declares". Engine-level contract for `db.labels()` / `db.propertyKeys()`
+  / `db.relationshipTypes()` locked by `db_labels_procedure_emits_a_row_per_label`.
+  The bench's "0 row" observation is a distinct RPC-path issue,
+  separately tracked.
+- **§5 WITH → RETURN projection (2 of 3 scenarios)** — **DONE** for
+  `subquery.exists_high_score` and `subquery.size_of_collect`. The
+  planner now stashes RETURN's items into `post_aggregation_return_items`
+  when WITH carries the aggregation, and emits a final `Project`
+  after `Aggregate` (inserted before any `Limit`). Locked by
+  `with_aggregation_then_return_expression_projects_correctly`.
+  `subquery.with_filter_count` stays open as §5.3.
+- **§6 avg() float-accumulation** — **DOCUMENTED-AS-ACCEPTED**. The
+  divergence is two ULPs on the 15th decimal place, well below any
+  user-facing assertion; the bench's strict-equality guard is the
+  only place this matters. Direction (a) "Kahan summation" is the
+  right long-term fix, but the gate decision is (c) here: accept the
+  informational divergence and let the bench's tolerance catch up in
+  a follow-up.
+
 ## Bench runs (append-only log; one entry per re-run)
 
 Snapshots live under

@@ -183,3 +183,8 @@
 - [x] Performance overhead < 15% vs standalone (measured at <1% on the `cluster_write_path` bench — 620 µs standalone vs 623 µs cluster-mode on a CREATE (n:Person))
 - [x] Test coverage ≥ 95% for cluster mode code (95.85% module-wide weighted line coverage via cargo llvm-cov; see §15.7)
 - [ ] All documentation complete
+
+## 1. Tail (mandatory — enforced by rulebook v5.3.0)
+- [ ] 1.1 Update or create documentation covering the implementation
+- [ ] 1.2 Write tests covering the new behavior
+- [ ] 1.3 Run tests and confirm they pass

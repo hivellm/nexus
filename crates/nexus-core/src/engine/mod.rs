@@ -400,11 +400,19 @@ impl Engine {
             params: ast.params.clone(),
         };
 
-        // Collect all node variables from MATCH clauses
+        // Collect all node variables from MATCH and CREATE clauses.
+        // phase6 §8 — also consider CREATE-bound variables so patterns
+        // like `CREATE (n:BenchCycle) WITH n DELETE n` resolve (the
+        // outer caller now admits queries with CREATE-or-MATCH + DELETE).
         let mut node_variables = Vec::new();
         for clause in &match_query.clauses {
-            if let executor::parser::Clause::Match(mc) = clause {
-                for element in &mc.pattern.elements {
+            let pattern_opt = match clause {
+                executor::parser::Clause::Match(mc) => Some(&mc.pattern),
+                executor::parser::Clause::Create(cc) => Some(&cc.pattern),
+                _ => None,
+            };
+            if let Some(pattern) = pattern_opt {
+                for element in &pattern.elements {
                     if let executor::parser::PatternElement::Node(node) = element {
                         if let Some(var) = &node.variable {
                             if !node_variables.contains(var) {
@@ -1422,18 +1430,35 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::Match(_)));
+        // phase6 §8 — a CREATE clause binds node variables too, so
+        // `CREATE (n) WITH n DELETE n` (the bench's create-delete
+        // cycle) is legal per openCypher even with no MATCH.
+        let has_create_bound_vars = ast.clauses.iter().any(|c| {
+            if let executor::parser::Clause::Create(cc) = c {
+                cc.pattern.elements.iter().any(|el| {
+                    if let executor::parser::PatternElement::Node(node) = el {
+                        node.variable.is_some()
+                    } else {
+                        false
+                    }
+                })
+            } else {
+                false
+            }
+        });
 
         // Handle DELETE (with or without MATCH)
         if has_delete {
-            let deleted_count = if has_match {
-                // MATCH ... DELETE: execute MATCH first, then DELETE with results
+            let deleted_count = if has_match || has_create_bound_vars {
+                // MATCH ... DELETE or CREATE ... DELETE: execute the
+                // upstream pattern first, then DELETE with results.
                 self.execute_match_delete_query(&ast)?
             } else {
-                // Standalone DELETE won't work without MATCH
-                // This would be: DELETE n (without MATCH)
-                // For now, we don't support this syntax
+                // Standalone DELETE won't work without an upstream
+                // binding. DELETE n with no MATCH / CREATE / WITH to
+                // produce `n` is genuinely invalid.
                 return Err(Error::CypherSyntax(
-                    "DELETE requires MATCH clause".to_string(),
+                    "DELETE requires an upstream MATCH, CREATE, or WITH".to_string(),
                 ));
             };
             self.refresh_executor()?;
@@ -3534,16 +3559,31 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::Match(_)));
+        // phase6 §8 — CREATE-bound variables satisfy DELETE's context
+        // requirement too, matching openCypher semantics.
+        let has_create_bound_vars = ast.clauses.iter().any(|c| {
+            if let executor::parser::Clause::Create(cc) = c {
+                cc.pattern.elements.iter().any(|el| {
+                    if let executor::parser::PatternElement::Node(node) = el {
+                        node.variable.is_some()
+                    } else {
+                        false
+                    }
+                })
+            } else {
+                false
+            }
+        });
 
         // Handle DELETE (with or without MATCH)
         if has_delete {
-            let deleted_count = if has_match {
-                // MATCH ... DELETE: execute MATCH first, then DELETE with results
+            let deleted_count = if has_match || has_create_bound_vars {
+                // MATCH ... DELETE or CREATE ... DELETE: execute the
+                // upstream pattern first, then DELETE with results.
                 self.execute_match_delete_query(ast)?
             } else {
-                // Standalone DELETE won't work without MATCH
                 return Err(Error::CypherSyntax(
-                    "DELETE requires MATCH clause".to_string(),
+                    "DELETE requires an upstream MATCH, CREATE, or WITH".to_string(),
                 ));
             };
             self.refresh_executor()?;

@@ -520,9 +520,12 @@ impl Executor {
                 let asc = ascending.get(idx).copied().unwrap_or(true);
                 let left = a.values.get(col_idx).cloned().unwrap_or(Value::Null);
                 let right = b.values.get(col_idx).cloned().unwrap_or(Value::Null);
-                let ordering = self.compare_values_for_sort(&left, &right);
+                let ordering =
+                    cypher_null_aware_order(&left, &right, asc, |l, r| {
+                        self.compare_values_for_sort(l, r)
+                    });
                 if ordering != std::cmp::Ordering::Equal {
-                    return if asc { ordering } else { ordering.reverse() };
+                    return ordering;
                 }
             }
             std::cmp::Ordering::Equal
@@ -574,9 +577,12 @@ impl Executor {
                 let asc = ascending.get(idx).copied().unwrap_or(true);
                 let left = a.values.get(col_idx).cloned().unwrap_or(Value::Null);
                 let right = b.values.get(col_idx).cloned().unwrap_or(Value::Null);
-                let ordering = self.compare_values_for_sort(&left, &right);
+                let ordering =
+                    cypher_null_aware_order(&left, &right, asc, |l, r| {
+                        self.compare_values_for_sort(l, r)
+                    });
                 if ordering != std::cmp::Ordering::Equal {
-                    return if asc { ordering } else { ordering.reverse() };
+                    return ordering;
                 }
             }
             std::cmp::Ordering::Equal
@@ -585,5 +591,50 @@ impl Executor {
         // Take only first K rows
         context.result_set.rows.truncate(k);
         Ok(())
+    }
+}
+
+/// phase6 §7 — openCypher null-positioning for ORDER BY. Returns the
+/// FINAL sort ordering (no further reverse should be applied by the
+/// caller), combining both the null-positioning rule and the ASC/DESC
+/// direction:
+/// * ASC  → non-null values in natural order, NULLs sort LAST
+/// * DESC → non-null values in reversed order, NULLs sort FIRST
+///
+/// The base comparator (`compare_values_for_sort`) treats null as
+/// less-than everything — that contract is correct for predicate
+/// evaluation (`<`, `>`) but opposite of what openCypher wants for
+/// ORDER BY, so we special-case the null comparisons here instead of
+/// changing the base comparator.
+fn cypher_null_aware_order<F>(
+    left: &Value,
+    right: &Value,
+    ascending: bool,
+    base_cmp: F,
+) -> std::cmp::Ordering
+where
+    F: FnOnce(&Value, &Value) -> std::cmp::Ordering,
+{
+    match (left.is_null(), right.is_null()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => {
+            // ASC: null sorts last (Greater). DESC: null sorts first (Less).
+            if ascending {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            }
+        }
+        (false, true) => {
+            if ascending {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        }
+        (false, false) => {
+            let base = base_cmp(left, right);
+            if ascending { base } else { base.reverse() }
+        }
     }
 }

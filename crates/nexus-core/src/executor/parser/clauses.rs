@@ -1682,23 +1682,31 @@ impl CypherParser {
             self.parse_keyword()?; // consume "YIELD"
             self.skip_whitespace();
 
-            let mut columns = Vec::new();
-
-            loop {
-                let column = self.parse_identifier()?;
-                columns.push(column);
-
+            // phase6 §3.4 — `YIELD *` means "project every column the
+            // procedure declares". The downstream `execute_call_procedure`
+            // already treats `yield_columns = None` as "use all columns",
+            // so we short-circuit to None instead of listing them.
+            if self.peek_char() == Some('*') {
+                self.consume_char();
                 self.skip_whitespace();
+                None
+            } else {
+                let mut columns = Vec::new();
+                loop {
+                    let column = self.parse_identifier()?;
+                    columns.push(column);
 
-                if self.peek_char() == Some(',') {
-                    self.consume_char();
                     self.skip_whitespace();
-                } else {
-                    break;
-                }
-            }
 
-            Some(columns)
+                    if self.peek_char() == Some(',') {
+                        self.consume_char();
+                        self.skip_whitespace();
+                    } else {
+                        break;
+                    }
+                }
+                Some(columns)
+            }
         } else {
             None
         };

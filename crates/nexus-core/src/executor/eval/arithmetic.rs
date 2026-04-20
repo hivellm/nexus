@@ -6,6 +6,31 @@ use super::super::engine::Executor;
 use crate::{Error, Result};
 use serde_json::Value;
 
+/// phase6 §4 — return the operands as `(i64, i64)` iff both values are
+/// JSON numbers whose storage is integer (not float). Following Cypher /
+/// openCypher rules, arithmetic that has only integer operands returns
+/// an integer; the moment a float is introduced the whole expression
+/// promotes to float. Pre-fix every operator unconditionally called
+/// `value_to_number` (f64), so `RETURN 1 + 2 * 3` produced
+/// `Number::Float(7.0)` instead of `Number::Int(7)`.
+fn both_as_i64(left: &Value, right: &Value) -> Option<(i64, i64)> {
+    let l = left.as_i64()?;
+    let r = right.as_i64()?;
+    // `as_i64` returns `Some` for both Number::PosInt / Number::NegInt
+    // and for Number::Float values that happen to be whole (`1.0`,
+    // `2.0`). Guard against the float case so `1.0 + 2` stays a float
+    // per Cypher promotion rules.
+    if left.as_f64()?.fract() != 0.0 || right.as_f64()?.fract() != 0.0 {
+        return None;
+    }
+    if matches!(left, Value::Number(n) if n.is_f64())
+        || matches!(right, Value::Number(n) if n.is_f64())
+    {
+        return None;
+    }
+    Some((l, r))
+}
+
 impl Executor {
     pub(in crate::executor) fn add_values(&self, left: &Value, right: &Value) -> Result<Value> {
         // Handle null values - null + number or number + null = null (Neo4j behavior)
@@ -33,6 +58,16 @@ impl Executor {
         // Check for duration + duration arithmetic
         if let Some(result) = self.try_duration_add(left, right)? {
             return Ok(result);
+        }
+
+        // phase6 §4 — preserve integer typing when both operands are ints.
+        if let Some((li, ri)) = both_as_i64(left, right) {
+            if let Some(sum) = li.checked_add(ri) {
+                return Ok(Value::Number(serde_json::Number::from(sum)));
+            }
+            // Integer overflow — fall through to f64 path so the result
+            // is still produceable (matches Neo4j's behaviour of
+            // promoting only on overflow-would-happen).
         }
 
         // Otherwise, treat as numeric addition
@@ -71,6 +106,12 @@ impl Executor {
             return Ok(result);
         }
 
+        if let Some((li, ri)) = both_as_i64(left, right) {
+            if let Some(diff) = li.checked_sub(ri) {
+                return Ok(Value::Number(serde_json::Number::from(diff)));
+            }
+        }
+
         let l = self.value_to_number(left)?;
         let r = self.value_to_number(right)?;
         serde_json::Number::from_f64(l - r)
@@ -90,6 +131,11 @@ impl Executor {
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
         }
+        if let Some((li, ri)) = both_as_i64(left, right) {
+            if let Some(prod) = li.checked_mul(ri) {
+                return Ok(Value::Number(serde_json::Number::from(prod)));
+            }
+        }
         let l = self.value_to_number(left)?;
         let r = self.value_to_number(right)?;
         serde_json::Number::from_f64(l * r)
@@ -104,6 +150,21 @@ impl Executor {
         // Handle null values - null / number or number / null = null (Neo4j behavior)
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
+        }
+        // phase6 §4 — Cypher integer division: int / int stays int
+        // (`100 / 4 = 25`, `7 / 2 = 3`). Only promote to float if either
+        // operand is itself a float.
+        if let Some((li, ri)) = both_as_i64(left, right) {
+            if ri == 0 {
+                return Err(Error::TypeMismatch {
+                    expected: "non-zero".to_string(),
+                    actual: "division by zero".to_string(),
+                });
+            }
+            // i64::MIN / -1 overflows — fall through to f64 in that case.
+            if let Some(q) = li.checked_div(ri) {
+                return Ok(Value::Number(serde_json::Number::from(q)));
+            }
         }
         let l = self.value_to_number(left)?;
         let r = self.value_to_number(right)?;
@@ -143,6 +204,18 @@ impl Executor {
         // Handle null values - null % anything or anything % null = null
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
+        }
+
+        if let Some((li, ri)) = both_as_i64(left, right) {
+            if ri == 0 {
+                return Err(Error::TypeMismatch {
+                    expected: "non-zero".to_string(),
+                    actual: "modulo by zero".to_string(),
+                });
+            }
+            if let Some(m) = li.checked_rem_euclid(ri) {
+                return Ok(Value::Number(serde_json::Number::from(m)));
+            }
         }
 
         let l = self.value_to_number(left)?;

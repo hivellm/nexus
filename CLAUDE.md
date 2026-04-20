@@ -9,7 +9,7 @@ The authoritative rules come from the imports below. Claude Code loads all of th
 automatically at session start (see [Anthropic memory docs](https://code.claude.com/docs/en/memory#claude-md-imports)).
 
 ## Project identity & live state
-<!-- @.rulebook/STATE.md (skipped — target file not present) -->
+@.rulebook/STATE.md
 
 ## Core standards (team-shared, versioned)
 @AGENTS.md
@@ -18,7 +18,7 @@ automatically at session start (see [Anthropic memory docs](https://code.claude.
 @AGENTS.override.md
 
 ## Session scratchpad (human notes)
-<!-- @.rulebook/PLANS.md (skipped — target file not present) -->
+@.rulebook/PLANS.md
 
 ## Critical rules (highest precedence — apply on every turn)
 

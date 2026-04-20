@@ -112,3 +112,7 @@
 - [ ] 15.6 Update README with Hub setup
 - [ ] 15.7 Add troubleshooting section
 
+## 16. Tail (mandatory — enforced by rulebook v5.3.0)
+- [ ] 16.1 Update or create documentation covering the implementation
+- [ ] 16.2 Write tests covering the new behavior
+- [ ] 16.3 Run tests and confirm they pass
