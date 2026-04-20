@@ -2,10 +2,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "nexus-core",
-    "nexus-server",
-    "nexus-protocol",
-    "nexus-cli",
+    "crates/nexus-core",
+    "crates/nexus-server",
+    "crates/nexus-protocol",
+    "crates/nexus-cli",
 ]
 exclude = [
     "sdks/rust",
@@ -22,8 +22,8 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # Core graph engine
-nexus-core = { path = "nexus-core" }
-nexus-protocol = { path = "nexus-protocol" }
+nexus-core = { path = "crates/nexus-core" }
+nexus-protocol = { path = "crates/nexus-protocol" }
 
 # Storage
 memmap2 = "0.9"

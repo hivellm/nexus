@@ -5,6 +5,66 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — V2 Sharding (core complete 2026-04-20)
+
+### Added — V2 horizontal scaling
+
+Nexus gains horizontal scalability through hash-based sharding, per-shard
+Raft consensus, and a distributed query coordinator. See
+[`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md)
+and [`.rulebook/tasks/phase5_implement-v2-sharding/design.md`](.rulebook/tasks/phase5_implement-v2-sharding/design.md).
+
+- **Sharding** (`nexus-core/src/sharding/`): deterministic xxh3-based
+  shard assignment, generation-tagged cluster metadata, iterative
+  rebalancer, per-shard health model. Standalone deployments are
+  unchanged — sharding is opt-in via `[cluster.sharding]` config.
+- **Raft consensus per shard** (`nexus-core/src/sharding/raft/`):
+  purpose-built Raft (openraft 0.10 is still alpha; its trait surface
+  would require an adapter larger than the Raft itself). Leader
+  election within 3× election timeout, §5.3 truncate-on-conflict,
+  §5.4.2 leader-only current-term commit, snapshot install, bincode
+  wire format with shard-id prefix. 5-node clusters tolerate 2
+  replica failures.
+- **Distributed query coordinator** (`nexus-core/src/coordinator/`):
+  scatter/gather with atomic per-query failure, leader-hint retry
+  (3 attempts), stale-generation refresh, COUNT/SUM/AVG/MIN/MAX/
+  COLLECT aggregation decomposition, ORDER BY + LIMIT top-k merge.
+- **Cross-shard traversal**: TTL + generation-aware LRU cache (10k
+  entries default), per-query fetch budget (1k default) with
+  `ERR_TOO_MANY_REMOTE_FETCHES` for runaway traversals.
+- **Cluster management API**: `GET /cluster/status`, `POST /cluster/
+  add_node | remove_node | rebalance`, `GET /cluster/shards/{id}`.
+  Admin-gated, `307 Temporary Redirect` on follower writes, drain
+  semantics for graceful node removal.
+
+### Test coverage
+
+**201 V2-dedicated tests** — 143 sharding unit tests, 46 coordinator
+unit tests, 12 E2E integration scenarios
+(`nexus-core/tests/v2_sharding_e2e.rs`) covering every §Scenario in
+the specs:
+
+- Deterministic assignment across restarts
+- Metadata consistency after leader change
+- Single-shard + broadcast query classification
+- AVG / SUM / MIN / MAX / COLLECT aggregation decomposition
+- Shard-failure atomicity (partial rows never leaked)
+- Raft failover within spec bound (≤90 ticks = 900ms)
+- Minority-failure replication continuity
+- Rebalance convergence
+- Leader-redirect on followers
+- Stale-generation refresh round-trip
+
+Full workspace: **1694 nexus-core lib tests + 12 V2 E2E tests**, zero
+failures on `cargo +nightly test`. Zero warnings on `cargo clippy
+--workspace --all-targets -- -D warnings`.
+
+### Breaking changes (when sharding is enabled)
+
+- Record-store files gain a 64-byte V2 header. Standalone deployments
+  use deterministic defaults (`shard_id = 0`, `generation = 0`); a
+  future `nexus migrate --to v2` CLI rewrites headers in place.
+
 ## [1.0.0] — 2026-04-19
 
 ### Added — cluster mode (multi-tenant deployments)

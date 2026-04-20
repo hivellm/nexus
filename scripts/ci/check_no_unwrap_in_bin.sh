@@ -29,15 +29,15 @@ ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 # directories we're about to check; fall back to the caller's CWD
 # otherwise so the script works inside stand-alone test fixtures
 # and nested worktrees.
-if [[ ! -d "$ROOT/nexus-cli" && ! -d "$ROOT/nexus-server" && ! -d "$ROOT/nexus-core" ]]; then
+if [[ ! -d "$ROOT/crates/nexus-cli" && ! -d "$ROOT/crates/nexus-server" && ! -d "$ROOT/crates/nexus-core" ]]; then
     ROOT="$(pwd)"
 fi
 cd "$ROOT"
 
 SCOPES=(
-    "nexus-cli/src/main.rs"
-    "nexus-cli/src/commands"
-    "nexus-server/src/main.rs"
+    "crates/nexus-cli/src/main.rs"
+    "crates/nexus-cli/src/commands"
+    "crates/nexus-server/src/main.rs"
 )
 
 mode="enforce"

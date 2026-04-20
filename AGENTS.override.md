@@ -255,33 +255,36 @@ cargo build --release --package nexus-cli
 
 ```
 nexus/
-├── nexus-core/           # 🧠 Core graph engine library
-│   ├── src/
-│   │   ├── catalog/      # Label/type/key mappings (LMDB)
-│   │   ├── storage/      # Record stores (nodes, rels, props)
-│   │   ├── page_cache/   # Memory management (8KB pages)
-│   │   ├── wal/          # Write-ahead log
-│   │   ├── index/        # Indexes (bitmap, KNN, full-text)
-│   │   ├── executor/     # Cypher parser & execution
-│   │   ├── transaction/  # MVCC & locking
-│   │   ├── graph/        # Graph algorithms & correlation analysis
-│   │   └── auth/         # Authentication & authorization
-│   └── tests/            # Core tests
-├── nexus-server/         # 🌐 HTTP server (Axum)
-│   ├── src/
-│   │   ├── api/          # REST endpoints
-│   │   ├── middleware/   # Auth, rate limiting
-│   │   └── config.rs     # Server configuration
-│   └── tests/            # Server tests
-├── nexus-protocol/       # 🔌 Integration protocols
-│   └── src/
-│       ├── rest.rs       # REST client
-│       ├── mcp.rs        # MCP client
-│       └── umicp.rs      # UMICP client
-├── nexus-cli/            # 💻 Command-line interface
-│   └── src/
-│       ├── commands/     # CLI commands
-│       └── config.rs     # CLI configuration
+├── crates/                # 🦀 Rust workspace crates (standard layout)
+│   ├── nexus-core/        # 🧠 Core graph engine library
+│   │   ├── src/
+│   │   │   ├── catalog/   # Label/type/key mappings (LMDB)
+│   │   │   ├── storage/   # Record stores (nodes, rels, props)
+│   │   │   ├── page_cache/ # Memory management (8KB pages)
+│   │   │   ├── wal/       # Write-ahead log
+│   │   │   ├── index/     # Indexes (bitmap, KNN, full-text)
+│   │   │   ├── executor/  # Cypher parser & execution
+│   │   │   ├── transaction/ # MVCC & locking
+│   │   │   ├── graph/     # Graph algorithms & correlation analysis
+│   │   │   ├── sharding/  # V2 sharding + Raft consensus
+│   │   │   ├── coordinator/ # V2 distributed query coordinator
+│   │   │   └── auth/      # Authentication & authorization
+│   │   └── tests/         # Core tests
+│   ├── nexus-server/      # 🌐 HTTP server (Axum)
+│   │   ├── src/
+│   │   │   ├── api/       # REST endpoints
+│   │   │   ├── middleware/ # Auth, rate limiting
+│   │   │   └── config.rs  # Server configuration
+│   │   └── tests/         # Server tests
+│   ├── nexus-protocol/    # 🔌 Integration protocols
+│   │   └── src/
+│   │       ├── rest.rs    # REST client
+│   │       ├── mcp.rs     # MCP client
+│   │       └── umicp.rs   # UMICP client
+│   └── nexus-cli/         # 💻 Command-line interface
+│       └── src/
+│           ├── commands/  # CLI commands
+│           └── config.rs  # CLI configuration
 ├── sdks/                 # 📦 Official SDKs
 │   ├── rust/             # Rust SDK
 │   ├── python/           # Python SDK
@@ -399,14 +402,14 @@ git commit -m "perf(cache): Optimize cache hit rate"
 ### Test Organization
 
 ```
-nexus-core/
+crates/nexus-core/
 ├── src/
 │   ├── module.rs           # Implementation
 │   └── module.rs (tests)   # Unit tests (#[cfg(test)] module)
 └── tests/
     └── integration_test.rs # Integration tests
 
-nexus-server/
+crates/nexus-server/
 ├── src/
 │   └── api/endpoint.rs     # Implementation + unit tests
 └── tests/
@@ -723,8 +726,8 @@ Each database is completely isolated:
 #### 6. Binary-Boundary Error Handling
 
 The CLI and server entry points must **never panic on user-facing
-input**. `.unwrap()` is banned in `nexus-cli/src/main.rs`,
-`nexus-cli/src/commands/*`, and `nexus-server/src/main.rs` outside
+input**. `.unwrap()` is banned in `crates/nexus-cli/src/main.rs`,
+`crates/nexus-cli/src/commands/*`, and `crates/nexus-server/src/main.rs` outside
 their `#[cfg(test)]` modules. The preferred patterns are:
 
 ```rust
@@ -798,7 +801,7 @@ RUST_TEST_THREADS=1 cargo test --workspace -- --nocapture
 
 # Issue: Database locked
 # Solution: Clean test databases
-rm -rf nexus-core/test_data
+rm -rf crates/nexus-core/test_data
 ```
 
 #### 3. Server Issues
@@ -916,7 +919,7 @@ curl http://localhost:15474/health
 
 ### Easy First Tasks
 
-1. **Add new Cypher function** - See `nexus-core/src/executor/mod.rs`
+1. **Add new Cypher function** - See `crates/nexus-core/src/executor/mod.rs`
 2. **Improve error messages** - Make errors more descriptive
 3. **Add examples** - Create example queries in `examples/`
 4. **Fix typos in docs** - Documentation improvements always welcome
