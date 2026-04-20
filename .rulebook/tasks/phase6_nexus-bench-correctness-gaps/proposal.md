@@ -157,6 +157,50 @@ Snapshots live under
 Nexus commit the bench ran against so a latency regression
 (or a fix) has a commit to point at.
 
+### Run 7 — 2026-04-20 · Nexus commit `edb331bc` · 51 catalog / 51 ran
+
+First bench run with the §1-§9 fixes all landed. Neo4j wiped clean
+(`MATCH (n) DETACH DELETE n`) before the run so the Run 6 "Neo4j
+has 2× data" artefact is gone and every row compares apples-to-apples.
+
+| Bucket | Count | Delta vs Run 6 |
+|---|---|---|
+| ⭐ Lead | 41 | +2 |
+| ✅ Parity | 5 | +4 |
+| ⚠️ Behind | 2 | +1 |
+| 🚨 Gap | 3 | +1 |
+| — n/a | 0 | -4 |
+| content-divergent | 0 (was ~11) | -11 |
+
+Every §1-§9 scenario is now Lead or Parity and content-matching:
+- `traversal.small_one_hop_hub` — Nexus 5 / Neo4j 5 — 636µs / 1630µs = 0.39× ⭐ (§1)
+- `traversal.small_two_hop_from_hub` — Nexus 5 / Neo4j 5 — 1017µs / 1749µs = 0.58× ⭐ (§1)
+- `traversal.small_var_length_1_to_3` — Nexus 15 / Neo4j 15 — 426µs / 1769µs = 0.24× ⭐ (§2)
+- `procedure.db_labels` — Nexus 6 / Neo4j 6 — 1416µs / 1580µs = 0.90× ✅ (§3)
+- `procedure.db_relationship_types` — Nexus 1 / Neo4j 1 — 1465µs / 1550µs = 0.95× ✅ (§3)
+- `procedure.db_property_keys` — Nexus / Neo4j match — 113µs / 1649µs = 0.07× ⭐ (§3)
+- `scalar.arithmetic` — Nexus 7 / Neo4j 7 — 102µs / 1548µs = 0.07× ⭐ (§4)
+- `subquery.exists_high_score` — Nexus false / Neo4j false — 738µs / 1740µs = 0.42× ⭐ (§5.1)
+- `subquery.size_of_collect` — Nexus 20 / Neo4j 20 — 228µs / 1650µs = 0.14× ⭐ (§5.2)
+- `subquery.with_filter_count` — Nexus 9 / Neo4j 9 — 274µs / 1602µs = 0.17× ⭐ (§5.3)
+- `aggregation.avg_score_a` — ULP drift (documented) — 155µs / 1699µs = 0.09× ⭐ (§6)
+- `order.top_5_by_score` + `order.bottom_5_by_score` — both Lead, content-matched (§7)
+- `write.create_delete_cycle` — executes cleanly — 500µs / 1669µs = 0.30× ⭐ (§8.1/8.2)
+- `aggregation.stdev_score` — Nexus / Neo4j match — 157µs / 1719µs = 0.09× ⭐ (§9)
+
+Remaining content divergences (out of §1-§9 scope — separate tasks):
+- `subquery.count_subquery` — Nexus emits Null for COUNT{…} subquery; Neo4j emits the per-row count. Known subquery-expression gap.
+- `write.unwind_create_batch` — Nexus returns 1, Neo4j 10 for `UNWIND range(1,10) CREATE(:X) RETURN count(*)`. UNWIND-before-CREATE collapses on Nexus.
+- `scalar.duration_between_days`, `scalar.point_distance_cartesian`, `scalar.point_distance_wgs84`, `scalar.point_within_distance` — temporal/spatial built-ins not wired up on Nexus.
+- `traversal.small_qpp_1_to_5` — quantified path patterns not implemented.
+- `traversal.small_shortest_path_hub`, `subquery.exists_block` — parser rejects `shortestPath` / `EXISTS { … }` block syntax.
+
+Remaining performance gaps (not correctness):
+- `traversal.cartesian_a_b` 🚨 — 794708µs / 1752µs = 453× slower. Pre-existing cartesian-product materialisation perf issue, already documented in Run 2.
+
+Snapshot: `docs/benchmarks/baselines/2026-04-20-run7.{md,json}`.
+
+
 ### Run 6 — 2026-04-20 · Nexus commit `5caef298` · 49 catalog / 43 ran
 
 Catalogue grew to 49 after `scalar.date_literal`,

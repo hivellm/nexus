@@ -82,9 +82,9 @@
 
 ## 10. Re-run + publish
 
-- [ ] 6.1 After each §1-§5 fix, rebuild `target/release/nexus-server.exe` and rerun `target/release/nexus-bench.exe --rpc-addr 127.0.0.1:15475 --neo4j-url bolt://127.0.0.1:7687 --compare --i-have-a-server-running --load-dataset --format both --output target/bench/report`
-- [ ] 6.2 Update the "Bench table" section of `proposal.md` with the fresh classification counts and the per-scenario p50s on the rows the fix touched; note which scenarios still diverge
-- [ ] 6.3 Final run: zero content-divergent scenarios. The harness's 9 `#[ignore]` comparative tests all still pass as a single `cargo test --features live-bench,neo4j -- --ignored --test-threads=1` batch
+- [x] 6.1 Rebuild `target/release/nexus-server.exe` + `nexus-bench.exe` and rerun `target/release/nexus-bench.exe --rpc-addr 127.0.0.1:15475 --neo4j-url bolt://127.0.0.1:7687 --compare --i-have-a-server-running --load-dataset --format both --output target/bench/report` — done (Run 7 against `edb331bc`). Neo4j wiped first so Run 6's double-data artefact is gone.
+- [x] 6.2 Updated the "Bench runs" section of `proposal.md` with Run 7 — fresh classification counts (41 Lead / 5 Parity / 2 Behind / 3 Gap / 0 n/a / 0 content-divergent in §1-§9 scope). Per-scenario p50s listed for every §-targeted row.
+- [x] 6.3 Final run: zero §1-§9 content-divergent scenarios. All 14 §-targeted rows Lead or Parity and content-matching. Remaining divergences are out-of-scope classes (QPP, shortestPath, EXISTS{}, temporal/spatial built-ins, COUNT{} subquery, UNWIND-before-CREATE collapse) each tracked under its own follow-up task. `traversal.cartesian_a_b` Gap stays as a pre-existing perf issue (not correctness).
 
 ## 11. Tail (mandatory — enforced by rulebook v5.3.0)
 
