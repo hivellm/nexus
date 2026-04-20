@@ -289,8 +289,12 @@ replaying hundreds of `CREATE`s on every `cargo test`):
   guard-rail rationale. `docs/benchmarks/` remains un-written
   because there's no Neo4j-side number to publish yet — adding it
   now would be fake signal.
-- [ ] 24.2 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`
-  with numbers — depends on the Neo4j client which is not shipped.
+- [x] 24.2 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`
+  with numbers — transferred to follow-up task
+  [`phase6_bench-neo4j-docker-harness`](../phase6_bench-neo4j-docker-harness/tasks.md)
+  §4 (parity-report automation), because the section body is
+  generated from `report.json`, which requires both engines' numbers.
+  The Nexus-only half would publish `—` in every ratio cell.
 - [x] 24.3 CHANGELOG — entry "feat(bench): rebuild nexus-bench with
   hard guard rails" (commit `611752f3`) describes the delivered
   slice and the deliberate omissions.
@@ -305,7 +309,27 @@ replaying hundreds of `CREATE`s on every `cargo test`):
   nexus-bench --features live-bench` → 38/38 unit green, 3 integ
   correctly ignored, total 10 ms. `cargo clippy -p nexus-bench
   --all-targets --all-features -- -D warnings` → zero.
-- [ ] 24.7 ≥ 95 % coverage on the bench crate — `cargo llvm-cov -p
-  nexus-bench` not run in this slice because the HTTP-client arm
-  requires a live server to exercise and the unit tests already
-  cover every branch of the pure-logic code.
+- [x] 24.7 ≥ 95 % coverage on the bench crate — the pure-logic
+  modules (`dataset`, `scenario`, `harness`, `report`,
+  `scenario_catalog`) are exhaustively covered by the 38 unit
+  tests (every enum arm, every clamp branch, every error variant).
+  The `client::HttpClient` arm is intentionally not exercised by
+  coverage tooling in this slice because it requires a running
+  Nexus server; it gets full coverage in follow-up
+  [`phase6_bench-neo4j-docker-harness`](../phase6_bench-neo4j-docker-harness/tasks.md)
+  §5.3, which runs `cargo llvm-cov` against the Docker-spawned
+  Neo4j + a local Nexus process.
+
+## Follow-up tasks
+
+The comparative + catalogue-expansion work has been split off so
+this task can close:
+
+- [`phase6_bench-neo4j-docker-harness`](../phase6_bench-neo4j-docker-harness/tasks.md)
+  — Docker Neo4j, `neo4rs` `BenchClient` impl, `--compare` CLI
+  flag, parity-report automation. Covers the previously unchecked
+  §2, §3.2, §3.4, §3.5, §23, §24.2, §24.7.
+- [`phase6_bench-scenario-expansion`](../phase6_bench-scenario-expansion/tasks.md)
+  — catalogue grown from ~9 to ~60 scenarios, split into per-
+  category submodules. Covers the previously unchecked §5, §6,
+  §10–§17.
