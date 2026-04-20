@@ -476,6 +476,19 @@ engine.refresh_executor().unwrap();
 
 **Overall Compatibility**: **100%** (210/210 Neo4j compatibility tests passing)
 
+### Benchmark Parity (Nexus RPC ↔ Neo4j Bolt)
+
+Per-scenario p50 / p95 latencies measured by `crates/nexus-bench`.
+Both sides speak binary wire protocols — Nexus native MessagePack
+RPC, Neo4j Bolt — so the `Ratio` column reflects engine work
+rather than serialisation overhead. Managed by
+`scripts/bench/update-parity.sh`; the block between the HTML
+markers is regenerated on every run.
+
+<!-- BEGIN bench-parity (managed by scripts/bench/update-parity.sh — DO NOT EDIT BY HAND) -->
+_No benchmark data yet. Run `./scripts/bench/update-parity.sh <report.json>` to populate._
+<!-- END bench-parity -->
+
 ### GDS Procedures Available
 
 | Procedure | Description |
