@@ -46,7 +46,7 @@ pub mod raft;
 pub mod rebalance;
 
 pub use assignment::{assign_shard, shard_for_node, shard_for_node_u64};
-pub use config::{ShardingConfig, ShardingMode};
+pub use config::{PeerEntry, ShardingConfig, ShardingMode};
 pub use controller::{
     AddNodeRequest, ClusterController, ClusterStatus, ControllerError, NodeStatus,
     RemoveNodeRequest, ShardHealthProvider, StaticAllHealthy,

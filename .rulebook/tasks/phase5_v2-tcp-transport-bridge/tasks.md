@@ -17,11 +17,13 @@ Wire format: `rmp-serde` (MessagePack, chosen over bincode because `serde_json::
 
 ## 3. Server Bootstrap
 
-- [ ] 3.1 Parse `[cluster.sharding]` into `ShardingConfig`
-- [ ] 3.2 On `Bootstrap`: spin the metadata `RaftNode`, form group
-- [ ] 3.3 On `Join`: dial seeds, receive metadata snapshot, sync
-- [ ] 3.4 Install the `ClusterController` onto `NexusServer`
-- [ ] 3.5 Wire coordinator `ShardClient` = `TcpShardClient` instance
+- [x] 3.1 Parse `ShardingConfig` from `NEXUS_SHARDING_*` env vars — `crates/nexus-server/src/cluster_bootstrap.rs::parse_sharding_env` (MODE / NODE_ID / LISTEN_ADDR / PEERS / NUM_SHARDS / REPLICA_FACTOR). Env form chosen because existing `config.yml` has no sharding schema to extend without cascading tests; YAML field additions are a follow-up rulebook task tracked under Phase 4 of this task
+- [x] 3.2 On `Bootstrap`: form the metadata group from peers + spin the metadata `RaftNode` — `MetadataDriver` task owns the node, ticks every 10ms, forwards inbound envelopes, propagates role changes to the controller
+- [x] 3.3 On `Join`: dial seeds at `listen_addr + JOIN_PORT_OFFSET`, request metadata snapshot, install locally — `run_join_client` + `run_join_listener` with a dedicated `JoinRequest` / `JoinResponse` pair over rmp-serde
+- [x] 3.4 Install the `ClusterController` onto `NexusServer` — `nexus_server.set_cluster_controller(Some(handle.controller))` in main.rs after a successful bootstrap
+- [x] 3.5 Expose `TcpShardClient` via `BootstrapHandle.shard_client` — the coordinator's `ScatterGather` picks it up as the production `ShardClient`. Scatter-engine integration into the `/cypher` handler is a follow-up; the client is ready and the wire format is stable.
+
+Tests: 11 new tests covering env parser happy paths + rejection cases, deterministic seed stability, single-node bootstrap with real TCP transport + election observable on `controller.is_leader()`, join protocol roundtripping `ClusterMeta` through a live `TcpListener`, join failing when seeds unreachable.
 
 ## 4. Benchmarks
 

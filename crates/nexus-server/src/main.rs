@@ -752,6 +752,44 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         ));
     }
 
+    // V2 sharding bootstrap (opt-in via NEXUS_SHARDING_MODE). When
+    // enabled, we spin a metadata Raft group over the TCP transport
+    // and install a ClusterController the /cluster/* endpoints will
+    // serve from. Disabled → no-op; standalone deployments keep the
+    // pre-V2 behaviour byte-identical.
+    match nexus_server::cluster_bootstrap::parse_sharding_env() {
+        Ok(None) => {
+            tracing::debug!("V2 sharding disabled (NEXUS_SHARDING_MODE unset)");
+        }
+        Ok(Some(sharding_cfg)) => {
+            let rt_handle = tokio::runtime::Handle::current();
+            match nexus_server::cluster_bootstrap::bootstrap_sharding(sharding_cfg, rt_handle).await
+            {
+                Ok(Some(handle)) => {
+                    tracing::info!("V2 sharding bootstrapped; controller installed on NexusServer");
+                    nexus_server
+                        .set_cluster_controller(Some(handle.controller.clone()))
+                        .await;
+                    // Leak the handle for the lifetime of the process
+                    // so its driver + listener tasks stay alive. A
+                    // graceful shutdown path reclaims it in a future
+                    // iteration; for now the process-level Ctrl+C
+                    // aborts the tokio runtime which cleans up tasks.
+                    std::mem::forget(handle);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!("V2 sharding bootstrap failed: {e}");
+                    return Err(anyhow::anyhow!("sharding bootstrap: {e}"));
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Invalid NEXUS_SHARDING_* env configuration: {e}");
+            return Err(anyhow::anyhow!("sharding env config: {e}"));
+        }
+    }
+
     // Apply authentication middleware if enabled
     if let Some(auth_middleware) = auth_middleware_state {
         app = app.layer(axum_middleware::from_fn_with_state(
