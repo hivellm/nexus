@@ -30,6 +30,7 @@ pub mod harness;
 pub mod report;
 pub mod scenario;
 pub mod scenario_catalog;
+pub mod scenarios;
 
 #[cfg(feature = "live-bench")]
 pub mod client;

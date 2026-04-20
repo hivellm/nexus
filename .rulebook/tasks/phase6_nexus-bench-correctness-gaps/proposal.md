@@ -25,6 +25,51 @@ Snapshots live under
 Nexus commit the bench ran against so a latency regression
 (or a fix) has a commit to point at.
 
+### Run 6 — 2026-04-20 · Nexus commit `5caef298` · 49 catalog / 43 ran
+
+Catalogue grew to 49 after `scalar.date_literal`,
+`scalar.duration_between_days`, `scalar.point_distance_cartesian`,
+`scalar.point_distance_wgs84`, `procedure.dbms_components`,
+`write.unwind_create_batch`, `subquery.count_subquery` landed —
+filling the §9 (Temporal/Spatial) and §8 (procedures) rows of
+the scenario-expansion task.
+
+| Bucket | Count |
+|---|---|
+| ⭐ Lead | 39 |
+| ✅ Parity | 1 |
+| ⚠️ Behind | 1 |
+| 🚨 Gap | 2 |
+| content-divergent | ~11 |
+| bench-aborting errors | 6 |
+
+New findings (all consolidated here instead of growing the
+§ list further — each new scenario maps to an existing root
+cause or sits on a class the task already tracks):
+
+- `scalar.duration_between_days`, `scalar.point_distance_cartesian`,
+  `scalar.point_distance_wgs84` — Nexus returns **0 rows** on
+  every temporal / spatial built-in bench-run. Either the
+  functions are not registered in the evaluator, or they
+  throw silently and the RPC path swallows the error. New
+  class of gap, noted here; would get its own § when it gets
+  attention.
+- `procedure.dbms_components` — Nexus: **"Procedure
+  'dbms.components' not found"**. Same family as §3 (db.*
+  procedures) but different namespace and a cleaner
+  failure mode (explicit "not found" instead of yielding 0).
+- `subquery.count_subquery` — Nexus parses `COUNT { }` but
+  returns **null** for the per-row count where Neo4j returns
+  the actual degree. Same family as §5 (subquery expression
+  drop).
+- `write.unwind_create_batch` — Nexus's `UNWIND range(1,10)
+  AS i CREATE (:X) RETURN count(*)` returns **1** where Neo4j
+  returns **10**. UNWIND is producing a single aggregated row
+  before CREATE+count see it; similar shape to §9 (stdev not
+  aggregating across rows).
+
+Snapshot: `docs/benchmarks/baselines/2026-04-20-run6.{md,json}`.
+
 ### Run 5 — 2026-04-20 · Nexus commit `bae6bebb` · 42 catalog / 40 ran
 
 Catalogue grew to 42 after `aggregation.stdev_score`,
