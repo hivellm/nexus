@@ -23,7 +23,7 @@
 - [x] 3.3 Scenario loop runs Nexus first, Neo4j second, builds `ComparativeRow` with both sides populated
 - [ ] 3.4 Divergence guard compares row contents, not just counts
 - [x] 3.5 Markdown + JSON reports now surface ratios + classifications for every row
-- [ ] 3.6 Integration tests under `tests/live_compare.rs` — all `#[ignore]`, require both `NEXUS_BENCH_URL` + `NEO4J_BENCH_URL`
+- [x] 3.6 Integration tests under `tests/live_compare.rs` — all `#[ignore]`, require both `NEXUS_BENCH_URL` + `NEO4J_BENCH_URL`
 
 ## 4. Parity-report automation
 
