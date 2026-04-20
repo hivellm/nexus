@@ -15,16 +15,16 @@
 - [x] 3.2 2-hop friend-of-friend — `traversal.small_two_hop_from_hub`
 - [x] 3.3 Variable-length path `*1..3` — `traversal.small_var_length_1_to_3`
 - [ ] 3.4 Quantified path pattern `{1,5}` (once QPP ships)
-- [ ] 3.5 `shortestPath` — pending a separate verification that Nexus's shortest-path syntax matches Neo4j
-- [ ] 3.6 MATCH with multiple patterns + cartesian join — pending a non-ambiguous query on the shared fixture
+- [ ] 3.5 `shortestPath` — **[blocked]** the `shortestPath((…)-[*]->(…))` syntax errors at Nexus's parser (column 25). Tracked in `phase6_nexus-bench-correctness-gaps`. Scenario was added and then pulled; add back after the fix ships
+- [x] 3.6 MATCH with multiple patterns + cartesian join — `traversal.cartesian_a_b` (commit `6a9983f4`). Content-matches Neo4j; exposed a 287× performance gap on Nexus noted in the gaps task
 
 ## 4. Writes (§11)
 
-- [ ] 4.1 Single-node CREATE
-- [ ] 4.2 Batched CREATE via UNWIND (100-row literal)
-- [ ] 4.3 MERGE with + without existing match
-- [ ] 4.4 SET property
-- [ ] 4.5 DELETE / DETACH DELETE
+- [x] 4.1 Single-node CREATE — `write.create_singleton` (commit `6a9983f4`); idempotent literal return so the divergence guard stays useful across iterations
+- [ ] 4.2 Batched CREATE via UNWIND (100-row literal) — pending; needs a query shape that returns the same count across iterations
+- [x] 4.3 MERGE with + without existing match — `write.merge_singleton` (commit `6a9983f4`); idempotent by design
+- [x] 4.4 SET property — `write.set_property` (commit `6a9983f4`); idempotent SET on a known node
+- [ ] 4.5 DELETE / DETACH DELETE — `write.create_delete_cycle` added but hits `phase6_nexus-bench-correctness-gaps` §8 (Nexus rejects DELETE on CREATE→WITH-flow bindings). Content-matches Neo4j once §8 ships
 
 ## 5. Indexes (§12)
 
@@ -43,20 +43,20 @@
 
 ## 7. Subqueries (§14)
 
-- [ ] 7.1 `EXISTS { }` predicate
-- [ ] 7.2 `COUNT { }` subquery
-- [ ] 7.3 `COLLECT { }` subquery
-- [ ] 7.4 Nested `CALL { }` 3-deep
+- [ ] 7.1 `EXISTS { }` predicate — pending; `subquery.exists_high_score` uses the older `MATCH → WITH → RETURN` form and is tracked under `phase6_nexus-bench-correctness-gaps` §5 for the WITH→RETURN regression. Promote to the `EXISTS { }` syntax once the WITH bug is fixed
+- [ ] 7.2 `COUNT { }` subquery — pending
+- [x] 7.3 `COLLECT { }` subquery — partial; `subquery.collect_names` + `subquery.size_of_collect` exercise the collect-then-project path (even if the latter surfaces the §5 bug)
+- [ ] 7.4 Nested `CALL { }` 3-deep — pending
 - [ ] 7.5 `CALL { } IN TRANSACTIONS` throughput (once the clause ships)
 
 ## 8. Procedures (§15)
 
-- [ ] 8.1 `db.labels` / `db.indexes` / `db.constraints` latency
-- [ ] 8.2 `dbms.procedures` / `dbms.components`
-- [ ] 8.3 `apoc.coll.*` representative set
-- [ ] 8.4 `apoc.map.*` merge / groupBy
-- [ ] 8.5 `apoc.path.expand` vs native variable-length
-- [ ] 8.6 `gds.pageRank`
+- [x] 8.1 `db.labels` / `db.indexes` / `db.constraints` latency — `procedure.db_labels`, `procedure.db_relationship_types`, `procedure.db_property_keys`, `procedure.db_indexes` all landed. Content-wise they're broken today (tracked in `phase6_nexus-bench-correctness-gaps` §3), but the bench rows exist. `db.constraints` pending until the §3 fix makes `db.*` meaningfully yieldable
+- [ ] 8.2 `dbms.procedures` / `dbms.components` — pending
+- [ ] 8.3 `apoc.coll.*` representative set — **[blocked on APOC]**
+- [ ] 8.4 `apoc.map.*` merge / groupBy — **[blocked on APOC]**
+- [ ] 8.5 `apoc.path.expand` vs native variable-length — **[blocked on APOC]**
+- [ ] 8.6 `gds.pageRank` — **[blocked on GDS]**
 
 ## 9. Temporal & Spatial (§16)
 

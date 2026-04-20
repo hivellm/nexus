@@ -210,6 +210,30 @@ pub fn seed_scenarios() -> Vec<Scenario> {
         )
         .expected_rows(1)
         .build(),
+        ScenarioBuilder::new(
+            "scalar.string_concat",
+            "string + string concatenation",
+            DatasetKind::Tiny,
+            "RETURN 'hello' + ' world' AS greet",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "scalar.list_indexing",
+            "zero-indexed list access",
+            DatasetKind::Tiny,
+            "RETURN [10, 20, 30][1] AS second",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "scalar.case_simple",
+            "CASE WHEN expression",
+            DatasetKind::Tiny,
+            "RETURN CASE WHEN 1 > 0 THEN 'yes' ELSE 'no' END AS verdict",
+        )
+        .expected_rows(1)
+        .build(),
         // --- Subqueries ------------------------------------------
         ScenarioBuilder::new(
             "subquery.collect_names",
@@ -351,6 +375,20 @@ pub fn seed_scenarios() -> Vec<Scenario> {
             "SET n.bench_visited = true on n0:A — idempotent",
             DatasetKind::Tiny,
             "MATCH (n:A {id: 0}) SET n.bench_visited = true RETURN n.id AS id",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "write.create_delete_cycle",
+            "CREATE-then-DELETE in one query — net-zero, iteration-safe",
+            DatasetKind::Tiny,
+            // Each iteration creates one node and deletes it in the
+            // same statement. Row count stays at 1 across the
+            // measured loop, so the divergence guard stays useful
+            // without a per-iteration reset hook. Also exercises
+            // the `DELETE` code path the other write scenarios
+            // avoid.
+            "CREATE (n:BenchCycle) WITH n DELETE n RETURN 'done' AS status",
         )
         .expected_rows(1)
         .build(),

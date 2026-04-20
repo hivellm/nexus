@@ -884,6 +884,62 @@ fn create_bound_variable_edge_does_not_duplicate_nodes() {
     );
 }
 
+/// Regression for phase6_nexus-bench-correctness-gaps §1 —
+/// composite `:Label {prop: value}` filter.
+///
+/// Pre-fix symptom: on a database where both `:X` and `:Y` labels
+/// hold nodes with `id: 0`, `MATCH (:X {id: 0})-[:R]->(b) RETURN
+/// count(b)` counted every `:R`-outgoing edge in the database,
+/// ignoring both the `:X` label and the `{id: 0}` property
+/// filter. The bench's `traversal.small_one_hop_hub` caught this
+/// (99 edges counted instead of 5).
+#[test]
+fn match_scopes_by_label_and_property_together() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    // Two labels, each with its own id=0 node + outgoing edges.
+    // Only the X/id=0 node's outgoing count (3) should be
+    // returned when the query scopes to :X {id: 0}. If either
+    // the label or the property filter is dropped, the answer
+    // drifts upward (to 5 if only label scope lost, to 3+2 = 5
+    // or higher if prop scope lost, etc.).
+    engine
+        .execute_cypher(
+            "CREATE (x0:X {id: 0}), (x1:X {id: 1}), \
+             (y0:Y {id: 0}), (y1:Y {id: 1}), \
+             (t0:Target {id: 10}), (t1:Target {id: 11}), (t2:Target {id: 12}), \
+             (x0)-[:R]->(t0), (x0)-[:R]->(t1), (x0)-[:R]->(t2), \
+             (x1)-[:R]->(t0), (x1)-[:R]->(t1), \
+             (y0)-[:R]->(t0), (y0)-[:R]->(t1), \
+             (y1)-[:R]->(t0)",
+        )
+        .expect("seed CREATE must succeed");
+
+    // Sanity: the total edge count is 8 — if the composite
+    // filter collapses and this test suddenly asserts on 8, the
+    // bug is still live.
+    let all = engine
+        .execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
+        .unwrap();
+    assert_eq!(
+        all.rows[0].values[0].as_u64(),
+        Some(8),
+        "sanity: 8 edges total"
+    );
+
+    // The actual assertion.
+    let scoped = engine
+        .execute_cypher("MATCH (:X {id: 0})-[:R]->(b) RETURN count(b) AS c")
+        .unwrap();
+    assert_eq!(
+        scoped.rows[0].values[0].as_u64(),
+        Some(3),
+        "expected 3 (X+id=0 has 3 outgoing); composite label+property \
+         filter broke — bench's traversal.small_one_hop_hub regression"
+    );
+}
+
 /// Multi-hop chain variant of the bound-variable CREATE fix —
 /// 3 nodes, 2 edges both referencing earlier declarations. Locks
 /// the invariant across more than one edge, which the single-edge

@@ -25,6 +25,34 @@ Snapshots live under
 Nexus commit the bench ran against so a latency regression
 (or a fix) has a commit to point at.
 
+### Run 4 — 2026-04-20 · Nexus commit `4b8ece39` · 38 catalog / 37 ran
+
+Catalogue grew to 38 after `scalar.string_concat`,
+`scalar.list_indexing`, `scalar.case_simple`,
+`write.create_delete_cycle` landed. The three scalars all pass
+clean; the write-cycle scenario exposes a new Nexus restriction.
+
+| Bucket | Count |
+|---|---|
+| ⭐ Lead | 31 |
+| ✅ Parity | 4 |
+| ⚠️ Behind | 0 |
+| 🚨 Gap | 2 |
+| content-divergent | 11 (same set as Run 3, one row fewer because `subquery.with_filter_count` hit expected-rows error this run instead of content mismatch — same bug) |
+| bench-aborting errors | 3 (`procedure.db_indexes`, `subquery.with_filter_count`, `write.create_delete_cycle`) |
+
+New finding vs Run 3:
+
+- `write.create_delete_cycle` — Nexus rejects
+  `CREATE (n:BenchCycle) WITH n DELETE n RETURN 'done' AS status`
+  with the parse-time error **"DELETE requires MATCH clause"**.
+  Neo4j accepts the same statement. The WITH binding from the
+  CREATE should satisfy DELETE's node-context requirement, but
+  Nexus only accepts DELETE when a MATCH is the direct upstream.
+  New §8 below.
+
+Snapshot: `docs/benchmarks/baselines/2026-04-20-run4.{md,json}`.
+
 ### Run 3 — 2026-04-20 · Nexus commit `6a9983f4` · 34 scenarios
 
 Catalogue grew to 34 after `procedure.db_indexes`,
@@ -286,6 +314,26 @@ Nexus sorts nulls with the wrong polarity in **both** DESC
 and ASC. openCypher: DESC → nulls first, ASC → nulls last.
 Medium severity because `ORDER BY` is everywhere; fix is a
 single polarity flip in the comparator.
+
+### 8. `DELETE` rejects CREATE→WITH-flow context (MEDIUM)
+
+Caught by:
+- `write.create_delete_cycle` (Run 4): Nexus parse-time error
+  **"DELETE requires MATCH clause"**
+
+```cypher
+CREATE (n:BenchCycle) WITH n DELETE n RETURN 'done' AS status
+-- Neo4j: executes the statement; 1 node created + deleted; returns 'done'
+-- Nexus: parse error, "DELETE requires MATCH clause"
+```
+
+The DELETE clause should accept any node binding already in
+scope — whether that came from `MATCH`, `CREATE`, or a prior
+`WITH`. Nexus's current check insists the node variable comes
+from a MATCH. Blocks iteration-safe create-then-delete
+patterns in the bench, and — more importantly — any real
+transactional flow that creates temp data and immediately
+cleans it up.
 
 ### Methodology
 
