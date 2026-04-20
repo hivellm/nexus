@@ -52,13 +52,20 @@
 - [ ] 8.2 Widen to other upstream clauses: UNWIND-produced bindings flowing into DELETE, CALL subquery returning nodes to DELETE. Confirm the clause-context check is uniformly "any node binding", not "MATCH-only"
 - [ ] 8.3 Fix the parser / planner and re-run bench; `write.create_delete_cycle` executes without error and content-matches Neo4j
 
-## 9. Re-run + publish
+## 9. Statistical aggregations don't aggregate (MEDIUM)
+
+- [ ] 9.1 Engine-level regression: `MATCH (n:A) RETURN stdev(n.score)` returns one row, not one-per-node
+- [ ] 9.2 Extend to `stdevp`, `variance`, `percentileCont`, `percentileDisc` — one row each
+- [ ] 9.3 Audit the planner's aggregation-function registry; add the missing entries so their presence in a RETURN collapses the row set the same way `count()` / `sum()` / `avg()` already do
+- [ ] 9.4 Re-run bench; `aggregation.stdev_score` content-matches Neo4j
+
+## 10. Re-run + publish
 
 - [ ] 6.1 After each §1-§5 fix, rebuild `target/release/nexus-server.exe` and rerun `target/release/nexus-bench.exe --rpc-addr 127.0.0.1:15475 --neo4j-url bolt://127.0.0.1:7687 --compare --i-have-a-server-running --load-dataset --format both --output target/bench/report`
 - [ ] 6.2 Update the "Bench table" section of `proposal.md` with the fresh classification counts and the per-scenario p50s on the rows the fix touched; note which scenarios still diverge
 - [ ] 6.3 Final run: zero content-divergent scenarios. The harness's 9 `#[ignore]` comparative tests all still pass as a single `cargo test --features live-bench,neo4j -- --ignored --test-threads=1` batch
 
-## 10. Tail (mandatory — enforced by rulebook v5.3.0)
+## 11. Tail (mandatory — enforced by rulebook v5.3.0)
 
 - [ ] 7.1 Update or create documentation — CHANGELOG entry per fix under `1.0.0 → Fixed`; mention in `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` if any fix closes a documented gap
 - [ ] 7.2 Write tests covering the new behavior — §1.1 / §2.1 / §3.1-3.2 / §4.1 / §5.1 above

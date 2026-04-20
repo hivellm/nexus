@@ -63,6 +63,14 @@ pub fn seed_scenarios() -> Vec<Scenario> {
         )
         .expected_rows(1)
         .build(),
+        ScenarioBuilder::new(
+            "aggregation.stdev_score",
+            "stdev over node.score on label A",
+            DatasetKind::Tiny,
+            "MATCH (n:A) RETURN stdev(n.score) AS sd",
+        )
+        .expected_rows(1)
+        .build(),
         // --- Filter + projection ---------------------------------
         ScenarioBuilder::new(
             "filter.score_gt_half",
@@ -77,6 +85,14 @@ pub fn seed_scenarios() -> Vec<Scenario> {
             "count nodes whose score is in [0.25, 0.75]",
             DatasetKind::Tiny,
             "MATCH (n) WHERE n.score >= 0.25 AND n.score <= 0.75 RETURN count(n) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "filter.label_and_id",
+            "label + id range filter combo on A",
+            DatasetKind::Tiny,
+            "MATCH (n:A) WHERE n.id > 5 AND n.id < 15 RETURN count(n) AS c",
         )
         .expected_rows(1)
         .build(),
@@ -231,6 +247,22 @@ pub fn seed_scenarios() -> Vec<Scenario> {
             "CASE WHEN expression",
             DatasetKind::Tiny,
             "RETURN CASE WHEN 1 > 0 THEN 'yes' ELSE 'no' END AS verdict",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "scalar.unwind_range_count",
+            "UNWIND range(1, 10) + count — basic iterator",
+            DatasetKind::Tiny,
+            "UNWIND range(1, 10) AS x RETURN count(x) AS c",
+        )
+        .expected_rows(1)
+        .build(),
+        ScenarioBuilder::new(
+            "scalar.list_reverse",
+            "reverse() of a literal list",
+            DatasetKind::Tiny,
+            "RETURN reverse([1, 2, 3, 4, 5]) AS rev",
         )
         .expected_rows(1)
         .build(),

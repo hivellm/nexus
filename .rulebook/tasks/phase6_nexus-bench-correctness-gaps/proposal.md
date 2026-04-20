@@ -25,6 +25,37 @@ Snapshots live under
 Nexus commit the bench ran against so a latency regression
 (or a fix) has a commit to point at.
 
+### Run 5 — 2026-04-20 · Nexus commit `bae6bebb` · 42 catalog / 40 ran
+
+Catalogue grew to 42 after `aggregation.stdev_score`,
+`filter.label_and_id`, `scalar.unwind_range_count`,
+`scalar.list_reverse` landed. Three of the four content-match
+Neo4j on the first run; `stdev()` surfaces a new aggregation
+bug.
+
+| Bucket | Count |
+|---|---|
+| ⭐ Lead | 34 |
+| ✅ Parity | 4 |
+| ⚠️ Behind | 0 |
+| 🚨 Gap | 2 |
+| content-divergent | 11 |
+| bench-aborting errors | 4 (now including `aggregation.stdev_score`) |
+
+New finding vs Run 4:
+
+- `aggregation.stdev_score` — `MATCH (n:A) RETURN stdev(n.score)
+  AS sd` returns 20 rows on Nexus (one per matched :A node),
+  not one aggregated row. Cypher aggregation contract says
+  unique-per-group, one row per distinct group; with no GROUP BY
+  that's one row total. Nexus's `stdev()` behaves like a
+  scalar pass-through. Filed as §9 below. Very likely the
+  same root cause as "the rest of the statistical
+  aggregations aren't wired up" — `percentileCont`, `variance`,
+  `collect` (the latter seems to work but only just).
+
+Snapshot: `docs/benchmarks/baselines/2026-04-20-run5.{md,json}`.
+
 ### Run 4 — 2026-04-20 · Nexus commit `4b8ece39` · 38 catalog / 37 ran
 
 Catalogue grew to 38 after `scalar.string_concat`,
@@ -334,6 +365,28 @@ from a MATCH. Blocks iteration-safe create-then-delete
 patterns in the bench, and — more importantly — any real
 transactional flow that creates temp data and immediately
 cleans it up.
+
+### 9. Statistical aggregations don't aggregate (MEDIUM)
+
+Caught by:
+- `aggregation.stdev_score` (Run 5): Nexus returns **20 rows**,
+  Neo4j returns **1** (the actual stdev value).
+
+```cypher
+MATCH (n:A) RETURN stdev(n.score) AS sd
+-- Neo4j: one row, stdev value ≈ 0.0577
+-- Nexus: 20 rows, one per matched :A node; stdev() appears to
+--        pass its argument through unchanged instead of
+--        aggregating across the row set
+```
+
+`stdev()` is not being recognised as an aggregation function
+in the planner — otherwise its presence alone would collapse
+the row set to one. Almost certainly extends to `stdevp`,
+`variance`, `percentileCont`, `percentileDisc` the same way.
+Fix direction: declare these in the aggregation-function
+registry the planner consults when deciding "should this
+expression collapse rows".
 
 ### Methodology
 
