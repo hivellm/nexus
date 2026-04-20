@@ -6,7 +6,6 @@ members = [
     "crates/nexus-server",
     "crates/nexus-protocol",
     "crates/nexus-cli",
-    "crates/nexus-bench",
 ]
 exclude = [
     "sdks/rust",
