@@ -1344,6 +1344,56 @@ fn with_aggregation_then_return_expression_projects_correctly() {
     );
 }
 
+/// Regression for phase6_nexus-bench-correctness-gaps §5.3 —
+/// WITH projects a non-aggregate expression, WITH's WHERE filters it,
+/// then RETURN aggregates over the filtered rows.
+///
+/// Pre-fix: the planner appended the WITH projection AFTER Aggregate
+/// (because the WITH-insertion step looked only for a Project sink and
+/// Aggregate is a separate variant). WITH tried to project
+/// `n.score AS s` on rows that Aggregate had already collapsed, so the
+/// filter `WHERE s > 0.1` saw zero rows downstream and `RETURN count(*)`
+/// returned zero rows instead of 1 (count aggregations always emit one).
+/// Fix: WITH insertion now treats Aggregate as a valid sink and lands
+/// the WITH + its Filter BEFORE the aggregation.
+#[test]
+fn with_projection_and_filter_run_before_return_aggregation() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+    engine
+        .execute_cypher(
+            "CREATE (:Phase6W3 {score: 0.05}), (:Phase6W3 {score: 0.2}), \
+             (:Phase6W3 {score: 0.7}), (:Phase6W3 {score: 0.9})",
+        )
+        .unwrap();
+
+    // Three of the four scores pass `s > 0.1`; count(*) aggregates those.
+    let r = engine
+        .execute_cypher(
+            "MATCH (n:Phase6W3) WITH n.score AS s WHERE s > 0.1 \
+             RETURN count(*) AS c",
+        )
+        .unwrap();
+    assert_eq!(
+        r.columns,
+        vec!["c"],
+        "§5.3: result column must be `c`, got {:?}",
+        r.columns
+    );
+    assert_eq!(
+        r.rows.len(),
+        1,
+        "§5.3: count(*) must emit exactly one row after aggregation; got {}",
+        r.rows.len()
+    );
+    assert_eq!(
+        r.rows[0].values[0].as_u64(),
+        Some(3),
+        "§5.3: expected count=3 (scores 0.2, 0.7, 0.9 pass `s > 0.1`); got {:?}",
+        r.rows[0].values[0]
+    );
+}
+
 /// Multi-hop chain variant of the bound-variable CREATE fix —
 /// 3 nodes, 2 edges both referencing earlier declarations. Locks
 /// the invariant across more than one edge, which the single-edge

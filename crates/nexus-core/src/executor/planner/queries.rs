@@ -605,17 +605,21 @@ impl<'a> QueryPlanner<'a> {
                 .collect();
 
             // Find the position to insert WITH:
-            // - Before Project if it exists
-            // - After UNWIND if Project doesn't exist (WITH needs UNWIND data)
+            // - Before Project OR Aggregate if either exists — WITH's projection
+            //   (and its WHERE filter) must run BEFORE aggregation, otherwise
+            //   `MATCH (n:A) WITH n.score AS s WHERE s > 0.1 RETURN count(*)`
+            //   has Aggregate already collapsing all `n`-bearing rows into
+            //   one by the time WITH tries to read `n.score` (phase6 §5.3).
+            // - After UNWIND if no sink exists (WITH needs UNWIND data)
             // - At end if neither exists
-            let project_pos = operators
+            let sink_pos = operators
                 .iter()
-                .position(|op| matches!(op, Operator::Project { .. }));
+                .position(|op| matches!(op, Operator::Project { .. } | Operator::Aggregate { .. }));
 
-            let insert_pos = if let Some(pos) = project_pos {
+            let insert_pos = if let Some(pos) = sink_pos {
                 pos
             } else {
-                // No Project found - insert after UNWIND operators (if any)
+                // No Project/Aggregate found - insert after UNWIND operators (if any)
                 // Find the last UNWIND operator position
                 let last_unwind_pos = operators
                     .iter()

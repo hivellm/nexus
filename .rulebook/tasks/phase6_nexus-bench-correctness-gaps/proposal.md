@@ -55,12 +55,23 @@ fix here" unsafe without a wider refactor. The in-pass punch list:
 
 Not landed this pass (still open):
 
-- **§5.3 `WITH ... WHERE ... RETURN count(*)`** — the
-  WITH-without-aggregation + RETURN-with-aggregation path still
-  leaks the WITH alias through as the final column. A separate
-  planner path that wasn't touched by the §5.1 / §5.2 fix.
+- (engine-level work closed for this task; only §10 bench re-run
+  against a live Neo4j remains.)
 
 Added to "DONE" after the third pass (2026-04-20, same day):
+
+- **§5.3 `WITH ... WHERE ... RETURN count(*)`** — **DONE**. The
+  WITH-insertion pass at `crates/nexus-core/src/executor/planner/queries.rs`
+  now treats `Operator::Aggregate` as a valid sink alongside
+  `Operator::Project`. Before this change, the insertion looked only
+  for `Project` and appended WITH at the end of the operator list
+  when none was found — which meant `MATCH (n:A) WITH n.score AS s
+  WHERE s > 0.1 RETURN count(*)` landed WITH (and its Filter) AFTER
+  Aggregate. WITH's projection then ran on already-collapsed rows,
+  Filter dropped everything, and the final row set was empty. With
+  Aggregate treated as a sink, WITH + Filter insert before it and
+  the pipeline runs in the correct Cypher order. Regression test:
+  `with_projection_and_filter_run_before_return_aggregation`.
 
 - **§1 Composite `:Label {prop}` filter** — **DONE**. Three coordinated
   edits in `crates/nexus-core`:
