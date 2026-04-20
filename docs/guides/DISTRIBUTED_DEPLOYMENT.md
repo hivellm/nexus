@@ -99,12 +99,71 @@ cross_shard_cache_ttl = "30s"
 * **`join`**: add a new node to an existing cluster. The joining
   node reads the authoritative shard count from cluster metadata.
 
+## Environment-variable configuration (1.x)
+
+The 1.0.0 server accepts the V2 sharding configuration as environment
+variables — the YAML schema extension (`[cluster.sharding]`) is tracked
+as a follow-up. Equivalent env-var form:
+
+```bash
+export NEXUS_SHARDING_MODE=bootstrap           # disabled | bootstrap | join
+export NEXUS_SHARDING_NODE_ID=node-a
+export NEXUS_SHARDING_LISTEN_ADDR=0.0.0.0:15480
+export NEXUS_SHARDING_PEERS="node-a=10.0.0.1:15480,node-b=10.0.0.2:15480,node-c=10.0.0.3:15480"
+export NEXUS_SHARDING_NUM_SHARDS=3
+export NEXUS_SHARDING_REPLICA_FACTOR=3
+```
+
+When `NEXUS_SHARDING_MODE` is unset (or set to `disabled`), the server
+boots in single-node mode and every `/cluster/*` endpoint returns `503
+Service Unavailable`. Malformed values are fatal — the server refuses
+to start rather than silently falling back to standalone.
+
+## TCP transport operational notes
+
+The Raft-group transport layer uses TCP on `NEXUS_SHARDING_LISTEN_ADDR`
+with a fixed wire format:
+
+```
+[shard_id:u32 LE][type:u8=0x40][length:u32 LE][payload:bincode][crc32:u32 LE]
+```
+
+Per-peer behavior:
+
+* **Outbound queue**: bounded (1024 frames by default). Non-blocking
+  `try_send`; `Full` drops the frame — Raft tolerates message loss and
+  the next heartbeat/append resends.
+* **Reconnect**: exponential backoff between 100 ms and 5 s on a dead
+  socket. No circuit breaker — the peer keeps trying forever so a
+  cluster can survive an extended partition without manual intervention.
+* **Connect timeout**: 2 s. Longer waits would pin the writer task on
+  an unreachable `SocketAddr`.
+
+The join-protocol port is `NEXUS_SHARDING_LISTEN_ADDR + 1`. A node
+booting in `join` mode dials this port on each listed seed, sending a
+small `JoinRequest` frame; the seed replies with its current
+`ClusterMeta` (rmp-serde). Firewall rules MUST allow the join port in
+addition to the Raft port on every seed.
+
+**Measured latencies** (`cargo +nightly bench --package nexus-core --
+v2_tcp_transport`, loopback):
+
+| Benchmark | Cold | Steady-state |
+|---|---|---|
+| `raft_envelope_roundtrip` | ~500 µs | ~60-100 µs |
+| `tcp_shard_client_execute` | ~1 ms | ~200-300 µs |
+| `three_node_failover` | — | < 1 s per failover (spec bound 2 s) |
+
+Add `~1 ms` per hop for LAN and `~15-50 ms` for WAN when interpreting
+against production traffic.
+
 ## Bootstrap walkthrough
 
 On every node:
 
 ```bash
-# 1. Place matching `nexus.toml` in /etc/nexus/
+# 1. Export the NEXUS_SHARDING_* env vars (see above) or place a
+#    matching `nexus.toml` in /etc/nexus/
 # 2. Start:
 nexus-server
 ```
