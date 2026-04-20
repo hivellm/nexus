@@ -34,6 +34,6 @@
 
 ## 5. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 5.1 Update or create documentation covering the implementation — `docs/benchmarks/README.md` with the Docker workflow + `crates/nexus-bench/README.md` comparative-mode section
-- [ ] 5.2 Write tests covering the new behavior — Bolt unit tests + `tests/live_compare.rs` + a Docker-based CI smoke
+- [x] 5.1 Update or create documentation covering the implementation — `docs/benchmarks/README.md` with the Docker workflow + `crates/nexus-bench/README.md` comparative-mode section
+- [x] 5.2 Write tests covering the new behavior — Bolt unit tests + `tests/live_compare.rs` + a Docker-based CI smoke
 - [ ] 5.3 Run tests and confirm they pass — `cargo +nightly test -p nexus-bench --features live-bench,neo4j` under a running docker compose
