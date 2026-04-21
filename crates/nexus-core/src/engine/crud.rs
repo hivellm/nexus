@@ -71,6 +71,48 @@ impl Engine {
         Ok(())
     }
 
+    /// Insert `node_id`'s tuple into every composite B-tree that
+    /// matches a label this node carries. Silent no-op when no
+    /// composite index is registered for those labels.
+    pub(super) fn index_composite_tuples(
+        &self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &Value,
+    ) -> Result<()> {
+        let obj = match properties.as_object() {
+            Some(m) => m,
+            None => return Ok(()),
+        };
+        for (lbl, keys, _unique, _name) in self.indexes.composite_btree.list() {
+            if !label_ids.contains(&lbl) {
+                continue;
+            }
+            // Build the tuple in key order; abort if any component is
+            // missing / NULL — NODE KEY enforcement rejects those
+            // writes upstream so this is a defence-in-depth skip.
+            let mut tuple: Vec<crate::index::PropertyValue> = Vec::with_capacity(keys.len());
+            let mut ok = true;
+            for k in &keys {
+                match obj.get(k) {
+                    Some(Value::Null) | None => {
+                        ok = false;
+                        break;
+                    }
+                    Some(v) => tuple.push(super::json_to_property_value(v)),
+                }
+            }
+            if !ok {
+                continue;
+            }
+            if let Some(idx) = self.indexes.composite_btree.find(lbl, &keys) {
+                let mut g = idx.write();
+                g.insert(node_id, tuple)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn load_node_properties_map(&self, node_id: u64) -> Result<Map<String, Value>> {
         if let Some(Value::Object(map)) = self.storage.load_node_properties(node_id)? {
             return Ok(map);
@@ -244,8 +286,10 @@ impl Engine {
             label_ids.push(label_id);
         }
 
-        // Check constraints before creating node
+        // Check constraints before creating node — legacy (UNIQUE /
+        // EXISTS) + extended (NODE KEY / property-type).
         self.check_constraints(&label_ids, &properties, None)?;
+        self.enforce_extended_node_constraints(&label_ids, &properties, None)?;
 
         let node_id =
             self.storage
@@ -261,7 +305,6 @@ impl Engine {
         if has_session_tx {
             // Index updates will be applied in batch during commit
             // For now, still update immediately for MATCH visibility during transaction
-            // TODO: Optimize to defer updates but maintain visibility
             self.indexes.label_index.add_node(node_id, &label_ids)?;
             self.index_node_properties(node_id, &properties)?;
         } else {
@@ -269,6 +312,13 @@ impl Engine {
             self.indexes.label_index.add_node(node_id, &label_ids)?;
             self.index_node_properties(node_id, &properties)?;
         }
+
+        // phase6_opencypher-constraint-enforcement §5 — populate every
+        // registered composite B-tree matching this node's label set
+        // so the next NODE KEY enforcement sees the tuple we just
+        // committed. Indexes are keyed by (label, property_keys);
+        // nodes carrying the label hit the register path.
+        self.index_composite_tuples(node_id, &label_ids, &properties)?;
 
         // Only commit if we created our own transaction
         if !has_session_tx {
@@ -330,6 +380,12 @@ impl Engine {
         };
 
         let type_id = self.catalog.get_or_create_type(&rel_type)?;
+
+        // phase6_opencypher-constraint-enforcement §6 — relationship
+        // NOT NULL / property-type enforcement. Runs before the
+        // storage write so a violation aborts atomically.
+        self.enforce_rel_constraints(type_id, &properties)?;
+
         let rel_id = self
             .storage
             .create_relationship(tx, from, to, type_id, properties.clone())?;
@@ -441,6 +497,7 @@ impl Engine {
 
         // Check constraints before updating node (exclude current node from uniqueness check)
         self.check_constraints(&label_ids, &properties, Some(id))?;
+        self.enforce_extended_node_constraints(&label_ids, &properties, Some(id))?;
 
         // Create updated node record
         let mut node_record = storage::NodeRecord::new();

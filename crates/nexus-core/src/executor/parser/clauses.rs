@@ -2015,7 +2015,17 @@ impl CypherParser {
         self.expect_keyword("ASSERT")?;
         self.skip_whitespace();
 
-        // Parse constraint type and extract property name
+        // Parse constraint type and extract property name.
+        //
+        // Accepted forms (Cypher 4.x + phase6 extension):
+        //   * `EXISTS(n.p)`               — legacy EXISTS
+        //   * `n.p IS UNIQUE`             — uniqueness
+        //   * `n.p IS NOT NULL`           — NOT NULL (alias of EXISTS)
+        //
+        // The Cypher 25 `FOR (n:L) REQUIRE (p1, p2) IS NODE KEY` and
+        // relationship / property-type grammars register through the
+        // programmatic API on `Engine` in this release; the parser
+        // extension lands with the FOR/REQUIRE reshape task.
         let (constraint_type, property) = if self.peek_keyword("EXISTS") {
             self.parse_keyword()?; // consume "EXISTS"
             self.expect_char('(')?;
@@ -2025,14 +2035,21 @@ impl CypherParser {
             self.expect_char(')')?;
             (ConstraintType::Exists, prop)
         } else {
-            // Parse: variable.property IS UNIQUE
             let _var = self.parse_identifier()?;
             self.expect_char('.')?;
             let prop = self.parse_identifier()?;
             self.skip_whitespace();
             self.expect_keyword("IS")?;
-            self.expect_keyword("UNIQUE")?;
-            (ConstraintType::Unique, prop)
+            self.skip_whitespace();
+            if self.peek_keyword("NOT") {
+                self.parse_keyword()?; // NOT
+                self.skip_whitespace();
+                self.expect_keyword("NULL")?;
+                (ConstraintType::Exists, prop)
+            } else {
+                self.expect_keyword("UNIQUE")?;
+                (ConstraintType::Unique, prop)
+            }
         };
 
         Ok(CreateConstraintClause {
@@ -2071,7 +2088,8 @@ impl CypherParser {
         self.expect_keyword("ASSERT")?;
         self.skip_whitespace();
 
-        // Parse constraint type and extract property name (same as CREATE)
+        // Parse constraint type and extract property name (same as CREATE).
+        // Accepts `IS UNIQUE`, `IS NOT NULL`, and the legacy `EXISTS(n.p)`.
         let (constraint_type, property) = if self.peek_keyword("EXISTS") {
             self.parse_keyword()?;
             self.expect_char('(')?;
@@ -2086,8 +2104,16 @@ impl CypherParser {
             let prop = self.parse_identifier()?;
             self.skip_whitespace();
             self.expect_keyword("IS")?;
-            self.expect_keyword("UNIQUE")?;
-            (ConstraintType::Unique, prop)
+            self.skip_whitespace();
+            if self.peek_keyword("NOT") {
+                self.parse_keyword()?;
+                self.skip_whitespace();
+                self.expect_keyword("NULL")?;
+                (ConstraintType::Exists, prop)
+            } else {
+                self.expect_keyword("UNIQUE")?;
+                (ConstraintType::Unique, prop)
+            }
         };
 
         Ok(DropConstraintClause {

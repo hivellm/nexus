@@ -5,6 +5,54 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-04-21
+
+### Added — Constraint enforcement for every advertised kind
+
+phase6_opencypher-constraint-enforcement closes the correctness gap
+where Nexus accepted DDL for NODE KEY / NOT NULL / property-type
+constraints but silently ignored them on writes. Every kind now
+enforces on CREATE / MERGE / SET / REMOVE / SET LABEL:
+
+- **NODE KEY** — composite `(p1, p2, ...)` uniqueness + implicit
+  NOT NULL on each component. Backed by the composite B-tree from
+  phase6_opencypher-advanced-types with the `unique` flag set.
+- **Relationship NOT NULL** — rejects rel CREATE that lacks the
+  required property, rejects SET r.p = NULL / REMOVE r.p.
+- **Property-type** (`IS :: INTEGER / FLOAT / STRING / BOOLEAN /
+  BYTES / LIST / MAP`) — strict Neo4j semantics (INTEGER ≠ FLOAT),
+  node and relationship scope.
+- **NOT NULL alias** — `ASSERT n.p IS NOT NULL` parses as an alias
+  of the legacy `EXISTS(n.p)` form.
+- **Label-add guard** — `SET n:L` that violates any constraint on
+  `L` is rejected before the label lands on the pending state.
+- **Backfill validator** — registering a constraint on an existing
+  dataset runs a one-shot streaming scan; the first 100 offending
+  rows surface in the error payload; abort is atomic (no partial
+  constraint state survives).
+- **Relaxed-enforcement flag** — `Engine::set_relaxed_constraint_
+  enforcement(true)` downgrades violations to `WARN` logs so users
+  can port dirty datasets in stages. Emits a loud server-startup
+  warning. Scheduled for removal at v1.5.
+
+Registration today goes through the programmatic API
+(`Engine::add_node_key_constraint`, `add_rel_not_null_constraint`,
+`add_property_type_constraint`, `add_rel_property_type_constraint`);
+the Cypher 25 `FOR (n:L) REQUIRE (...) IS NODE KEY` surface grammar
+lands in the follow-up DDL-reshape task.
+
+Errors surface as `ERR_CONSTRAINT_VIOLATED: kind=<KIND> ...` where
+`<KIND>` is `UNIQUENESS` / `NODE_PROPERTY_EXISTENCE` / `NODE_KEY` /
+`RELATIONSHIP_PROPERTY_EXISTENCE` / `PROPERTY_TYPE`. HTTP mapping:
+409 for UNIQUENESS + NODE_KEY; 400 for NOT NULL + PROPERTY_TYPE.
+
+See [docs/guides/CONSTRAINTS.md](docs/guides/CONSTRAINTS.md).
+
+**Behaviour change**: workloads that relied on the silent
+acceptance of non-unique constraint violations will start failing.
+Set `relaxed_constraint_enforcement = true` during the migration
+window if that applies.
+
 ## [1.6.0] — 2026-04-21
 
 ### Added — APOC procedure ecosystem (~100 procedures)

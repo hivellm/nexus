@@ -47,6 +47,7 @@ pub mod cache;
 pub mod catalog;
 pub mod cluster;
 pub mod concurrent_access;
+pub mod constraints;
 pub mod coordinator;
 pub mod database;
 pub mod error;
