@@ -146,7 +146,15 @@ mod tests {
         // Anything outside those prefixes must stay pure-read so a
         // harness run without `--load-dataset` cannot surprise the
         // operator by mutating state.
-        const MUTATION_PREFIXES: &[&str] = &["write.", "constraint.", "ecosystem."];
+        const MUTATION_PREFIXES: &[&str] = &[
+            "write.",
+            "constraint.",
+            "ecosystem.",
+            // phase6 advanced-types bench scenarios legitimately
+            // issue `CREATE INDEX FOR (n:L) ON (...)` DDL — the same
+            // "author-intent marker" principle applies.
+            "advanced_types.",
+        ];
         for s in seed_scenarios() {
             let q = format!(" {} ", s.query.to_uppercase());
             let has_write = [

@@ -23,7 +23,9 @@
 
 use crate::scenario::Scenario;
 
+pub(crate) mod advanced_types;
 pub(crate) mod aggregation;
+pub(crate) mod apoc;
 pub(crate) mod constraint;
 pub(crate) mod ecosystem;
 pub(crate) mod filter;
@@ -44,7 +46,9 @@ pub(crate) mod write;
 /// output listing stays predictable.
 pub(crate) fn all() -> Vec<Scenario> {
     let mut out = Vec::new();
+    out.extend(advanced_types::scenarios());
     out.extend(aggregation::scenarios());
+    out.extend(apoc::scenarios());
     out.extend(constraint::scenarios());
     out.extend(ecosystem::scenarios());
     out.extend(filter::scenarios());
