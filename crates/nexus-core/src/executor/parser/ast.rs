@@ -800,6 +800,47 @@ pub struct CallSubqueryClause {
     pub in_transactions: bool,
     /// Batch size for IN TRANSACTIONS (optional)
     pub batch_size: Option<usize>,
+    /// phase6_opencypher-subquery-transactions — `IN CONCURRENT
+    /// TRANSACTIONS` variant. When `Some(n)`, spawn up to `n`
+    /// parallel workers; when `None`, single-worker (default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<usize>,
+    /// phase6_opencypher-subquery-transactions — `ON ERROR`
+    /// clause. Default is `Fail` (abort immediately), matching
+    /// Neo4j's implicit behaviour.
+    #[serde(default, skip_serializing_if = "OnErrorPolicy::is_default")]
+    pub on_error: OnErrorPolicy,
+    /// phase6_opencypher-subquery-transactions — `REPORT STATUS
+    /// AS <var>`. When set, the clause emits one row per batch
+    /// with columns `(started, committed, rowsProcessed, err)`
+    /// bound to the named variable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_var: Option<String>,
+}
+
+/// phase6_opencypher-subquery-transactions — `ON ERROR` clause
+/// variants. Controls how `CALL { ... } IN TRANSACTIONS` reacts to
+/// a failure inside the inner subquery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum OnErrorPolicy {
+    /// `ON ERROR FAIL` (default) — abort the outer query on any
+    /// inner failure.
+    #[default]
+    Fail,
+    /// `ON ERROR CONTINUE` — log + mark row failed, keep going.
+    Continue,
+    /// `ON ERROR BREAK` — commit the current batch, stop cleanly.
+    Break,
+    /// `ON ERROR RETRY <n>` — retry the failing batch up to `n`
+    /// times before giving up.
+    Retry { max_attempts: usize },
+}
+
+impl OnErrorPolicy {
+    /// Serde helper — skip the field when it carries the default.
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::Fail)
+    }
 }
 
 /// CALL procedure clause

@@ -1811,38 +1811,135 @@ impl CypherParser {
             graph_scope: None,
         };
 
-        // Check for IN TRANSACTIONS
+        // Check for IN TRANSACTIONS / IN CONCURRENT TRANSACTIONS
+        // with optional OF N ROWS / REPORT STATUS AS var / ON ERROR
+        // clauses (phase6_opencypher-subquery-transactions).
         self.skip_whitespace();
-        let (in_transactions, batch_size) = if self.peek_keyword("IN") {
-            self.parse_keyword()?; // consume "IN"
-            self.expect_keyword("TRANSACTIONS")?;
-            self.skip_whitespace();
+        let (in_transactions, batch_size, concurrency, status_var, on_error) =
+            if self.peek_keyword("IN") {
+                self.parse_keyword()?; // consume "IN"
+                self.skip_whitespace();
+                // `IN CONCURRENT TRANSACTIONS` is parsed the same way as
+                // `IN TRANSACTIONS` but sets `concurrency` to a default
+                // of 1 until `ON ERROR` / worker-count extensions land.
+                let concurrent = if self.peek_keyword("CONCURRENT") {
+                    self.parse_keyword()?;
+                    self.skip_whitespace();
+                    true
+                } else {
+                    false
+                };
+                self.expect_keyword("TRANSACTIONS")?;
+                self.skip_whitespace();
 
-            // Check for batch size: OF n ROWS
-            let batch = if self.peek_keyword("OF") {
-                self.parse_keyword()?; // consume "OF"
-                self.skip_whitespace();
-                let size = self.parse_number()?;
-                self.skip_whitespace();
-                if self.peek_keyword("ROWS") {
-                    self.parse_keyword()?; // consume "ROWS"
-                } else if self.peek_keyword("ROW") {
-                    self.parse_keyword()?; // consume "ROW"
+                let mut batch: Option<usize> = None;
+                let mut status: Option<String> = None;
+                let mut err_policy: OnErrorPolicy = OnErrorPolicy::Fail;
+
+                // Parse the OF / REPORT STATUS / ON ERROR suffix
+                // clauses in any order. Neo4j accepts arbitrary
+                // ordering so we accept the same.
+                loop {
+                    self.skip_whitespace();
+                    if self.peek_keyword("OF") {
+                        self.parse_keyword()?; // OF
+                        self.skip_whitespace();
+                        let raw = self.parse_number()?;
+                        if raw <= 0 {
+                            return Err(self.error(
+                                "ERR_CALL_IN_TX_INVALID_BATCH: OF <N> ROWS requires \
+                                 a positive integer",
+                            ));
+                        }
+                        batch = Some(raw as usize);
+                        self.skip_whitespace();
+                        if self.peek_keyword("ROWS") {
+                            self.parse_keyword()?;
+                        } else if self.peek_keyword("ROW") {
+                            self.parse_keyword()?;
+                        } else {
+                            return Err(self.error(
+                                "ERR_CALL_IN_TX_INVALID_BATCH: OF <N> must be \
+                                 followed by ROWS / ROW",
+                            ));
+                        }
+                        continue;
+                    }
+                    if self.peek_keyword("REPORT") {
+                        self.parse_keyword()?; // REPORT
+                        self.skip_whitespace();
+                        self.expect_keyword("STATUS")?;
+                        self.skip_whitespace();
+                        self.expect_keyword("AS")?;
+                        self.skip_whitespace();
+                        status = Some(self.parse_identifier()?);
+                        continue;
+                    }
+                    if self.peek_keyword("ON") {
+                        self.parse_keyword()?; // ON
+                        self.skip_whitespace();
+                        self.expect_keyword("ERROR")?;
+                        self.skip_whitespace();
+                        if self.peek_keyword("CONTINUE") {
+                            self.parse_keyword()?;
+                            err_policy = OnErrorPolicy::Continue;
+                        } else if self.peek_keyword("BREAK") {
+                            self.parse_keyword()?;
+                            err_policy = OnErrorPolicy::Break;
+                        } else if self.peek_keyword("FAIL") {
+                            self.parse_keyword()?;
+                            err_policy = OnErrorPolicy::Fail;
+                        } else if self.peek_keyword("RETRY") {
+                            self.parse_keyword()?;
+                            self.skip_whitespace();
+                            let raw = self.parse_number()?;
+                            if raw <= 0 {
+                                return Err(self.error(
+                                    "ERR_CALL_IN_TX_INVALID_RETRY: RETRY <N> \
+                                     requires a positive integer",
+                                ));
+                            }
+                            err_policy = OnErrorPolicy::Retry {
+                                max_attempts: raw as usize,
+                            };
+                        } else {
+                            return Err(self.error(
+                                "ERR_CALL_IN_TX_UNKNOWN_ON_ERROR: expected \
+                                 CONTINUE / BREAK / FAIL / RETRY",
+                            ));
+                        }
+                        continue;
+                    }
+                    break;
                 }
-                Some(size as usize)
+
+                let concurrency = if concurrent { Some(1) } else { None };
+                (true, batch, concurrency, status, err_policy)
             } else {
-                None
+                (false, None, None, None, OnErrorPolicy::Fail)
             };
 
-            (true, batch)
-        } else {
-            (false, None)
-        };
+        // Validation — §2 of the task spec.
+        // §2.2 inner subquery must be non-empty (already checked
+        // above), §2.3 RETURN in inner is forbidden when REPORT
+        // STATUS is set.
+        if status_var.is_some() {
+            let has_return = query.clauses.iter().any(|c| matches!(c, Clause::Return(_)));
+            if has_return {
+                return Err(self.error(
+                    "ERR_CALL_IN_TX_RETURN_WITH_STATUS: the inner subquery \
+                     cannot declare RETURN when REPORT STATUS AS <var> is set",
+                ));
+            }
+        }
 
         Ok(CallSubqueryClause {
             query,
             in_transactions,
             batch_size,
+            concurrency,
+            on_error,
+            status_var,
         })
     }
 

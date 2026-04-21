@@ -4455,6 +4455,47 @@ impl Engine {
         for clause in &ast.clauses {
             if let executor::parser::Clause::CallSubquery(call_subquery) = clause {
                 if call_subquery.in_transactions {
+                    // phase6_opencypher-subquery-transactions — the
+                    // extended suffix clauses (IN CONCURRENT, ON ERROR
+                    // non-FAIL, REPORT STATUS) land with the planner
+                    // operator in a later slice of the task. Reject
+                    // loudly here instead of silently ignoring fields
+                    // the caller spelled out, so production users do
+                    // not get FAIL semantics when they asked for
+                    // RETRY / CONTINUE / BREAK.
+                    if call_subquery.concurrency.is_some() {
+                        return Err(Error::CypherExecution(
+                            "ERR_CALL_IN_TX_NOT_IMPLEMENTED: \
+                             IN CONCURRENT TRANSACTIONS lands with \
+                             the planner operator in a follow-up \
+                             slice of phase6_opencypher-subquery-\
+                             transactions"
+                                .to_string(),
+                        ));
+                    }
+                    if !matches!(
+                        call_subquery.on_error,
+                        executor::parser::OnErrorPolicy::Fail
+                    ) {
+                        return Err(Error::CypherExecution(
+                            "ERR_CALL_IN_TX_NOT_IMPLEMENTED: \
+                             ON ERROR CONTINUE / BREAK / RETRY \
+                             lands with the planner operator in a \
+                             follow-up slice of \
+                             phase6_opencypher-subquery-transactions"
+                                .to_string(),
+                        ));
+                    }
+                    if call_subquery.status_var.is_some() {
+                        return Err(Error::CypherExecution(
+                            "ERR_CALL_IN_TX_NOT_IMPLEMENTED: \
+                             REPORT STATUS AS <var> lands with the \
+                             planner operator in a follow-up slice \
+                             of phase6_opencypher-subquery-\
+                             transactions"
+                                .to_string(),
+                        ));
+                    }
                     // Execute with batching in transactions
                     let batch_size = call_subquery.batch_size.unwrap_or(1000);
 

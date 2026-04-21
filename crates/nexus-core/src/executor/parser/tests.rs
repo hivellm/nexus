@@ -2163,3 +2163,174 @@ fn qpp_bare_parens_without_quantifier_is_not_qpp() {
         "no QPP should be emitted for `(a)(b)` without a quantifier"
     );
 }
+
+// ---------------------------------------------------------------
+// CALL { } IN TRANSACTIONS (Cypher 25) — parser-level tests
+// phase6_opencypher-subquery-transactions §1 + §2
+// ---------------------------------------------------------------
+
+fn call_tx_clause(q: &CypherQuery) -> &CallSubqueryClause {
+    q.clauses
+        .iter()
+        .find_map(|c| {
+            if let Clause::CallSubquery(s) = c {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("expected a CallSubqueryClause")
+}
+
+#[test]
+fn call_in_transactions_parses_bare() {
+    let mut p = CypherParser::new("CALL { CREATE (:Tmp) } IN TRANSACTIONS".to_string());
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert!(c.in_transactions);
+    assert_eq!(c.batch_size, None);
+    assert_eq!(c.concurrency, None);
+    assert!(matches!(c.on_error, OnErrorPolicy::Fail));
+    assert_eq!(c.status_var, None);
+}
+
+#[test]
+fn call_in_transactions_parses_batch_size() {
+    let mut p = CypherParser::new("CALL { CREATE (:Tmp) } IN TRANSACTIONS OF 500 ROWS".to_string());
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert!(c.in_transactions);
+    assert_eq!(c.batch_size, Some(500));
+}
+
+#[test]
+fn call_in_transactions_accepts_singular_row() {
+    let mut p = CypherParser::new("CALL { CREATE (:Tmp) } IN TRANSACTIONS OF 1 ROW".to_string());
+    let q = p.parse().unwrap();
+    assert_eq!(call_tx_clause(&q).batch_size, Some(1));
+}
+
+#[test]
+fn call_in_transactions_parses_concurrent() {
+    let mut p = CypherParser::new(
+        "CALL { CREATE (:Tmp) } IN CONCURRENT TRANSACTIONS OF 100 ROWS".to_string(),
+    );
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert!(c.in_transactions);
+    assert_eq!(c.concurrency, Some(1));
+    assert_eq!(c.batch_size, Some(100));
+}
+
+#[test]
+fn call_in_transactions_parses_every_on_error_form() {
+    for (cypher, expected) in [
+        (
+            "CALL { CREATE (:T) } IN TRANSACTIONS ON ERROR CONTINUE",
+            OnErrorPolicy::Continue,
+        ),
+        (
+            "CALL { CREATE (:T) } IN TRANSACTIONS ON ERROR BREAK",
+            OnErrorPolicy::Break,
+        ),
+        (
+            "CALL { CREATE (:T) } IN TRANSACTIONS ON ERROR FAIL",
+            OnErrorPolicy::Fail,
+        ),
+        (
+            "CALL { CREATE (:T) } IN TRANSACTIONS ON ERROR RETRY 3",
+            OnErrorPolicy::Retry { max_attempts: 3 },
+        ),
+    ] {
+        let mut p = CypherParser::new(cypher.to_string());
+        let q = p
+            .parse()
+            .unwrap_or_else(|e| panic!("failed parsing `{cypher}`: {e}"));
+        assert_eq!(call_tx_clause(&q).on_error, expected, "for `{cypher}`");
+    }
+}
+
+#[test]
+fn call_in_transactions_parses_report_status() {
+    let mut p = CypherParser::new(
+        "CALL { CREATE (:T) } IN TRANSACTIONS OF 100 ROWS REPORT STATUS AS status".to_string(),
+    );
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert_eq!(c.batch_size, Some(100));
+    assert_eq!(c.status_var, Some("status".to_string()));
+}
+
+#[test]
+fn call_in_transactions_suffix_clauses_are_order_agnostic() {
+    // REPORT STATUS first, then OF, then ON ERROR — all parse.
+    let mut p = CypherParser::new(
+        "CALL { CREATE (:T) } IN TRANSACTIONS REPORT STATUS AS s OF 50 ROWS \
+         ON ERROR RETRY 5"
+            .to_string(),
+    );
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert_eq!(c.batch_size, Some(50));
+    assert_eq!(c.status_var, Some("s".to_string()));
+    assert_eq!(c.on_error, OnErrorPolicy::Retry { max_attempts: 5 });
+}
+
+#[test]
+fn call_in_transactions_rejects_zero_batch() {
+    let mut p = CypherParser::new("CALL { CREATE (:T) } IN TRANSACTIONS OF 0 ROWS".to_string());
+    let err = p.parse().unwrap_err();
+    assert!(
+        err.to_string().contains("ERR_CALL_IN_TX_INVALID_BATCH"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn call_in_transactions_rejects_bad_retry() {
+    let mut p =
+        CypherParser::new("CALL { CREATE (:T) } IN TRANSACTIONS ON ERROR RETRY 0".to_string());
+    let err = p.parse().unwrap_err();
+    assert!(
+        err.to_string().contains("ERR_CALL_IN_TX_INVALID_RETRY"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn call_in_transactions_rejects_unknown_on_error() {
+    let mut p =
+        CypherParser::new("CALL { CREATE (:T) } IN TRANSACTIONS ON ERROR IGNORE".to_string());
+    let err = p.parse().unwrap_err();
+    assert!(
+        err.to_string().contains("ERR_CALL_IN_TX_UNKNOWN_ON_ERROR"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn call_in_transactions_rejects_return_with_report_status() {
+    let mut p = CypherParser::new(
+        "CALL { MATCH (n) RETURN n } IN TRANSACTIONS REPORT STATUS AS s".to_string(),
+    );
+    let err = p.parse().unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("ERR_CALL_IN_TX_RETURN_WITH_STATUS"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn call_subquery_without_in_transactions_still_parses() {
+    // Back-compat — plain CALL { } subqueries must keep working
+    // with the extended grammar.
+    let mut p = CypherParser::new("CALL { CREATE (:Tmp) }".to_string());
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert!(!c.in_transactions);
+    assert_eq!(c.batch_size, None);
+    assert_eq!(c.concurrency, None);
+    assert_eq!(c.status_var, None);
+    assert_eq!(c.on_error, OnErrorPolicy::Fail);
+}
