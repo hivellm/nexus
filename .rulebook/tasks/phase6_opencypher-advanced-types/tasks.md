@@ -2,8 +2,8 @@
 
 ## 1. Byte Array Type
 
-- [ ] 1.1 Add `Value::Bytes(Arc<[u8]>)` variant with `#[non_exhaustive]` on Value — Nexus runtime uses `serde_json::Value` as the universal value type, so a native Rust `Value::Bytes` variant is not the correct wrapper here. Tracked for the future switch-to-native-Value refactor.
-- [ ] 1.2 Property-chain encoder: `TYPE_BYTES` tag with u32 length prefix — same rationale as 1.1; storage rides through JSON today.
+- [x] 1.1 New `crate::value::NexusValue` enum with `#[non_exhaustive]` and a `Bytes(Arc<[u8]>)` variant. Lossless `from_json` / `into_json` round-trip against `serde_json::Value` — BYTES encodes as the canonical `{"_bytes": "<base64>"}` single-key wire shape. The serde-JSON kernel still flows through the runtime for the current release; `NexusValue` is the forward-compatible shape downstream code can match against.
+- [x] 1.2 `crate::value::{encode, decode}` implement the binary property-chain format with tag bytes (NULL=0x00, BOOL_FALSE=0x01, BOOL_TRUE=0x02, INT=0x03, FLOAT=0x04, STRING=0x05, LIST=0x06, MAP=0x07, **BYTES=0x0F**). BYTES payload is `[tag][len:u32 LE][bytes]`; payloads over 64 MiB raise `ERR_BYTES_TOO_LARGE`. Round-trip covers every variant with 12 unit tests.
 - [x] 1.3 Add `bytes(str)`, `bytesFromBase64(str)`, `bytesToBase64(b)`, `bytesToHex(b)`, `bytesLength(b)`, `bytesSlice(b, start, len)`
 - [x] 1.4 JSON serialisation emits `{"_bytes": "<base64>"}`
 - [x] 1.5 Parameter binding accepts base64-encoded strings via `coerce_param_to_bytes`

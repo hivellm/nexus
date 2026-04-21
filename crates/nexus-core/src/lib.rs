@@ -73,6 +73,7 @@ pub mod storage;
 pub mod transaction;
 pub mod udf;
 pub mod validation;
+pub mod value;
 pub mod vectorizer_cache;
 pub mod wal;
 
