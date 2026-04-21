@@ -48,20 +48,34 @@ standalone Tantivy directory. Dropping the index best-effort removes
 the directory tree. Directory state is reused when the registry is
 re-instantiated, so a graceful restart does not rebuild the index.
 
-## Write path (v1.8 scope)
+## Write path (v1.8–v1.10 scope)
 
 `CREATE` / `MERGE` / `SET` do **not** yet auto-enqueue rows to the
 FTS backend — that hook is parked for the WAL-integration follow-up.
-Callers that want populated indexes today use the programmatic API:
+Callers that want populated indexes today use the programmatic API.
+
+Interactive (one-doc-at-a-time) callers use `add_node_document` —
+commits and reloads the reader synchronously, so the next
+`queryNodes` sees the document without waiting for any refresh
+tick:
 
 ```rust
 let reg = engine.indexes().fulltext.clone();
 reg.add_node_document("moviesFts", node_id, label_id, key_id, text)?;
 ```
 
-Tantivy commits on every call and reloads the reader synchronously,
-so the next `queryNodes` sees the document without waiting for any
-refresh tick.
+Bulk loaders (import scripts, catch-up rebuilds) use
+`add_node_documents_bulk` — one Tantivy writer, every doc, one
+commit. Delivers ≈60 k docs/sec on the reference hardware vs.
+Tantivy segment-flush latency floored by per-doc commits:
+
+```rust
+let docs: Vec<(u64, u32, u32, &str)> = rows
+    .iter()
+    .map(|r| (r.node_id, r.label_id, r.key_id, r.text.as_str()))
+    .collect();
+reg.add_node_documents_bulk("moviesFts", &docs)?;
+```
 
 ## Analyzer catalogue (v1.9)
 
@@ -135,8 +149,10 @@ The tail of the feature ships behind explicit follow-up tasks:
   recovery replays pending docs.
 - ~~**Per-index analyzer config**~~ — shipped in v1.9
   (phase6_fulltext-analyzer-catalogue).
-- **Bench targets** — single-term < 5 ms p95, phrase < 20 ms p95,
-  ingest > 5k docs/sec (Criterion harness).
+- ~~**Bench targets**~~ — shipped in v1.10
+  (phase6_fulltext-benchmarks). See
+  [docs/performance/PERFORMANCE_V1.md](../performance/PERFORMANCE_V1.md)
+  for baselines.
 - **TCK import** — the fulltext scenarios from the Neo4j TCK.
 
 Each is tracked as a standalone rulebook task; this release is

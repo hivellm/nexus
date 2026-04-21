@@ -276,6 +276,49 @@ impl FullTextIndex {
         Ok(())
     }
 
+    /// Bulk ingest: open a single Tantivy writer, push every
+    /// document, commit once, reload the reader once. Dramatically
+    /// faster than calling [`Self::add_document`] in a loop when the
+    /// caller already has every document in hand.
+    ///
+    /// Each tuple is `(node_id, label_id, key_id, content)`. The
+    /// `value` field is stored equal to `content`; language defaults
+    /// to `"en"`; no boost is applied.
+    pub fn add_documents_bulk(&self, docs: &[(u64, u32, u32, &str)]) -> Result<()> {
+        if docs.is_empty() {
+            return Ok(());
+        }
+        let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+            self.index.writer(50_000_000)?;
+        let mut total_bytes: u64 = 0;
+        for (node_id, label_id, key_id, content) in docs {
+            let mut doc = tantivy::TantivyDocument::new();
+            doc.add_u64(self.fields.node_id, *node_id);
+            doc.add_u64(self.fields.label_id, *label_id as u64);
+            doc.add_u64(self.fields.key_id, *key_id as u64);
+            doc.add_text(self.fields.content, content);
+            doc.add_text(self.fields.value, content);
+            doc.add_text(self.fields.language, "en");
+            doc.add_f64(self.fields.boost, 1.0);
+            index_writer.add_document(doc)?;
+            total_bytes += content.len() as u64;
+        }
+        index_writer.commit()?;
+        self.reader.reload()?;
+        {
+            let mut stats = self.stats.write();
+            stats.total_documents += docs.len() as u64;
+            stats.content_size_bytes += total_bytes;
+            stats.avg_document_size = if stats.total_documents > 0 {
+                stats.content_size_bytes as f64 / stats.total_documents as f64
+            } else {
+                0.0
+            };
+            stats.last_updated = chrono::Utc::now();
+        }
+        Ok(())
+    }
+
     /// Remove a document from the index
     pub fn remove_document(&self, node_id: u64, _label_id: u32, _key_id: u32) -> Result<()> {
         let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =

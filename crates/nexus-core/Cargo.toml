@@ -170,6 +170,10 @@ harness = false
 name = "v2_tcp_transport"
 harness = false
 
+[[bench]]
+name = "fulltext_bench"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../../examples/hierarchical_call_graph_example.rs"

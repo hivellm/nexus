@@ -22,10 +22,37 @@ when the number regresses.
 | RLE `find_run_length` @ 16 K uniform       | 3.2 µs scalar | 1.0 µs AVX-512 | ≥ 3× scalar | **3.2×** ✅ |
 | Cypher parse @ 31.5 KiB query              | ≈ 1 s (O(N²))  | 3.7 ms (O(N)) | linear scaling | **≈290× ✅** |
 | WAL CRC throughput @ 64 KiB                | 3.5 µs `crc32fast` | 3.5 µs `crc32fast` | 1× (kept) | **see notes** |
+| FTS single-term @ 100k × 1 KB              | n/a    | 150 µs          | < 5 ms p95  | **≈33×** ✅ |
+| FTS phrase query @ 100k × 1 KB             | n/a    | 4.57 ms         | < 20 ms p95 | **≈4.4×** ✅ |
+| FTS bulk ingest @ 10k × 1 KB               | n/a    | ~60 k docs/s    | > 5 k docs/s | **≈12×** ✅ |
 
 All numbers are single-threaded. Throughput counters for KNN / bulk
 ingest at query-loop scale are tracked separately once the RPC
 transport lands.
+
+### Full-text search (phase6_fulltext-benchmarks)
+
+Harness: `cargo +nightly bench -p nexus-core --bench fulltext_bench`.
+Corpus: 100 000 synthetic documents of ~1 KB each, built from a
+75-word vocabulary through a seeded LCG so the byte layout is
+deterministic. Analyzer: `standard` (lowercase + English stopwords).
+Reader reload: synchronous after commit (v1.8 default).
+
+| Scenario                             | Median    | SLO          | Notes |
+|--------------------------------------|-----------|--------------|-------|
+| `fulltext_single_term/corpus_100k_1kb` | 150 µs  | < 5 ms p95   | BM25 single-term over full corpus, limit=10 |
+| `fulltext_phrase/corpus_100k_1kb`    | 4.57 ms   | < 20 ms p95  | 2-term phrase `"quick brown"`, limit=10 |
+| `fulltext_ingest/bulk_10k_docs`      | ~60 k docs/s | > 5 k docs/s | Single-writer bulk commit via `FullTextRegistry::add_node_documents_bulk` |
+
+The per-doc ingest path (`add_node_document`) commits + reloads on
+every call, so its throughput is floored by Tantivy segment-flush
+latency. The bulk path wraps N documents in a single writer +
+commit and is the one the SLO measures against. Async writer +
+WAL-driven enqueue ships under `phase6_fulltext-wal-integration`.
+
+Regression detection for ranking quality (not latency) lives in
+`tests/fulltext_ranking_regression.rs` — 7 golden tests that pin
+top-N output against a hand-curated 10-doc corpus.
 
 ## SIMD kernel selection
 

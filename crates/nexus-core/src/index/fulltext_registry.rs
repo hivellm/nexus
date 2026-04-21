@@ -297,6 +297,21 @@ impl FullTextRegistry {
         Ok(())
     }
 
+    /// Bulk ingest variant of [`add_node_document`]. Opens a single
+    /// Tantivy writer, pushes every tuple, commits once. Required
+    /// for meaningful bench throughput and for bulk-load scripts;
+    /// the per-doc path commits on every call.
+    pub fn add_node_documents_bulk(
+        &self,
+        name: &str,
+        docs: &[(u64, u32, u32, &str)],
+    ) -> Result<()> {
+        let entry = self
+            .get(name)
+            .ok_or_else(|| Error::storage(format!("ERR_FTS_INDEX_NOT_FOUND: {name:?}")))?;
+        entry.index.add_documents_bulk(docs)
+    }
+
     /// Names known to the registry — used by duplicate-detection at
     /// creation time and by the `db.indexes()` procedure.
     pub fn names(&self) -> Vec<String> {

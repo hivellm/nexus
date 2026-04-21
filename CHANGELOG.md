@@ -5,6 +5,37 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — 2026-04-21
+
+### Added — FTS benchmarks + bulk-ingest path + ranking regression
+
+phase6_fulltext-benchmarks establishes performance baselines and a
+ranking-regression guard for the full-text search backend:
+
+- **Criterion harness** `crates/nexus-core/benches/fulltext_bench.rs`
+  with three scenarios over a deterministic 100 k × 1 KB corpus:
+  - `fulltext_single_term/corpus_100k_1kb` — BM25 single-term.
+  - `fulltext_phrase/corpus_100k_1kb` — 2-term phrase query.
+  - `fulltext_ingest/bulk_10k_docs` — bulk-ingest throughput.
+- **Measured numbers** (Ryzen 9 7950X3D, all SLOs cleared):
+  - single-term: 150 µs median (target < 5 ms p95) → ≈33× headroom.
+  - phrase query: 4.57 ms median (target < 20 ms p95) → ≈4.4×.
+  - bulk ingest: ≈60 k docs/sec (target > 5 k) → ≈12×.
+- **Bulk-ingest API** — `FullTextIndex::add_documents_bulk` and
+  `FullTextRegistry::add_node_documents_bulk` open one Tantivy
+  writer, push every doc, and commit once. The per-doc path keeps
+  its commit-after-every-write cadence for interactive callers;
+  bulk loaders pick the batched path.
+- **Ranking regression suite** `tests/fulltext_ranking_regression.rs`
+  with 7 golden top-N assertions over a 10-doc hand-curated corpus
+  (graph-family dominance, vector-family dominance, phrase pins,
+  boolean-must narrowing, empty query, limit respected).
+
+Baseline numbers land in
+[docs/performance/PERFORMANCE_V1.md](docs/performance/PERFORMANCE_V1.md).
+Async-writer + WAL-driven enqueue remain scoped for
+phase6_fulltext-wal-integration.
+
 ## [1.9.0] — 2026-04-21
 
 ### Added — FTS analyzer catalogue
