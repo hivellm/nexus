@@ -66,7 +66,7 @@
 - [x] 8.3 Add `docs/guides/SAVEPOINTS.md`
 - [x] 8.4 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` with the new surface
 - [x] 8.5 Add CHANGELOG entry "Added advanced types (bytes, dynamic labels, composite indexes, typed lists, savepoints, graph scoping)"
-- [x] 8.6 Module-level rustdoc on every new file documents the implementation
-- [x] 8.7 Tests written: 44 new unit tests + 13 parser integration tests
-- [x] 8.8 Tests passing: `cargo +nightly test -p nexus-core --lib` → 1799 passed / 0 failed / 12 ignored
-- [x] 8.9 Quality pipeline: `cargo +nightly fmt --all` + `cargo clippy -p nexus-core --lib -- -D warnings` both clean
+- [x] 8.6 Update or create documentation covering the implementation — module-level rustdoc on every new source file plus the spec/guide/compatibility updates listed above.
+- [x] 8.7 Write tests covering the new behavior — 65+ unit tests across `value`, `executor::eval::bytes`, `engine::dynamic_labels`, `index::composite_btree`, `engine::typed_collections`, `transaction::savepoint`, `engine::graph_preamble_tests`, plus 13 parser integration tests and 17 TCK-shaped end-to-end tests in `tests/advanced_types_tck.rs`.
+- [x] 8.8 Run tests and confirm they pass — `cargo +nightly test -p nexus-core --lib` reports 1825 passed / 0 failed / 12 ignored, and `cargo +nightly test -p nexus-core --test advanced_types_tck` reports 17 passed / 0 failed / 0 ignored.
+- [x] 8.9 Quality pipeline: `cargo +nightly fmt --all` + `cargo clippy -p nexus-core --lib --tests -- -D warnings` both clean.
