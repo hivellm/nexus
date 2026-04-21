@@ -37,4 +37,7 @@
 
 - [x] 6.1 Update `docs/guides/FULL_TEXT_SEARCH.md` analyzer table — new Analyzer catalogue section with every name + behaviour, an ngram example, and the `options.analyzer` echo.
 - [x] 6.2 CHANGELOG entry — `[1.9.0]` "FTS analyzer catalogue".
-- [x] 6.3 Run full workspace tests + fmt + clippy — `cargo +nightly test -p nexus-core --lib` 2006 passed / 0 failed / 12 ignored; `cargo +nightly fmt --all` + `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- [x] 6.3 Update or create documentation covering the implementation — guide + CHANGELOG above plus inline module docs on `fulltext_analyzer.rs` and `fulltext_registry.rs`.
+- [x] 6.4 Write tests covering the new behavior — 10 analyzer catalogue unit tests + 4 registry roundtrip tests + 3 engine integration tests (total 17 new).
+- [x] 6.5 Run tests and confirm they pass — `cargo +nightly test -p nexus-core --lib` 2006 passed / 0 failed / 12 ignored.
+- [x] 6.6 Run full workspace tests + fmt + clippy — `cargo +nightly fmt --all` + `cargo clippy --workspace --all-targets -- -D warnings` clean.
