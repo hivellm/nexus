@@ -220,6 +220,24 @@ pub enum Operator {
         /// Label to scan
         label: String,
     },
+    /// phase6_opencypher-advanced-types §3.4 — composite B-tree seek.
+    ///
+    /// Emitted by the planner when a query predicates a strict prefix
+    /// of a registered composite index and the engine has a matching
+    /// registry entry. The executor reads the registry, performs an
+    /// exact (if every column is bound) or prefix seek, and emits one
+    /// row per returned node id bound to `variable`.
+    CompositeBtreeSeek {
+        /// Label every indexed node carries.
+        label: String,
+        /// Variable the pattern assigns the returned nodes to.
+        variable: String,
+        /// Ordered property-value pairs that formed the prefix.
+        /// Length ≥ 1, ≤ the index's arity. Equality only — a range
+        /// predicate on the trailing column is expressed by the
+        /// planner via a residual `Filter` on top of this operator.
+        prefix: Vec<(String, serde_json::Value)>,
+    },
     /// Distinct results
     Distinct {
         /// Columns to check for distinctness

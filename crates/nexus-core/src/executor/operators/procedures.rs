@@ -448,6 +448,46 @@ impl Executor {
             }
         }
 
+        // phase6_opencypher-advanced-types §3.5 — expose every
+        // composite B-tree index registered via
+        // `CREATE INDEX <name> FOR (n:L) ON (n.p1, n.p2, ...)`.
+        // labelsOrTypes is `[label]` and properties is the ordered
+        // list of composite keys, matching Neo4j's
+        // RANGE-multi-property convention so drivers render the row
+        // correctly without format-specific branching.
+        if let Some(registry) = self.composite_btree() {
+            for (label_id, property_keys, unique, name_opt) in registry.list() {
+                let label_name = match self.catalog().get_label_name(label_id) {
+                    Ok(Some(n)) => n,
+                    _ => continue,
+                };
+                let idx_name = name_opt.clone().unwrap_or_else(|| {
+                    format!("index_composite_{}_{}", label_name, property_keys.join("_"))
+                });
+                if filter_name.is_some_and(|n| n != idx_name) {
+                    continue;
+                }
+                rows.push(Row {
+                    values: vec![
+                        Value::Number(serde_json::Number::from(next_id)),
+                        Value::String(idx_name),
+                        Value::String("ONLINE".to_string()),
+                        Value::Number(
+                            serde_json::Number::from_f64(100.0)
+                                .unwrap_or_else(|| serde_json::Number::from(100)),
+                        ),
+                        Value::String(if unique { "UNIQUE" } else { "NONUNIQUE" }.to_string()),
+                        Value::String("BTREE".to_string()),
+                        Value::String("NODE".to_string()),
+                        Value::Array(vec![Value::String(label_name)]),
+                        Value::Array(property_keys.into_iter().map(Value::String).collect()),
+                        Value::String("btree-composite-1.0".to_string()),
+                    ],
+                });
+                next_id += 1;
+            }
+        }
+
         if filter_name.is_some() && rows.is_empty() {
             return Err(Error::CypherExecution(format!(
                 "ERR_INDEX_NOT_FOUND: no index named '{}'",

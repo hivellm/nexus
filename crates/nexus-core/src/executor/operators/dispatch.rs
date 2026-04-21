@@ -183,6 +183,13 @@ impl Executor {
             Operator::IndexScan { index_name, label } => {
                 self.execute_index_scan_new(context, index_name, label)?;
             }
+            Operator::CompositeBtreeSeek {
+                label,
+                variable,
+                prefix,
+            } => {
+                self.execute_composite_btree_seek(context, label, variable, prefix)?;
+            }
             Operator::Distinct { columns } => {
                 self.execute_distinct(context, columns)?;
             }

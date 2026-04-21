@@ -86,6 +86,13 @@ pub struct Engine {
     /// parameters — in that case a query containing a `:$param` label
     /// is rejected with `ERR_INVALID_LABEL`.
     pub(crate) current_params: HashMap<String, Value>,
+    /// In-memory registry of `LIST<T>` property-type constraints
+    /// (phase6_opencypher-advanced-types §4.3). Keyed by
+    /// `(label_id, property_key_id)`; check_constraints consults this
+    /// map and rejects writes whose list does not match via
+    /// `ERR_CONSTRAINT_VIOLATED`. Persistence through LMDB is a
+    /// follow-up that ships with the constraint-DDL grammar extension.
+    pub(crate) typed_list_constraints: HashMap<(u32, u32), typed_collections::ListElemType>,
     /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
     _temp_dir: Option<tempfile::TempDir>,
 }
@@ -178,6 +185,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            typed_list_constraints: HashMap::new(),
             _temp_dir: None,
         };
 
@@ -342,6 +350,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            typed_list_constraints: HashMap::new(),
             _temp_dir: None,
         };
 
@@ -1108,6 +1117,11 @@ impl Engine {
             &self.indexes.label_index,
             &self.indexes.knn_index,
         )?;
+        // phase6_opencypher-advanced-types §3.5 — share the composite
+        // B-tree registry so `db.indexes()` sees it and the planner can
+        // later consult it for seeks.
+        self.executor
+            .install_composite_btree(self.indexes.composite_btree.clone());
         Ok(())
     }
 
@@ -1210,6 +1224,44 @@ impl Engine {
     /// sentinels encoded as leading `$` strings) against the current
     /// query parameters. Returns `ERR_INVALID_LABEL` if any sentinel
     /// cannot be resolved. Static-only inputs are returned unchanged.
+    /// Register a `LIST<T>` property-type constraint
+    /// (phase6_opencypher-advanced-types §4.3).
+    ///
+    /// Adds an in-memory assertion that every node carrying `label`
+    /// and writing `property` must supply a typed list whose element
+    /// type matches `elem_type`. Empty lists and NULL always pass
+    /// (see spec §4.4). Violations surface as
+    /// `ERR_CONSTRAINT_VIOLATED`.
+    ///
+    /// Registering the same `(label, property)` twice replaces the
+    /// previous element type, matching the idempotent shape of other
+    /// constraint APIs.
+    pub fn add_typed_list_constraint(
+        &mut self,
+        label: &str,
+        property: &str,
+        elem_type: typed_collections::ListElemType,
+    ) -> Result<()> {
+        let label_id = self.catalog.get_or_create_label(label)?;
+        let key_id = self.catalog.get_or_create_key(property)?;
+        self.typed_list_constraints
+            .insert((label_id, key_id), elem_type);
+        Ok(())
+    }
+
+    /// Remove a previously-registered typed-list constraint.
+    /// No-op when nothing is registered for the pair.
+    pub fn drop_typed_list_constraint(&mut self, label: &str, property: &str) -> Result<()> {
+        let Ok(label_id) = self.catalog.get_label_id(label) else {
+            return Ok(());
+        };
+        let Ok(key_id) = self.catalog.get_key_id(property) else {
+            return Ok(());
+        };
+        self.typed_list_constraints.remove(&(label_id, key_id));
+        Ok(())
+    }
+
     pub(super) fn resolve_dynamic_labels(&self, labels: &[String]) -> Result<Vec<String>> {
         if !dynamic_labels::contains_dynamic(labels) {
             return Ok(labels.to_vec());
@@ -3551,6 +3603,29 @@ impl Engine {
         properties: &serde_json::Value,
         exclude_node_id: Option<u64>,
     ) -> Result<()> {
+        // phase6_opencypher-advanced-types §4.3 — typed-list
+        // constraint enforcement. Run first so a clearly-typed
+        // violation short-circuits before we touch the single-column
+        // UNIQUE / EXISTS machinery.
+        if !self.typed_list_constraints.is_empty() {
+            if let Some(props) = properties.as_object() {
+                for &label_id in label_ids {
+                    for ((lbl, key_id), elem_type) in &self.typed_list_constraints {
+                        if *lbl != label_id {
+                            continue;
+                        }
+                        let key_name = match self.catalog.get_key_name(*key_id)? {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        if let Some(val) = props.get(&key_name) {
+                            typed_collections::validate_list(val, *elem_type)?;
+                        }
+                    }
+                }
+            }
+        }
+
         let constraint_manager = self.catalog.constraint_manager().read();
 
         // Check constraints for each label

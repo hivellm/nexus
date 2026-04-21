@@ -138,6 +138,115 @@ impl Executor {
         Ok(())
     }
 
+    /// phase6_opencypher-advanced-types §3.4 — execute a composite
+    /// B-tree seek.
+    ///
+    /// Resolves the label through the catalog, then looks up a
+    /// composite index whose `property_keys` start with the supplied
+    /// prefix keys. Missing index / label → empty result (the planner
+    /// only emits this operator when a matching index exists, so a
+    /// miss in practice means the index was dropped between planning
+    /// and execution — falling back to empty is safer than raising a
+    /// runtime error against a user-visible operator boundary).
+    pub(in crate::executor) fn execute_composite_btree_seek(
+        &self,
+        context: &mut ExecutionContext,
+        label: &str,
+        variable: &str,
+        prefix: &[(String, serde_json::Value)],
+    ) -> Result<()> {
+        use crate::index::PropertyValue;
+
+        let label_id = match self.catalog().get_label_id(label) {
+            Ok(id) => id,
+            Err(_) => {
+                context.set_variable(variable, Value::Array(Vec::new()));
+                return Ok(());
+            }
+        };
+
+        let prefix_keys: Vec<String> = prefix.iter().map(|(k, _)| k.clone()).collect();
+
+        let Some(registry) = self.composite_btree() else {
+            context.set_variable(variable, Value::Array(Vec::new()));
+            return Ok(());
+        };
+
+        // Find any composite index whose key list starts with the
+        // requested prefix. Prefer an exact-arity match (single pass
+        // over the registry, stable order).
+        let mut matched: Option<_> = None;
+        for (lbl, keys, _unique, _name) in registry.list() {
+            if lbl != label_id {
+                continue;
+            }
+            if keys.len() < prefix_keys.len() {
+                continue;
+            }
+            if keys[..prefix_keys.len()] != prefix_keys[..] {
+                continue;
+            }
+            matched = registry.find(lbl, &keys);
+            break;
+        }
+
+        let Some(index_arc) = matched else {
+            context.set_variable(variable, Value::Array(Vec::new()));
+            return Ok(());
+        };
+
+        let prefix_pv: Vec<PropertyValue> = prefix
+            .iter()
+            .map(|(_, v)| json_to_property_value(v))
+            .collect();
+
+        let node_ids = {
+            let idx = index_arc.read();
+            if prefix_pv.len() == idx.property_keys.len() {
+                idx.seek_exact(&prefix_pv)
+            } else {
+                idx.seek_prefix(&prefix_pv)
+            }
+        };
+
+        // Materialise each id as a node-shaped map, matching what
+        // NodeByLabel emits through `read_node_as_value`.
+        let nodes: Vec<Value> = node_ids
+            .into_iter()
+            .filter_map(|id| self.read_node_as_value(id).ok())
+            .filter(|v| !matches!(v, Value::Null))
+            .collect();
+        context.set_variable(variable, Value::Array(nodes));
+        Ok(())
+    }
+}
+
+/// Map a JSON scalar into the [`crate::index::PropertyValue`] shape used
+/// as the key type of the composite B-tree. Non-scalar inputs (maps,
+/// arrays) collapse to `Null` — the planner only emits scalar prefix
+/// components today, so this is never exercised on a well-formed plan.
+fn json_to_property_value(v: &serde_json::Value) -> crate::index::PropertyValue {
+    use crate::index::PropertyValue;
+    match v {
+        serde_json::Value::Null => PropertyValue::Null,
+        serde_json::Value::Bool(b) => PropertyValue::Boolean(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                PropertyValue::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                PropertyValue::Float(f)
+            } else {
+                PropertyValue::Null
+            }
+        }
+        serde_json::Value::String(s) => PropertyValue::String(s.clone()),
+        _ => PropertyValue::Null,
+    }
+}
+
+// Anchor impl block so the helper above is at module scope and the
+// earlier `impl Executor { ... }` is properly closed.
+impl Executor {
     /// Execute LOAD CSV operator
     pub(in crate::executor) fn execute_load_csv(
         &self,

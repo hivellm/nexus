@@ -221,6 +221,28 @@ impl Executor {
     /// classic `execute` entry point. The override is one-shot — the
     /// executor clears the slot on each call so an override cannot
     /// leak into a subsequent unrelated query.
+    /// Share the engine's composite B-tree registry with this executor.
+    /// Called from `Engine::refresh_executor` after every engine-side
+    /// index update so the executor sees the current registry through
+    /// the `composite_btree()` accessor. Subsequent calls are no-ops
+    /// (OnceLock semantics) — the registry itself is internally
+    /// mutable via `Arc<RwLock>`, so one install is enough.
+    pub(crate) fn install_composite_btree(
+        &self,
+        registry: crate::index::composite_btree::CompositeBtreeRegistry,
+    ) {
+        self.shared.set_composite_btree(registry);
+    }
+
+    /// Borrow the composite B-tree registry installed by the engine.
+    /// Returns `None` for executors built outside an engine (test
+    /// harness in `crate::testing`).
+    pub(super) fn composite_btree(
+        &self,
+    ) -> Option<&crate::index::composite_btree::CompositeBtreeRegistry> {
+        self.shared.composite_btree()
+    }
+
     pub(crate) fn install_preparsed_ast_override(
         &self,
         ast: Option<super::parser::CypherQuery>,

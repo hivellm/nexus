@@ -816,6 +816,13 @@ impl Executor {
                         "HashJoin operator not implemented".to_string(),
                     ));
                 }
+                Operator::CompositeBtreeSeek {
+                    label,
+                    variable,
+                    prefix,
+                } => {
+                    self.execute_composite_btree_seek(&mut context, label, variable, prefix)?;
+                }
             }
         }
 

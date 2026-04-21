@@ -72,6 +72,15 @@ pub struct ExecutorShared {
     /// `RwLock::write().take()` would also serialise.
     pub(super) preparsed_ast_override:
         Arc<parking_lot::Mutex<Option<crate::executor::parser::CypherQuery>>>,
+    /// Composite B-tree index registry shared with the engine.
+    ///
+    /// Populated via [`ExecutorShared::set_composite_btree`] at engine
+    /// construction time (see `Engine::refresh_executor`). When empty
+    /// the `db.indexes()` procedure and the planner both see zero
+    /// composite indexes, which is the correct default for fresh
+    /// deployments and for the test-harness executor.
+    pub(super) composite_btree:
+        std::sync::OnceLock<crate::index::composite_btree::CompositeBtreeRegistry>,
 }
 
 impl ExecutorShared {
@@ -110,7 +119,27 @@ impl ExecutorShared {
             transaction_manager,
             database_manager: std::sync::OnceLock::new(),
             preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
+            composite_btree: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Install the engine's composite B-tree registry on this shared
+    /// state. Idempotent per executor instance; the second call is a
+    /// no-op (matches `OnceLock::set` semantics).
+    pub fn set_composite_btree(
+        &self,
+        registry: crate::index::composite_btree::CompositeBtreeRegistry,
+    ) {
+        let _ = self.composite_btree.set(registry);
+    }
+
+    /// Borrow the composite B-tree registry if one has been installed.
+    /// Returns `None` for executor instances that were constructed
+    /// without engine-level indexes (e.g. the test harness).
+    pub fn composite_btree(
+        &self,
+    ) -> Option<&crate::index::composite_btree::CompositeBtreeRegistry> {
+        self.composite_btree.get()
     }
 
     /// Set the database manager for multi-database support
@@ -186,6 +215,7 @@ impl ExecutorShared {
             transaction_manager,
             database_manager: std::sync::OnceLock::new(),
             preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
+            composite_btree: std::sync::OnceLock::new(),
         })
     }
 }

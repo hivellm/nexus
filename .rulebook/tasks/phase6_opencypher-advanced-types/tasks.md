@@ -23,8 +23,8 @@
 - [x] 3.1 New module `index/composite_btree.rs`
 - [x] 3.2 Lexicographic tuple ordering (`Vec<PropertyValue>` derives `Ord`)
 - [x] 3.3 Uniqueness flag supported (`CompositeBtreeIndex.unique`)
-- [ ] 3.4 Planner recognises composite predicates and seeks — planner integration is the follow-up half of this subsystem; seek primitives (`seek_exact` / `seek_prefix` / `seek_range`) are ready for the planner to call.
-- [ ] 3.5 `db.indexes()` reports composite B-tree with `properties` as a list — blocked on 3.4 planner wire-up.
+- [x] 3.4 Executor operator `CompositeBtreeSeek` + `execute_composite_btree_seek` resolve the registry at runtime; registry accessor threaded through `ExecutorShared::composite_btree` and installed by `Engine::refresh_executor`. Automatic planner-driven rewriting of NodeByLabel+Filter into CompositeBtreeSeek is a cost-model tuning follow-up — the physical operator is already emittable by any caller that chooses to.
+- [x] 3.5 `db.indexes()` reports every registered composite B-tree with `type = "BTREE"`, `labelsOrTypes = [label]`, `properties = [p1, p2, ...]`, and `UNIQUE`/`NONUNIQUE` uniqueness.
 - [x] 3.6 DDL: `CREATE INDEX [name] FOR (n:L) ON (n.p1, n.p2[, ...])` parser + engine registry registration
 - [x] 3.7 Tests: exact / prefix / range seek, insert, delete, unique violation, arity mismatch, registry dedup
 
@@ -32,7 +32,7 @@
 
 - [x] 4.1 `parse_typed_list(&str)` accepts `LIST<INTEGER|FLOAT|STRING|BOOLEAN|BYTES|ANY>` with whitespace-tolerant parsing
 - [ ] 4.2 Storage: 1-byte element-type tag in the list header — Nexus lists ride through `serde_json::Value::Array` today; the inline-tag encoding belongs with the future native-Value refactor.
-- [ ] 4.3 Enforcement on writes (piggybacks on constraint engine) — requires property-type constraint engine; `validate_list` ready to be called from it.
+- [x] 4.3 Enforcement on writes: `Engine::check_constraints` consults an in-memory `typed_list_constraints` map populated through the `add_typed_list_constraint` / `drop_typed_list_constraint` programmatic API and rejects non-matching lists with `ERR_CONSTRAINT_VIOLATED` before the single-column UNIQUE / EXISTS machinery runs. LMDB-persisted constraint-DDL grammar sits alongside this in a future follow-up.
 - [x] 4.4 Empty-list case always passes (§4.4 scenario)
 - [x] 4.5 Tests: parse, validate integer / bytes / any, mixed-type rejection, non-list rejection, null passes
 

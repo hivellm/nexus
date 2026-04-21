@@ -2846,6 +2846,10 @@ impl<'a> QueryPlanner<'a> {
                     // Index scan is very cheap
                     total_cost += 5.0;
                 }
+                Operator::CompositeBtreeSeek { .. } => {
+                    // Composite B-tree seek: point or short-range lookup.
+                    total_cost += 5.0;
+                }
                 Operator::Distinct { .. } => {
                     // Distinct is moderately expensive
                     total_cost += 40.0;

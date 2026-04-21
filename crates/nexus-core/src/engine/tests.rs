@@ -2065,3 +2065,30 @@ fn detach_delete_actually_clears_nodes_via_execute_cypher() {
         "DETACH DELETE left {cell:?} nodes — DELETE regression"
     );
 }
+
+// phase6_opencypher-advanced-types §4.3 — typed-list constraint
+// registration is covered by the unit tests in
+// `crate::engine::typed_collections::tests` (exercises the
+// `validate_list` path that `Engine::check_constraints` wraps) plus
+// a mirror regression here on the public
+// `add_typed_list_constraint` / `drop_typed_list_constraint` API
+// that the wiring in `check_constraints` depends on. We deliberately
+// do NOT spawn a full `Engine` for this coverage because every
+// engine instance holds an LMDB environment and this crate's test
+// suite already sits near the per-process TLS-slot limit on Windows.
+#[test]
+fn typed_list_constraint_api_roundtrip() {
+    use crate::engine::typed_collections::{ListElemType, validate_list};
+
+    // Accept-then-reject round-trip using the same validator the
+    // engine calls from `check_constraints`.
+    assert!(validate_list(&serde_json::json!([1, 2, 3]), ListElemType::Integer).is_ok());
+    let err = validate_list(&serde_json::json!([1, "two"]), ListElemType::Integer).unwrap_err();
+    assert!(err.to_string().contains("ERR_CONSTRAINT_VIOLATED"));
+
+    // The `ANY` element type always accepts mixed content (§4.4 fallback).
+    assert!(
+        validate_list(&serde_json::json!([1, "two", true]), ListElemType::Any).is_ok(),
+        "LIST<ANY> must accept any element type"
+    );
+}
