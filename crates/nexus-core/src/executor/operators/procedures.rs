@@ -100,6 +100,33 @@ impl Executor {
             _ => {}
         }
 
+        // phase6_opencypher-apoc-ecosystem — route apoc.* procedures
+        // through the in-tree registry. The registry evaluates every
+        // argument expression in the current context, passes the
+        // resulting JSON values to the APOC handler, and feeds the
+        // returned `(columns, rows)` back into the execution context
+        // the way other procedures do.
+        if procedure_name.starts_with("apoc.") {
+            let mut arg_values: Vec<serde_json::Value> = Vec::with_capacity(arguments.len());
+            for arg_expr in arguments {
+                arg_values.push(self.evaluate_expression_in_context(context, arg_expr)?);
+            }
+            if let Some(apoc_result) = crate::apoc::dispatch(procedure_name, arg_values)? {
+                let rows: Vec<Row> = apoc_result
+                    .rows
+                    .into_iter()
+                    .map(|values| Row { values })
+                    .collect();
+                let columns = if let Some(yield_cols) = yield_columns {
+                    yield_cols.clone()
+                } else {
+                    apoc_result.columns
+                };
+                context.set_columns_and_rows(columns, rows);
+                return Ok(());
+            }
+        }
+
         // Get procedure registry (for now, create a new one - in full implementation would be shared)
         let registry = ProcedureRegistry::new();
 
@@ -771,7 +798,7 @@ impl Executor {
                 "Return the caller's identity and roles.",
             ),
         ];
-        let rows: Vec<Row> = entries
+        let mut rows: Vec<Row> = entries
             .iter()
             .map(|(name, sig, mode, desc)| Row {
                 values: vec![
@@ -783,6 +810,23 @@ impl Executor {
                 ],
             })
             .collect();
+
+        // phase6_opencypher-apoc-ecosystem — append every apoc.*
+        // procedure. Signatures are enumerated compactly; the full
+        // per-procedure signature lives in `docs/procedures/
+        // APOC_COMPATIBILITY.md`.
+        for name in crate::apoc::list_procedures() {
+            rows.push(Row {
+                values: vec![
+                    Value::String(name.to_string()),
+                    Value::String(format!("{name}(...) :: ANY")),
+                    Value::String("APOC-compatible procedure.".to_string()),
+                    Value::String("READ".to_string()),
+                    Value::Bool(false),
+                ],
+            });
+        }
+
         let columns = if let Some(y) = yield_columns {
             y.clone()
         } else {

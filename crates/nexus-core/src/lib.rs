@@ -41,6 +41,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use tracing;
 
+pub mod apoc;
 pub mod auth;
 pub mod cache;
 pub mod catalog;

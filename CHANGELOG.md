@@ -5,6 +5,44 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-04-21
+
+### Added — APOC procedure ecosystem (~100 procedures)
+
+phase6_opencypher-apoc-ecosystem ships an in-tree APOC compatibility
+surface across five namespaces:
+
+- **`apoc.coll.*`** (30) — union, intersection, disjunction, subtract,
+  sort / sortMaps / sortNodes, shuffle, reverse, zip, pairs / pairsMin,
+  combinations, partitions, flatten (deep or shallow), frequencies /
+  frequenciesAsMap, duplicates, toSet, indexOf, contains / containsAll,
+  max / min / sum / avg / stdev, remove, fill, runningTotal.
+- **`apoc.map.*`** (20) — merge / mergeList, fromPairs / fromLists /
+  fromValues / fromEntries, setKey / removeKey / removeKeys, clean,
+  flatten / unflatten, values, groupBy / groupByMulti, updateTree,
+  submap, get / getOrDefault.
+- **`apoc.text.*`** (20) — Levenshtein (distance + similarity), Jaro-
+  Winkler, Sorensen-Dice, Hamming, regex groups / replace / split,
+  phonetic (American Soundex), doubleMetaphone (Philips Metaphone),
+  clean, lpad / rpad, format (`{0}` + `{name}`), base64 encode/decode,
+  camelCase, capitalize, hexValue, byteCount.
+- **`apoc.date.*`** (25) — format / parse / convertFormat (with Java
+  `yyyy-MM-dd HH:mm:ss` tokens), currentMillis, systemTimezone,
+  toYears / toMonths / toDays / toHours / toMinutes / toSeconds,
+  add / subtract, fromISO / toISO, yearQuarter, week (ISO), weekday
+  (Monday=1), dayOfYear, startOfDay / endOfDay, diff / between.
+- **`apoc.schema.*`** (10) — assert (idempotent DDL row-shape),
+  nodes, relationships, properties.distinctCount, node /
+  relationship indexExists / constraintExists, stats, info.
+
+Dispatch routes through the existing
+`executor::operators::procedures::execute_call_procedure`; every
+APOC name surfaces in `dbms.procedures()`. Compatibility matrix:
+[docs/procedures/APOC_COMPATIBILITY.md](docs/procedures/APOC_COMPATIBILITY.md).
+
+82 new unit tests. Full `cargo +nightly test -p nexus-core --lib`
+run reports 1907 passed / 0 failed / 12 ignored.
+
 ## [1.5.0] — 2026-04-21
 
 ### Added — Advanced types (phase6_opencypher-advanced-types)

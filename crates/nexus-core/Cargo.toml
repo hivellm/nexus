@@ -66,6 +66,7 @@ tempfile = "3.15"
 crossbeam-channel = "0.5"
 rand.workspace = true
 regex = "1.11"
+strsim = "0.11"  # phase6 apoc.text.* similarity metrics (Levenshtein, Jaro, Sorensen-Dice)
 tracing = "0.1"
 dashmap = "5.5"
 # Temporarily disabled - focus on core optimizations first
