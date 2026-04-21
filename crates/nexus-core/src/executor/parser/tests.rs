@@ -1918,3 +1918,107 @@ fn query_without_graph_scope_has_none() {
     let q = parser.parse().unwrap();
     assert_eq!(q.graph_scope, None);
 }
+
+// ───────── phase6_opencypher-constraint-enforcement — Cypher 25 DDL ─────────
+
+#[test]
+fn parse_cypher25_node_key_constraint() {
+    let mut parser = CypherParser::new(
+        "CREATE CONSTRAINT person_key FOR (p:Person) REQUIRE (p.tenantId, p.id) IS NODE KEY"
+            .to_string(),
+    );
+    let q = parser.parse().expect("NODE KEY DDL must parse");
+    match &q.clauses[0] {
+        Clause::CreateConstraint(c) => {
+            assert_eq!(c.name.as_deref(), Some("person_key"));
+            assert_eq!(c.constraint_type, ConstraintType::NodeKey);
+            assert_eq!(c.label, "Person");
+            assert_eq!(c.properties, vec!["tenantId".to_string(), "id".to_string()]);
+            assert_eq!(c.entity, ConstraintEntity::Node);
+        }
+        other => panic!("expected CREATE CONSTRAINT, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_cypher25_not_null_constraint() {
+    let mut parser = CypherParser::new(
+        "CREATE CONSTRAINT FOR (p:Person) REQUIRE p.email IS NOT NULL".to_string(),
+    );
+    let q = parser.parse().expect("IS NOT NULL DDL must parse");
+    match &q.clauses[0] {
+        Clause::CreateConstraint(c) => {
+            assert_eq!(c.constraint_type, ConstraintType::Exists);
+            assert_eq!(c.label, "Person");
+            assert_eq!(c.property, "email");
+            assert_eq!(c.entity, ConstraintEntity::Node);
+        }
+        other => panic!("expected CREATE CONSTRAINT, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_cypher25_property_type_constraint() {
+    let mut parser = CypherParser::new(
+        "CREATE CONSTRAINT FOR (p:Person) REQUIRE p.age IS :: INTEGER".to_string(),
+    );
+    let q = parser.parse().expect("IS :: TYPE DDL must parse");
+    match &q.clauses[0] {
+        Clause::CreateConstraint(c) => {
+            assert_eq!(c.constraint_type, ConstraintType::PropertyType);
+            assert_eq!(c.property, "age");
+            assert_eq!(c.property_type.as_deref(), Some("INTEGER"));
+            assert_eq!(c.entity, ConstraintEntity::Node);
+        }
+        other => panic!("expected CREATE CONSTRAINT, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_cypher25_rel_not_null_constraint() {
+    let mut parser = CypherParser::new(
+        "CREATE CONSTRAINT FOR ()-[r:CONNECTS]-() REQUIRE r.weight IS NOT NULL".to_string(),
+    );
+    let q = parser.parse().expect("rel NOT NULL DDL must parse");
+    match &q.clauses[0] {
+        Clause::CreateConstraint(c) => {
+            assert_eq!(c.constraint_type, ConstraintType::Exists);
+            assert_eq!(c.label, "CONNECTS");
+            assert_eq!(c.property, "weight");
+            assert_eq!(c.entity, ConstraintEntity::Relationship);
+        }
+        other => panic!("expected CREATE CONSTRAINT, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_cypher25_rel_property_type_directed() {
+    let mut parser = CypherParser::new(
+        "CREATE CONSTRAINT FOR ()-[r:CONNECTS]->() REQUIRE r.weight IS :: FLOAT".to_string(),
+    );
+    let q = parser.parse().expect("directed rel DDL must parse");
+    match &q.clauses[0] {
+        Clause::CreateConstraint(c) => {
+            assert_eq!(c.constraint_type, ConstraintType::PropertyType);
+            assert_eq!(c.entity, ConstraintEntity::Relationship);
+            assert_eq!(c.property_type.as_deref(), Some("FLOAT"));
+        }
+        other => panic!("expected CREATE CONSTRAINT, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_legacy_constraint_still_accepted() {
+    let mut parser =
+        CypherParser::new("CREATE CONSTRAINT ON (p:Person) ASSERT p.email IS UNIQUE".to_string());
+    let q = parser.parse().expect("legacy form must still parse");
+    match &q.clauses[0] {
+        Clause::CreateConstraint(c) => {
+            assert_eq!(c.constraint_type, ConstraintType::Unique);
+            assert_eq!(c.label, "Person");
+            assert_eq!(c.property, "email");
+            assert_eq!(c.entity, ConstraintEntity::Node);
+        }
+        other => panic!("expected CREATE CONSTRAINT, got {other:?}"),
+    }
+}

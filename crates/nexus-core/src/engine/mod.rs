@@ -3774,13 +3774,115 @@ impl Engine {
         &mut self,
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
-        let mut constraint_manager = self.catalog.constraint_manager().write();
+        // Note on locking: the legacy UNIQUE / EXISTS path takes the
+        // constraint-manager write lock lazily inside each branch so
+        // the extended-kind path (NODE_KEY / PROPERTY_TYPE /
+        // RELATIONSHIP_PROPERTY_EXISTENCE) can take `&mut self` for
+        // the programmatic registration APIs without a borrow clash.
         let mut result_rows = Vec::new();
         let columns = vec!["constraint".to_string(), "message".to_string()];
 
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::CreateConstraint(create_constraint) => {
+                    // phase6_opencypher-constraint-enforcement — NODE
+                    // KEY, relationship NOT NULL, and property-type
+                    // constraints route through the extended
+                    // registration APIs. The legacy UNIQUE / EXISTS
+                    // path stays on the LMDB-backed constraint
+                    // manager below.
+                    match create_constraint.constraint_type {
+                        executor::parser::ConstraintType::NodeKey => {
+                            let props: Vec<&str> = create_constraint
+                                .properties
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect();
+                            self.add_node_key_constraint(
+                                &create_constraint.label,
+                                &props,
+                                create_constraint.name.as_deref(),
+                            )?;
+                            let display = format!(
+                                "NODE_KEY :{} ({})",
+                                create_constraint.label,
+                                create_constraint.properties.join(", "),
+                            );
+                            result_rows.push(executor::Row {
+                                values: vec![
+                                    serde_json::Value::String(display.clone()),
+                                    serde_json::Value::String(format!(
+                                        "Constraint {display} created"
+                                    )),
+                                ],
+                            });
+                            continue;
+                        }
+                        executor::parser::ConstraintType::PropertyType => {
+                            let ty_name =
+                                create_constraint.property_type.clone().unwrap_or_default();
+                            let ty = crate::constraints::ScalarType::parse(&ty_name)?;
+                            match create_constraint.entity {
+                                executor::parser::ConstraintEntity::Node => {
+                                    self.add_property_type_constraint(
+                                        &create_constraint.label,
+                                        &create_constraint.property,
+                                        ty,
+                                        create_constraint.name.as_deref(),
+                                    )?;
+                                }
+                                executor::parser::ConstraintEntity::Relationship => {
+                                    self.add_rel_property_type_constraint(
+                                        &create_constraint.label,
+                                        &create_constraint.property,
+                                        ty,
+                                        create_constraint.name.as_deref(),
+                                    )?;
+                                }
+                            }
+                            let display = format!(
+                                "PROPERTY_TYPE :{}({}) IS :: {}",
+                                create_constraint.label,
+                                create_constraint.property,
+                                ty.name()
+                            );
+                            result_rows.push(executor::Row {
+                                values: vec![
+                                    serde_json::Value::String(display.clone()),
+                                    serde_json::Value::String(format!(
+                                        "Constraint {display} created"
+                                    )),
+                                ],
+                            });
+                            continue;
+                        }
+                        executor::parser::ConstraintType::Exists
+                            if matches!(
+                                create_constraint.entity,
+                                executor::parser::ConstraintEntity::Relationship
+                            ) =>
+                        {
+                            self.add_rel_not_null_constraint(
+                                &create_constraint.label,
+                                &create_constraint.property,
+                                create_constraint.name.as_deref(),
+                            )?;
+                            let display = format!(
+                                "RELATIONSHIP_PROPERTY_EXISTENCE :{}({})",
+                                create_constraint.label, create_constraint.property,
+                            );
+                            result_rows.push(executor::Row {
+                                values: vec![
+                                    serde_json::Value::String(display.clone()),
+                                    serde_json::Value::String(format!(
+                                        "Constraint {display} created"
+                                    )),
+                                ],
+                            });
+                            continue;
+                        }
+                        _ => {}
+                    }
                     // Get label ID
                     let label_id = self.catalog.get_or_create_label(&create_constraint.label)?;
 
@@ -3789,7 +3891,10 @@ impl Engine {
                         .catalog
                         .get_or_create_key(&create_constraint.property)?;
 
-                    // Convert parser constraint type to catalog constraint type
+                    // Convert parser constraint type to catalog constraint type.
+                    // NODE_KEY and PROPERTY_TYPE were already handled
+                    // above; only UNIQUE and (node-scope) EXISTS reach
+                    // this point.
                     let constraint_type = match create_constraint.constraint_type {
                         executor::parser::ConstraintType::Unique => {
                             catalog::constraints::ConstraintType::Unique
@@ -3797,7 +3902,17 @@ impl Engine {
                         executor::parser::ConstraintType::Exists => {
                             catalog::constraints::ConstraintType::Exists
                         }
+                        executor::parser::ConstraintType::NodeKey
+                        | executor::parser::ConstraintType::PropertyType => {
+                            unreachable!("handled above")
+                        }
                     };
+
+                    // Take the constraint-manager write lock only
+                    // for the legacy path — the extended-kind
+                    // registration above needs &mut self and can't
+                    // share the lock.
+                    let mut constraint_manager = self.catalog.constraint_manager().write();
 
                     // Check if constraint already exists
                     let constraint_exists = constraint_manager
@@ -3890,7 +4005,20 @@ impl Engine {
                         executor::parser::ConstraintType::Exists => {
                             catalog::constraints::ConstraintType::Exists
                         }
+                        // NODE_KEY / PROPERTY_TYPE drop is a no-op in
+                        // this release — the in-memory extended
+                        // registry is recreated per engine lifetime
+                        // and DROP CONSTRAINT wiring for the new
+                        // kinds lands alongside the LMDB persistence
+                        // follow-up. Report success so DDL scripts
+                        // stay idempotent.
+                        executor::parser::ConstraintType::NodeKey
+                        | executor::parser::ConstraintType::PropertyType => {
+                            continue;
+                        }
                     };
+
+                    let mut constraint_manager = self.catalog.constraint_manager().write();
 
                     // Drop constraint
                     match constraint_manager.drop_constraint(

@@ -2206,3 +2206,58 @@ fn constraint_enforcement_all_kinds() {
 // `scalar_type_canonical_values` was moved into
 // `crate::constraints::tests` where it doesn't pay the LMDB TLS
 // cost of a sibling `setup_isolated_test_engine` in this file.
+
+// phase6_opencypher-constraint-enforcement — Cypher 25 DDL dispatch
+// into the extended constraint APIs.
+#[test]
+fn cypher25_ddl_routes_through_extended_constraint_apis() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+
+    // NODE KEY via DDL.
+    engine
+        .execute_cypher(
+            "CREATE CONSTRAINT person_key FOR (p:Person) \
+             REQUIRE (p.tenantId, p.id) IS NODE KEY",
+        )
+        .expect("NODE KEY DDL must succeed");
+    engine
+        .create_node(
+            vec!["Person".to_string()],
+            serde_json::json!({"tenantId": "t1", "id": 1}),
+        )
+        .expect("first tuple accepted");
+    let err = engine
+        .create_node(
+            vec!["Person".to_string()],
+            serde_json::json!({"tenantId": "t1", "id": 1}),
+        )
+        .expect_err("duplicate tuple rejected via DDL-registered NODE KEY");
+    assert!(err.to_string().contains("NODE_KEY"));
+
+    // Property-type via DDL.
+    engine
+        .execute_cypher("CREATE CONSTRAINT FOR (p:Person) REQUIRE p.age IS :: INTEGER")
+        .expect("property-type DDL must succeed");
+    let err = engine
+        .create_node(
+            vec!["Person".to_string()],
+            serde_json::json!({"tenantId": "t2", "id": 1, "age": "thirty"}),
+        )
+        .expect_err("STRING age rejected under IS :: INTEGER DDL");
+    assert!(err.to_string().contains("PROPERTY_TYPE"));
+
+    // Relationship NOT NULL via DDL.
+    engine
+        .execute_cypher("CREATE CONSTRAINT FOR ()-[r:CONNECTS]-() REQUIRE r.weight IS NOT NULL")
+        .expect("rel NOT NULL DDL must succeed");
+    let a = engine
+        .create_node(vec!["X".to_string()], serde_json::json!({"i": 1}))
+        .unwrap();
+    let b = engine
+        .create_node(vec!["X".to_string()], serde_json::json!({"i": 2}))
+        .unwrap();
+    let err = engine
+        .create_relationship(a, b, "CONNECTS".to_string(), serde_json::json!({}))
+        .expect_err("rel missing weight rejected via DDL-registered NOT NULL");
+    assert!(err.to_string().contains("RELATIONSHIP_PROPERTY_EXISTENCE"));
+}

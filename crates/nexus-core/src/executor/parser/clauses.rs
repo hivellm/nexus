@@ -1985,16 +1985,53 @@ impl CypherParser {
         })
     }
 
-    /// Parse CREATE CONSTRAINT clause
-    /// Syntax: CREATE CONSTRAINT [IF NOT EXISTS] ON (n:Label) ASSERT n.property IS UNIQUE
-    /// or: CREATE CONSTRAINT [IF NOT EXISTS] ON (n:Label) ASSERT EXISTS(n.property)
+    /// Parse CREATE CONSTRAINT clause.
+    ///
+    /// Accepted forms:
+    ///
+    /// ```text
+    /// // Legacy (Cypher 4.x):
+    /// CREATE CONSTRAINT [IF NOT EXISTS] ON (n:Label) ASSERT n.p IS UNIQUE
+    /// CREATE CONSTRAINT [IF NOT EXISTS] ON (n:Label) ASSERT n.p IS NOT NULL
+    /// CREATE CONSTRAINT [IF NOT EXISTS] ON (n:Label) ASSERT EXISTS(n.p)
+    ///
+    /// // Cypher 25 — node scope:
+    /// CREATE CONSTRAINT [<name>] [IF NOT EXISTS]
+    ///     FOR (n:Label) REQUIRE n.p IS UNIQUE
+    /// CREATE CONSTRAINT [<name>] [IF NOT EXISTS]
+    ///     FOR (n:Label) REQUIRE n.p IS NOT NULL
+    /// CREATE CONSTRAINT [<name>] [IF NOT EXISTS]
+    ///     FOR (n:Label) REQUIRE (n.p1, n.p2, ...) IS NODE KEY
+    /// CREATE CONSTRAINT [<name>] [IF NOT EXISTS]
+    ///     FOR (n:Label) REQUIRE n.p IS :: INTEGER   // or FLOAT / STRING / BOOLEAN / BYTES / LIST / MAP
+    ///
+    /// // Cypher 25 — relationship scope:
+    /// CREATE CONSTRAINT [<name>] [IF NOT EXISTS]
+    ///     FOR ()-[r:TYPE]-() REQUIRE r.p IS NOT NULL
+    /// CREATE CONSTRAINT [<name>] [IF NOT EXISTS]
+    ///     FOR ()-[r:TYPE]-() REQUIRE r.p IS :: INTEGER
+    /// ```
     pub(super) fn parse_create_constraint_clause(&mut self) -> Result<CreateConstraintClause> {
         self.expect_keyword("CONSTRAINT")?;
         self.skip_whitespace();
 
-        // Check for IF NOT EXISTS
+        // Optional constraint name (`CREATE CONSTRAINT <name> [IF NOT EXISTS] FOR ...`).
+        // Only legal before `IF`, `FOR`, or `ON`. Identifiers that
+        // collide with a keyword are handled by the keyword checks.
+        let name = if self.is_identifier_start()
+            && !self.peek_keyword("IF")
+            && !self.peek_keyword("FOR")
+            && !self.peek_keyword("ON")
+        {
+            Some(self.parse_identifier()?)
+        } else {
+            None
+        };
+        self.skip_whitespace();
+
+        // IF NOT EXISTS
         let if_not_exists = if self.peek_keyword("IF") {
-            self.parse_keyword()?; // consume "IF"
+            self.parse_keyword()?; // IF
             self.expect_keyword("NOT")?;
             self.expect_keyword("EXISTS")?;
             self.skip_whitespace();
@@ -2003,61 +2040,239 @@ impl CypherParser {
             false
         };
 
-        self.expect_keyword("ON")?;
-        self.skip_whitespace();
-        self.expect_char('(')?;
-        let _variable = self.parse_identifier()?; // variable name (usually 'n')
-        self.skip_whitespace();
-        self.expect_char(':')?;
-        let label = self.parse_identifier()?;
-        self.expect_char(')')?;
-        self.skip_whitespace();
-        self.expect_keyword("ASSERT")?;
-        self.skip_whitespace();
+        if self.peek_keyword("FOR") {
+            self.parse_create_constraint_for_form(name, if_not_exists)
+        } else {
+            // Legacy `ON (n:L) ASSERT ...` form — every output here
+            // is a node-scope constraint.
+            self.expect_keyword("ON")?;
+            self.skip_whitespace();
+            self.expect_char('(')?;
+            let _variable = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_char(':')?;
+            let label = self.parse_identifier()?;
+            self.expect_char(')')?;
+            self.skip_whitespace();
+            self.expect_keyword("ASSERT")?;
+            self.skip_whitespace();
+            let (constraint_type, property) = self.parse_legacy_constraint_body()?;
+            Ok(CreateConstraintClause {
+                name,
+                constraint_type,
+                label,
+                property: property.clone(),
+                properties: vec![property],
+                entity: ConstraintEntity::Node,
+                property_type: None,
+                if_not_exists,
+            })
+        }
+    }
 
-        // Parse constraint type and extract property name.
-        //
-        // Accepted forms (Cypher 4.x + phase6 extension):
-        //   * `EXISTS(n.p)`               — legacy EXISTS
-        //   * `n.p IS UNIQUE`             — uniqueness
-        //   * `n.p IS NOT NULL`           — NOT NULL (alias of EXISTS)
-        //
-        // The Cypher 25 `FOR (n:L) REQUIRE (p1, p2) IS NODE KEY` and
-        // relationship / property-type grammars register through the
-        // programmatic API on `Engine` in this release; the parser
-        // extension lands with the FOR/REQUIRE reshape task.
-        let (constraint_type, property) = if self.peek_keyword("EXISTS") {
-            self.parse_keyword()?; // consume "EXISTS"
+    /// Legacy `ASSERT n.p IS UNIQUE / IS NOT NULL / EXISTS(n.p)` body.
+    fn parse_legacy_constraint_body(&mut self) -> Result<(ConstraintType, String)> {
+        if self.peek_keyword("EXISTS") {
+            self.parse_keyword()?;
             self.expect_char('(')?;
             let _var = self.parse_identifier()?;
             self.expect_char('.')?;
             let prop = self.parse_identifier()?;
             self.expect_char(')')?;
-            (ConstraintType::Exists, prop)
+            return Ok((ConstraintType::Exists, prop));
+        }
+        let _var = self.parse_identifier()?;
+        self.expect_char('.')?;
+        let prop = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_keyword("IS")?;
+        self.skip_whitespace();
+        if self.peek_keyword("NOT") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            self.expect_keyword("NULL")?;
+            Ok((ConstraintType::Exists, prop))
         } else {
-            let _var = self.parse_identifier()?;
-            self.expect_char('.')?;
-            let prop = self.parse_identifier()?;
-            self.skip_whitespace();
-            self.expect_keyword("IS")?;
-            self.skip_whitespace();
-            if self.peek_keyword("NOT") {
-                self.parse_keyword()?; // NOT
-                self.skip_whitespace();
-                self.expect_keyword("NULL")?;
-                (ConstraintType::Exists, prop)
-            } else {
-                self.expect_keyword("UNIQUE")?;
-                (ConstraintType::Unique, prop)
-            }
-        };
+            self.expect_keyword("UNIQUE")?;
+            Ok((ConstraintType::Unique, prop))
+        }
+    }
 
+    /// Cypher 25 `FOR (n:L) REQUIRE ...` and
+    /// `FOR ()-[r:T]-() REQUIRE ...` forms.
+    fn parse_create_constraint_for_form(
+        &mut self,
+        name: Option<String>,
+        if_not_exists: bool,
+    ) -> Result<CreateConstraintClause> {
+        self.expect_keyword("FOR")?;
+        self.skip_whitespace();
+
+        // Entity scope: node pattern `(n:L)` or rel pattern `()-[r:T]-()`.
+        let (entity, var_name, label_or_type) =
+            if self.peek_char() == Some('(') && !self.peek_is_rel_after_lparen() {
+                // Actually look at next char to decide. Both forms start with `(`:
+                //   node pattern:  (n:L)
+                //   rel pattern:   ()-[r:T]-()
+                // We disambiguate by peeking past `(` for `)-[`.
+                self.parse_constraint_node_pattern()?
+            } else {
+                self.parse_constraint_rel_pattern()?
+            };
+        let _ = var_name;
+
+        self.skip_whitespace();
+        self.expect_keyword("REQUIRE")?;
+        self.skip_whitespace();
+
+        // Body: `(p1, p2, ...) IS NODE KEY` | `n.p IS UNIQUE` |
+        //       `n.p IS NOT NULL` | `n.p IS :: TYPE`.
+        let (constraint_type, properties, property_type) =
+            if self.peek_char() == Some('(') && self.peek_is_node_key_tuple() {
+                self.parse_require_node_key_body()?
+            } else {
+                let _var = self.parse_identifier()?;
+                self.expect_char('.')?;
+                let prop = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_keyword("IS")?;
+                self.skip_whitespace();
+                if self.peek_keyword("NOT") {
+                    self.parse_keyword()?;
+                    self.skip_whitespace();
+                    self.expect_keyword("NULL")?;
+                    (ConstraintType::Exists, vec![prop], None)
+                } else if self.peek_char() == Some(':') && self.peek_char_at(1) == Some(':') {
+                    self.consume_char();
+                    self.consume_char();
+                    self.skip_whitespace();
+                    let ty = self.parse_identifier()?;
+                    (ConstraintType::PropertyType, vec![prop], Some(ty))
+                } else {
+                    self.expect_keyword("UNIQUE")?;
+                    (ConstraintType::Unique, vec![prop], None)
+                }
+            };
+
+        let property = properties.first().cloned().unwrap_or_default();
         Ok(CreateConstraintClause {
+            name,
             constraint_type,
-            label,
+            label: label_or_type,
             property,
+            properties,
+            entity,
+            property_type,
             if_not_exists,
         })
+    }
+
+    /// Look past `(` to decide if the pattern is a node `(n:L)` or a
+    /// relationship `()-[r:T]-()`. Stateless — `self.pos` is
+    /// unchanged on return.
+    fn peek_is_rel_after_lparen(&self) -> bool {
+        let mut pos = self.pos + 1;
+        // Skip whitespace inside `(`.
+        while pos < self.input.len() {
+            if !self.input.as_bytes()[pos].is_ascii_whitespace() {
+                break;
+            }
+            pos += 1;
+        }
+        // Rel pattern shape: `()-[...`
+        pos < self.input.len() && self.input.as_bytes()[pos] == b')'
+    }
+
+    /// Look past `(` to decide if we're at a NODE KEY tuple
+    /// `(n.p1, n.p2)` vs a single `n.p` wrapped in parens. Heuristic:
+    /// after the first `.`, a comma before the closing paren implies
+    /// a tuple.
+    fn peek_is_node_key_tuple(&self) -> bool {
+        let mut depth = 0i32;
+        for i in self.pos..self.input.len() {
+            let b = self.input.as_bytes()[i];
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                b',' if depth == 1 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn parse_constraint_node_pattern(&mut self) -> Result<(ConstraintEntity, String, String)> {
+        self.expect_char('(')?;
+        self.skip_whitespace();
+        let var = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_char(':')?;
+        let label = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_char(')')?;
+        Ok((ConstraintEntity::Node, var, label))
+    }
+
+    fn parse_constraint_rel_pattern(&mut self) -> Result<(ConstraintEntity, String, String)> {
+        // Accepts `()-[r:TYPE]-()` and `()-[r:TYPE]->()`.
+        self.expect_char('(')?;
+        self.skip_whitespace();
+        self.expect_char(')')?;
+        self.skip_whitespace();
+        self.expect_char('-')?;
+        self.skip_whitespace();
+        self.expect_char('[')?;
+        self.skip_whitespace();
+        let var = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_char(':')?;
+        let rel_type = self.parse_identifier()?;
+        self.skip_whitespace();
+        self.expect_char(']')?;
+        self.skip_whitespace();
+        self.expect_char('-')?;
+        self.skip_whitespace();
+        if self.peek_char() == Some('>') {
+            self.consume_char();
+            self.skip_whitespace();
+        }
+        self.expect_char('(')?;
+        self.skip_whitespace();
+        self.expect_char(')')?;
+        Ok((ConstraintEntity::Relationship, var, rel_type))
+    }
+
+    fn parse_require_node_key_body(
+        &mut self,
+    ) -> Result<(ConstraintType, Vec<String>, Option<String>)> {
+        self.expect_char('(')?;
+        let mut props = Vec::new();
+        loop {
+            self.skip_whitespace();
+            let _var = self.parse_identifier()?;
+            self.expect_char('.')?;
+            props.push(self.parse_identifier()?);
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.consume_char();
+                continue;
+            }
+            break;
+        }
+        self.skip_whitespace();
+        self.expect_char(')')?;
+        self.skip_whitespace();
+        self.expect_keyword("IS")?;
+        self.skip_whitespace();
+        self.expect_keyword("NODE")?;
+        self.skip_whitespace();
+        self.expect_keyword("KEY")?;
+        Ok((ConstraintType::NodeKey, props, None))
     }
 
     /// Parse DROP CONSTRAINT clause

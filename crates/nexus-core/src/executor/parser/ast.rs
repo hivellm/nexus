@@ -561,23 +561,54 @@ pub struct DropIndexClause {
 /// CREATE CONSTRAINT clause
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateConstraintClause {
+    /// Optional constraint name (`CREATE CONSTRAINT <name> FOR ...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Constraint type
     pub constraint_type: ConstraintType,
-    /// Label name
+    /// Label name (node constraints) or relationship type (rel constraints).
     pub label: String,
-    /// Property name
+    /// Primary property name (first element of `properties`, retained
+    /// for backward compatibility with single-property callers).
     pub property: String,
+    /// Every property the constraint keys on. Length 1 for UNIQUE /
+    /// EXISTS / IS NOT NULL / property-type, length ≥ 2 for NODE KEY.
+    /// phase6_opencypher-constraint-enforcement §5/§7.
+    #[serde(default)]
+    pub properties: Vec<String>,
+    /// Entity scope — NODE or RELATIONSHIP. Defaults to NODE so
+    /// legacy callers building `CreateConstraintClause` literals keep
+    /// compiling.
+    #[serde(default)]
+    pub entity: ConstraintEntity,
+    /// Property-type token when `constraint_type == PropertyType`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property_type: Option<String>,
     /// Optional IF NOT EXISTS flag
     pub if_not_exists: bool,
+}
+
+/// Entity scope for a constraint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConstraintEntity {
+    #[default]
+    Node,
+    Relationship,
 }
 
 /// Constraint type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConstraintType {
-    /// UNIQUE constraint
+    /// UNIQUE constraint (node property uniqueness).
     Unique,
-    /// EXISTS constraint (property must exist)
+    /// EXISTS constraint — property must exist (alias for
+    /// node/rel NOT NULL).
     Exists,
+    /// NODE KEY — `(p1, p2, ...)` composite uniqueness + per-component
+    /// NOT NULL (phase6_opencypher-constraint-enforcement §5).
+    NodeKey,
+    /// Property-type constraint — `IS :: <TYPE>` (§7).
+    PropertyType,
 }
 
 /// DROP CONSTRAINT clause
