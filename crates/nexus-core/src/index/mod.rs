@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub mod btree;
 pub mod composite_btree;
 pub mod fulltext;
+pub mod fulltext_analyzer;
 pub mod fulltext_registry;
 pub mod pending_updates;
 

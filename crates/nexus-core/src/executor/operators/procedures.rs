@@ -460,6 +460,7 @@ impl Executor {
                     Value::Array(vec![Value::String(label_name.clone())]),
                     Value::Array(Vec::new()),
                     Value::String("token-lookup-1.0".to_string()),
+                    Value::Object(serde_json::Map::new()),
                 ],
             });
             next_id += 1;
@@ -491,6 +492,7 @@ impl Executor {
                             Value::Array(Vec::new()),
                             Value::Array(Vec::new()),
                             Value::String("hnsw-1.0".to_string()),
+                            Value::Object(serde_json::Map::new()),
                         ],
                     });
                     next_id += 1;
@@ -532,6 +534,7 @@ impl Executor {
                         Value::Array(vec![Value::String(label_name)]),
                         Value::Array(property_keys.into_iter().map(Value::String).collect()),
                         Value::String("btree-composite-1.0".to_string()),
+                        Value::Object(serde_json::Map::new()),
                     ],
                 });
                 next_id += 1;
@@ -579,6 +582,14 @@ impl Executor {
                                 .collect(),
                         ),
                         Value::String("tantivy-0.22".to_string()),
+                        {
+                            let mut opts = serde_json::Map::new();
+                            opts.insert(
+                                "analyzer".to_string(),
+                                Value::String(meta.analyzer.clone()),
+                            );
+                            Value::Object(opts)
+                        },
                     ],
                 });
                 next_id += 1;
@@ -606,6 +617,7 @@ impl Executor {
                 "labelsOrTypes".to_string(),
                 "properties".to_string(),
                 "indexProvider".to_string(),
+                "options".to_string(),
             ]
         };
         context.set_columns_and_rows(columns, rows);
@@ -1385,17 +1397,7 @@ impl Executor {
         let name = self.fts_str_arg(context, arguments, 0, "name")?;
         let labels = self.fts_str_list_arg(context, arguments, 1, "labelsOrTypes")?;
         let props = self.fts_str_list_arg(context, arguments, 2, "properties")?;
-        let analyzer = match arguments.get(3) {
-            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
-                Value::Object(m) => m
-                    .get("analyzer")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                Value::Null => None,
-                _ => None,
-            },
-            None => None,
-        };
+        let config = self.fts_parse_analyzer_config(context, arguments, 3)?;
         let registry = self.fulltext_registry().ok_or_else(|| {
             Error::CypherExecution(
                 "ERR_FTS_INDEX_UNAVAILABLE: registry not configured on this executor".to_string(),
@@ -1404,13 +1406,13 @@ impl Executor {
         let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
         let prop_refs: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
         if is_node {
-            registry.create_node_index(&name, &label_refs, &prop_refs, analyzer.as_deref())?;
+            registry.create_node_index_with_config(&name, &label_refs, &prop_refs, config)?;
         } else {
-            registry.create_relationship_index(
+            registry.create_relationship_index_with_config(
                 &name,
                 &label_refs,
                 &prop_refs,
-                analyzer.as_deref(),
+                config,
             )?;
         }
         let columns = yield_columns
@@ -1516,36 +1518,64 @@ impl Executor {
         let columns = yield_columns
             .cloned()
             .unwrap_or_else(|| vec!["name".to_string(), "description".to_string()]);
-        let entries = [
-            (
-                "standard",
-                "Lucene-style standard analyser — lowercasing + splitting on punctuation.",
-            ),
-            ("simple", "Whitespace tokenisation with lowercasing."),
-            (
-                "whitespace",
-                "Whitespace tokenisation only (case-sensitive).",
-            ),
-            (
-                "keyword",
-                "No tokenisation; the value is indexed as a single term.",
-            ),
-            (
-                "ngram",
-                "Character n-grams (min=2, max=3) with lowercasing.",
-            ),
-        ];
-        let rows: Vec<Row> = entries
-            .iter()
-            .map(|(name, desc)| Row {
+        let rows: Vec<Row> = crate::index::fulltext_analyzer::catalogue()
+            .into_iter()
+            .map(|d| Row {
                 values: vec![
-                    Value::String((*name).to_string()),
-                    Value::String((*desc).to_string()),
+                    Value::String(d.name.to_string()),
+                    Value::String(d.description.to_string()),
                 ],
             })
             .collect();
         context.set_columns_and_rows(columns, rows);
         Ok(())
+    }
+
+    /// Parse the optional `config` map argument of
+    /// `db.index.fulltext.createNodeIndex / createRelationshipIndex`
+    /// into an [`AnalyzerConfig`]. Supported keys:
+    ///
+    /// - `analyzer` (STRING): catalogue name; defaults to `"standard"`.
+    /// - `ngram_min` (INTEGER): lower bound for the `ngram` analyzer.
+    /// - `ngram_max` (INTEGER): upper bound for the `ngram` analyzer.
+    ///
+    /// Any other keys are ignored (forward-compat with Neo4j
+    /// configuration maps that carry additional tuning flags).
+    fn fts_parse_analyzer_config(
+        &self,
+        context: &ExecutionContext,
+        arguments: &[parser::Expression],
+        idx: usize,
+    ) -> Result<crate::index::fulltext_registry::AnalyzerConfig> {
+        use crate::index::fulltext_registry::AnalyzerConfig;
+        let Some(expr) = arguments.get(idx) else {
+            return Ok(AnalyzerConfig::of_name(None));
+        };
+        let value = self.evaluate_expression_in_context(context, expr)?;
+        let Value::Object(map) = value else {
+            // Non-map config is treated as "no config" (NULL or a
+            // misuse); the Neo4j procedure signature accepts the map
+            // as optional, so surface no failure here.
+            return Ok(AnalyzerConfig::of_name(None));
+        };
+        let name = map
+            .get("analyzer")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "standard".to_string());
+        let ngram_min = map
+            .get("ngram_min")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let ngram_max = map
+            .get("ngram_max")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        Ok(AnalyzerConfig {
+            name,
+            ngram_min,
+            ngram_max,
+        })
     }
 
     fn fts_str_arg(

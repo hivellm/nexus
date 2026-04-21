@@ -1775,7 +1775,9 @@ fn system_procedures_expose_db_and_dbms_surface() {
         .execute_cypher("CREATE (:Phase6SP_A {name: 'x'})")
         .unwrap();
 
-    // §4 — db.indexes is callable and emits the 10 canonical columns.
+    // §4 — db.indexes is callable and emits the 11 canonical columns
+    // (phase6_fulltext-analyzer-catalogue added `options` for
+    // analyzer / ngram metadata; non-FTS rows get an empty map).
     let r = engine.execute_cypher("CALL db.indexes()").unwrap();
     assert_eq!(
         r.columns,
@@ -1790,6 +1792,7 @@ fn system_procedures_expose_db_and_dbms_surface() {
             "labelsOrTypes",
             "properties",
             "indexProvider",
+            "options",
         ]
     );
     // Every row's state is `ONLINE` and `type` is `LOOKUP` (label scan).
@@ -2315,4 +2318,81 @@ fn fulltext_search_ddl_and_query_roundtrip() {
         .execute_cypher("CALL db.index.fulltext.queryNodes('docs', 'anything')")
         .expect_err("dropped index must raise ERR_FTS_INDEX_NOT_FOUND");
     assert!(err.to_string().contains("ERR_FTS_INDEX_NOT_FOUND"));
+}
+
+// phase6_fulltext-analyzer-catalogue — listAvailableAnalyzers surface.
+#[test]
+fn fulltext_list_available_analyzers_exposes_catalogue() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    let r = engine
+        .execute_cypher("CALL db.index.fulltext.listAvailableAnalyzers()")
+        .unwrap();
+    let names: Vec<String> = r
+        .rows
+        .iter()
+        .map(|row| row.values[0].as_str().unwrap().to_string())
+        .collect();
+    for expected in [
+        "english",
+        "french",
+        "german",
+        "keyword",
+        "ngram",
+        "portuguese",
+        "simple",
+        "spanish",
+        "standard",
+        "whitespace",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "listAvailableAnalyzers missing {expected:?}, got {names:?}"
+        );
+    }
+    // Alphabetical order.
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted, "analyzer rows must be alphabetical");
+}
+
+// phase6_fulltext-analyzer-catalogue — config map picks the analyzer.
+#[test]
+fn fulltext_create_index_honours_config_analyzer() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    engine
+        .execute_cypher(
+            "CALL db.index.fulltext.createNodeIndex('imgs', ['Image'], ['caption'], \
+             {analyzer: 'ngram', ngram_min: 2, ngram_max: 3})",
+        )
+        .expect("createNodeIndex with ngram config must succeed");
+    let ixs = engine.execute_cypher("CALL db.indexes()").unwrap();
+    let analyzer_cell = ixs
+        .rows
+        .iter()
+        .find(|row| row.values[1] == serde_json::json!("imgs"))
+        .expect("imgs index should appear in db.indexes()");
+    // The `options` column (last) carries the resolved analyzer for
+    // FTS rows.
+    let options = analyzer_cell.values.last().expect("options column");
+    let analyzer = options
+        .get("analyzer")
+        .and_then(|v| v.as_str())
+        .expect("analyzer key in options map");
+    assert_eq!(analyzer, "ngram(2,3)");
+}
+
+// phase6_fulltext-analyzer-catalogue — unknown analyzer is rejected.
+#[test]
+fn fulltext_unknown_analyzer_is_rejected() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    let err = engine
+        .execute_cypher(
+            "CALL db.index.fulltext.createNodeIndex('bad', ['L'], ['p'], \
+             {analyzer: 'klingon'})",
+        )
+        .expect_err("unknown analyzer must surface ERR_FTS_UNKNOWN_ANALYZER");
+    assert!(
+        err.to_string().contains("ERR_FTS_UNKNOWN_ANALYZER"),
+        "got: {err}"
+    );
 }

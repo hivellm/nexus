@@ -63,6 +63,45 @@ Tantivy commits on every call and reloads the reader synchronously,
 so the next `queryNodes` sees the document without waiting for any
 refresh tick.
 
+## Analyzer catalogue (v1.9)
+
+Pick an analyzer per index via the `config` map argument of
+`createNodeIndex` / `createRelationshipIndex`. Default is
+`standard` (Neo4j parity).
+
+| Name | Behaviour |
+|---|---|
+| `standard` | Lowercase + English stopword removal. Default. |
+| `whitespace` | Split on whitespace only; case preserved. |
+| `simple` | Lowercase + split on non-alphanumeric runs. |
+| `keyword` | Single token pass-through; case preserved. |
+| `ngram` | Character n-grams. Default `2..3`; configurable via `ngram_min` / `ngram_max` in `config`. |
+| `english` | English stemmer + lowercase + stopwords. |
+| `spanish` | Spanish stemmer + lowercase + stopwords. |
+| `portuguese` | Portuguese stemmer + lowercase + stopwords. |
+| `german` | German stemmer + lowercase + stopwords. |
+| `french` | French stemmer + lowercase + stopwords. |
+
+Example:
+
+```cypher
+CALL db.index.fulltext.createNodeIndex(
+  'imageCaptions',
+  ['Image'],
+  ['caption'],
+  {analyzer: 'ngram', ngram_min: 3, ngram_max: 5}
+)
+```
+
+Unknown analyzer names surface `ERR_FTS_UNKNOWN_ANALYZER`. Call
+`db.index.fulltext.listAvailableAnalyzers()` to enumerate the
+catalogue at runtime (rows are alphabetical, matching Neo4j).
+
+The resolved analyzer name is echoed back through the
+`options.analyzer` field of each row returned by `db.indexes()`,
+so driver tooling can render the tokenisation choice without
+probing the backend.
+
 ## Query syntax
 
 The backend is Tantivy's `QueryParser`, which accepts the Lucene-like
@@ -85,6 +124,7 @@ they want a different cut-off. Tie-breaks use node id ascending order.
 | `ERR_FTS_INDEX_NOT_FOUND` | `queryNodes` / `drop` called on an unknown name |
 | `ERR_FTS_INDEX_INVALID` | Empty labels-list or properties-list on create |
 | `ERR_FTS_PARSE` | Tantivy rejected the query string |
+| `ERR_FTS_UNKNOWN_ANALYZER` | `config.analyzer` is not in the catalogue, or `ngram` sizes are invalid |
 
 ## Parked follow-ups
 
@@ -93,8 +133,8 @@ The tail of the feature ships behind explicit follow-up tasks:
 - **WAL integration** — `OP_FTS_ADD / OP_FTS_DEL` + commit-hook
   enqueue so CREATE / MERGE / SET auto-populate the index and crash
   recovery replays pending docs.
-- **Per-index analyzer config** — `whitespace`, `simple`, `keyword`,
-  and n-gram analyzers wired through the `config` map argument.
+- ~~**Per-index analyzer config**~~ — shipped in v1.9
+  (phase6_fulltext-analyzer-catalogue).
 - **Bench targets** — single-term < 5 ms p95, phrase < 20 ms p95,
   ingest > 5k docs/sec (Criterion harness).
 - **TCK import** — the fulltext scenarios from the Neo4j TCK.

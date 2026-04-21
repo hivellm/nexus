@@ -16,6 +16,7 @@
 //! expected to re-enqueue the dataset through `add_node_document`.
 
 use super::fulltext::{DocumentParams, FullTextIndex, SearchOptions};
+use super::fulltext_analyzer::resolve as resolve_analyzer;
 use crate::{Error, Result};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -27,6 +28,30 @@ use std::sync::Arc;
 pub enum FullTextEntity {
     Node,
     Relationship,
+}
+
+/// Config payload for picking (and parameterising) the analyzer of
+/// a new full-text index. Produced by the procedure dispatcher from
+/// the `config` map argument of `db.index.fulltext.createNodeIndex`.
+#[derive(Debug, Clone)]
+pub struct AnalyzerConfig {
+    /// Catalogued analyzer name — e.g. `"standard"`, `"ngram"`.
+    pub name: String,
+    /// Lower bound for the `ngram` analyzer. Ignored otherwise.
+    pub ngram_min: Option<usize>,
+    /// Upper bound for the `ngram` analyzer. Ignored otherwise.
+    pub ngram_max: Option<usize>,
+}
+
+impl AnalyzerConfig {
+    /// Build from a bare analyzer name; defaults to `"standard"`.
+    pub fn of_name(name: Option<&str>) -> Self {
+        Self {
+            name: name.unwrap_or("standard").to_string(),
+            ngram_min: None,
+            ngram_max: None,
+        }
+    }
 }
 
 /// Metadata record for a named full-text index. Mirrors the shape
@@ -98,7 +123,13 @@ impl FullTextRegistry {
         properties: &[&str],
         analyzer: Option<&str>,
     ) -> Result<()> {
-        self.create_index_inner(name, FullTextEntity::Node, labels, properties, analyzer)
+        self.create_index_with_config(
+            name,
+            FullTextEntity::Node,
+            labels,
+            properties,
+            AnalyzerConfig::of_name(analyzer),
+        )
     }
 
     /// Relationship-scoped variant.
@@ -109,22 +140,54 @@ impl FullTextRegistry {
         properties: &[&str],
         analyzer: Option<&str>,
     ) -> Result<()> {
-        self.create_index_inner(
+        self.create_index_with_config(
             name,
             FullTextEntity::Relationship,
             types,
             properties,
-            analyzer,
+            AnalyzerConfig::of_name(analyzer),
         )
     }
 
-    fn create_index_inner(
+    /// Node-scoped create with a fully populated [`AnalyzerConfig`]
+    /// (name + optional ngram sizes). Called by the `db.index.
+    /// fulltext.createNodeIndex(..., config)` procedure once the
+    /// `config` map has been unpacked.
+    pub fn create_node_index_with_config(
+        &self,
+        name: &str,
+        labels: &[&str],
+        properties: &[&str],
+        config: AnalyzerConfig,
+    ) -> Result<()> {
+        self.create_index_with_config(name, FullTextEntity::Node, labels, properties, config)
+    }
+
+    /// Relationship-scoped variant of
+    /// [`create_node_index_with_config`].
+    pub fn create_relationship_index_with_config(
+        &self,
+        name: &str,
+        types: &[&str],
+        properties: &[&str],
+        config: AnalyzerConfig,
+    ) -> Result<()> {
+        self.create_index_with_config(
+            name,
+            FullTextEntity::Relationship,
+            types,
+            properties,
+            config,
+        )
+    }
+
+    fn create_index_with_config(
         &self,
         name: &str,
         entity: FullTextEntity,
         labels_or_types: &[&str],
         properties: &[&str],
-        analyzer: Option<&str>,
+        config: AnalyzerConfig,
     ) -> Result<()> {
         // Name uniqueness — cross-kind within the registry.
         if self.inner.read().contains_key(name) {
@@ -143,16 +206,19 @@ impl FullTextRegistry {
             ));
         }
 
+        let analyzer_kind = resolve_analyzer(&config.name, config.ngram_min, config.ngram_max)?;
+        let analyzer_display = analyzer_kind.display_name();
+
         let base = self.resolve_base()?;
         let dir = base.join(name);
-        let index = Arc::new(FullTextIndex::new(&dir)?);
+        let index = Arc::new(FullTextIndex::with_analyzer(&dir, analyzer_kind)?);
 
         let meta = FullTextIndexMeta {
             name: name.to_string(),
             entity,
             labels_or_types: labels_or_types.iter().map(|s| s.to_string()).collect(),
             properties: properties.iter().map(|s| s.to_string()).collect(),
-            analyzer: analyzer.unwrap_or("standard").to_string(),
+            analyzer: analyzer_display,
             refresh_ms: 1000,
             top_k: 100,
             path: dir,
@@ -314,6 +380,126 @@ mod tests {
         assert!(
             results.iter().any(|r| r.node_id == 1),
             "expected node 1 in results, got {results:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_analyzer_rejected_at_create_time() {
+        let (reg, _dir) = fresh_registry();
+        let err = reg
+            .create_node_index_with_config(
+                "bad",
+                &["L"],
+                &["p"],
+                AnalyzerConfig {
+                    name: "klingon".to_string(),
+                    ngram_min: None,
+                    ngram_max: None,
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("ERR_FTS_UNKNOWN_ANALYZER"));
+    }
+
+    #[test]
+    fn ngram_analyzer_matches_substrings() {
+        // With a `ngram(2,3)` analyzer, an indexed value "photograph"
+        // should match a search for the substring "tog" — something a
+        // whitespace-default analyzer would miss.
+        let (reg, _dir) = fresh_registry();
+        reg.create_node_index_with_config(
+            "imgs",
+            &["Image"],
+            &["caption"],
+            AnalyzerConfig {
+                name: "ngram".to_string(),
+                ngram_min: Some(2),
+                ngram_max: Some(3),
+            },
+        )
+        .unwrap();
+        reg.add_node_document("imgs", 42, 0, 0, "photograph")
+            .unwrap();
+        let results = reg.query("imgs", "tog", None).unwrap();
+        assert!(
+            results.iter().any(|r| r.node_id == 42),
+            "expected substring match via ngram, got {results:?}"
+        );
+    }
+
+    #[test]
+    fn keyword_analyzer_is_exact_match_only() {
+        let (reg, _dir) = fresh_registry();
+        reg.create_node_index_with_config(
+            "kv",
+            &["Tag"],
+            &["value"],
+            AnalyzerConfig {
+                name: "keyword".to_string(),
+                ngram_min: None,
+                ngram_max: None,
+            },
+        )
+        .unwrap();
+        reg.add_node_document("kv", 7, 0, 0, "Hello World").unwrap();
+        // Querying "hello" alone must NOT match: the value is stored
+        // as a single token "Hello World" and keyword does not
+        // lowercase.
+        let partial = reg.query("kv", "hello", None).unwrap();
+        assert!(
+            partial.is_empty(),
+            "keyword analyzer must not split tokens, got {partial:?}"
+        );
+        // Exact-phrase query against the keyword should hit. Tantivy
+        // query parser treats a quoted string as a phrase; we supply
+        // the exact token text.
+        let exact = reg.query("kv", "\"Hello World\"", None).unwrap();
+        assert!(
+            exact.iter().any(|r| r.node_id == 7),
+            "exact keyword hit missing, got {exact:?}"
+        );
+    }
+
+    #[test]
+    fn metadata_echoes_resolved_analyzer_name() {
+        let (reg, _dir) = fresh_registry();
+        reg.create_node_index_with_config(
+            "story",
+            &["Chapter"],
+            &["text"],
+            AnalyzerConfig {
+                name: "ngram".to_string(),
+                ngram_min: Some(3),
+                ngram_max: Some(5),
+            },
+        )
+        .unwrap();
+        let meta = &reg.list()[0];
+        assert_eq!(meta.analyzer, "ngram(3,5)");
+    }
+
+    #[test]
+    fn english_analyzer_is_usable_end_to_end() {
+        let (reg, _dir) = fresh_registry();
+        reg.create_node_index_with_config(
+            "blog",
+            &["Post"],
+            &["body"],
+            AnalyzerConfig {
+                name: "english".to_string(),
+                ngram_min: None,
+                ngram_max: None,
+            },
+        )
+        .unwrap();
+        reg.add_node_document("blog", 1, 0, 0, "running runners ran")
+            .unwrap();
+        // English stemmer collapses run / running / ran / runners,
+        // so a query for "run" must reach the document.
+        let results = reg.query("blog", "run", None).unwrap();
+        assert!(
+            results.iter().any(|r| r.node_id == 1),
+            "english stemmer did not reduce forms, got {results:?}"
         );
     }
 }

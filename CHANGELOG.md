@@ -5,6 +5,56 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] — 2026-04-21
+
+### Added — FTS analyzer catalogue
+
+phase6_fulltext-analyzer-catalogue fills in the analyzer surface
+left parked by v1.8. `db.index.fulltext.createNodeIndex /
+createRelationshipIndex` now accepts a full Neo4j-parity config
+map that picks the per-index tokenizer chain:
+
+- **Catalogue**: `standard`, `whitespace`, `simple`, `keyword`,
+  `ngram`, `english`, `spanish`, `portuguese`, `german`, `french`.
+  Every name matches Neo4j's `listAvailableAnalyzers()` output
+  verbatim; rows are alphabetical.
+- **`standard`** — default; lowercase + English stopword removal
+  (Lucene's English stopword list, bundled via Tantivy 0.22).
+- **Language analyzers** — stemmer + lowercase + stopword filter
+  for English / Spanish / Portuguese / German / French. Built on
+  Tantivy's `Stemmer` + `StopWordFilter::new(Language)` with the
+  `stopwords` feature enabled upstream.
+- **`ngram`** — character n-grams with configurable `ngram_min`
+  / `ngram_max` (default `2..3`). Useful for autocomplete and
+  substring match. Rejected when `min > max` or `min == 0`.
+- **`keyword`** — single-token pass-through. Case-sensitive exact
+  match, no tokenisation.
+- **`options.analyzer`** column on every `db.indexes()` FULLTEXT
+  row echoes the resolved analyzer name (including `ngram(m,n)`
+  for parameterised ngram indexes), so driver tooling can render
+  the tokenisation choice without probing the backend.
+
+Config map shape:
+
+```cypher
+CALL db.index.fulltext.createNodeIndex(
+  'movies', ['Movie'], ['title', 'overview'],
+  {analyzer: 'english'}
+)
+
+CALL db.index.fulltext.createNodeIndex(
+  'imgs', ['Image'], ['caption'],
+  {analyzer: 'ngram', ngram_min: 3, ngram_max: 5}
+)
+```
+
+Unknown analyzer names and invalid ngram sizes surface as
+`ERR_FTS_UNKNOWN_ANALYZER`. The `db.indexes()` row shape grew one
+column — `options` — at position 10; non-FTS rows emit an empty
+map so existing consumers that read by column name keep working.
+
+See [docs/guides/FULL_TEXT_SEARCH.md](docs/guides/FULL_TEXT_SEARCH.md).
+
 ## [1.8.0] — 2026-04-21
 
 ### Added — Full-text search (Tantivy)

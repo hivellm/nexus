@@ -8,6 +8,7 @@
 //! - Faceted search capabilities
 //! - Highlighting and snippet generation
 
+use super::fulltext_analyzer::{AnalyzerKind, resolve as resolve_analyzer};
 use crate::Result;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -15,9 +16,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tantivy::query::QueryParser;
 use tantivy::schema::Field;
-use tantivy::tokenizer::LowerCaser;
-use tantivy::tokenizer::Stemmer;
-use tantivy::tokenizer::{NgramTokenizer, SimpleTokenizer, TextAnalyzer};
 use tantivy::{
     Index, IndexReader, ReloadPolicy, Score, Term,
     collector::TopDocs,
@@ -156,22 +154,41 @@ impl Default for SearchOptions {
 }
 
 impl FullTextIndex {
-    /// Create a new full-text search index
+    /// Create a new full-text search index using the Neo4j-default
+    /// `standard` analyzer. Back-compat shim — prefer
+    /// [`FullTextIndex::with_analyzer`] when the caller has access to
+    /// a registry-selected analyzer.
     pub fn new<P: AsRef<Path>>(index_dir: P) -> Result<Self> {
+        Self::with_analyzer(index_dir, AnalyzerKind::Standard)
+    }
+
+    /// Create a new full-text search index bound to the given
+    /// analyzer. The analyzer is registered on the fresh Tantivy
+    /// index's tokenizer manager and referenced from the content
+    /// field's schema, so every doc written to this index flows
+    /// through the selected tokenizer chain.
+    pub fn with_analyzer<P: AsRef<Path>>(index_dir: P, analyzer: AnalyzerKind) -> Result<Self> {
         let index_dir = index_dir.as_ref();
         std::fs::create_dir_all(index_dir)?;
 
-        // Create schema
-        let mut schema_builder = Schema::builder();
+        // Build content-field schema that references the chosen
+        // analyzer by its canonical tokenizer name.
+        let tokenizer_name = analyzer.tokenizer_name();
+        let content_indexing = TextFieldIndexing::default()
+            .set_tokenizer(&tokenizer_name)
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions);
+        let content_options = TextOptions::default()
+            .set_indexing_options(content_indexing)
+            .set_stored();
 
+        let mut schema_builder = Schema::builder();
         let node_id_field = schema_builder.add_u64_field("node_id", STORED | INDEXED);
         let label_id_field = schema_builder.add_u64_field("label_id", STORED | INDEXED);
         let key_id_field = schema_builder.add_u64_field("key_id", STORED | INDEXED);
-        let content_field = schema_builder.add_text_field("content", TEXT | STORED);
+        let content_field = schema_builder.add_text_field("content", content_options);
         let value_field = schema_builder.add_text_field("value", STORED);
         let language_field = schema_builder.add_text_field("language", STORED);
         let boost_field = schema_builder.add_f64_field("boost", STORED | INDEXED);
-
         let schema = schema_builder.build();
 
         let fields = FullTextFields {
@@ -184,13 +201,13 @@ impl FullTextIndex {
             boost: boost_field,
         };
 
-        // Create index
         let index = Index::create_in_dir(index_dir, schema.clone())?;
 
-        // Configure tokenizers
-        Self::configure_tokenizers(&index)?;
+        // Register the chosen analyzer on the index's tokenizer
+        // manager so the schema's `set_tokenizer(<name>)` reference
+        // resolves when docs are indexed.
+        analyzer.register_on(&index)?;
 
-        // Create reader
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -213,44 +230,16 @@ impl FullTextIndex {
         })
     }
 
-    /// Configure tokenizers for different languages
-    fn configure_tokenizers(index: &Index) -> Result<()> {
-        let tokenizer_manager = index.tokenizers();
-
-        // Simple tokenizer for basic text
-        let simple_tokenizer = TextAnalyzer::builder(SimpleTokenizer::default())
-            .filter(LowerCaser)
-            .build();
-        tokenizer_manager.register("simple", simple_tokenizer);
-
-        // N-gram tokenizer for fuzzy search
-        let ngram_tokenizer = TextAnalyzer::builder(NgramTokenizer::new(2, 3, false)?)
-            .filter(LowerCaser)
-            .build();
-        tokenizer_manager.register("ngram", ngram_tokenizer);
-
-        // English stemmer
-        let english_tokenizer = TextAnalyzer::builder(SimpleTokenizer::default())
-            .filter(LowerCaser)
-            .filter(Stemmer::new(tantivy::tokenizer::Language::English))
-            .build();
-        tokenizer_manager.register("en", english_tokenizer);
-
-        // Spanish stemmer
-        let spanish_tokenizer = TextAnalyzer::builder(SimpleTokenizer::default())
-            .filter(LowerCaser)
-            .filter(Stemmer::new(tantivy::tokenizer::Language::Spanish))
-            .build();
-        tokenizer_manager.register("es", spanish_tokenizer);
-
-        // French stemmer
-        let french_tokenizer = TextAnalyzer::builder(SimpleTokenizer::default())
-            .filter(LowerCaser)
-            .filter(Stemmer::new(tantivy::tokenizer::Language::French))
-            .build();
-        tokenizer_manager.register("fr", french_tokenizer);
-
-        Ok(())
+    /// Back-compat helper: resolve an analyzer name + optional
+    /// ngram sizes through the catalogue and open the index.
+    pub fn with_named_analyzer<P: AsRef<Path>>(
+        index_dir: P,
+        analyzer_name: &str,
+        ngram_min: Option<usize>,
+        ngram_max: Option<usize>,
+    ) -> Result<Self> {
+        let kind = resolve_analyzer(analyzer_name, ngram_min, ngram_max)?;
+        Self::with_analyzer(index_dir, kind)
     }
 
     /// Add a document to the index
