@@ -31,7 +31,7 @@
 ## 4. Typed Collections
 
 - [x] 4.1 `parse_typed_list(&str)` accepts `LIST<INTEGER|FLOAT|STRING|BOOLEAN|BYTES|ANY>` with whitespace-tolerant parsing
-- [ ] 4.2 Storage: 1-byte element-type tag in the list header — Nexus lists ride through `serde_json::Value::Array` today; the inline-tag encoding belongs with the future native-Value refactor.
+- [x] 4.2 New `NexusValue::TypedList { elem_type: u8, items }` variant + binary tag `0x0C` (`TYPED_LIST`). Wire layout: `[0x0C][elem_type:u8][count:u32 LE][items...]` — scalar elements (INT/FLOAT/BOOL/STRING/BYTES) are stored inline without per-element tag bytes; `ANY` (0x00) falls back to per-element tags for heterogeneous content. Element-type codes live in `value::typed_list_elem`. INT→FLOAT coercion is supported on write. `typed_list_*` unit-test suite covers INT, FLOAT (with Int→Float coercion), STRING, BYTES, BOOL, ANY, mismatch rejection, unknown-code decode rejection, and JSON surface shape.
 - [x] 4.3 Enforcement on writes: `Engine::check_constraints` consults an in-memory `typed_list_constraints` map populated through the `add_typed_list_constraint` / `drop_typed_list_constraint` programmatic API and rejects non-matching lists with `ERR_CONSTRAINT_VIOLATED` before the single-column UNIQUE / EXISTS machinery runs. LMDB-persisted constraint-DDL grammar sits alongside this in a future follow-up.
 - [x] 4.4 Empty-list case always passes (§4.4 scenario)
 - [x] 4.5 Tests: parse, validate integer / bytes / any, mixed-type rejection, non-list rejection, null passes
