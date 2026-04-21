@@ -3433,6 +3433,14 @@ impl Executor {
                                     }
                                 }
                             }
+                            parser::PatternElement::QuantifiedGroup(_) => {
+                                return Err(Error::CypherExecution(
+                                    "ERR_QPP_NOT_IMPLEMENTED: quantified path \
+                                     patterns inside EXISTS subqueries need the \
+                                     QPP operator (tracked as follow-up task)"
+                                        .to_string(),
+                                ));
+                            }
                         }
                     }
 
@@ -3575,6 +3583,14 @@ impl Executor {
                             if let Some(var) = &rel.variable {
                                 pattern_vars.push(var.clone());
                             }
+                        }
+                        parser::PatternElement::QuantifiedGroup(_) => {
+                            return Err(Error::CypherExecution(
+                                "ERR_QPP_NOT_IMPLEMENTED: quantified path \
+                                 patterns inside COLLECT subqueries need the \
+                                 QPP operator (tracked as follow-up task)"
+                                    .to_string(),
+                            ));
                         }
                     }
                 }

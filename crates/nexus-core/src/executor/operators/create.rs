@@ -80,6 +80,13 @@ impl Executor {
                         all_types.insert(rel_type.as_str());
                     }
                 }
+                parser::PatternElement::QuantifiedGroup(_) => {
+                    return Err(Error::Executor(
+                        "ERR_QPP_NOT_IN_CREATE: quantified path patterns \
+                         are read-only; use a MATCH clause instead"
+                            .to_string(),
+                    ));
+                }
             }
         }
 
@@ -105,6 +112,13 @@ impl Executor {
         // Pattern alternates: Node -> Relationship -> Node -> Relationship ...
         for (i, element) in pattern.elements.iter().enumerate() {
             match element {
+                parser::PatternElement::QuantifiedGroup(_) => {
+                    return Err(Error::Executor(
+                        "ERR_QPP_NOT_IN_CREATE: quantified path patterns \
+                         are read-only; use a MATCH clause instead"
+                            .to_string(),
+                    ));
+                }
                 parser::PatternElement::Node(node) => {
                     // Skip if this node was already created as part of the previous relationship
                     if skip_next_node {
@@ -754,7 +768,7 @@ impl Executor {
                 let pattern_requires_existing_nodes = pattern.elements.iter().any(|elem| {
                     match elem {
                         parser::PatternElement::Node(node) => {
-                            if let Some(var) = &node.variable {
+                            if let Some(_var) = &node.variable {
                                 // If node has no properties or labels, it's likely from MATCH
                                 // If it has properties/labels, it's a new node to create
                                 node.properties.is_none() && node.labels.is_empty()
@@ -763,6 +777,7 @@ impl Executor {
                             }
                         }
                         parser::PatternElement::Relationship(_) => false,
+                        parser::PatternElement::QuantifiedGroup(_) => false,
                     }
                 });
 
@@ -776,6 +791,13 @@ impl Executor {
 
             for (idx, element) in pattern.elements.iter().enumerate() {
                 match element {
+                    parser::PatternElement::QuantifiedGroup(_) => {
+                        return Err(Error::Executor(
+                            "ERR_QPP_NOT_IN_CREATE: quantified path patterns \
+                             are read-only; use a MATCH clause instead"
+                                .to_string(),
+                        ));
+                    }
                     parser::PatternElement::Node(node) => {
                         if let Some(var) = &node.variable {
                             if !node_ids.contains_key(var) {

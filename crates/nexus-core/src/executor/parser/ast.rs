@@ -274,13 +274,32 @@ pub struct Pattern {
     pub path_variable: Option<String>,
 }
 
-/// Pattern element (node or relationship)
+/// Pattern element (node, relationship, or quantified group)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PatternElement {
     /// Node pattern
     Node(NodePattern),
     /// Relationship pattern
     Relationship(RelationshipPattern),
+    /// Cypher 25 / GQL quantified path pattern: `( fragment ) quantifier`.
+    /// Inner variables are list-promoted in the outer scope on match.
+    QuantifiedGroup(QuantifiedGroup),
+}
+
+/// Quantified path pattern group (Cypher 25 / GQL).
+///
+/// The `inner` field is a nested sub-pattern that the planner
+/// iteratively expands `quantifier` times. Unlike the relationship
+/// quantifier, this one applies to whole path fragments — every
+/// variable declared in `inner` becomes a `LIST<T>` in the outer
+/// scope, ordered by iteration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantifiedGroup {
+    /// Body of the group — must start and end with a node pattern
+    /// (or be empty-legal when the quantifier allows zero matches).
+    pub inner: Vec<PatternElement>,
+    /// Quantifier applied to the whole group.
+    pub quantifier: RelationshipQuantifier,
 }
 
 /// Node pattern

@@ -149,6 +149,14 @@ fn scope_pattern(pattern: &mut Pattern, ns: &UserNamespace) {
         match element {
             PatternElement::Node(node) => scope_node_pattern(node, ns),
             PatternElement::Relationship(rel) => scope_relationship_pattern(rel, ns),
+            PatternElement::QuantifiedGroup(group) => {
+                let mut inner = Pattern {
+                    elements: std::mem::take(&mut group.inner),
+                    path_variable: None,
+                };
+                scope_pattern(&mut inner, ns);
+                group.inner = inner.elements;
+            }
         }
     }
 }

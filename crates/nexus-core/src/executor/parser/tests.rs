@@ -2022,3 +2022,144 @@ fn parse_legacy_constraint_still_accepted() {
         other => panic!("expected CREATE CONSTRAINT, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------
+// Quantified Path Patterns (Cypher 25 / GQL) — parser-level tests
+// ---------------------------------------------------------------
+
+fn qpp_group_of(q: &CypherQuery) -> &QuantifiedGroup {
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH, got {:?}", q.clauses[0]);
+    };
+    mc.pattern
+        .elements
+        .iter()
+        .find_map(|e| {
+            if let PatternElement::QuantifiedGroup(g) = e {
+                Some(g)
+            } else {
+                None
+            }
+        })
+        .expect("expected a QuantifiedGroup in pattern")
+}
+
+#[test]
+fn qpp_parses_bounded_range() {
+    let mut parser =
+        CypherParser::new("MATCH (e)((x)-[:R]->(m)){1,5}(ceo) RETURN e, ceo".to_string());
+    let q = parser.parse().unwrap();
+    let g = qpp_group_of(&q);
+    assert_eq!(g.quantifier, RelationshipQuantifier::Range(1, 5));
+    // Inner body should be node - rel - node (3 elements).
+    assert_eq!(g.inner.len(), 3);
+    assert!(matches!(g.inner[0], PatternElement::Node(_)));
+    assert!(matches!(g.inner[1], PatternElement::Relationship(_)));
+    assert!(matches!(g.inner[2], PatternElement::Node(_)));
+}
+
+#[test]
+fn qpp_parses_exact_quantifier() {
+    let mut parser = CypherParser::new("MATCH (a)((x)-[:R]->(y)){3}(b) RETURN a".to_string());
+    let q = parser.parse().unwrap();
+    let g = qpp_group_of(&q);
+    assert_eq!(g.quantifier, RelationshipQuantifier::Exact(3));
+}
+
+#[test]
+fn qpp_parses_open_upper_bound() {
+    let mut parser = CypherParser::new("MATCH (a)((x)-[:R]->(y)){2,}(b) RETURN a".to_string());
+    let q = parser.parse().unwrap();
+    let g = qpp_group_of(&q);
+    assert_eq!(g.quantifier, RelationshipQuantifier::Range(2, usize::MAX));
+}
+
+#[test]
+fn qpp_parses_open_lower_bound() {
+    let mut parser = CypherParser::new("MATCH (a)((x)-[:R]->(y)){,4}(b) RETURN a".to_string());
+    let q = parser.parse().unwrap();
+    let g = qpp_group_of(&q);
+    assert_eq!(g.quantifier, RelationshipQuantifier::Range(0, 4));
+}
+
+#[test]
+fn qpp_parses_star_plus_question() {
+    for (cypher, expected) in [
+        (
+            "MATCH (a)((x)-[:R]->(y))*(b) RETURN a",
+            RelationshipQuantifier::ZeroOrMore,
+        ),
+        (
+            "MATCH (a)((x)-[:R]->(y))+(b) RETURN a",
+            RelationshipQuantifier::OneOrMore,
+        ),
+        (
+            "MATCH (a)((x)-[:R]->(y))?(b) RETURN a",
+            RelationshipQuantifier::ZeroOrOne,
+        ),
+    ] {
+        let mut parser = CypherParser::new(cypher.to_string());
+        let q = parser
+            .parse()
+            .unwrap_or_else(|e| panic!("failed parsing `{cypher}`: {e}"));
+        assert_eq!(qpp_group_of(&q).quantifier, expected, "for `{cypher}`");
+    }
+}
+
+#[test]
+fn qpp_rejects_inverted_range() {
+    let mut parser = CypherParser::new("MATCH (a)((x)-[:R]->(y)){5,2}(b) RETURN a".to_string());
+    let err = parser.parse().unwrap_err();
+    assert!(
+        err.to_string().contains("ERR_QPP_INVALID_QUANTIFIER"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn qpp_rejects_nested_groups() {
+    let mut parser =
+        CypherParser::new("MATCH (a)(((x)-[:R]->(y)){1,2}(z)){1,3}(b) RETURN a".to_string());
+    let err = parser.parse().unwrap_err();
+    assert!(
+        err.to_string().contains("ERR_QPP_NESTING_TOO_DEEP"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn qpp_with_legacy_varlen_coexists() {
+    // Ensure the new QPP branch does not break the pre-existing
+    // `*m..n` relationship-quantifier parser.
+    let mut parser = CypherParser::new("MATCH (a)-[r:R*1..3]->(b) RETURN a, b".to_string());
+    let q = parser.parse().unwrap();
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH");
+    };
+    let has_varlen = mc.pattern.elements.iter().any(|e| match e {
+        PatternElement::Relationship(r) => {
+            matches!(&r.quantifier, Some(RelationshipQuantifier::Range(1, 3)))
+        }
+        _ => false,
+    });
+    assert!(has_varlen, "legacy *1..3 quantifier was dropped");
+}
+
+#[test]
+fn qpp_bare_parens_without_quantifier_is_not_qpp() {
+    // `(a)(b)` without a trailing quantifier must NOT produce a
+    // QuantifiedGroup — the backtracker restores position and the
+    // outer pattern ends at `(a)`.
+    let mut parser = CypherParser::new("MATCH (a)(b) RETURN a".to_string());
+    let q = parser.parse().unwrap();
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH");
+    };
+    assert!(
+        mc.pattern
+            .elements
+            .iter()
+            .all(|e| !matches!(e, PatternElement::QuantifiedGroup(_))),
+        "no QPP should be emitted for `(a)(b)` without a quantifier"
+    );
+}

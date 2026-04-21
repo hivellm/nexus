@@ -843,6 +843,13 @@ impl Engine {
                         ));
                     }
                 }
+                executor::parser::PatternElement::QuantifiedGroup(_) => {
+                    return Err(Error::CypherExecution(
+                        "ERR_QPP_NOT_IN_CREATE: quantified path patterns \
+                         are read-only; use a MATCH clause instead"
+                            .to_string(),
+                    ));
+                }
             }
         }
 
@@ -1005,6 +1012,13 @@ impl Engine {
                                 rel_properties,
                                 session_tx,
                             )?;
+                        }
+                        executor::parser::PatternElement::QuantifiedGroup(_) => {
+                            return Err(Error::CypherExecution(
+                                "ERR_QPP_NOT_IN_CREATE: quantified path patterns \
+                                 are read-only; use a MATCH clause instead"
+                                    .to_string(),
+                            ));
                         }
                     }
                 }

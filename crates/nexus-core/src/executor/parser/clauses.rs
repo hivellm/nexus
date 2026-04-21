@@ -812,19 +812,149 @@ impl CypherParser {
                 // Parse next node
                 let node = self.parse_node_pattern()?;
                 elements.push(PatternElement::Node(node));
-            } else {
-                // Restore position if no relationship or comma found
-                self.pos = saved_pos;
-                self.line = saved_line;
-                self.column = saved_column;
-                break;
+                continue;
             }
+
+            // QPP: `( subPattern ) quantifier` — Cypher 25 / GQL.
+            // Triggered by a parenthesis directly after a node, with
+            // no intervening `-` / `<` / `>` rel-operator. The closing
+            // paren must be followed by a quantifier token (`{m,n}`,
+            // `*`, `+`, `?`). Anything else is not a QPP — we restore
+            // position and let the caller terminate the pattern.
+            if self.peek_char() == Some('(') {
+                match self.try_parse_qpp_group()? {
+                    Some(group) => {
+                        elements.push(PatternElement::QuantifiedGroup(group));
+                        continue;
+                    }
+                    None => {
+                        self.pos = saved_pos;
+                        self.line = saved_line;
+                        self.column = saved_column;
+                        break;
+                    }
+                }
+            }
+
+            // Restore position if no relationship, comma, or QPP found
+            self.pos = saved_pos;
+            self.line = saved_line;
+            self.column = saved_column;
+            break;
         }
 
         Ok(Pattern {
             elements,
             path_variable: None, // Set by caller if path variable assignment detected
         })
+    }
+
+    /// Attempt to parse a quantified path pattern group starting at
+    /// the current position. Returns `Ok(None)` when the lookahead
+    /// does not form a valid QPP (caller should backtrack); returns
+    /// `Ok(Some(group))` on success. Rejects nested QPP (one level
+    /// deep — Cypher 25 restriction) and empty bodies.
+    fn try_parse_qpp_group(&mut self) -> Result<Option<QuantifiedGroup>> {
+        debug_assert_eq!(self.peek_char(), Some('('));
+        let restore_pos = self.pos;
+        let restore_line = self.line;
+        let restore_column = self.column;
+
+        self.consume_char(); // '('
+        self.skip_whitespace();
+
+        // Body must start with a node pattern. Anything else fails
+        // the QPP match and the caller backtracks.
+        if self.peek_char() != Some('(') {
+            self.pos = restore_pos;
+            self.line = restore_line;
+            self.column = restore_column;
+            return Ok(None);
+        }
+
+        // Detect nested QPP before entering the recursive body parser:
+        // `( ( ( ... ) ){..} ... )` starts `(((`. Since QPP's recursive
+        // descent cannot parse a body whose first element is itself a
+        // QPP, we intercept the shape explicitly and surface the
+        // Cypher 25 restriction with a clean error.
+        {
+            let mut probe = self.pos + 1; // skip the inner `(`
+            while probe < self.input.len() {
+                let c = self.input.as_bytes()[probe] as char;
+                if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+                    probe += 1;
+                } else {
+                    break;
+                }
+            }
+            if probe < self.input.len() && self.input.as_bytes()[probe] as char == '(' {
+                return Err(Error::CypherSyntax(
+                    "ERR_QPP_NESTING_TOO_DEEP: quantified path patterns \
+                     cannot nest (Cypher 25 restriction)"
+                        .to_string(),
+                ));
+            }
+        }
+
+        let inner = match self.parse_pattern() {
+            Ok(pattern) => pattern,
+            Err(_) => {
+                self.pos = restore_pos;
+                self.line = restore_line;
+                self.column = restore_column;
+                return Ok(None);
+            }
+        };
+
+        // Reject nested QPP (one level deep — Cypher 25).
+        if inner
+            .elements
+            .iter()
+            .any(|e| matches!(e, PatternElement::QuantifiedGroup(_)))
+        {
+            return Err(Error::CypherSyntax(
+                "ERR_QPP_NESTING_TOO_DEEP: quantified path patterns \
+                 cannot nest (Cypher 25 restriction)"
+                    .to_string(),
+            ));
+        }
+
+        self.skip_whitespace();
+        if self.peek_char() != Some(')') {
+            self.pos = restore_pos;
+            self.line = restore_line;
+            self.column = restore_column;
+            return Ok(None);
+        }
+        self.consume_char(); // ')'
+
+        // Quantifier is mandatory. A bare `( subPattern )` without a
+        // quantifier is not a QPP — backtrack so the caller can
+        // terminate the outer pattern normally.
+        let quantifier = match self.parse_relationship_quantifier()? {
+            Some(q) => q,
+            None => {
+                self.pos = restore_pos;
+                self.line = restore_line;
+                self.column = restore_column;
+                return Ok(None);
+            }
+        };
+
+        // Reject `{n,m}` where n > m.
+        if let RelationshipQuantifier::Range(lo, hi) = &quantifier {
+            if lo > hi {
+                return Err(Error::CypherSyntax(format!(
+                    "ERR_QPP_INVALID_QUANTIFIER: lower bound {lo} \
+                     exceeds upper bound {hi}"
+                )));
+            }
+        }
+
+        Ok(Some(QuantifiedGroup {
+            inner: inner.elements,
+            quantifier,
+        }))
     }
 
     /// Parse node pattern

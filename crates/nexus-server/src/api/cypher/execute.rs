@@ -195,6 +195,20 @@ pub async fn execute_cypher(
 
                     while index < elements.len() {
                         match &elements[index] {
+                            nexus_core::executor::parser::PatternElement::QuantifiedGroup(_) => {
+                                let execution_time = start_time.elapsed().as_millis() as u64;
+                                let err = "ERR_QPP_NOT_IN_CREATE: quantified \
+                                           path patterns are read-only; use a \
+                                           MATCH clause instead"
+                                    .to_string();
+                                tracing::error!("{}", err);
+                                return Json(CypherResponse {
+                                    columns: vec![],
+                                    rows: vec![],
+                                    execution_time_ms: execution_time,
+                                    error: Some(err),
+                                });
+                            }
                             nexus_core::executor::parser::PatternElement::Node(node_pattern) => {
                                 let mut current_nodes = match ensure_node_from_pattern(
                                     &mut engine,
@@ -312,6 +326,9 @@ pub async fn execute_cypher(
                                             index += 2;
                                         }
                                         nexus_core::executor::parser::PatternElement::Node(_) => {
+                                            break;
+                                        }
+                                        nexus_core::executor::parser::PatternElement::QuantifiedGroup(_) => {
                                             break;
                                         }
                                     }

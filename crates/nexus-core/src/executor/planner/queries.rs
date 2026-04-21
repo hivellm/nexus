@@ -282,6 +282,23 @@ impl<'a> QueryPlanner<'a> {
                                         last_optional_vars.push(var.clone());
                                     }
                                 }
+                                PatternElement::QuantifiedGroup(group) => {
+                                    for inner in &group.inner {
+                                        match inner {
+                                            PatternElement::Node(n) => {
+                                                if let Some(var) = &n.variable {
+                                                    last_optional_vars.push(var.clone());
+                                                }
+                                            }
+                                            PatternElement::Relationship(r) => {
+                                                if let Some(var) = &r.variable {
+                                                    last_optional_vars.push(var.clone());
+                                                }
+                                            }
+                                            PatternElement::QuantifiedGroup(_) => {}
+                                        }
+                                    }
+                                }
                             }
                         }
                         tracing::debug!(
@@ -2435,6 +2452,14 @@ impl<'a> QueryPlanner<'a> {
                             });
                         }
                     }
+                    PatternElement::QuantifiedGroup(_) => {
+                        return Err(Error::CypherExecution(
+                            "ERR_QPP_NOT_IMPLEMENTED: quantified path patterns \
+                             are parsed but not yet executable — the planner \
+                             operator lands in phase6_fulltext-qpp-operator"
+                                .to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -2651,6 +2676,26 @@ impl<'a> QueryPlanner<'a> {
                             result.push('-');
                         }
                     }
+                }
+                PatternElement::QuantifiedGroup(group) => {
+                    let inner = Pattern {
+                        elements: group.inner.clone(),
+                        path_variable: None,
+                    };
+                    let inner_str = self.pattern_to_string(&inner)?;
+                    let quant = match &group.quantifier {
+                        RelationshipQuantifier::Exact(n) => format!("{{{}}}", n),
+                        RelationshipQuantifier::Range(min, max) => {
+                            format!("{{{},{}}}", min, max)
+                        }
+                        RelationshipQuantifier::ZeroOrMore => "*".to_string(),
+                        RelationshipQuantifier::OneOrMore => "+".to_string(),
+                        RelationshipQuantifier::ZeroOrOne => "?".to_string(),
+                    };
+                    result.push('(');
+                    result.push_str(&inner_str);
+                    result.push(')');
+                    result.push_str(&quant);
                 }
             }
         }
