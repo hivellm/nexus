@@ -1387,6 +1387,72 @@ impl Executor {
         self.shared.fulltext()
     }
 
+    /// phase6_fulltext-wal-integration §4 — auto-populate every
+    /// registered FTS index whose label/property set matches the
+    /// node just created. Called from the CREATE operators' node-
+    /// creation paths.
+    ///
+    /// Match rule: a node is indexed by a given FTS index when
+    /// (a) it carries at least one of the index's labels AND
+    /// (b) at least one of the index's properties has a string
+    /// value on the node. The indexed content is the whitespace-
+    /// joined concatenation of every matching string property in
+    /// the order the index declared them.
+    ///
+    /// Errors from individual FTS writes do NOT abort the caller —
+    /// FTS is an index, not a source of truth. Failures surface via
+    /// `tracing::warn!` so the CREATE path stays durable even when
+    /// one Tantivy index is misbehaving.
+    pub(in crate::executor) fn fts_autopopulate_node(
+        &self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) {
+        use crate::index::fulltext_registry::FullTextEntity;
+        let Some(registry) = self.fulltext_registry() else {
+            return;
+        };
+        let Some(props_obj) = properties.as_object() else {
+            return;
+        };
+        for meta in registry.list() {
+            if meta.entity != FullTextEntity::Node {
+                continue;
+            }
+            let mut matches_label = false;
+            for label_name in &meta.labels_or_types {
+                if let Ok(id) = self.catalog().get_label_id(label_name) {
+                    if label_ids.contains(&id) {
+                        matches_label = true;
+                        break;
+                    }
+                }
+            }
+            if !matches_label {
+                continue;
+            }
+            let mut parts: Vec<String> = Vec::new();
+            for prop in &meta.properties {
+                if let Some(v) = props_obj.get(prop) {
+                    if let Some(s) = v.as_str() {
+                        parts.push(s.to_string());
+                    }
+                }
+            }
+            if parts.is_empty() {
+                continue;
+            }
+            let content = parts.join(" ");
+            if let Err(e) = registry.add_node_document(&meta.name, node_id, 0, 0, &content) {
+                tracing::warn!(
+                    "FTS: autopopulate on index {:?} for node {node_id} failed: {e}",
+                    meta.name
+                );
+            }
+        }
+    }
+
     pub(in crate::executor) fn execute_fts_create(
         &self,
         context: &mut ExecutionContext,

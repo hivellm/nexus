@@ -341,7 +341,98 @@ impl Engine {
         // When there's a session transaction, index is updated immediately for MATCH visibility
         // On rollback, we'll remove nodes from index and mark them as deleted in storage
 
+        // phase6_fulltext-wal-integration §4 — auto-populate every
+        // registered FTS index whose label/property set matches the
+        // node we just created. The hook also emits a matching
+        // `FtsAdd` WAL entry so crash recovery replays the write.
+        self.fts_autopopulate_node(node_id, &label_ids, &properties)?;
+
         Ok(node_id)
+    }
+
+    /// Walk every registered FTS index and, for each one whose
+    /// label / property match the node just created, enqueue an
+    /// `FtsAdd` into both the Tantivy backend and the WAL.
+    ///
+    /// The match rule mirrors Neo4j: a node is indexed by a given
+    /// FTS index when (a) it carries at least one of the index's
+    /// labels and (b) at least one of the index's properties has
+    /// a string value on the node. The indexed content is the
+    /// whitespace-joined concatenation of every matching string
+    /// property, in the order the index declared them.
+    ///
+    /// Errors from individual FTS writes do NOT abort the caller —
+    /// FTS is an index, not a source of truth. Problems surface via
+    /// `tracing::warn!` so the node-write path stays durable even
+    /// when one Tantivy index is misbehaving.
+    fn fts_autopopulate_node(
+        &mut self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) -> Result<()> {
+        use crate::index::fulltext_registry::FullTextEntity;
+        let props_obj = match properties.as_object() {
+            Some(o) => o,
+            None => return Ok(()),
+        };
+        for meta in self.indexes.fulltext.list() {
+            if meta.entity != FullTextEntity::Node {
+                continue;
+            }
+            // Match by label name (registry persists names; storage
+            // carries ids). Resolving names to ids on every hop is
+            // cheap because the catalog keeps an in-memory cache.
+            let mut matches_label = false;
+            for label_name in &meta.labels_or_types {
+                if let Ok(id) = self.catalog.get_label_id(label_name) {
+                    if label_ids.contains(&id) {
+                        matches_label = true;
+                        break;
+                    }
+                }
+            }
+            if !matches_label {
+                continue;
+            }
+            let mut parts: Vec<String> = Vec::new();
+            for prop in &meta.properties {
+                if let Some(v) = props_obj.get(prop) {
+                    if let Some(s) = v.as_str() {
+                        parts.push(s.to_string());
+                    }
+                }
+            }
+            if parts.is_empty() {
+                continue;
+            }
+            let content = parts.join(" ");
+            if let Err(e) = self
+                .indexes
+                .fulltext
+                .add_node_document(&meta.name, node_id, 0, 0, &content)
+            {
+                tracing::warn!(
+                    "FTS: autopopulate on index {:?} for node {node_id} failed: {e}",
+                    meta.name
+                );
+                continue;
+            }
+            let wal_entry = wal::WalEntry::FtsAdd {
+                name: meta.name.clone(),
+                entity_id: node_id,
+                label_or_type_id: 0,
+                key_id: 0,
+                content,
+            };
+            if let Err(e) = self.write_wal_async(wal_entry) {
+                tracing::warn!(
+                    "FTS: WAL append for index {:?} / node {node_id} failed: {e}",
+                    meta.name
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Create a new relationship

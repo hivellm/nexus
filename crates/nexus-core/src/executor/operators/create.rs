@@ -192,15 +192,24 @@ impl Executor {
                     self.check_constraints(&label_ids_for_update, &properties)?;
 
                     // Create the node
-                    let node_id = self
-                        .store_mut()
-                        .create_node_with_label_bits(&mut tx, label_bits, properties)?;
+                    let node_id = self.store_mut().create_node_with_label_bits(
+                        &mut tx,
+                        label_bits,
+                        properties.clone(),
+                    )?;
 
                     tracing::trace!(
                         "execute_create_pattern_internal: created node_id={}, variable={:?}",
                         node_id,
                         node.variable
                     );
+
+                    // phase6_fulltext-wal-integration §4 — auto-populate
+                    // every registered FTS index whose label/property
+                    // set matches this node. See
+                    // `Executor::fts_autopopulate_node` for the match
+                    // rule and error-containment policy.
+                    self.fts_autopopulate_node(node_id, &label_ids_for_update, &properties);
 
                     // Phase 1 Optimization: Batch catalog metadata updates (defer to end)
                     for label_id in &label_ids_for_update {
@@ -294,8 +303,13 @@ impl Executor {
                                 let tid = self.store_mut().create_node_with_label_bits(
                                     &mut tx,
                                     target_label_bits,
-                                    target_properties,
+                                    target_properties.clone(),
                                 )?;
+                                self.fts_autopopulate_node(
+                                    tid,
+                                    &target_label_ids_for_update,
+                                    &target_properties,
+                                );
 
                                 for label_id in &target_label_ids_for_update {
                                     *label_count_updates.entry(*label_id).or_insert(0) += 1;
@@ -833,9 +847,12 @@ impl Executor {
                                 };
 
                                 // Create the node
-                                let node_id = self
-                                    .store_mut()
-                                    .create_node_with_label_bits(&mut tx, label_bits, properties)?;
+                                let node_id = self.store_mut().create_node_with_label_bits(
+                                    &mut tx,
+                                    label_bits,
+                                    properties.clone(),
+                                )?;
+                                self.fts_autopopulate_node(node_id, &label_ids, &properties);
                                 if !label_ids.is_empty() {
                                     created_nodes_with_labels.push((node_id, label_ids.clone()));
                                 }

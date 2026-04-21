@@ -338,6 +338,12 @@ impl FullTextIndex {
 
         index_writer.commit()?;
 
+        // Reload the reader so the next search stops seeing the
+        // deleted document. Mirrors the manual reload `add_document`
+        // performs after commit (`ReloadPolicy::Manual` is the policy
+        // configured in `with_analyzer`).
+        self.reader.reload()?;
+
         // Update statistics
         self.update_stats(0)?; // Recalculate stats
 

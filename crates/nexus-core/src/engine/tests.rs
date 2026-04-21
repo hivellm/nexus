@@ -2381,6 +2381,117 @@ fn fulltext_create_index_honours_config_analyzer() {
     assert_eq!(analyzer, "ngram(2,3)");
 }
 
+// phase6_fulltext-wal-integration §4 — CREATE auto-populates the
+// matching FTS index without any explicit add_node_document call.
+#[test]
+fn fulltext_create_node_auto_populates_matching_index() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    engine
+        .execute_cypher(
+            "CALL db.index.fulltext.createNodeIndex('movies', ['Movie'], ['title', 'overview'])",
+        )
+        .unwrap();
+    // Creating a Movie with matching properties should automatically
+    // land the node in the FTS index.
+    engine
+        .execute_cypher(
+            "CREATE (:Movie {title: 'The Matrix', overview: 'A computer hacker discovers reality'})",
+        )
+        .unwrap();
+    let r = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('movies', 'matrix')")
+        .unwrap();
+    assert!(
+        !r.rows.is_empty(),
+        "expected the auto-populated Movie to surface via queryNodes"
+    );
+}
+
+// phase6_fulltext-wal-integration §5 — WAL replay (simulated crash
+// recovery). Emits a sequence of FTS WAL entries, feeds each one
+// through `FullTextRegistry::apply_wal_entry` on a fresh registry,
+// and confirms every committed row is queryable. Mirrors the
+// crash-during-bulk-ingest scenario without needing a sub-process
+// harness.
+#[test]
+fn fulltext_wal_replay_reconstructs_registry_and_content() {
+    use crate::index::fulltext_registry::FullTextRegistry;
+    use crate::wal::WalEntry;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let reg = FullTextRegistry::new();
+    reg.set_base_dir(dir.path().to_path_buf());
+
+    let entries = vec![
+        WalEntry::FtsCreateIndex {
+            name: "posts".to_string(),
+            entity: 0,
+            labels_or_types: vec!["Post".to_string()],
+            properties: vec!["body".to_string()],
+            analyzer: "standard".to_string(),
+        },
+        WalEntry::FtsAdd {
+            name: "posts".to_string(),
+            entity_id: 1,
+            label_or_type_id: 0,
+            key_id: 0,
+            content: "first post body".to_string(),
+        },
+        WalEntry::FtsAdd {
+            name: "posts".to_string(),
+            entity_id: 2,
+            label_or_type_id: 0,
+            key_id: 0,
+            content: "second post body".to_string(),
+        },
+        WalEntry::FtsDel {
+            name: "posts".to_string(),
+            entity_id: 1,
+        },
+        // Simulate a node-create interleaved in the log — replay
+        // must skip it without aborting the FTS recovery loop.
+        WalEntry::CreateNode {
+            node_id: 99,
+            label_bits: 0,
+        },
+    ];
+
+    for e in &entries {
+        reg.apply_wal_entry(e).expect("replay FTS WAL entry");
+    }
+
+    // Only doc 2 survives after the replayed delete.
+    let hits = reg.query("posts", "body", None).unwrap();
+    let ids: Vec<u64> = hits.iter().map(|h| h.node_id).collect();
+    assert!(ids.contains(&2));
+    assert!(
+        !ids.contains(&1),
+        "replayed FtsDel should have removed node 1"
+    );
+}
+
+// phase6_fulltext-wal-integration §4 — CREATE against a label the
+// FTS index does not cover must NOT populate the index.
+#[test]
+fn fulltext_create_node_skips_non_matching_label() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    engine
+        .execute_cypher("CALL db.index.fulltext.createNodeIndex('films', ['Film'], ['title'])")
+        .unwrap();
+    engine
+        .execute_cypher("CREATE (:Documentary {title: 'Earth At Night'})")
+        .unwrap();
+    let r = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('films', 'earth')")
+        .unwrap();
+    assert!(
+        r.rows.is_empty(),
+        "Documentary must not leak into the Film-scoped index, got {:?}",
+        r.rows
+    );
+}
+
 // phase6_fulltext-analyzer-catalogue — unknown analyzer is rejected.
 #[test]
 fn fulltext_unknown_analyzer_is_rejected() {
