@@ -55,6 +55,7 @@ fn test_plan_simple_query() {
             }),
         ],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let operators = planner.plan_query(&query).unwrap();
@@ -143,6 +144,7 @@ fn test_plan_query_with_where_clause() {
             }),
         ],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let operators = planner.plan_query(&query).unwrap();
@@ -207,6 +209,7 @@ fn test_plan_query_with_limit() {
             }),
         ],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let operators = planner.plan_query(&query).unwrap();
@@ -265,6 +268,7 @@ fn test_plan_query_with_relationship() {
             }),
         ],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let operators = planner.plan_query(&query).unwrap();
@@ -322,6 +326,7 @@ fn test_plan_query_with_variable_length_path() {
             }),
         ],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let operators = planner.plan_query(&query).unwrap();
@@ -390,6 +395,7 @@ fn test_plan_query_with_range_quantifier() {
             }),
         ],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let operators = planner.plan_query(&query).unwrap();
@@ -418,6 +424,7 @@ fn test_plan_query_empty_patterns() {
     let query = CypherQuery {
         clauses: vec![],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let result = planner.plan_query(&query);
@@ -655,6 +662,7 @@ fn test_plan_query_with_return_alias() {
             }),
         ],
         params: std::collections::HashMap::new(),
+        graph_scope: None,
     };
 
     let operators = planner.plan_query(&query).unwrap();

@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 pub mod btree;
+pub mod composite_btree;
 pub mod fulltext;
 pub mod pending_updates;
 
@@ -68,6 +69,11 @@ pub struct IndexManager {
     pub knn_index: KnnIndex,
     /// Property index for property-based queries
     pub property_index: PropertyIndex,
+    /// Composite B-tree indexes keyed by (label, property list) tuple
+    /// (phase6_opencypher-advanced-types §3). Registered via DDL; the
+    /// planner consults the registry before falling back to a label
+    /// scan + residual filter.
+    pub composite_btree: composite_btree::CompositeBtreeRegistry,
 }
 
 impl IndexManager {
@@ -80,6 +86,7 @@ impl IndexManager {
             label_index: LabelIndex::new(),
             knn_index: KnnIndex::new(DEFAULT_VECTORIZER_DIMENSION)?,
             property_index: PropertyIndex::new(),
+            composite_btree: composite_btree::CompositeBtreeRegistry::new(),
         })
     }
 

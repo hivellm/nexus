@@ -275,6 +275,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 
@@ -295,6 +296,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 
@@ -314,6 +316,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 
@@ -341,6 +344,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 
@@ -360,6 +364,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 
@@ -384,6 +389,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 
@@ -418,6 +424,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 
@@ -438,6 +445,7 @@ mod tests {
         let ast = CypherQuery {
             clauses: vec![],
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
         let operators = vec![];
 

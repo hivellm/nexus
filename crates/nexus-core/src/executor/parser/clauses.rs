@@ -31,6 +31,27 @@ impl CypherParser {
         // Skip whitespace
         self.skip_whitespace();
 
+        // phase6_opencypher-advanced-types §6 — optional leading
+        // `GRAPH[name]` clause scoping the whole query to a named
+        // database. At most one such clause is permitted, which is why
+        // this path fires before `is_clause_boundary()`: once we enter
+        // the normal clause loop, `GRAPH[...]` is not recognised
+        // anywhere else and any subsequent occurrence bails with a
+        // syntax error on the unknown keyword.
+        let graph_scope = if self.peek_keyword("GRAPH") {
+            self.parse_keyword()?; // consume "GRAPH"
+            self.skip_whitespace();
+            self.expect_char('[')?;
+            self.skip_whitespace();
+            let name = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_char(']')?;
+            self.skip_whitespace();
+            Some(name)
+        } else {
+            None
+        };
+
         // Parse clauses
         while self.pos < self.input.len() {
             // Check if we're at a clause boundary
@@ -53,7 +74,11 @@ impl CypherParser {
 
         // Allow empty queries (for EXPLAIN/PROFILE nested queries)
         // The planner will validate if needed
-        Ok(CypherQuery { clauses, params })
+        Ok(CypherQuery {
+            clauses,
+            params,
+            graph_scope,
+        })
     }
 
     /// Neo4j-style syntax error for a `WHERE` appearing as a
@@ -340,10 +365,34 @@ impl CypherParser {
             }
             "ROLLBACK" => {
                 self.skip_whitespace();
+                // phase6_opencypher-advanced-types §5 —
+                // `ROLLBACK TO SAVEPOINT <name>` peels work back to a
+                // named marker; the bare `ROLLBACK [TRANSACTION]` form
+                // rolls the whole tx as before.
+                if self.peek_keyword("TO") {
+                    self.parse_keyword()?; // consume "TO"
+                    self.skip_whitespace();
+                    self.expect_keyword("SAVEPOINT")?;
+                    self.skip_whitespace();
+                    let name = self.parse_identifier()?;
+                    return Ok(Clause::RollbackToSavepoint(SavepointClause { name }));
+                }
                 if self.peek_keyword("TRANSACTION") {
                     self.parse_keyword()?; // consume "TRANSACTION"
                 }
                 Ok(Clause::RollbackTransaction)
+            }
+            "SAVEPOINT" => {
+                self.skip_whitespace();
+                let name = self.parse_identifier()?;
+                Ok(Clause::Savepoint(SavepointClause { name }))
+            }
+            "RELEASE" => {
+                self.skip_whitespace();
+                self.expect_keyword("SAVEPOINT")?;
+                self.skip_whitespace();
+                let name = self.parse_identifier()?;
+                Ok(Clause::ReleaseSavepoint(SavepointClause { name }))
             }
             "DROP" => {
                 self.skip_whitespace();
@@ -575,10 +624,33 @@ impl CypherParser {
                     value,
                 });
             } else if self.peek_char() == Some(':') {
-                // Label addition (node:Label)
-                self.consume_char();
-                let label = self.parse_identifier()?;
-                items.push(SetItem::Label { target, label });
+                // Label addition (node:Label) — accepts `:$param` for
+                // write-side dynamic labels (advanced-types §2).
+                // Chained labels on a single SET item (`SET n:A:B`) push
+                // one `SetItem::Label` per segment so the engine can
+                // resolve and apply them one-at-a-time, mirroring the
+                // READ path and keeping error localisation sharp.
+                let mut any = false;
+                while self.peek_char() == Some(':') {
+                    self.consume_char();
+                    let label = if self.peek_char() == Some('$') {
+                        self.consume_char();
+                        format!("${}", self.parse_identifier()?)
+                    } else {
+                        self.parse_identifier()?
+                    };
+                    items.push(SetItem::Label {
+                        target: target.clone(),
+                        label,
+                    });
+                    self.skip_whitespace();
+                    any = true;
+                }
+                if !any {
+                    return Err(Error::storage(
+                        "SET clause: expected label after ':'".to_string(),
+                    ));
+                }
             } else if self.peek_char() == Some('+') && self.peek_char_at(1) == Some('=') {
                 // phase6_opencypher-quickwins §6 — `SET lhs += mapExpr`
                 // merge semantics. Distinct from `SET lhs = mapExpr`
@@ -655,10 +727,31 @@ impl CypherParser {
                 let property = self.parse_identifier()?;
                 items.push(RemoveItem::Property { target, property });
             } else if self.peek_char() == Some(':') {
-                // Label removal (node:Label)
-                self.consume_char();
-                let label = self.parse_identifier()?;
-                items.push(RemoveItem::Label { target, label });
+                // Label removal (node:Label) — accepts `:$param` for
+                // write-side dynamic labels (advanced-types §2). Chained
+                // labels on a single REMOVE item (`REMOVE n:A:B`) push
+                // one `RemoveItem::Label` per segment.
+                let mut any = false;
+                while self.peek_char() == Some(':') {
+                    self.consume_char();
+                    let label = if self.peek_char() == Some('$') {
+                        self.consume_char();
+                        format!("${}", self.parse_identifier()?)
+                    } else {
+                        self.parse_identifier()?
+                    };
+                    items.push(RemoveItem::Label {
+                        target: target.clone(),
+                        label,
+                    });
+                    self.skip_whitespace();
+                    any = true;
+                }
+                if !any {
+                    return Err(Error::storage(
+                        "REMOVE clause: expected label after ':'".to_string(),
+                    ));
+                }
             } else {
                 return Err(Error::storage(
                     "REMOVE clause: expected property or label removal".to_string(),
@@ -899,14 +992,27 @@ impl CypherParser {
         }
     }
 
-    /// Parse labels
+    /// Parse labels.
+    ///
+    /// phase6_opencypher-advanced-types §2 — parameter-valued labels.
+    /// A `:$param` label is encoded as the sentinel string `"$param"`
+    /// (leading `$` is never a valid identifier character, so downstream
+    /// writers can unambiguously recognise and resolve it against the
+    /// execution-time parameter map via
+    /// [`crate::engine::dynamic_labels::resolve_labels`]).
     pub(super) fn parse_labels(&mut self) -> Result<Vec<String>> {
         let mut labels = Vec::new();
 
         while self.peek_char() == Some(':') {
             self.consume_char(); // consume ':'
-            let label = self.parse_identifier()?;
-            labels.push(label);
+            if self.peek_char() == Some('$') {
+                self.consume_char(); // consume '$'
+                let param = self.parse_identifier()?;
+                labels.push(format!("${param}"));
+            } else {
+                let label = self.parse_identifier()?;
+                labels.push(label);
+            }
         }
 
         Ok(labels)
@@ -1572,6 +1678,7 @@ impl CypherParser {
         let query = CypherQuery {
             clauses,
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
 
         // Check for IN TRANSACTIONS
@@ -1752,6 +1859,20 @@ impl CypherParser {
         self.expect_keyword("INDEX")?;
         self.skip_whitespace();
 
+        // phase6_opencypher-advanced-types §3 — optional index name
+        // between `INDEX` and `FOR`, e.g.
+        // `CREATE INDEX person_id FOR (p:Person) ON (p.tenantId, p.id)`.
+        let name = if self.is_identifier_start()
+            && !self.peek_keyword("IF")
+            && !self.peek_keyword("FOR")
+            && !self.peek_keyword("ON")
+        {
+            Some(self.parse_identifier()?)
+        } else {
+            None
+        };
+        self.skip_whitespace();
+
         // Check for IF NOT EXISTS
         let if_not_exists = if self.peek_keyword("IF") {
             self.parse_keyword()?; // consume "IF"
@@ -1763,18 +1884,69 @@ impl CypherParser {
             false
         };
 
-        self.expect_keyword("ON")?;
-        self.skip_whitespace();
-        self.expect_char(':')?;
-        let label = self.parse_identifier()?;
-        self.skip_whitespace();
-        self.expect_char('(')?;
-        let property = self.parse_identifier()?;
-        self.expect_char(')')?;
+        // Two grammar shapes:
+        //   legacy : ON :Label(property)
+        //   modern : FOR (var:Label) ON (var.p1, var.p2, ...)
+        // The modern form is the only one that supports composite
+        // property lists (§3.6). The legacy form is kept for every
+        // existing test and SDK call site that already emits it.
+        let (label, properties) = if self.peek_keyword("FOR") {
+            self.parse_keyword()?; // consume "FOR"
+            self.skip_whitespace();
+            self.expect_char('(')?;
+            self.skip_whitespace();
+            let var = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_char(':')?;
+            let lbl = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_char(')')?;
+            self.skip_whitespace();
+            self.expect_keyword("ON")?;
+            self.skip_whitespace();
+            self.expect_char('(')?;
+            let mut props = Vec::new();
+            loop {
+                self.skip_whitespace();
+                let p_var = self.parse_identifier()?;
+                if p_var != var {
+                    return Err(self.error(&format!(
+                        "CREATE INDEX: property prefix {p_var:?} does not match pattern variable \
+                         {var:?}"
+                    )));
+                }
+                self.expect_char('.')?;
+                let prop = self.parse_identifier()?;
+                props.push(prop);
+                self.skip_whitespace();
+                if self.peek_char() == Some(',') {
+                    self.consume_char();
+                    continue;
+                }
+                break;
+            }
+            self.skip_whitespace();
+            self.expect_char(')')?;
+            (lbl, props)
+        } else {
+            self.expect_keyword("ON")?;
+            self.skip_whitespace();
+            self.expect_char(':')?;
+            let lbl = self.parse_identifier()?;
+            self.skip_whitespace();
+            self.expect_char('(')?;
+            let prop = self.parse_identifier()?;
+            self.expect_char(')')?;
+            (lbl, vec![prop])
+        };
+
+        let property = properties.first().cloned().unwrap_or_default();
 
         Ok(CreateIndexClause {
+            name,
             label,
             property,
+            properties,
             if_not_exists,
             or_replace,
             index_type,
@@ -2399,6 +2571,7 @@ impl CypherParser {
         let query = CypherQuery {
             clauses,
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
 
         Ok(Clause::Explain(ExplainClause {
@@ -2512,6 +2685,7 @@ impl CypherParser {
         let query = CypherQuery {
             clauses,
             params: std::collections::HashMap::new(),
+            graph_scope: None,
         };
 
         Ok(Clause::Profile(ProfileClause {

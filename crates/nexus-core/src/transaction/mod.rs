@@ -21,6 +21,9 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod savepoint;
+pub use savepoint::{SavepointMarker, SavepointStack};
+
 /// Transaction state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxState {

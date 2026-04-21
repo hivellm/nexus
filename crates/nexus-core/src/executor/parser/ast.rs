@@ -7,12 +7,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Abstract Syntax Tree for Cypher queries
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CypherQuery {
     /// Query clauses in order
     pub clauses: Vec<Clause>,
     /// Query parameters
     pub params: HashMap<String, serde_json::Value>,
+    /// Optional leading `GRAPH[name]` scope
+    /// (phase6_opencypher-advanced-types §6). `None` means the query
+    /// runs against the session's current database. `Some(name)`
+    /// overrides the scope for this one query; the session's database
+    /// remains untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_scope: Option<String>,
 }
 
 /// Individual query clause
@@ -64,6 +71,15 @@ pub enum Clause {
     CommitTransaction,
     /// ROLLBACK TRANSACTION command
     RollbackTransaction,
+    /// SAVEPOINT <name> — create a new marker on the current
+    /// transaction's savepoint stack (phase6_opencypher-advanced-types §5).
+    Savepoint(SavepointClause),
+    /// ROLLBACK TO SAVEPOINT <name> — undo everything since the named
+    /// savepoint, keeping the savepoint and transaction active.
+    RollbackToSavepoint(SavepointClause),
+    /// RELEASE SAVEPOINT <name> — pop the named savepoint (and any
+    /// inner savepoints) without undoing work.
+    ReleaseSavepoint(SavepointClause),
     /// CREATE INDEX command
     CreateIndex(CreateIndexClause),
     /// DROP INDEX command
@@ -447,6 +463,19 @@ pub enum ForeachUpdateClause {
     Delete(DeleteClause),
 }
 
+/// Savepoint clause payload.
+///
+/// Carried by [`Clause::Savepoint`], [`Clause::RollbackToSavepoint`] and
+/// [`Clause::ReleaseSavepoint`]. The `name` is the user-supplied
+/// identifier; the runtime enforces uniqueness inside a transaction on
+/// push (nested savepoints with the same name shadow each other and
+/// unwind LIFO).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavepointClause {
+    /// Savepoint name (ASCII identifier).
+    pub name: String,
+}
+
 /// CREATE DATABASE clause
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateDatabaseClause {
@@ -493,10 +522,23 @@ pub struct UseDatabaseClause {
 /// CREATE INDEX clause
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateIndexClause {
+    /// Optional index name (`CREATE INDEX <name> FOR ...`).
+    ///
+    /// `None` for the legacy `CREATE INDEX ON :Label(prop)` shape,
+    /// `Some(name)` for the Cypher 25 `CREATE INDEX <name> FOR (n:Label) ON (...)`
+    /// form introduced in phase6_opencypher-advanced-types §3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Label name
     pub label: String,
-    /// Property name
+    /// Property name (first element of `properties`, retained for
+    /// backwards compatibility with existing single-property callers).
     pub property: String,
+    /// All property names the index keys on. Length 1 for a regular
+    /// single-property index, length ≥ 2 for a composite B-tree index.
+    /// phase6_opencypher-advanced-types §3.
+    #[serde(default)]
+    pub properties: Vec<String>,
     /// Optional IF NOT EXISTS flag
     pub if_not_exists: bool,
     /// Optional OR REPLACE flag

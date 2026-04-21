@@ -1744,3 +1744,177 @@ fn optional_match_where_still_parses() {
     }
     assert!(matches!(query.clauses[2], Clause::Where(_)));
 }
+
+// phase6_opencypher-advanced-types §2 — write-side dynamic labels
+#[test]
+fn parse_dynamic_label_in_create() {
+    let mut parser = CypherParser::new("CREATE (n:$label {k: 1})".to_string());
+    let q = parser.parse().expect("CREATE with :$param must parse");
+    match &q.clauses[0] {
+        Clause::Create(c) => match &c.pattern.elements[0] {
+            PatternElement::Node(n) => {
+                assert_eq!(n.labels, vec!["$label".to_string()]);
+            }
+            other => panic!("expected node pattern, got {other:?}"),
+        },
+        other => panic!("expected CREATE, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_dynamic_label_mixed_with_static() {
+    let mut parser = CypherParser::new("CREATE (n:Base:$role)".to_string());
+    let q = parser
+        .parse()
+        .expect("mixed static+dynamic labels must parse");
+    if let Clause::Create(c) = &q.clauses[0] {
+        if let PatternElement::Node(n) = &c.pattern.elements[0] {
+            assert_eq!(n.labels, vec!["Base".to_string(), "$role".to_string()]);
+            return;
+        }
+    }
+    panic!("expected CREATE node pattern");
+}
+
+#[test]
+fn parse_set_dynamic_label() {
+    let mut parser = CypherParser::new("MATCH (n) SET n:$role".to_string());
+    let q = parser.parse().expect("SET n:$param must parse");
+    let set = q
+        .clauses
+        .iter()
+        .find_map(|c| {
+            if let Clause::Set(s) = c {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .expect("SET clause");
+    match &set.items[0] {
+        SetItem::Label { label, .. } => assert_eq!(label, "$role"),
+        other => panic!("expected SET label, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_remove_dynamic_label() {
+    let mut parser = CypherParser::new("MATCH (n) REMOVE n:$role".to_string());
+    let q = parser.parse().expect("REMOVE n:$param must parse");
+    let rem = q
+        .clauses
+        .iter()
+        .find_map(|c| {
+            if let Clause::Remove(r) = c {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .expect("REMOVE clause");
+    match &rem.items[0] {
+        RemoveItem::Label { label, .. } => assert_eq!(label, "$role"),
+        other => panic!("expected REMOVE label, got {other:?}"),
+    }
+}
+
+// phase6_opencypher-advanced-types §3 — composite index DDL
+#[test]
+fn parse_composite_index_modern_form() {
+    let mut parser = CypherParser::new(
+        "CREATE INDEX person_id FOR (p:Person) ON (p.tenantId, p.id)".to_string(),
+    );
+    let q = parser.parse().expect("composite index DDL must parse");
+    match &q.clauses[0] {
+        Clause::CreateIndex(ix) => {
+            assert_eq!(ix.name.as_deref(), Some("person_id"));
+            assert_eq!(ix.label, "Person");
+            assert_eq!(
+                ix.properties,
+                vec!["tenantId".to_string(), "id".to_string()]
+            );
+        }
+        other => panic!("expected CREATE INDEX, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_legacy_single_property_index_still_works() {
+    let mut parser = CypherParser::new("CREATE INDEX ON :Person(email)".to_string());
+    let q = parser
+        .parse()
+        .expect("legacy single-property index must still parse");
+    match &q.clauses[0] {
+        Clause::CreateIndex(ix) => {
+            assert_eq!(ix.label, "Person");
+            assert_eq!(ix.properties, vec!["email".to_string()]);
+            assert_eq!(ix.property, "email");
+            assert_eq!(ix.name, None);
+        }
+        other => panic!("expected CREATE INDEX, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_composite_index_rejects_mismatched_variable() {
+    let mut parser =
+        CypherParser::new("CREATE INDEX FOR (p:Person) ON (q.tenantId, p.id)".to_string());
+    assert!(
+        parser.parse().is_err(),
+        "prefix variable must match pattern variable"
+    );
+}
+
+// phase6_opencypher-advanced-types §5 — savepoints
+#[test]
+fn parse_savepoint_statement() {
+    let mut parser = CypherParser::new("SAVEPOINT my_sp".to_string());
+    let q = parser.parse().unwrap();
+    match &q.clauses[0] {
+        Clause::Savepoint(s) => assert_eq!(s.name, "my_sp"),
+        other => panic!("expected Savepoint, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_rollback_to_savepoint() {
+    let mut parser = CypherParser::new("ROLLBACK TO SAVEPOINT my_sp".to_string());
+    let q = parser.parse().unwrap();
+    match &q.clauses[0] {
+        Clause::RollbackToSavepoint(s) => assert_eq!(s.name, "my_sp"),
+        other => panic!("expected RollbackToSavepoint, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_release_savepoint() {
+    let mut parser = CypherParser::new("RELEASE SAVEPOINT my_sp".to_string());
+    let q = parser.parse().unwrap();
+    match &q.clauses[0] {
+        Clause::ReleaseSavepoint(s) => assert_eq!(s.name, "my_sp"),
+        other => panic!("expected ReleaseSavepoint, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_rollback_still_parses_as_transaction_rollback() {
+    let mut parser = CypherParser::new("ROLLBACK".to_string());
+    let q = parser.parse().unwrap();
+    assert!(matches!(q.clauses[0], Clause::RollbackTransaction));
+}
+
+// phase6_opencypher-advanced-types §6 — graph scoping
+#[test]
+fn parse_graph_scope_preamble() {
+    let mut parser = CypherParser::new("GRAPH[analytics] MATCH (n:Person) RETURN n".to_string());
+    let q = parser.parse().expect("GRAPH[name] preamble must parse");
+    assert_eq!(q.graph_scope.as_deref(), Some("analytics"));
+    assert_eq!(q.clauses.len(), 2);
+}
+
+#[test]
+fn query_without_graph_scope_has_none() {
+    let mut parser = CypherParser::new("MATCH (n) RETURN n".to_string());
+    let q = parser.parse().unwrap();
+    assert_eq!(q.graph_scope, None);
+}

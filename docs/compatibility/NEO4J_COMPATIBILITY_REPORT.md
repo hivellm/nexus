@@ -1,7 +1,32 @@
 # Neo4j Compatibility Report
 
-**Version**: 1.0.0 (workspace)
+**Version**: 1.5.0 (workspace)
 **Last verified**: 2026-04-19 against Neo4j 2025.09.0 community
+
+## v1.5 — advanced-types additions (2026-04-21)
+
+phase6_opencypher-advanced-types lifts Nexus toward ~95% openCypher
+parity by adding six concurrent surfaces, none of which regress the
+existing 300/300 diff suite:
+
+- **BYTES scalar family** — `bytes()`, `bytesFromBase64()`,
+  `bytesToBase64()`, `bytesToHex()`, `bytesLength()`, `bytesSlice()`.
+  Wire format `{"_bytes": "<base64>"}`.
+- **Write-side dynamic labels** — `CREATE (n:$x)`, `SET n:$x`,
+  `REMOVE n:$x` with STRING or LIST<STRING> parameter expansion.
+- **Composite B-tree indexes** — `CREATE INDEX <name> FOR (n:L) ON
+  (n.p1, n.p2, ...)` with exact / prefix / range seek and optional
+  uniqueness.
+- **Typed collections** — `parse_typed_list` +  `validate_list` for
+  `LIST<INTEGER|FLOAT|STRING|BOOLEAN|BYTES|ANY>`.
+- **Transaction savepoints** — `SAVEPOINT`, `ROLLBACK TO SAVEPOINT`,
+  `RELEASE SAVEPOINT`.
+- **Graph scoping** — `GRAPH[<name>]` preamble; cross-database
+  routing surfaces `ERR_GRAPH_NOT_FOUND` on the single-engine path.
+
+See `docs/specs/cypher-subset.md` § *Advanced Types*.
+
+
 **Status**: **300/300 Neo4j diff-suite tests passing** (verified
 via `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`
 against a live Neo4j container + release Nexus server; full

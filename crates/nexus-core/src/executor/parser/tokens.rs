@@ -107,6 +107,8 @@ impl CypherParser {
             || self.peek_keyword("FOREACH") // For FOREACH clause
             || self.peek_keyword("ALTER") // For ALTER DATABASE
             || self.peek_keyword("TERMINATE") // For TERMINATE QUERY
+            || self.peek_keyword("SAVEPOINT") // phase6_opencypher-advanced-types §5
+            || self.peek_keyword("RELEASE") // RELEASE SAVEPOINT
     }
 
     /// Check if character is identifier start

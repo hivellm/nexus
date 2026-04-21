@@ -35,6 +35,11 @@ pub struct Session {
     pub timeout: Duration,
     /// Current database name (for multi-database support)
     pub current_database: String,
+    /// Savepoint stack for the current transaction
+    /// (phase6_opencypher-advanced-types §5). Empty outside an
+    /// explicit transaction; cleared on commit / rollback along with
+    /// `created_nodes` and `created_relationships`.
+    pub savepoints: crate::transaction::SavepointStack,
 }
 
 impl Session {
@@ -59,6 +64,7 @@ impl Session {
             last_activity: Instant::now(),
             timeout: Duration::from_secs(30 * 60), // 30 minutes
             current_database: database,
+            savepoints: crate::transaction::SavepointStack::new(),
         }
     }
 
@@ -86,6 +92,7 @@ impl Session {
         self.created_nodes.clear();
         self.created_relationships.clear();
         self.pending_index_updates.clear();
+        self.savepoints.clear();
         self.last_activity = Instant::now();
 
         Ok(())
@@ -276,6 +283,7 @@ impl SessionManager {
                 last_activity: Instant::now(),
                 timeout: session.timeout,
                 current_database: session.current_database.clone(),
+                savepoints: session.savepoints.clone(),
             };
             sessions.insert(session_id.clone(), session.clone());
             Some(session)

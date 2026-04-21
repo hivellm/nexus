@@ -216,6 +216,10 @@ impl Engine {
         session_tx: &mut Option<&mut transaction::Transaction>,
         created_nodes_tracker: Option<&mut Vec<u64>>,
     ) -> Result<u64> {
+        // phase6_opencypher-advanced-types §2 — resolve `:$param`
+        // sentinels against the current query parameter map. Fully
+        // static label lists short-circuit with no allocation change.
+        let labels = self.resolve_dynamic_labels(&labels)?;
         let has_session_tx = session_tx.is_some();
         let mut own_tx = if has_session_tx {
             None

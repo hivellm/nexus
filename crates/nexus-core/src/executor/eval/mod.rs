@@ -8,6 +8,7 @@
 //! core type declared in `super::engine`.
 
 pub mod arithmetic;
+pub mod bytes;
 pub mod helpers;
 pub mod predicate;
 pub mod projection;

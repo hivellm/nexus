@@ -5,6 +5,40 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-04-21
+
+### Added — Advanced types (phase6_opencypher-advanced-types)
+
+Six concurrent openCypher / Cypher 25 surface additions landing
+together so downstream SDKs can consume a single compatibility level:
+
+- **BYTES scalar family** — `bytes(s)`, `bytesFromBase64(s)`,
+  `bytesToBase64(b)`, `bytesToHex(b)`, `bytesLength(b)`,
+  `bytesSlice(b, start, len)`. JSON wire format is
+  `{"_bytes": "<base64>"}`. Parameter binding also accepts a plain
+  base64 STRING for convenience. 64 MiB per-property cap enforced.
+- **Write-side dynamic labels** — `CREATE (n:$label)`,
+  `SET n:$label`, `REMOVE n:$label`. Parameter may resolve to a
+  STRING or a `LIST<STRING>` (multi-label fan-out). Comprehensive
+  `ERR_INVALID_LABEL` surface for null, empty, or malformed inputs.
+- **Composite B-tree indexes** — `CREATE INDEX <name> FOR (n:Label)
+  ON (n.p1, n.p2, ...)`. Exact / prefix / range seeks and a
+  uniqueness flag available through `CompositeBtreeRegistry`.
+- **Typed-collection validation** —
+  `LIST<INTEGER|FLOAT|STRING|BOOLEAN|BYTES|ANY>` parse helper +
+  `validate_list` enforcement for the constraint engine.
+- **Transaction savepoints** — `SAVEPOINT <name>`,
+  `ROLLBACK TO SAVEPOINT <name>`, `RELEASE SAVEPOINT <name>`.
+  Nested savepoints unwind LIFO. See
+  [docs/guides/SAVEPOINTS.md](docs/guides/SAVEPOINTS.md).
+- **Graph scoping** — `GRAPH[<name>]` preamble parsed into
+  `CypherQuery.graph_scope`. The single-engine path surfaces
+  `ERR_GRAPH_NOT_FOUND` when a scope cannot be served in place;
+  multi-database routing happens above the engine.
+
+1799 unit tests passing (1742 pre-task + 57 new). Regression-free
+against the Neo4j 2025.09 diff suite.
+
 ## [1.0.0] — 2026-04-20
 
 ### Fixed — CREATE with bound-variable edges duplicated nodes (2026-04-20)

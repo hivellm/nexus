@@ -1415,6 +1415,125 @@ impl Executor {
                         let skip = char_len - take;
                         Ok(Value::String(s.chars().skip(skip).collect()))
                     }
+                    // phase6_opencypher-advanced-types §1 — BYTES family.
+                    // Uses the `{"_bytes": "<base64>"}` wire shape so
+                    // the JSON-based runtime stays unchanged. NULL-in →
+                    // NULL-out across every entry point.
+                    "bytes" => {
+                        let arg = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match arg {
+                            Value::Null => Ok(Value::Null),
+                            Value::String(s) => super::bytes::bytes_from_vec(s.into_bytes()),
+                            other if super::bytes::is_bytes_value(&other) => Ok(other),
+                            other => Err(Error::TypeMismatch {
+                                expected: "STRING or BYTES".to_string(),
+                                actual: type_name_of(&other).to_string(),
+                            }),
+                        }
+                    }
+                    "bytesfrombase64" => {
+                        let arg = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        match arg {
+                            Value::Null => Ok(Value::Null),
+                            Value::String(s) => {
+                                use base64::Engine as _;
+                                use base64::engine::general_purpose::STANDARD as B64;
+                                let raw = B64.decode(&s).map_err(|e| {
+                                    Error::CypherExecution(format!(
+                                        "ERR_INVALID_BYTES: base64 decode failed: {e}"
+                                    ))
+                                })?;
+                                super::bytes::bytes_from_vec(raw)
+                            }
+                            other => Err(Error::TypeMismatch {
+                                expected: "STRING".to_string(),
+                                actual: type_name_of(&other).to_string(),
+                            }),
+                        }
+                    }
+                    "bytestobase64" => {
+                        let arg = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        if matches!(arg, Value::Null) {
+                            return Ok(Value::Null);
+                        }
+                        let raw = super::bytes::bytes_value_to_vec(&arg)?;
+                        use base64::Engine as _;
+                        use base64::engine::general_purpose::STANDARD as B64;
+                        Ok(Value::String(B64.encode(raw)))
+                    }
+                    "bytestohex" => {
+                        let arg = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        if matches!(arg, Value::Null) {
+                            return Ok(Value::Null);
+                        }
+                        let raw = super::bytes::bytes_value_to_vec(&arg)?;
+                        Ok(Value::String(super::bytes::to_hex(&raw)))
+                    }
+                    "byteslength" => {
+                        let arg = match args.first() {
+                            Some(a) => self.evaluate_projection_expression(row, context, a)?,
+                            None => return Ok(Value::Null),
+                        };
+                        if matches!(arg, Value::Null) {
+                            return Ok(Value::Null);
+                        }
+                        let raw = super::bytes::bytes_value_to_vec(&arg)?;
+                        Ok(Value::Number(serde_json::Number::from(raw.len() as i64)))
+                    }
+                    "bytesslice" => {
+                        if args.len() < 3 {
+                            return Ok(Value::Null);
+                        }
+                        let b = self.evaluate_projection_expression(row, context, &args[0])?;
+                        let start_v =
+                            self.evaluate_projection_expression(row, context, &args[1])?;
+                        let len_v = self.evaluate_projection_expression(row, context, &args[2])?;
+                        if matches!(b, Value::Null)
+                            || matches!(start_v, Value::Null)
+                            || matches!(len_v, Value::Null)
+                        {
+                            return Ok(Value::Null);
+                        }
+                        let raw = super::bytes::bytes_value_to_vec(&b)?;
+                        let start = match &start_v {
+                            Value::Number(n) => n
+                                .as_i64()
+                                .or_else(|| n.as_f64().map(|f| f as i64))
+                                .unwrap_or(0),
+                            _ => {
+                                return Err(Error::TypeMismatch {
+                                    expected: "INTEGER".to_string(),
+                                    actual: type_name_of(&start_v).to_string(),
+                                });
+                            }
+                        };
+                        let len = match &len_v {
+                            Value::Number(n) => n
+                                .as_i64()
+                                .or_else(|| n.as_f64().map(|f| f as i64))
+                                .unwrap_or(0),
+                            _ => {
+                                return Err(Error::TypeMismatch {
+                                    expected: "INTEGER".to_string(),
+                                    actual: type_name_of(&len_v).to_string(),
+                                });
+                            }
+                        };
+                        let sliced = super::bytes::slice(&raw, start, len);
+                        super::bytes::bytes_from_vec(sliced)
+                    }
                     "todate" => {
                         // toDate(value) - Convert to date string (YYYY-MM-DD)
                         if let Some(arg) = args.first() {

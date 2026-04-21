@@ -23,8 +23,11 @@ use std::sync::Arc;
 pub mod clustering;
 pub mod config;
 pub mod crud;
+pub mod dynamic_labels;
+pub mod graph_scope;
 pub mod maintenance;
 pub mod stats;
+pub mod typed_collections;
 
 #[cfg(test)]
 mod tests;
@@ -71,6 +74,18 @@ pub struct Engine {
     /// HiveHub-backed implementation without touching any of the
     /// code that consults it.
     pub(crate) quota_provider: Option<Arc<dyn crate::cluster::QuotaProvider>>,
+    /// Parameters of the currently-executing Cypher query.
+    ///
+    /// Set by [`Self::execute_cypher_with_params`] before dispatching
+    /// the query down the write path (and cleared on the RAII guard in
+    /// Drop), read by `apply_set_clause`, `apply_remove_clause`, and
+    /// the CREATE-node helpers when resolving `:$param` dynamic labels
+    /// (phase6_opencypher-advanced-types §2).
+    ///
+    /// Empty for callers that use [`Self::execute_cypher`] without
+    /// parameters — in that case a query containing a `:$param` label
+    /// is rejected with `ERR_INVALID_LABEL`.
+    pub(crate) current_params: HashMap<String, Value>,
     /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
     _temp_dir: Option<tempfile::TempDir>,
 }
@@ -162,6 +177,7 @@ impl Engine {
             executor,
             cache,
             quota_provider: None,
+            current_params: HashMap::new(),
             _temp_dir: None,
         };
 
@@ -325,6 +341,7 @@ impl Engine {
             executor,
             cache,
             quota_provider: None,
+            current_params: HashMap::new(),
             _temp_dir: None,
         };
 
@@ -398,6 +415,7 @@ impl Engine {
         let match_query = executor::parser::CypherQuery {
             clauses: match_query_clauses,
             params: ast.params.clone(),
+            graph_scope: ast.graph_scope.clone(),
         };
 
         // Collect all node variables from MATCH and CREATE clauses.
@@ -1147,6 +1165,58 @@ impl Engine {
         self.execute_cypher_with_context(query, None, crate::cluster::TenantIsolationMode::None)
     }
 
+    /// Execute a Cypher query with a client-supplied parameter map.
+    ///
+    /// The parameters are made visible to every write-path operator
+    /// through `self.current_params` for the duration of the call and
+    /// cleared on exit (RAII guard, so panics and early-return errors
+    /// still release the slot). Currently consumed by the write-side
+    /// dynamic-label resolver
+    /// ([`dynamic_labels::resolve_labels`]); read-side operators
+    /// receive parameters through the existing
+    /// [`executor::Query::params`] path.
+    pub fn execute_cypher_with_params(
+        &mut self,
+        query: &str,
+        params: HashMap<String, Value>,
+    ) -> Result<executor::ResultSet> {
+        struct ParamsGuard<'a> {
+            slot: &'a mut HashMap<String, Value>,
+        }
+        impl Drop for ParamsGuard<'_> {
+            fn drop(&mut self) {
+                self.slot.clear();
+            }
+        }
+        self.current_params = params;
+        let _guard = ParamsGuard {
+            slot: &mut self.current_params,
+        };
+        // `_guard` borrows `self.current_params`; we need to release it
+        // before the nested `execute_cypher_with_context` borrows
+        // `&mut self`, so drop explicitly after transferring ownership.
+        drop(_guard);
+        let result = self.execute_cypher_with_context(
+            query,
+            None,
+            crate::cluster::TenantIsolationMode::None,
+        );
+        // RAII cleanup: clear after call regardless of Ok/Err.
+        self.current_params.clear();
+        result
+    }
+
+    /// Resolve a parser-emitted label list (which may contain `:$param`
+    /// sentinels encoded as leading `$` strings) against the current
+    /// query parameters. Returns `ERR_INVALID_LABEL` if any sentinel
+    /// cannot be resolved. Static-only inputs are returned unchanged.
+    pub(super) fn resolve_dynamic_labels(&self, labels: &[String]) -> Result<Vec<String>> {
+        if !dynamic_labels::contains_dynamic(labels) {
+            return Ok(labels.to_vec());
+        }
+        dynamic_labels::resolve_labels(labels, &self.current_params)
+    }
+
     /// Execute a Cypher query, optionally rewriting catalog-visible
     /// names to the tenant's namespaced form before planning.
     ///
@@ -1174,6 +1244,22 @@ impl Engine {
         // Parse query to check if it contains CREATE or DELETE clauses
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let mut ast = parser.parse()?;
+
+        // phase6_opencypher-advanced-types §6 — reject a
+        // `GRAPH[name]` preamble when the engine is not wired to the
+        // multi-database manager that owns the named graph. The
+        // single-engine code path here does not own per-database
+        // engines, so we can only honour scopes that coincide with
+        // the session's current database. Anything else is surfaced
+        // to the caller with a deterministic ERR_GRAPH_NOT_FOUND.
+        if let Some(requested) = ast.graph_scope.as_ref() {
+            let routed = crate::engine::graph_scope::accept_here(self, requested)?;
+            if !routed {
+                return Err(Error::CypherExecution(format!(
+                    "ERR_GRAPH_NOT_FOUND: graph {requested:?} is not accessible from this engine"
+                )));
+            }
+        }
 
         // Cluster-mode scope rewrite. When a UserContext is present
         // AND the isolation mode asks for catalog-level prefixing,
@@ -1345,8 +1431,20 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::RollbackTransaction));
+        // phase6_opencypher-advanced-types §5 — route savepoint
+        // statements through the transaction-command path so they
+        // share session resolution and return a uniform `status`
+        // column.
+        let has_savepoint_cmd = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                executor::parser::Clause::Savepoint(_)
+                    | executor::parser::Clause::RollbackToSavepoint(_)
+                    | executor::parser::Clause::ReleaseSavepoint(_)
+            )
+        });
 
-        if has_begin || has_commit || has_rollback {
+        if has_begin || has_commit || has_rollback || has_savepoint_cmd {
             return self.execute_transaction_commands(&ast, None);
         }
 
@@ -1529,6 +1627,7 @@ impl Engine {
                     let tail_ast = executor::parser::CypherQuery {
                         clauses: vec![executor::parser::Clause::Return(return_clause.clone())],
                         params: ast.params.clone(),
+                        graph_scope: ast.graph_scope.clone(),
                     };
                     struct OverrideGuard {
                         executor: executor::Executor,
@@ -2115,9 +2214,16 @@ impl Engine {
                         ))
                     })?;
 
-                    for node_id in node_ids {
-                        let state = self.ensure_node_state(*node_id, &mut state_map)?;
-                        state.labels.insert(label.clone());
+                    // phase6_opencypher-advanced-types §2 — resolve
+                    // `:$param` in SET position. A single parser-emitted
+                    // label may fan out to multiple names when the
+                    // parameter is a `LIST<STRING>`.
+                    let resolved = self.resolve_dynamic_labels(std::slice::from_ref(label))?;
+                    for node_id in node_ids.clone() {
+                        let state = self.ensure_node_state(node_id, &mut state_map)?;
+                        for lbl in &resolved {
+                            state.labels.insert(lbl.clone());
+                        }
                     }
                 }
                 // phase6_opencypher-quickwins §6 — `SET lhs += mapExpr`.
@@ -2222,9 +2328,15 @@ impl Engine {
                         ))
                     })?;
 
-                    for node_id in node_ids {
-                        let state = self.ensure_node_state(*node_id, &mut state_map)?;
-                        state.labels.remove(label);
+                    // phase6_opencypher-advanced-types §2 — resolve
+                    // `:$param` in REMOVE position (same semantics as
+                    // SET, inverted operation).
+                    let resolved = self.resolve_dynamic_labels(std::slice::from_ref(label))?;
+                    for node_id in node_ids.clone() {
+                        let state = self.ensure_node_state(node_id, &mut state_map)?;
+                        for lbl in &resolved {
+                            state.labels.remove(lbl);
+                        }
                     }
                 }
             }
@@ -2465,6 +2577,104 @@ impl Engine {
                     // could potentially reintroduce deleted nodes if there's a timing issue.
                     self.refresh_executor()?;
                 }
+                // phase6_opencypher-advanced-types §5 — savepoint
+                // lifecycle statements. All three require an active
+                // explicit transaction; outside one they raise
+                // ERR_SAVEPOINT_NO_TX.
+                executor::parser::Clause::Savepoint(s) => {
+                    let mut session = self
+                        .session_manager
+                        .get_session(&session_id.to_string())
+                        .ok_or_else(|| {
+                            Error::transaction(format!(
+                                "Session {} not found or expired",
+                                session_id
+                            ))
+                        })?;
+                    if !session.has_active_transaction() {
+                        return Err(Error::CypherExecution(
+                            "ERR_SAVEPOINT_NO_TX: SAVEPOINT outside an explicit transaction"
+                                .to_string(),
+                        ));
+                    }
+                    session.savepoints.push(
+                        &s.name,
+                        transaction::SavepointMarker {
+                            undo_log_offset: session.created_nodes.len(),
+                            staged_ops_offset: session.created_relationships.len(),
+                        },
+                    );
+                    self.session_manager.update_session(session);
+                }
+                executor::parser::Clause::RollbackToSavepoint(s) => {
+                    let mut session = self
+                        .session_manager
+                        .get_session(&session_id.to_string())
+                        .ok_or_else(|| {
+                            Error::transaction(format!(
+                                "Session {} not found or expired",
+                                session_id
+                            ))
+                        })?;
+                    if !session.has_active_transaction() {
+                        return Err(Error::CypherExecution(
+                            "ERR_SAVEPOINT_NO_TX: ROLLBACK TO SAVEPOINT outside an explicit \
+                             transaction"
+                                .to_string(),
+                        ));
+                    }
+                    let marker = session.savepoints.rollback_to(&s.name)?;
+                    // Replay node undo-log: every node created after
+                    // the marker's offset gets marked deleted and
+                    // pulled from the label index. Relationships
+                    // follow the same pattern.
+                    let to_undo_nodes: Vec<u64> = session
+                        .created_nodes
+                        .drain(marker.undo_log_offset..)
+                        .collect();
+                    let to_undo_rels: Vec<u64> = session
+                        .created_relationships
+                        .drain(marker.staged_ops_offset..)
+                        .collect();
+                    for node_id in &to_undo_nodes {
+                        let _ = self.storage.delete_node(*node_id);
+                        if let Ok(Some(serde_json::Value::Object(props))) =
+                            self.storage.load_node_properties(*node_id)
+                        {
+                            let property_index = self.cache.property_index_manager();
+                            for prop_name in props.keys() {
+                                let _ = property_index.remove_property(prop_name, *node_id);
+                            }
+                        }
+                        if let Ok(_record) = self.storage.read_node(*node_id) {
+                            let _ = self.indexes.label_index.remove_node(*node_id);
+                        }
+                    }
+                    for rel_id in &to_undo_rels {
+                        let _ = self.storage.delete_rel(*rel_id);
+                    }
+                    self.session_manager.update_session(session);
+                }
+                executor::parser::Clause::ReleaseSavepoint(s) => {
+                    let mut session = self
+                        .session_manager
+                        .get_session(&session_id.to_string())
+                        .ok_or_else(|| {
+                            Error::transaction(format!(
+                                "Session {} not found or expired",
+                                session_id
+                            ))
+                        })?;
+                    if !session.has_active_transaction() {
+                        return Err(Error::CypherExecution(
+                            "ERR_SAVEPOINT_NO_TX: RELEASE SAVEPOINT outside an explicit \
+                             transaction"
+                                .to_string(),
+                        ));
+                    }
+                    session.savepoints.release(&s.name)?;
+                    self.session_manager.update_session(session);
+                }
                 _ => {}
             }
         }
@@ -2488,6 +2698,32 @@ impl Engine {
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::CreateIndex(create_index) => {
+                    // phase6_opencypher-advanced-types §3 — composite
+                    // B-tree: any index defined over 2+ properties goes
+                    // to the dedicated composite registry, not the
+                    // single-column property index.
+                    if create_index.properties.len() > 1 {
+                        let label_id = self.catalog.get_or_create_label(&create_index.label)?;
+                        for prop in &create_index.properties {
+                            let _ = self.catalog.get_or_create_key(prop)?;
+                        }
+                        self.indexes.composite_btree.register(
+                            label_id,
+                            create_index.properties.clone(),
+                            false,
+                            create_index.name.clone(),
+                            create_index.if_not_exists,
+                        )?;
+                        let joined = create_index.properties.join(", ");
+                        let index_name = format!(":{}({})", create_index.label, joined);
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(index_name),
+                                serde_json::Value::String("Composite index created".to_string()),
+                            ],
+                        });
+                        continue;
+                    }
                     // Get label and property IDs
                     let label_id = self.catalog.get_or_create_label(&create_index.label)?;
                     let property_key_id = self.catalog.get_or_create_key(&create_index.property)?;
@@ -3541,8 +3777,16 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::RollbackTransaction));
+        let has_savepoint_cmd = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                executor::parser::Clause::Savepoint(_)
+                    | executor::parser::Clause::RollbackToSavepoint(_)
+                    | executor::parser::Clause::ReleaseSavepoint(_)
+            )
+        });
 
-        if has_begin || has_commit || has_rollback {
+        if has_begin || has_commit || has_rollback || has_savepoint_cmd {
             return self.execute_transaction_commands(ast, None);
         }
 

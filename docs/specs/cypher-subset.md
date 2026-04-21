@@ -1527,6 +1527,71 @@ TPC-like graph query suite (future V1):
 - Subqueries in WHERE (EXISTS, ANY, ALL)
 - Map and list operators
 
+## Advanced Types (v1.5 — phase6_opencypher-advanced-types)
+
+### BYTES scalar
+
+Nexus represents binary data as the JSON shape
+`{"_bytes": "<base64>"}`. The following scalar functions are
+available in every expression position:
+
+| Function                              | Result                                    |
+|---------------------------------------|-------------------------------------------|
+| `bytes(str)`                          | UTF-8 encode a STRING to BYTES            |
+| `bytesFromBase64(str)`                | Decode a base64 STRING to BYTES           |
+| `bytesToBase64(b)`                    | Encode BYTES as a base64 STRING           |
+| `bytesToHex(b)`                       | Lowercase hex of the bytes                |
+| `bytesLength(b)`                      | Length in bytes (INTEGER)                 |
+| `bytesSlice(b, start, len)`           | Sub-range, clamped like `substring`       |
+
+NULL in → NULL out across every entry point. The per-property cap
+is 64 MiB; exceeding it raises `ERR_BYTES_TOO_LARGE`.
+
+### Dynamic labels on writes
+
+`$param` is accepted wherever a label appears in a write clause:
+
+```cypher
+CREATE (n:$label)
+CREATE (n:Base:$role)
+SET n:$label
+REMOVE n:$label
+```
+
+The parameter may be a STRING (single label) or a LIST<STRING>
+(expands to multiple labels in order). Rejected with
+`ERR_INVALID_LABEL`: NULL, empty string, empty list, non-STRING
+list element, or a label string containing characters outside
+`[A-Za-z_][A-Za-z0-9_]*`.
+
+### Composite B-tree indexes
+
+```cypher
+CREATE INDEX person_tenant_id FOR (p:Person) ON (p.tenantId, p.id)
+```
+
+Seek modes: exact (every column bound), prefix (leading columns
+bound), range on the first unbound column. `UNIQUE` flag
+supported; a duplicate tuple raises `ERR_CONSTRAINT_VIOLATED`.
+
+### Transaction savepoints
+
+See [../guides/SAVEPOINTS.md](../guides/SAVEPOINTS.md). Statements:
+`SAVEPOINT name`, `ROLLBACK TO SAVEPOINT name`,
+`RELEASE SAVEPOINT name`.
+
+### Graph scoping
+
+`GRAPH[<name>]` as a leading clause scopes the query to a named
+database:
+
+```cypher
+GRAPH[analytics] MATCH (n:Person) RETURN count(n)
+```
+
+Exactly one such clause may appear, and only at the top. Missing
+or inaccessible graphs raise `ERR_GRAPH_NOT_FOUND`.
+
 ### V3: Graph Algorithms
 
 - Shortest path: `shortestPath((n)-[*]-(m))`

@@ -148,10 +148,12 @@ impl<'a> QueryPlanner<'a> {
                 let left_query = CypherQuery {
                     clauses: left_clauses,
                     params: query.params.clone(),
+                    graph_scope: query.graph_scope.clone(),
                 };
                 let right_query = CypherQuery {
                     clauses: right_clauses,
                     params: query.params.clone(),
+                    graph_scope: query.graph_scope.clone(),
                 };
 
                 // Plan both sides recursively
