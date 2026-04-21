@@ -19,7 +19,13 @@ impl Executor {
         context: &ExecutionContext,
         expr: &parser::Expression,
     ) -> Result<Value> {
-        // Simple evaluation - for literals and variables
+        // Fast path — literals & unadorned variables avoid the full
+        // projection evaluator's row-level setup. Everything else
+        // (LIST / MAP literals, FunctionCall, BinaryOp, nested
+        // procedure arguments such as `apoc.coll.union([1,2],[3,4])`
+        // or `apoc.map.merge({a:1}, {b:2})`) routes through
+        // `evaluate_projection_expression` with an empty row, which
+        // is the same evaluator RETURN / WITH / WHERE clauses use.
         match expr {
             parser::Expression::Literal(parser::Literal::String(s)) => Ok(Value::String(s.clone())),
             parser::Expression::Literal(parser::Literal::Integer(i)) => {
@@ -35,9 +41,11 @@ impl Executor {
                 .get_variable(var)
                 .cloned()
                 .ok_or_else(|| Error::CypherSyntax(format!("Variable '{}' not found", var))),
-            _ => Err(Error::CypherSyntax(
-                "Complex expressions in procedure arguments not yet supported".to_string(),
-            )),
+            _ => {
+                let empty_row: std::collections::HashMap<String, Value> =
+                    std::collections::HashMap::new();
+                self.evaluate_projection_expression(&empty_row, context, expr)
+            }
         }
     }
 
