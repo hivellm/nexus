@@ -324,6 +324,9 @@ impl Engine {
         engine
             .executor
             .install_composite_btree(engine.indexes.composite_btree.clone());
+        engine
+            .executor
+            .install_fulltext(engine.indexes.fulltext.clone());
 
         Ok(engine)
     }
@@ -497,6 +500,9 @@ impl Engine {
         engine
             .executor
             .install_composite_btree(engine.indexes.composite_btree.clone());
+        engine
+            .executor
+            .install_fulltext(engine.indexes.fulltext.clone());
 
         Ok(engine)
     }
@@ -1264,6 +1270,8 @@ impl Engine {
         // later consult it for seeks.
         self.executor
             .install_composite_btree(self.indexes.composite_btree.clone());
+        self.executor
+            .install_fulltext(self.indexes.fulltext.clone());
         Ok(())
     }
 

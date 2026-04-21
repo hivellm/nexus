@@ -97,6 +97,29 @@ impl Executor {
             "dbms.showCurrentUser" => {
                 return self.execute_dbms_show_current_user_procedure(context, yield_columns);
             }
+            // phase6_opencypher-fulltext-search — Neo4j-compatible
+            // `db.index.fulltext.*` surface backed by Tantivy.
+            "db.index.fulltext.createNodeIndex" => {
+                return self.execute_fts_create(context, arguments, yield_columns, true);
+            }
+            "db.index.fulltext.createRelationshipIndex" => {
+                return self.execute_fts_create(context, arguments, yield_columns, false);
+            }
+            "db.index.fulltext.queryNodes" => {
+                return self.execute_fts_query(context, arguments, yield_columns);
+            }
+            "db.index.fulltext.queryRelationships" => {
+                return self.execute_fts_query(context, arguments, yield_columns);
+            }
+            "db.index.fulltext.drop" => {
+                return self.execute_fts_drop(context, arguments, yield_columns);
+            }
+            "db.index.fulltext.awaitEventuallyConsistentIndexRefresh" => {
+                return self.execute_fts_await_refresh(context, yield_columns);
+            }
+            "db.index.fulltext.listAvailableAnalyzers" => {
+                return self.execute_fts_list_analyzers(context, yield_columns);
+            }
             _ => {}
         }
 
@@ -515,6 +538,53 @@ impl Executor {
             }
         }
 
+        // phase6_opencypher-fulltext-search §9.1 — surface every
+        // registered FTS index through `db.indexes()` with
+        // `type = "FULLTEXT"`, `indexProvider = "tantivy-0.22"`.
+        if let Some(registry) = self.fulltext_registry() {
+            for meta in registry.list() {
+                if filter_name.is_some_and(|n| n != meta.name) {
+                    continue;
+                }
+                rows.push(Row {
+                    values: vec![
+                        Value::Number(serde_json::Number::from(next_id)),
+                        Value::String(meta.name.clone()),
+                        Value::String("ONLINE".to_string()),
+                        Value::Number(
+                            serde_json::Number::from_f64(100.0)
+                                .unwrap_or_else(|| serde_json::Number::from(100)),
+                        ),
+                        Value::String("NONUNIQUE".to_string()),
+                        Value::String("FULLTEXT".to_string()),
+                        Value::String(
+                            match meta.entity {
+                                crate::index::fulltext_registry::FullTextEntity::Node => "NODE",
+                                crate::index::fulltext_registry::FullTextEntity::Relationship => {
+                                    "RELATIONSHIP"
+                                }
+                            }
+                            .to_string(),
+                        ),
+                        Value::Array(
+                            meta.labels_or_types
+                                .iter()
+                                .map(|s| Value::String(s.clone()))
+                                .collect(),
+                        ),
+                        Value::Array(
+                            meta.properties
+                                .iter()
+                                .map(|s| Value::String(s.clone()))
+                                .collect(),
+                        ),
+                        Value::String("tantivy-0.22".to_string()),
+                    ],
+                });
+                next_id += 1;
+            }
+        }
+
         if filter_name.is_some() && rows.is_empty() {
             return Err(Error::CypherExecution(format!(
                 "ERR_INDEX_NOT_FOUND: no index named '{}'",
@@ -796,6 +866,53 @@ impl Executor {
               flags :: LIST<STRING>)",
                 "DBMS",
                 "Return the caller's identity and roles.",
+            ),
+            // phase6_opencypher-fulltext-search — Neo4j-compatible surface.
+            (
+                "db.index.fulltext.createNodeIndex",
+                "db.index.fulltext.createNodeIndex(name :: STRING, labels :: LIST<STRING>, \
+              properties :: LIST<STRING>, config :: MAP?) :: (name :: STRING, state :: STRING)",
+                "SCHEMA",
+                "Register a node-scope full-text index.",
+            ),
+            (
+                "db.index.fulltext.createRelationshipIndex",
+                "db.index.fulltext.createRelationshipIndex(name :: STRING, types :: LIST<STRING>, \
+              properties :: LIST<STRING>, config :: MAP?) :: (name :: STRING, state :: STRING)",
+                "SCHEMA",
+                "Register a relationship-scope full-text index.",
+            ),
+            (
+                "db.index.fulltext.queryNodes",
+                "db.index.fulltext.queryNodes(name :: STRING, query :: STRING) :: \
+              (node :: NODE, score :: FLOAT)",
+                "READ",
+                "Run a BM25 query against a node full-text index.",
+            ),
+            (
+                "db.index.fulltext.queryRelationships",
+                "db.index.fulltext.queryRelationships(name :: STRING, query :: STRING) :: \
+              (relationship :: RELATIONSHIP, score :: FLOAT)",
+                "READ",
+                "Run a BM25 query against a relationship full-text index.",
+            ),
+            (
+                "db.index.fulltext.drop",
+                "db.index.fulltext.drop(name :: STRING) :: (name :: STRING, state :: STRING)",
+                "SCHEMA",
+                "Drop a full-text index and remove its directory.",
+            ),
+            (
+                "db.index.fulltext.awaitEventuallyConsistentIndexRefresh",
+                "db.index.fulltext.awaitEventuallyConsistentIndexRefresh() :: (status :: STRING)",
+                "READ",
+                "Block until every FTS index has refreshed at least once.",
+            ),
+            (
+                "db.index.fulltext.listAvailableAnalyzers",
+                "db.index.fulltext.listAvailableAnalyzers() :: (name :: STRING, description :: STRING)",
+                "READ",
+                "List analyzers accepted by the FTS config.analyzer option.",
             ),
         ];
         let mut rows: Vec<Row> = entries
@@ -1250,5 +1367,240 @@ impl Executor {
     /// the column back into a DATETIME.
     fn current_rfc3339_utc() -> String {
         chrono::Utc::now().to_rfc3339()
+    }
+
+    // ──────────── phase6_opencypher-fulltext-search procedures ────────────
+
+    fn fulltext_registry(&self) -> Option<&crate::index::fulltext_registry::FullTextRegistry> {
+        self.shared.fulltext()
+    }
+
+    pub(in crate::executor) fn execute_fts_create(
+        &self,
+        context: &mut ExecutionContext,
+        arguments: &[parser::Expression],
+        yield_columns: Option<&Vec<String>>,
+        is_node: bool,
+    ) -> Result<()> {
+        let name = self.fts_str_arg(context, arguments, 0, "name")?;
+        let labels = self.fts_str_list_arg(context, arguments, 1, "labelsOrTypes")?;
+        let props = self.fts_str_list_arg(context, arguments, 2, "properties")?;
+        let analyzer = match arguments.get(3) {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::Object(m) => m
+                    .get("analyzer")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                Value::Null => None,
+                _ => None,
+            },
+            None => None,
+        };
+        let registry = self.fulltext_registry().ok_or_else(|| {
+            Error::CypherExecution(
+                "ERR_FTS_INDEX_UNAVAILABLE: registry not configured on this executor".to_string(),
+            )
+        })?;
+        let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+        let prop_refs: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
+        if is_node {
+            registry.create_node_index(&name, &label_refs, &prop_refs, analyzer.as_deref())?;
+        } else {
+            registry.create_relationship_index(
+                &name,
+                &label_refs,
+                &prop_refs,
+                analyzer.as_deref(),
+            )?;
+        }
+        let columns = yield_columns
+            .cloned()
+            .unwrap_or_else(|| vec!["name".to_string(), "state".to_string()]);
+        context.set_columns_and_rows(
+            columns,
+            vec![Row {
+                values: vec![Value::String(name), Value::String("ONLINE".to_string())],
+            }],
+        );
+        Ok(())
+    }
+
+    pub(in crate::executor) fn execute_fts_query(
+        &self,
+        context: &mut ExecutionContext,
+        arguments: &[parser::Expression],
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        let name = self.fts_str_arg(context, arguments, 0, "name")?;
+        let query = self.fts_str_arg(context, arguments, 1, "query")?;
+        let registry = self.fulltext_registry().ok_or_else(|| {
+            Error::CypherExecution(
+                "ERR_FTS_INDEX_UNAVAILABLE: registry not configured on this executor".to_string(),
+            )
+        })?;
+        let results = registry.query(&name, &query, None)?;
+        let columns = yield_columns
+            .cloned()
+            .unwrap_or_else(|| vec!["node".to_string(), "score".to_string()]);
+        let rows: Vec<Row> = results
+            .into_iter()
+            .map(|r| {
+                let node = serde_json::json!({
+                    "_nexus_id": r.node_id,
+                    "value": r.value,
+                });
+                let score = serde_json::Number::from_f64(r.score as f64)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null);
+                Row {
+                    values: vec![node, score],
+                }
+            })
+            .collect();
+        context.set_columns_and_rows(columns, rows);
+        Ok(())
+    }
+
+    pub(in crate::executor) fn execute_fts_drop(
+        &self,
+        context: &mut ExecutionContext,
+        arguments: &[parser::Expression],
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        let name = self.fts_str_arg(context, arguments, 0, "name")?;
+        let registry = self.fulltext_registry().ok_or_else(|| {
+            Error::CypherExecution(
+                "ERR_FTS_INDEX_UNAVAILABLE: registry not configured on this executor".to_string(),
+            )
+        })?;
+        let removed = registry.drop_index(&name)?;
+        let columns = yield_columns
+            .cloned()
+            .unwrap_or_else(|| vec!["name".to_string(), "state".to_string()]);
+        let state = if removed { "DROPPED" } else { "NOT_FOUND" };
+        context.set_columns_and_rows(
+            columns,
+            vec![Row {
+                values: vec![Value::String(name), Value::String(state.to_string())],
+            }],
+        );
+        Ok(())
+    }
+
+    pub(in crate::executor) fn execute_fts_await_refresh(
+        &self,
+        context: &mut ExecutionContext,
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        // The registry's writer commits + reloads synchronously on
+        // every add_node_document today (ReloadPolicy::Manual with an
+        // explicit reload after each commit), so the "await" window
+        // is already bounded at zero. Return an acknowledgement row.
+        let columns = yield_columns
+            .cloned()
+            .unwrap_or_else(|| vec!["status".to_string()]);
+        context.set_columns_and_rows(
+            columns,
+            vec![Row {
+                values: vec![Value::String("refreshed".to_string())],
+            }],
+        );
+        Ok(())
+    }
+
+    pub(in crate::executor) fn execute_fts_list_analyzers(
+        &self,
+        context: &mut ExecutionContext,
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        let columns = yield_columns
+            .cloned()
+            .unwrap_or_else(|| vec!["name".to_string(), "description".to_string()]);
+        let entries = [
+            (
+                "standard",
+                "Lucene-style standard analyser — lowercasing + splitting on punctuation.",
+            ),
+            ("simple", "Whitespace tokenisation with lowercasing."),
+            (
+                "whitespace",
+                "Whitespace tokenisation only (case-sensitive).",
+            ),
+            (
+                "keyword",
+                "No tokenisation; the value is indexed as a single term.",
+            ),
+            (
+                "ngram",
+                "Character n-grams (min=2, max=3) with lowercasing.",
+            ),
+        ];
+        let rows: Vec<Row> = entries
+            .iter()
+            .map(|(name, desc)| Row {
+                values: vec![
+                    Value::String((*name).to_string()),
+                    Value::String((*desc).to_string()),
+                ],
+            })
+            .collect();
+        context.set_columns_and_rows(columns, rows);
+        Ok(())
+    }
+
+    fn fts_str_arg(
+        &self,
+        context: &ExecutionContext,
+        arguments: &[parser::Expression],
+        idx: usize,
+        name: &str,
+    ) -> Result<String> {
+        match arguments.get(idx) {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::String(s) => Ok(s),
+                other => Err(Error::CypherExecution(format!(
+                    "ERR_INVALID_ARG_TYPE: db.index.fulltext arg {idx} ({name}) must be STRING \
+                     (got {other})",
+                ))),
+            },
+            None => Err(Error::CypherExecution(format!(
+                "ERR_MISSING_ARG: db.index.fulltext requires a `{name}` argument at position {idx}",
+            ))),
+        }
+    }
+
+    fn fts_str_list_arg(
+        &self,
+        context: &ExecutionContext,
+        arguments: &[parser::Expression],
+        idx: usize,
+        name: &str,
+    ) -> Result<Vec<String>> {
+        match arguments.get(idx) {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::Array(arr) => {
+                    let mut out = Vec::with_capacity(arr.len());
+                    for v in arr {
+                        match v {
+                            Value::String(s) => out.push(s),
+                            other => {
+                                return Err(Error::CypherExecution(format!(
+                                    "ERR_INVALID_ARG_TYPE: db.index.fulltext {name}[] elements \
+                                     must be STRING (got {other})",
+                                )));
+                            }
+                        }
+                    }
+                    Ok(out)
+                }
+                other => Err(Error::CypherExecution(format!(
+                    "ERR_INVALID_ARG_TYPE: db.index.fulltext arg {idx} ({name}) must be \
+                     LIST<STRING> (got {other})",
+                ))),
+            },
+            None => Err(Error::CypherExecution(format!(
+                "ERR_MISSING_ARG: db.index.fulltext requires a `{name}` argument at position {idx}",
+            ))),
+        }
     }
 }

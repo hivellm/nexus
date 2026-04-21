@@ -243,6 +243,14 @@ impl Executor {
         self.shared.composite_btree()
     }
 
+    /// Share the engine's full-text search registry with this executor.
+    pub(crate) fn install_fulltext(
+        &self,
+        registry: crate::index::fulltext_registry::FullTextRegistry,
+    ) {
+        self.shared.set_fulltext(registry);
+    }
+
     pub(crate) fn install_preparsed_ast_override(
         &self,
         ast: Option<super::parser::CypherQuery>,

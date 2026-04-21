@@ -81,6 +81,9 @@ pub struct ExecutorShared {
     /// deployments and for the test-harness executor.
     pub(super) composite_btree:
         std::sync::OnceLock<crate::index::composite_btree::CompositeBtreeRegistry>,
+    /// Named full-text search registry (phase6_opencypher-fulltext-search).
+    /// Populated by `Engine::refresh_executor`.
+    pub(super) fulltext: std::sync::OnceLock<crate::index::fulltext_registry::FullTextRegistry>,
 }
 
 impl ExecutorShared {
@@ -120,6 +123,7 @@ impl ExecutorShared {
             database_manager: std::sync::OnceLock::new(),
             preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
             composite_btree: std::sync::OnceLock::new(),
+            fulltext: std::sync::OnceLock::new(),
         })
     }
 
@@ -140,6 +144,16 @@ impl ExecutorShared {
         &self,
     ) -> Option<&crate::index::composite_btree::CompositeBtreeRegistry> {
         self.composite_btree.get()
+    }
+
+    /// Install the engine's full-text registry on this shared state.
+    pub fn set_fulltext(&self, registry: crate::index::fulltext_registry::FullTextRegistry) {
+        let _ = self.fulltext.set(registry);
+    }
+
+    /// Borrow the full-text registry if one has been installed.
+    pub fn fulltext(&self) -> Option<&crate::index::fulltext_registry::FullTextRegistry> {
+        self.fulltext.get()
     }
 
     /// Set the database manager for multi-database support
@@ -216,6 +230,7 @@ impl ExecutorShared {
             database_manager: std::sync::OnceLock::new(),
             preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
             composite_btree: std::sync::OnceLock::new(),
+            fulltext: std::sync::OnceLock::new(),
         })
     }
 }

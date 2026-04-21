@@ -3,6 +3,22 @@
 **Version**: 1.5.0 (workspace)
 **Last verified**: 2026-04-19 against Neo4j 2025.09.0 community
 
+## v1.8 — full-text search (2026-04-21)
+
+phase6_opencypher-fulltext-search adds the Neo4j
+`db.index.fulltext.*` procedure namespace on top of a Tantivy 0.22
+backend. Named indexes appear in `db.indexes()` with
+`type = "FULLTEXT"` and `indexProvider = "tantivy-0.22"`, and BM25
+queries run through the `queryNodes` / `queryRelationships`
+procedures with `(node|relationship, score)` yield shape.
+
+Scoped for v1.8: DDL + query path (create / drop / query / list
+analyzers / await-refresh). Parked for follow-ups: WAL auto-populate
+on `CREATE`/`MERGE`/`SET`, per-index analyzer config, bench targets,
+and the TCK fulltext scenarios.
+
+See `docs/guides/FULL_TEXT_SEARCH.md`.
+
 ## v1.5 — advanced-types additions (2026-04-21)
 
 phase6_opencypher-advanced-types lifts Nexus toward ~95% openCypher

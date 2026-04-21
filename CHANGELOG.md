@@ -5,6 +5,49 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] — 2026-04-21
+
+### Added — Full-text search (Tantivy)
+
+phase6_opencypher-fulltext-search ships the Neo4j
+`db.index.fulltext.*` procedure namespace on top of a Tantivy 0.22
+backend. Nexus now maintains named BM25-scored full-text indexes
+over node / relationship property sets and exposes them through the
+same CALL surface Neo4j drivers already use.
+
+- **Named FTS registry** — `FullTextRegistry` keyed by user-supplied
+  name, backed by per-index Tantivy directories under
+  `<data_dir>/indexes/fulltext/<name>/`. Cross-kind name uniqueness
+  is enforced.
+- **Procedures**:
+  - `db.index.fulltext.createNodeIndex(name, labels, properties, config?)`
+  - `db.index.fulltext.createRelationshipIndex(...)`
+  - `db.index.fulltext.queryNodes(name, query, limit?)` → `(node, score)`
+  - `db.index.fulltext.queryRelationships(...)` → `(relationship, score)`
+  - `db.index.fulltext.drop(name)`
+  - `db.index.fulltext.awaitEventuallyConsistentIndexRefresh()`
+  - `db.index.fulltext.listAvailableAnalyzers()`
+- **`db.indexes()` integration** — FTS indexes surface with
+  `type = "FULLTEXT"` and `indexProvider = "tantivy-0.22"`.
+- **BM25 ranking** — Tantivy default scorer, `top_k` default 100,
+  tie-breaks on node id ascending.
+- **Synchronous reader reload** — `FullTextIndex::add_document`
+  now calls `reader.reload()` after every commit so the next query
+  sees the write without waiting for a refresh tick.
+
+Errors surface as `ERR_FTS_INDEX_EXISTS`, `ERR_FTS_INDEX_NOT_FOUND`,
+`ERR_FTS_INDEX_INVALID`, or `ERR_FTS_PARSE`.
+
+See [docs/guides/FULL_TEXT_SEARCH.md](docs/guides/FULL_TEXT_SEARCH.md).
+
+**Parked for follow-up tasks** (outside this release's scope): WAL
+integration for auto-populate on `CREATE`/`MERGE`/`SET`, per-index
+analyzer catalogue (whitespace / simple / keyword / n-gram), bench
+targets (<5 ms p95 single-term / <20 ms p95 phrase / >5k docs/sec
+ingest), and the Neo4j TCK fulltext scenarios. Today, ingest goes
+through the programmatic `FullTextRegistry::add_node_document`
+API; query path is fully wired through Cypher `CALL`.
+
 ## [1.7.0] — 2026-04-21
 
 ### Added — Constraint enforcement for every advertised kind

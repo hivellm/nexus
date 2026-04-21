@@ -273,6 +273,14 @@ impl FullTextIndex {
         index_writer.add_document(doc)?;
         index_writer.commit()?;
 
+        // Manual reload — the reader was built with `ReloadPolicy::Manual`
+        // in `new()` so new segments aren't visible to searchers
+        // without an explicit bump. Eventual consistency is still the
+        // contract for the `db.index.fulltext.*` surface; this reload
+        // keeps write-then-read round-trips correct inside a single
+        // process.
+        self.reader.reload()?;
+
         // Update statistics
         self.update_stats(params.content.len() as u64)?;
 

@@ -2261,3 +2261,58 @@ fn cypher25_ddl_routes_through_extended_constraint_apis() {
         .expect_err("rel missing weight rejected via DDL-registered NOT NULL");
     assert!(err.to_string().contains("RELATIONSHIP_PROPERTY_EXISTENCE"));
 }
+
+// phase6_opencypher-fulltext-search — end-to-end FTS DDL + query.
+#[test]
+fn fulltext_search_ddl_and_query_roundtrip() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+
+    // Register the index via CALL.
+    let r = engine
+        .execute_cypher("CALL db.index.fulltext.createNodeIndex('docs', ['Doc'], ['body'])")
+        .expect("createNodeIndex must succeed");
+    assert!(!r.rows.is_empty(), "createNodeIndex must return a row");
+    assert_eq!(r.rows[0].values[0], serde_json::json!("docs"));
+    assert_eq!(r.rows[0].values[1], serde_json::json!("ONLINE"));
+
+    // db.indexes() must list the FULLTEXT row.
+    let ixs = engine.execute_cypher("CALL db.indexes()").unwrap();
+    let has_fts = ixs.rows.iter().any(|row| {
+        row.values[1] == serde_json::json!("docs") && row.values[5] == serde_json::json!("FULLTEXT")
+    });
+    assert!(has_fts, "db.indexes() must include the docs FULLTEXT row");
+
+    // Feed two documents through the registry (bypassing the
+    // MATCH/SET wiring — the registry's public add API is exercised
+    // here; the executor's CREATE-hook follow-up auto-populates).
+    let registry = engine.indexes.fulltext.clone();
+    registry
+        .add_node_document("docs", 1, 0, 0, "the quick brown fox")
+        .unwrap();
+    registry
+        .add_node_document("docs", 2, 0, 0, "a sleepy cat on a mat")
+        .unwrap();
+
+    // Query through the Cypher procedure surface.
+    let r = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('docs', 'fox')")
+        .unwrap();
+    assert!(
+        !r.rows.is_empty(),
+        "queryNodes should return at least one row for `fox`"
+    );
+    let node = &r.rows[0].values[0];
+    assert_eq!(node["_nexus_id"], serde_json::json!(1));
+
+    // Drop removes the index.
+    let r = engine
+        .execute_cypher("CALL db.index.fulltext.drop('docs')")
+        .unwrap();
+    assert_eq!(r.rows[0].values[1], serde_json::json!("DROPPED"));
+
+    // Subsequent query errors out.
+    let err = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('docs', 'anything')")
+        .expect_err("dropped index must raise ERR_FTS_INDEX_NOT_FOUND");
+    assert!(err.to_string().contains("ERR_FTS_INDEX_NOT_FOUND"));
+}

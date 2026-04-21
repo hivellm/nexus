@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub mod btree;
 pub mod composite_btree;
 pub mod fulltext;
+pub mod fulltext_registry;
 pub mod pending_updates;
 
 /// Default dimensionality for `KnnIndex` when no per-call override is
@@ -74,6 +75,9 @@ pub struct IndexManager {
     /// planner consults the registry before falling back to a label
     /// scan + residual filter.
     pub composite_btree: composite_btree::CompositeBtreeRegistry,
+    /// Named full-text search indexes (phase6_opencypher-fulltext-search).
+    /// Backed by Tantivy through `fulltext::FullTextIndex`.
+    pub fulltext: fulltext_registry::FullTextRegistry,
 }
 
 impl IndexManager {
@@ -82,11 +86,14 @@ impl IndexManager {
         let index_dir = index_dir.as_ref();
         std::fs::create_dir_all(index_dir)?;
 
+        let fulltext = fulltext_registry::FullTextRegistry::new();
+        fulltext.set_base_dir(index_dir.join("fulltext"));
         Ok(Self {
             label_index: LabelIndex::new(),
             knn_index: KnnIndex::new(DEFAULT_VECTORIZER_DIMENSION)?,
             property_index: PropertyIndex::new(),
             composite_btree: composite_btree::CompositeBtreeRegistry::new(),
+            fulltext,
         })
     }
 
