@@ -116,6 +116,52 @@ subquery task.
 | `apoc.schema.stats` | skeleton map | zero-valued counters |
 | `apoc.schema.info` | exact | reports the APOC registry size |
 
+### `apoc.util.*` (9)
+
+| Procedure | Parity | Notes |
+|-----------|--------|-------|
+| `apoc.util.md5` | exact | in-tree RFC-1321 implementation (no extra crate); list input hashes concatenation |
+| `apoc.util.sha1` | exact | in-tree FIPS 180-4 implementation |
+| `apoc.util.sha256` | exact | via `sha2` crate |
+| `apoc.util.sha512` | exact | via `sha2` crate |
+| `apoc.util.validate` | exact | throws `ERR_VALIDATE_FAILED` when predicate is true |
+| `apoc.util.validatePredicate` | exact | throws when predicate is false |
+| `apoc.util.uuid` | exact | v4 via `uuid` crate |
+| `apoc.util.compress` / `decompress` | exact | gzip + base64 envelope |
+
+### `apoc.convert.*` (13)
+
+| Procedure | Parity |
+|-----------|--------|
+| `apoc.convert.toJson` | exact (compact JSON) |
+| `apoc.convert.fromJsonMap` / `fromJsonList` | exact (rejects root-shape mismatches) |
+| `apoc.convert.toMap` | exact (list-of-pairs, JSON STRING, or MAP) |
+| `apoc.convert.toList` | exact (wraps scalars, NULL → empty) |
+| `apoc.convert.toString` / `toInteger` / `toFloat` / `toBoolean` | exact — `yes`/`no`/`1`/`0` accepted for booleans |
+| `apoc.convert.toStringList` / `toIntList` / `toFloatList` / `toBooleanList` | exact |
+
+### `apoc.number.*` (9)
+
+| Procedure | Parity |
+|-----------|--------|
+| `apoc.number.format` | exact (thousands separator + precision) |
+| `apoc.number.parseInt` / `parseFloat` | exact (comma-tolerant) |
+| `apoc.number.arabicToRoman` / `romanToArabic` | exact (1–3999 range) |
+| `apoc.number.exact.add` / `sub` / `mul` / `div` | exact (i128, overflow raises; result returned as STRING) |
+
+### `apoc.agg.*` (10)
+
+| Procedure | Parity |
+|-----------|--------|
+| `apoc.agg.statistics` | exact (total, min, max, mean, stdev, median, p75, p90, p95, p99) |
+| `apoc.agg.percentiles` | exact (default `[0.5, 0.75, 0.9, 0.95, 0.99]`) |
+| `apoc.agg.median` | exact (even-count averages) |
+| `apoc.agg.mode` | exact (first-wins on ties) |
+| `apoc.agg.nth` | exact (negative index = from-end) |
+| `apoc.agg.first` / `last` | exact |
+| `apoc.agg.maxItems` / `minItems` | exact (key-driven, limit support) |
+| `apoc.agg.product` | exact |
+
 ## Not yet shipped
 
 - `apoc.load.*` — HTTP + JSON/CSV + file loading; gated on HTTP

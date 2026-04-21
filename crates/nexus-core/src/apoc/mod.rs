@@ -34,11 +34,15 @@
 use crate::{Error, Result};
 use serde_json::Value;
 
+pub mod agg;
 pub mod coll;
+pub mod convert;
 pub mod date;
 pub mod map;
+pub mod number;
 pub mod schema;
 pub mod text;
+pub mod util;
 
 /// Return shape of every APOC procedure — column names + row values.
 /// Matches the columns/rows pair the executor exposes to drivers.
@@ -87,6 +91,10 @@ pub fn dispatch(name: &str, args: Vec<Value>) -> Result<Option<ApocResult>> {
         "text" => text::dispatch(proc, args)?,
         "date" => date::dispatch(proc, args)?,
         "schema" => schema::dispatch(proc, args)?,
+        "util" => util::dispatch(proc, args)?,
+        "convert" => convert::dispatch(proc, args)?,
+        "number" => number::dispatch(proc, args)?,
+        "agg" => agg::dispatch(proc, args)?,
         _ => return Err(not_found(name)),
     };
     Ok(Some(out))
@@ -101,6 +109,10 @@ pub fn list_procedures() -> Vec<&'static str> {
     out.extend(text::list().iter().copied());
     out.extend(date::list().iter().copied());
     out.extend(schema::list().iter().copied());
+    out.extend(util::list().iter().copied());
+    out.extend(convert::list().iter().copied());
+    out.extend(number::list().iter().copied());
+    out.extend(agg::list().iter().copied());
     out.sort_unstable();
     out
 }
