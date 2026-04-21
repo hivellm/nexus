@@ -82,11 +82,30 @@ into WAL-backed FTS ops is scoped for the next slice of
 programmatic API (or the bulk-ingest path) and are responsible
 for emitting the matching WAL entries.
 
-## Write path (v1.8–v1.10 scope)
+## Write path (v1.12)
 
-`CREATE` / `MERGE` / `SET` do **not** yet auto-enqueue rows to the
-FTS backend — that hook is parked for the WAL-integration follow-up.
-Callers that want populated indexes today use the programmatic API.
+`CREATE` / `SET` / `REMOVE` / `DELETE` auto-maintain every
+registered FTS index whose labels + properties match the node
+being mutated. Users no longer need to call `add_node_document`
+explicitly — the executor + engine hooks do it on every write.
+
+- `CREATE (:Label {p: 'text'})` → `FtsAdd` for every index whose
+  `labels` match `Label` and `properties` include `p`.
+- `SET n.p = 'new'` → delete-then-add: the stale doc goes, a
+  fresh one lands with the new content.
+- `REMOVE n.p` → delete-then-add with empty content = effective
+  eviction.
+- `DELETE n` → `FtsDel` for every index the node was in.
+
+Every mutation emits the matching `FtsAdd` / `FtsDel` WAL entry
+(see *WAL integration* below) so crash recovery can replay the
+FTS state.
+
+### Programmatic API
+
+Callers outside the Cypher pipeline (or wanting to back-fill an
+existing dataset after registering a new index) drive the
+registry directly.
 
 Interactive (one-doc-at-a-time) callers use `add_node_document` —
 commits and reloads the reader synchronously, so the next

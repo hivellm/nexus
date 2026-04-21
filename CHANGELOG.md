@@ -5,6 +5,59 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] — 2026-04-21
+
+### Added — FTS auto-maintenance on CREATE / SET / REMOVE / DELETE
+
+Slices 2+3 of `phase6_fulltext-wal-integration` close the
+write-path integration. Every mutating Cypher path now keeps the
+FTS view in lockstep with the authoritative node state and emits
+matching WAL entries for crash recovery.
+
+- **CREATE auto-populate** — `Executor::fts_autopopulate_node` is
+  wired into all three CREATE operators (standalone node,
+  relationship-target node, MATCH-combined-pattern node) plus the
+  programmatic `Engine::create_node` path. Match rule: node
+  carries ≥1 of the index's labels AND has a string value for ≥1
+  of the indexed properties; content is the whitespace-joined
+  concatenation of matching string properties in declared order.
+- **SET / REMOVE auto-refresh** — `Engine::persist_node_state`
+  now calls `fts_refresh_node`, which delete-then-conditional-adds
+  against every FTS index currently containing the node. When
+  the refresh clears the last indexed property (e.g. `REMOVE n.p`)
+  the doc stays evicted; when the property changes (e.g. SET
+  n.title = 'New'), the reindex surfaces the new terms and
+  purges the old.
+- **DELETE auto-evict** — `Engine::delete_node` drops the node
+  from every matching FTS index before marking the storage record
+  deleted and emits `FtsDel` WAL entries.
+- **Membership tracking** — `NamedFullTextIndex.members` is a
+  per-index `HashSet<u64>` updated on every add/del so refresh /
+  evict paths can enumerate matching indexes without consulting
+  the engine-side label index (which diverges from the
+  executor's cloned view after `refresh_executor`).
+- **`FullTextIndex::remove_document`** now reloads the reader
+  after commit — fixes an existing bug where replayed `FtsDel`
+  ops were invisible to same-process searchers.
+
+WAL emissions go through the existing `write_wal_async` path so
+recovery replay (slice 1) can reconstruct the full index state
+from the log.
+
+Tests (+3): `fulltext_create_node_auto_populates_matching_index`,
+`fulltext_create_node_skips_non_matching_label`,
+`fulltext_wal_replay_reconstructs_registry_and_content`,
+`fulltext_delete_node_evicts_from_index`,
+`fulltext_set_property_refreshes_doc`,
+`fulltext_remove_property_evicts_doc`. Full lib suite: 2019
+passed / 0 failed / 12 ignored.
+
+**Follow-up task**: `phase6_fulltext-async-writer` covers the
+per-index background writer with `refresh_ms` cadence + the
+crash-during-bulk-ingest integration test. Current sync commit
+path already beats the >5 k docs/sec SLO so the async pipeline
+is purely a concurrency optimisation.
+
 ## [1.11.0] — 2026-04-21
 
 ### Added — FTS WAL integration (slice 1: op-codes + persistence + replay)

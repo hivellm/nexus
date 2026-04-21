@@ -16,7 +16,7 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase6_fulltext-wal-integration | 0/22 | fulltext wal integration |
+| ⬚ | phase6_fulltext-async-writer | 0/20 | fulltext async writer |
 | ⬚ | phase6_opencypher-geospatial-predicates | 0/49 | opencypher geospatial predicates |
 | ⬚ | phase6_opencypher-quantified-path-patterns | 0/49 | opencypher quantified path patterns |
 | ⬚ | phase6_opencypher-subquery-transactions | 0/52 | opencypher subquery transactions |
