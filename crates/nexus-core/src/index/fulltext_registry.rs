@@ -19,9 +19,63 @@ use super::fulltext::{DocumentParams, FullTextIndex, SearchOptions};
 use super::fulltext_analyzer::resolve as resolve_analyzer;
 use crate::{Error, Result};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// On-disk sidecar persisted alongside each FTS index directory.
+/// Written to `<index_dir>/_meta.json` on create and read back by
+/// `FullTextRegistry::load_from_disk` at engine startup so the
+/// catalogue survives restarts without requiring a WAL replay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedMeta {
+    name: String,
+    entity: u8, // 0 = Node, 1 = Relationship — stable on-disk format
+    labels_or_types: Vec<String>,
+    properties: Vec<String>,
+    analyzer: String,
+    refresh_ms: u64,
+    top_k: usize,
+}
+
+/// Recover `(min, max)` from a display string like `"ngram(3,5)"`.
+/// Returns `None` when the shape does not match so the caller can
+/// fall back to bare-name resolution.
+fn parse_ngram_display(s: &str) -> Option<(usize, usize)> {
+    let rest = s.strip_prefix("ngram(")?.strip_suffix(')')?;
+    let (lo, hi) = rest.split_once(',')?;
+    let lo = lo.trim().parse::<usize>().ok()?;
+    let hi = hi.trim().parse::<usize>().ok()?;
+    Some((lo, hi))
+}
+
+impl PersistedMeta {
+    fn from_runtime(meta: &FullTextIndexMeta) -> Self {
+        Self {
+            name: meta.name.clone(),
+            entity: match meta.entity {
+                FullTextEntity::Node => 0,
+                FullTextEntity::Relationship => 1,
+            },
+            labels_or_types: meta.labels_or_types.clone(),
+            properties: meta.properties.clone(),
+            analyzer: meta.analyzer.clone(),
+            refresh_ms: meta.refresh_ms,
+            top_k: meta.top_k,
+        }
+    }
+
+    fn entity_runtime(&self) -> Result<FullTextEntity> {
+        match self.entity {
+            0 => Ok(FullTextEntity::Node),
+            1 => Ok(FullTextEntity::Relationship),
+            other => Err(Error::storage(format!(
+                "ERR_FTS_META_CORRUPT: unknown entity discriminant {other}"
+            ))),
+        }
+    }
+}
 
 /// Entity scope for a full-text index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,13 +275,112 @@ impl FullTextRegistry {
             analyzer: analyzer_display,
             refresh_ms: 1000,
             top_k: 100,
-            path: dir,
+            path: dir.clone(),
         };
+        // Persist to disk so restarts rebuild the registry without
+        // requiring a full WAL replay. Written before the in-memory
+        // insert so a crash between filesystem + process state leaves
+        // the index discoverable on startup.
+        Self::write_meta_sidecar(&dir, &meta)?;
         self.inner.write().insert(
             name.to_string(),
             Arc::new(NamedFullTextIndex { meta, index }),
         );
         Ok(())
+    }
+
+    fn write_meta_sidecar(dir: &std::path::Path, meta: &FullTextIndexMeta) -> Result<()> {
+        let persisted = PersistedMeta::from_runtime(meta);
+        let bytes = serde_json::to_vec_pretty(&persisted)?;
+        let sidecar = dir.join("_meta.json");
+        // Atomic replace via tmp-then-rename so a crash mid-write
+        // cannot leave a truncated sidecar behind.
+        let tmp = dir.join("_meta.json.tmp");
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, &sidecar)?;
+        Ok(())
+    }
+
+    fn read_meta_sidecar(dir: &std::path::Path) -> Result<Option<PersistedMeta>> {
+        let sidecar = dir.join("_meta.json");
+        if !sidecar.exists() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&sidecar)?;
+        let persisted: PersistedMeta = serde_json::from_slice(&bytes)?;
+        Ok(Some(persisted))
+    }
+
+    /// Rebuild the in-memory registry from on-disk state. Scans the
+    /// base directory for index subdirectories, loads each
+    /// `_meta.json` sidecar, and re-opens the Tantivy index with the
+    /// catalogued analyzer.
+    ///
+    /// Idempotent — already-loaded indexes are skipped. Malformed
+    /// sidecars (missing / unparseable / unknown analyzer) are
+    /// logged and skipped rather than aborting the whole rebuild so
+    /// a single corrupt directory cannot break the boot path.
+    pub fn load_from_disk(&self) -> Result<usize> {
+        let base = self.resolve_base()?;
+        if !base.exists() {
+            return Ok(0);
+        }
+        let mut loaded = 0usize;
+        let mut inner = self.inner.write();
+        for entry in std::fs::read_dir(&base)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let dir = entry.path();
+            let persisted = match Self::read_meta_sidecar(&dir) {
+                Ok(Some(p)) => p,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!("FTS: skipping {dir:?}: {e}");
+                    continue;
+                }
+            };
+            if inner.contains_key(&persisted.name) {
+                continue;
+            }
+            let analyzer_kind = match resolve_analyzer(&persisted.analyzer, None, None) {
+                Ok(k) => k,
+                Err(e) => {
+                    // Parameterised ngram (e.g. `ngram(3,5)`) round-
+                    // trips through `display_name`; strip back to the
+                    // canonical form before re-resolving.
+                    match parse_ngram_display(&persisted.analyzer) {
+                        Some((min, max)) => resolve_analyzer("ngram", Some(min), Some(max))?,
+                        None => {
+                            tracing::warn!(
+                                "FTS: unknown analyzer {:?} for index {:?}: {e}",
+                                persisted.analyzer,
+                                persisted.name
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
+            let index = Arc::new(FullTextIndex::with_analyzer(&dir, analyzer_kind)?);
+            let meta = FullTextIndexMeta {
+                name: persisted.name.clone(),
+                entity: persisted.entity_runtime()?,
+                labels_or_types: persisted.labels_or_types.clone(),
+                properties: persisted.properties.clone(),
+                analyzer: persisted.analyzer.clone(),
+                refresh_ms: persisted.refresh_ms,
+                top_k: persisted.top_k,
+                path: dir,
+            };
+            inner.insert(
+                persisted.name.clone(),
+                Arc::new(NamedFullTextIndex { meta, index }),
+            );
+            loaded += 1;
+        }
+        Ok(loaded)
     }
 
     /// Drop an index: remove from registry + best-effort filesystem
@@ -295,6 +448,80 @@ impl FullTextRegistry {
             boost: None,
         })?;
         Ok(())
+    }
+
+    /// Apply a single FTS-shaped WAL entry against this registry.
+    /// Used by the crash-recovery dispatcher in `wal::recover_fts`
+    /// (phase6_fulltext-wal-integration §1.3 + §5.1-§5.2).
+    ///
+    /// Returns `Ok(false)` when the entry is not FTS-shaped — callers
+    /// loop over all recovered entries and feed every one through.
+    /// FTS ops on an index name that no longer exists after replay
+    /// (e.g. an `FtsAdd` followed by `FtsDropIndex` in the same
+    /// segment) are silently skipped rather than aborting recovery.
+    pub fn apply_wal_entry(&self, entry: &crate::wal::WalEntry) -> Result<bool> {
+        use crate::wal::WalEntry;
+        match entry {
+            WalEntry::FtsCreateIndex {
+                name,
+                entity,
+                labels_or_types,
+                properties,
+                analyzer,
+            } => {
+                if self.inner.read().contains_key(name) {
+                    return Ok(true);
+                }
+                let config = match parse_ngram_display(analyzer) {
+                    Some((min, max)) => AnalyzerConfig {
+                        name: "ngram".to_string(),
+                        ngram_min: Some(min),
+                        ngram_max: Some(max),
+                    },
+                    None => AnalyzerConfig {
+                        name: analyzer.clone(),
+                        ngram_min: None,
+                        ngram_max: None,
+                    },
+                };
+                let labels_str: Vec<&str> = labels_or_types.iter().map(|s| s.as_str()).collect();
+                let props_str: Vec<&str> = properties.iter().map(|s| s.as_str()).collect();
+                let entity_kind = match entity {
+                    0 => FullTextEntity::Node,
+                    1 => FullTextEntity::Relationship,
+                    other => {
+                        return Err(Error::storage(format!(
+                            "ERR_FTS_WAL_CORRUPT: unknown entity discriminant {other}"
+                        )));
+                    }
+                };
+                self.create_index_with_config(name, entity_kind, &labels_str, &props_str, config)?;
+                Ok(true)
+            }
+            WalEntry::FtsDropIndex { name } => {
+                let _ = self.drop_index(name)?;
+                Ok(true)
+            }
+            WalEntry::FtsAdd {
+                name,
+                entity_id,
+                label_or_type_id,
+                key_id,
+                content,
+            } => {
+                if self.get(name).is_some() {
+                    self.add_node_document(name, *entity_id, *label_or_type_id, *key_id, content)?;
+                }
+                Ok(true)
+            }
+            WalEntry::FtsDel { name, entity_id } => {
+                if let Some(entry) = self.get(name) {
+                    entry.index.remove_document(*entity_id, 0, 0)?;
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 
     /// Bulk ingest variant of [`add_node_document`]. Opens a single
@@ -516,5 +743,145 @@ mod tests {
             results.iter().any(|r| r.node_id == 1),
             "english stemmer did not reduce forms, got {results:?}"
         );
+    }
+
+    // phase6_fulltext-wal-integration §2 — sidecar persistence.
+    #[test]
+    fn metadata_sidecar_is_written_on_create() {
+        let (reg, dir) = fresh_registry();
+        reg.create_node_index("persisted", &["Doc"], &["body"], Some("standard"))
+            .unwrap();
+        let sidecar = dir.path().join("persisted").join("_meta.json");
+        assert!(sidecar.exists(), "expected _meta.json sidecar");
+        let raw = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(raw.contains("\"persisted\""));
+        assert!(raw.contains("\"standard\""));
+    }
+
+    #[test]
+    fn load_from_disk_rebuilds_registry_after_drop() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().to_path_buf();
+
+        // First registry: create one standard + one ngram.
+        let r1 = FullTextRegistry::new();
+        r1.set_base_dir(base.clone());
+        r1.create_node_index("std_idx", &["Doc"], &["body"], Some("standard"))
+            .unwrap();
+        r1.create_node_index_with_config(
+            "ngr_idx",
+            &["Img"],
+            &["caption"],
+            AnalyzerConfig {
+                name: "ngram".to_string(),
+                ngram_min: Some(2),
+                ngram_max: Some(4),
+            },
+        )
+        .unwrap();
+        r1.add_node_document("std_idx", 1, 0, 0, "hello world")
+            .unwrap();
+        drop(r1);
+
+        // Fresh registry pointed at the same base should pick up
+        // both indexes and recover their ingested content.
+        let r2 = FullTextRegistry::new();
+        r2.set_base_dir(base);
+        let loaded = r2.load_from_disk().unwrap();
+        assert_eq!(loaded, 2, "expected 2 indexes restored");
+        let names = r2.names();
+        assert!(names.contains(&"std_idx".to_string()));
+        assert!(names.contains(&"ngr_idx".to_string()));
+        // Ngram analyzer display round-trips with parameters.
+        let metas: std::collections::HashMap<String, String> = r2
+            .list()
+            .into_iter()
+            .map(|m| (m.name, m.analyzer))
+            .collect();
+        assert_eq!(metas["std_idx"], "standard");
+        assert_eq!(metas["ngr_idx"], "ngram(2,4)");
+        // Content survives the restart.
+        let hits = r2.query("std_idx", "hello", None).unwrap();
+        assert!(hits.iter().any(|h| h.node_id == 1));
+    }
+
+    #[test]
+    fn apply_wal_entry_creates_and_drops_index() {
+        let (reg, _dir) = fresh_registry();
+        use crate::wal::WalEntry;
+        let create = WalEntry::FtsCreateIndex {
+            name: "from_wal".to_string(),
+            entity: 0,
+            labels_or_types: vec!["Doc".to_string()],
+            properties: vec!["body".to_string()],
+            analyzer: "standard".to_string(),
+        };
+        assert!(reg.apply_wal_entry(&create).unwrap());
+        assert!(reg.get("from_wal").is_some());
+        // Replay is idempotent — duplicate create must not error.
+        assert!(reg.apply_wal_entry(&create).unwrap());
+        assert_eq!(reg.list().len(), 1);
+
+        let add = WalEntry::FtsAdd {
+            name: "from_wal".to_string(),
+            entity_id: 7,
+            label_or_type_id: 0,
+            key_id: 0,
+            content: "replayed content".to_string(),
+        };
+        assert!(reg.apply_wal_entry(&add).unwrap());
+        let hits = reg.query("from_wal", "replayed", None).unwrap();
+        assert!(hits.iter().any(|h| h.node_id == 7));
+
+        let drop_op = WalEntry::FtsDropIndex {
+            name: "from_wal".to_string(),
+        };
+        assert!(reg.apply_wal_entry(&drop_op).unwrap());
+        assert!(reg.get("from_wal").is_none());
+    }
+
+    #[test]
+    fn apply_wal_entry_skips_non_fts_ops() {
+        let (reg, _dir) = fresh_registry();
+        let non_fts = crate::wal::WalEntry::CreateNode {
+            node_id: 1,
+            label_bits: 0,
+        };
+        assert!(
+            !reg.apply_wal_entry(&non_fts).unwrap(),
+            "non-FTS ops must return false so the caller skips them"
+        );
+    }
+
+    #[test]
+    fn apply_wal_entry_tolerates_missing_index() {
+        let (reg, _dir) = fresh_registry();
+        // Add/del against an unregistered index — must not error;
+        // recovery replay can reach add-before-create in corrupted
+        // logs, and the committed-create path is the authority.
+        let add = crate::wal::WalEntry::FtsAdd {
+            name: "ghost".to_string(),
+            entity_id: 1,
+            label_or_type_id: 0,
+            key_id: 0,
+            content: "x".to_string(),
+        };
+        assert!(reg.apply_wal_entry(&add).unwrap());
+        let del = crate::wal::WalEntry::FtsDel {
+            name: "ghost".to_string(),
+            entity_id: 1,
+        };
+        assert!(reg.apply_wal_entry(&del).unwrap());
+    }
+
+    #[test]
+    fn load_from_disk_is_idempotent() {
+        let (reg, _dir) = fresh_registry();
+        reg.create_node_index("one", &["A"], &["p"], Some("standard"))
+            .unwrap();
+        // Second call must not double-insert or error.
+        let loaded_again = reg.load_from_disk().unwrap();
+        assert_eq!(loaded_again, 0, "already-loaded indexes must be skipped");
+        assert_eq!(reg.list().len(), 1);
     }
 }

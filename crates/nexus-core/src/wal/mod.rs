@@ -86,6 +86,14 @@ pub enum WalEntryType {
     SetProperty = 0x30,
     /// Delete property
     DeleteProperty = 0x31,
+    /// Full-text index create (phase6_fulltext-wal-integration)
+    FtsCreateIndex = 0x40,
+    /// Full-text index drop
+    FtsDropIndex = 0x41,
+    /// Full-text document add
+    FtsAdd = 0x42,
+    /// Full-text document delete
+    FtsDel = 0x43,
     /// Checkpoint marker
     Checkpoint = 0xFF,
 }
@@ -163,6 +171,47 @@ pub enum WalEntry {
         /// Epoch ID
         epoch: u64,
     },
+    /// phase6_fulltext-wal-integration — FTS index creation.
+    /// Carries every field needed to rebuild the index on replay:
+    /// name, entity scope, labels-or-types, properties, resolved
+    /// analyzer display name (e.g. `"standard"` / `"ngram(3,5)"`).
+    FtsCreateIndex {
+        /// Registry name
+        name: String,
+        /// 0 = Node, 1 = Relationship (entity scope)
+        entity: u8,
+        /// Labels (for node scope) or types (for relationship scope)
+        labels_or_types: Vec<String>,
+        /// Indexed properties
+        properties: Vec<String>,
+        /// Resolved analyzer name as persisted in the registry meta
+        analyzer: String,
+    },
+    /// FTS index drop.
+    FtsDropIndex {
+        /// Registry name
+        name: String,
+    },
+    /// FTS document add.
+    FtsAdd {
+        /// Registry name
+        name: String,
+        /// Node (or relationship) id
+        entity_id: u64,
+        /// Label (or type) id this doc was registered under
+        label_or_type_id: u32,
+        /// Property key id
+        key_id: u32,
+        /// Indexed text payload
+        content: String,
+    },
+    /// FTS document delete by entity id.
+    FtsDel {
+        /// Registry name
+        name: String,
+        /// Node (or relationship) id to remove
+        entity_id: u64,
+    },
 }
 
 impl WalEntry {
@@ -179,6 +228,10 @@ impl WalEntry {
             Self::SetProperty { .. } => WalEntryType::SetProperty,
             Self::DeleteProperty { .. } => WalEntryType::DeleteProperty,
             Self::Checkpoint { .. } => WalEntryType::Checkpoint,
+            Self::FtsCreateIndex { .. } => WalEntryType::FtsCreateIndex,
+            Self::FtsDropIndex { .. } => WalEntryType::FtsDropIndex,
+            Self::FtsAdd { .. } => WalEntryType::FtsAdd,
+            Self::FtsDel { .. } => WalEntryType::FtsDel,
         }
     }
 
@@ -1149,5 +1202,74 @@ mod tests {
             WalEntry::CreateNode { node_id: 200, .. }
         ));
         assert!(matches!(entries[2], WalEntry::CommitTx { tx_id: 1, .. }));
+    }
+
+    // phase6_fulltext-wal-integration — FTS op-code round-trip.
+    #[test]
+    fn fts_wal_ops_encode_decode_roundtrip() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("fts.wal");
+        let mut wal = Wal::new(&path).unwrap();
+
+        let create = WalEntry::FtsCreateIndex {
+            name: "movies".to_string(),
+            entity: 0,
+            labels_or_types: vec!["Movie".to_string()],
+            properties: vec!["title".to_string(), "overview".to_string()],
+            analyzer: "standard".to_string(),
+        };
+        let add = WalEntry::FtsAdd {
+            name: "movies".to_string(),
+            entity_id: 42,
+            label_or_type_id: 0,
+            key_id: 0,
+            content: "The Matrix".to_string(),
+        };
+        let del = WalEntry::FtsDel {
+            name: "movies".to_string(),
+            entity_id: 42,
+        };
+        let drop = WalEntry::FtsDropIndex {
+            name: "movies".to_string(),
+        };
+        for e in [&create, &add, &del, &drop] {
+            wal.append(e).unwrap();
+        }
+        wal.flush().unwrap();
+        drop_wal(wal);
+
+        let mut wal = Wal::new(&path).unwrap();
+        let entries = wal.recover().unwrap();
+        assert_eq!(entries.len(), 4);
+        match &entries[0] {
+            WalEntry::FtsCreateIndex {
+                name,
+                entity,
+                labels_or_types,
+                properties,
+                analyzer,
+            } => {
+                assert_eq!(name, "movies");
+                assert_eq!(*entity, 0);
+                assert_eq!(labels_or_types, &vec!["Movie".to_string()]);
+                assert_eq!(
+                    properties,
+                    &vec!["title".to_string(), "overview".to_string()]
+                );
+                assert_eq!(analyzer, "standard");
+            }
+            other => panic!("expected FtsCreateIndex, got {other:?}"),
+        }
+        assert!(matches!(entries[1], WalEntry::FtsAdd { entity_id: 42, .. }));
+        assert!(matches!(entries[2], WalEntry::FtsDel { entity_id: 42, .. }));
+        match &entries[3] {
+            WalEntry::FtsDropIndex { name } => assert_eq!(name, "movies"),
+            other => panic!("expected FtsDropIndex, got {other:?}"),
+        }
+    }
+
+    fn drop_wal(_w: Wal) {
+        // Explicit drop helper — required because `Wal` holds a file
+        // handle that we need closed before reopening for recovery.
     }
 }

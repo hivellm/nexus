@@ -64,8 +64,14 @@ enum WalEntryType {
     DeleteRel = 0x21,       // Relationship deletion
     SetProperty = 0x30,     // Property set/update
     DeleteProperty = 0x31,  // Property deletion
-    AddLabel = 0x40,        // Add label to node
-    RemoveLabel = 0x41,     // Remove label from node
+    // phase6_fulltext-wal-integration — 0x40-0x43 reserved for
+    // the full-text-search op family. AddLabel / RemoveLabel were
+    // spec-only and never implemented; when they land they need a
+    // new slot (0x50 / 0x51 suggested).
+    FtsCreateIndex = 0x40,  // FTS index creation
+    FtsDropIndex = 0x41,    // FTS index drop
+    FtsAdd = 0x42,          // FTS document add
+    FtsDel = 0x43,          // FTS document delete
     Checkpoint = 0xFF,      // Checkpoint marker
 }
 ```

@@ -89,6 +89,14 @@ impl IndexManager {
 
         let fulltext = fulltext_registry::FullTextRegistry::new();
         fulltext.set_base_dir(index_dir.join("fulltext"));
+        // phase6_fulltext-wal-integration §2.2 — pull every
+        // catalogued index back into memory from its on-disk
+        // `_meta.json` sidecar so the registry survives process
+        // restarts without requiring a WAL replay first.
+        let loaded = fulltext.load_from_disk().unwrap_or(0);
+        if loaded > 0 {
+            tracing::info!("FTS: restored {loaded} index(es) from on-disk catalogue");
+        }
         Ok(Self {
             label_index: LabelIndex::new(),
             knn_index: KnnIndex::new(DEFAULT_VECTORIZER_DIMENSION)?,

@@ -48,6 +48,40 @@ standalone Tantivy directory. Dropping the index best-effort removes
 the directory tree. Directory state is reused when the registry is
 re-instantiated, so a graceful restart does not rebuild the index.
 
+### Catalogue persistence (v1.11)
+
+Every create writes a `_meta.json` sidecar into the index directory
+with the registry-level metadata (name, entity scope, labels /
+types, properties, resolved analyzer, refresh_ms, top_k). On engine
+startup `FullTextRegistry::load_from_disk` scans the base directory
+and re-opens every index it finds — so the catalogue survives
+restarts without a WAL replay. Malformed or unreadable sidecars are
+logged and skipped rather than aborting the whole boot path.
+
+### WAL integration (v1.11)
+
+The WAL op-code set grew four FTS codes:
+
+| Code | Shape | Replayed by |
+|---|---|---|
+| `0x40` `FtsCreateIndex` | name + entity + labels + properties + analyzer | `FullTextRegistry::apply_wal_entry` |
+| `0x41` `FtsDropIndex`   | name | same |
+| `0x42` `FtsAdd`         | name + entity_id + label_or_type_id + key_id + content | same |
+| `0x43` `FtsDel`         | name + entity_id | same |
+
+`apply_wal_entry` returns `Ok(false)` when the entry is not
+FTS-shaped, so a recovery loop feeds every decoded entry through
+and lets the registry pick the ones it owns. Idempotent on replay:
+a duplicate `FtsCreateIndex` against an already-registered name is
+a no-op; an `FtsAdd` / `FtsDel` against a name that no longer
+exists is skipped rather than aborting recovery.
+
+The commit-hook path that turns every `CREATE` / `MERGE` / `SET`
+into WAL-backed FTS ops is scoped for the next slice of
+`phase6_fulltext-wal-integration`; today callers drive the
+programmatic API (or the bulk-ingest path) and are responsible
+for emitting the matching WAL entries.
+
 ## Write path (v1.8–v1.10 scope)
 
 `CREATE` / `MERGE` / `SET` do **not** yet auto-enqueue rows to the

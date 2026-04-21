@@ -5,6 +5,56 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] — 2026-04-21
+
+### Added — FTS WAL integration (slice 1: op-codes + persistence + replay)
+
+First slice of `phase6_fulltext-wal-integration`. Wires the FTS
+backend into the WAL durability model and the engine's restart
+path; the commit-hook that turns every `CREATE` / `MERGE` / `SET`
+into enqueued WAL entries ships as the next slice of the same
+task.
+
+- **WAL op-codes** — four new entry kinds in `WalEntryType` /
+  `WalEntry`:
+  - `FtsCreateIndex` (`0x40`): name + entity + labels/types +
+    properties + resolved analyzer name.
+  - `FtsDropIndex` (`0x41`): name.
+  - `FtsAdd` (`0x42`): name + entity_id + label_or_type_id +
+    key_id + content.
+  - `FtsDel` (`0x43`): name + entity_id.
+  Round-trip covered by `wal::tests::fts_wal_ops_encode_decode_roundtrip`.
+- **On-disk catalogue** — every create writes a `_meta.json`
+  sidecar into the index directory carrying the registry-level
+  metadata. `FullTextRegistry::load_from_disk` scans the base
+  directory at engine startup and re-opens every catalogued
+  index; parameterised ngram analyzers round-trip through the
+  `ngram(m,n)` display name.
+- **Reopen-aware `FullTextIndex`** — `with_analyzer` now falls
+  back to `Index::open_in_dir` when the Tantivy directory already
+  exists, so restart does not throw `IndexAlreadyExists`.
+- **WAL replay dispatcher** — `FullTextRegistry::apply_wal_entry`
+  consumes a single `WalEntry` and dispatches FTS-shaped ops into
+  the registry. Idempotent: duplicate create = no-op; add/del on
+  a missing index = no-op. Non-FTS ops return `Ok(false)` so the
+  caller can skip them.
+- **Startup hook** — `IndexManager::new` calls `load_from_disk`
+  before returning so the engine boots with the full FTS
+  catalogue already in memory.
+
+Tests: +7 (1 WAL encode/decode + 3 sidecar/load + 3 replay
+dispatcher). Full lib suite: 2013 passed / 0 failed.
+
+Scoped out to the next slice:
+- Per-index async writer + `refresh_ms` cadence (Tantivy's
+  synchronous commit already cleared the >5k docs/sec SLO — see
+  `docs/performance/PERFORMANCE_V1.md` — so async is pure
+  optimisation, not correctness).
+- Commit-hook: `CREATE` / `MERGE` / `SET` paths emit WAL ops that
+  match registered FTS indexes. Today callers drive the
+  programmatic API.
+- Crash-during-bulk-ingest integration test.
+
 ## [1.10.0] — 2026-04-21
 
 ### Added — FTS benchmarks + bulk-ingest path + ranking regression

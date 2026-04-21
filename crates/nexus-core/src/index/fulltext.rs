@@ -201,7 +201,16 @@ impl FullTextIndex {
             boost: boost_field,
         };
 
-        let index = Index::create_in_dir(index_dir, schema.clone())?;
+        // Either create a fresh index or reopen an existing one on
+        // the same directory. The reopen path is taken by the
+        // phase6_fulltext-wal-integration restore flow in
+        // `FullTextRegistry::load_from_disk` — it rebuilds the
+        // in-memory registry from persisted Tantivy directories.
+        let index = match Index::create_in_dir(index_dir, schema.clone()) {
+            Ok(idx) => idx,
+            Err(tantivy::TantivyError::IndexAlreadyExists) => Index::open_in_dir(index_dir)?,
+            Err(e) => return Err(e.into()),
+        };
 
         // Register the chosen analyzer on the index's tokenizer
         // manager so the schema's `set_tokenizer(<name>)` reference
