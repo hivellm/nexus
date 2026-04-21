@@ -40,6 +40,69 @@ pub use stats::{EngineStats, HealthState, HealthStatus};
 // cypher-execution code in this file can keep referring to it.
 use crud::NodeWriteState;
 
+/// Strip a leading `GRAPH[<name>]` preamble from a Cypher query
+/// (phase6_opencypher-advanced-types §6). Used when routing a
+/// scoped query to a sibling engine via `DatabaseManager` so the
+/// target engine does not re-resolve the same preamble and loop.
+///
+/// Whitespace-tolerant; returns the original string unchanged when
+/// no preamble is present. Bracket-aware (handles identifier +
+/// optional surrounding spaces inside `[...]`). Uses a single scan
+/// so the common case (no preamble) pays only a peek.
+fn strip_graph_preamble(query: &str) -> String {
+    let trimmed = query.trim_start();
+    let leading_ws_len = query.len() - trimmed.len();
+    if !trimmed[..trimmed.len().min(5)].eq_ignore_ascii_case("GRAPH") {
+        return query.to_string();
+    }
+    let after_kw = trimmed[5..].trim_start();
+    if !after_kw.starts_with('[') {
+        return query.to_string();
+    }
+    if let Some(close_rel) = after_kw[1..].find(']') {
+        // close_rel is the offset of `]` inside `after_kw[1..]`.
+        let consumed_within_trimmed = (trimmed.len() - after_kw.len()) + 1 + close_rel + 1;
+        let total_prefix = leading_ws_len + consumed_within_trimmed;
+        return query[total_prefix..].trim_start().to_string();
+    }
+    query.to_string()
+}
+
+#[cfg(test)]
+mod graph_preamble_tests {
+    use super::strip_graph_preamble;
+
+    #[test]
+    fn strips_basic_preamble() {
+        assert_eq!(
+            strip_graph_preamble("GRAPH[analytics] MATCH (n) RETURN n"),
+            "MATCH (n) RETURN n"
+        );
+    }
+
+    #[test]
+    fn tolerates_whitespace_around_brackets() {
+        assert_eq!(
+            strip_graph_preamble("  GRAPH  [  analytics  ]  MATCH (n) RETURN n"),
+            "MATCH (n) RETURN n"
+        );
+    }
+
+    #[test]
+    fn leaves_query_without_preamble_untouched() {
+        let q = "MATCH (n:Person) RETURN n";
+        assert_eq!(strip_graph_preamble(q), q);
+    }
+
+    #[test]
+    fn is_case_insensitive_on_keyword() {
+        assert_eq!(
+            strip_graph_preamble("graph[analytics] RETURN 1"),
+            "RETURN 1"
+        );
+    }
+}
+
 /// Graph database engine
 pub struct Engine {
     /// Storage catalog for label/type/key mappings
@@ -1297,19 +1360,28 @@ impl Engine {
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let mut ast = parser.parse()?;
 
-        // phase6_opencypher-advanced-types §6 — reject a
-        // `GRAPH[name]` preamble when the engine is not wired to the
-        // multi-database manager that owns the named graph. The
-        // single-engine code path here does not own per-database
-        // engines, so we can only honour scopes that coincide with
-        // the session's current database. Anything else is surfaced
-        // to the caller with a deterministic ERR_GRAPH_NOT_FOUND.
-        if let Some(requested) = ast.graph_scope.as_ref() {
-            let routed = crate::engine::graph_scope::accept_here(self, requested)?;
-            if !routed {
-                return Err(Error::CypherExecution(format!(
-                    "ERR_GRAPH_NOT_FOUND: graph {requested:?} is not accessible from this engine"
-                )));
+        // phase6_opencypher-advanced-types §6 — honour a leading
+        // `GRAPH[name]` preamble. With a `DatabaseManager` wired to
+        // the executor, the target database is resolved and either
+        // served in place (when it matches the manager's default
+        // name) or routed to the owning engine. Without a manager,
+        // the scope cannot be resolved and we surface
+        // `ERR_GRAPH_NOT_FOUND`.
+        if let Some(requested) = ast.graph_scope.clone() {
+            match crate::engine::graph_scope::resolve(self, &requested)? {
+                crate::engine::graph_scope::ScopedDispatch::AcceptHere => {
+                    // Fall through — the rest of this function runs
+                    // against `self`, the correct engine.
+                }
+                crate::engine::graph_scope::ScopedDispatch::Route(target) => {
+                    // Strip the preamble from the text query so the
+                    // target engine doesn't loop on its own scope
+                    // resolver. Parameters and cluster context flow
+                    // through verbatim.
+                    let cleaned = strip_graph_preamble(query);
+                    let mut target_engine = target.write();
+                    return target_engine.execute_cypher_with_context(&cleaned, ctx, mode);
+                }
             }
         }
 

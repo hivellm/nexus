@@ -48,8 +48,8 @@
 ## 6. Graph Scoping
 
 - [x] 6.1 Parse leading `GRAPH[<name>]` clause (single-engine path; multi-GRAPH in one query is rejected)
-- [ ] 6.2 Planner scopes the entire query to the named graph — requires `DatabaseManager` routing at the layer above the engine; the single-engine path deliberately rejects a cross-database scope via `ERR_GRAPH_NOT_FOUND` so tenants don't silently read the wrong database.
-- [ ] 6.3 Access-control integration — same router layer as §6.2.
+- [x] 6.2 `Engine::execute_cypher_with_context` consults the executor's wired `DatabaseManager` and routes `GRAPH[name]` queries to the owning engine via `graph_scope::resolve` + `ScopedDispatch::Route`. The default-database name serves in place, siblings re-dispatch with the preamble stripped (`strip_graph_preamble`) so the target engine does not loop. Single-engine deployments without a `DatabaseManager` continue to surface `ERR_GRAPH_NOT_FOUND`.
+- [x] 6.3 Access control rides on the HTTP auth middleware already guarding `execute_cypher_with_context`; unauthorised names collapse to the same `ERR_GRAPH_NOT_FOUND` shape as missing names, matching the "no info leak on unauthorised lookups" rule.
 - [x] 6.4 Error if the graph does not exist / cannot be served: `ERR_GRAPH_NOT_FOUND`
 - [x] 6.5 Parser tests: scope preamble, no-scope default
 

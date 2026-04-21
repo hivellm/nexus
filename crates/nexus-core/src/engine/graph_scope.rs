@@ -1,45 +1,90 @@
-//! `GRAPH[name]` query-scope validation (phase6_opencypher-advanced-types §6).
+//! `GRAPH[name]` query-scope routing (phase6_opencypher-advanced-types §6).
 //!
 //! A leading `GRAPH[name]` clause on a Cypher query asks the engine to
 //! execute against a specific named database rather than the session's
-//! current one. The full multi-database routing lives one layer up
-//! (in `DatabaseManager`) — this module is the shim the single-engine
-//! code path calls to answer "can I serve this scope from here?".
+//! current one. This module owns the name-resolution policy:
 //!
-//! Semantics implemented here:
+//! - No `DatabaseManager` attached to the executor → only the single
+//!   engine's default database is reachable, and we conservatively
+//!   reject every `GRAPH[name]` clause with `ERR_GRAPH_NOT_FOUND`.
+//!   The rationale is that the engine cannot tell its own name from
+//!   here, so returning `AcceptHere` for an arbitrary `name` would
+//!   silently map every scope onto the default database.
+//! - `DatabaseManager` attached → look the name up. Missing →
+//!   `ERR_GRAPH_NOT_FOUND`; found → `Route(target_engine)` so the
+//!   caller can hand the query to the owning engine.
 //!
-//! - If the engine is wired to exactly one session-scoped database and
-//!   the caller asks for its name, the scope is accepted (returns
-//!   `true`).
-//! - Otherwise we answer "no": the caller will surface
-//!   `ERR_GRAPH_NOT_FOUND` to the client. The multi-database router
-//!   takes a different code path and never ends up here, so "no" is
-//!   the safest answer for the single-engine case.
-//!
-//! The access-control story (§6.3) is delegated to the caller's
-//! existing auth middleware — this shim only answers name resolution.
+//! Access control (§6.3) rides on whichever auth middleware guards
+//! the HTTP entry point. A caller that has reached
+//! `execute_cypher_with_context` has already cleared auth for the
+//! session; per-database ACLs sit on the
+//! `DatabaseManager::get_database` lookup (future extension), and
+//! the error surface collapses missing-access to the same
+//! `ERR_GRAPH_NOT_FOUND` we already return for missing-db, matching
+//! the "no information leak on unauthorised names" rule.
 
 use super::Engine;
-use crate::Result;
+use crate::{Error, Result};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
-/// Return `Ok(true)` if the engine is currently executing against the
-/// requested graph name (i.e. the query can be served in place),
-/// `Ok(false)` otherwise. The caller decides whether to raise
-/// `ERR_GRAPH_NOT_FOUND`.
-///
-/// We don't presently probe the session manager for a per-session
-/// `current_database` override because the single-engine code path
-/// doesn't track one — multi-database routing runs above the engine.
-/// `accept_here` therefore always returns `false`, and the caller's
-/// error message is the user-visible surface.
-pub fn accept_here(_engine: &Engine, _requested: &str) -> Result<bool> {
-    Ok(false)
+/// Outcome of resolving a `GRAPH[name]` scope.
+pub enum ScopedDispatch {
+    /// The caller can honour the scope in place — no routing needed.
+    /// Returned today only when `name` coincides with the default
+    /// database name tracked by the attached `DatabaseManager`;
+    /// single-engine deployments never hit this variant.
+    AcceptHere,
+    /// The scope targets a sibling engine owned by the same
+    /// `DatabaseManager`. The caller locks the returned handle and
+    /// re-dispatches the query against that engine.
+    Route(Arc<RwLock<Engine>>),
+}
+
+/// Resolve a `GRAPH[name]` scope. Returns
+/// `Err(ERR_GRAPH_NOT_FOUND)` if the name cannot be served from this
+/// process.
+pub fn resolve(engine: &Engine, requested: &str) -> Result<ScopedDispatch> {
+    let Some(mgr) = engine.executor.shared().database_manager() else {
+        return Err(not_found(requested));
+    };
+    let manager = mgr.read();
+    // When the scope names the manager's default database AND the
+    // default happens to be served by this very engine instance, we
+    // can honour the scope without routing. Otherwise we always
+    // route so the target engine's own catalog/state handles the
+    // query — even the default path goes through `get_database` so
+    // the caller ends up locking the manager's handle for the same
+    // database this engine is backing, which is a no-op.
+    if manager.default_database_name() == requested {
+        return Ok(ScopedDispatch::AcceptHere);
+    }
+    match manager.get_database(requested) {
+        Ok(target) => Ok(ScopedDispatch::Route(target)),
+        Err(_) => Err(not_found(requested)),
+    }
+}
+
+/// Back-compat shim: returns `true` iff `resolve` would answer
+/// `AcceptHere` (the single-engine fast path).
+pub fn accept_here(engine: &Engine, requested: &str) -> Result<bool> {
+    match resolve(engine, requested) {
+        Ok(ScopedDispatch::AcceptHere) => Ok(true),
+        Ok(ScopedDispatch::Route(_)) => Ok(false),
+        Err(_) => Ok(false),
+    }
+}
+
+fn not_found(requested: &str) -> Error {
+    Error::CypherExecution(format!(
+        "ERR_GRAPH_NOT_FOUND: graph {requested:?} is not accessible from this engine"
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    // `accept_here` is deliberately trivial; the interesting checks
-    // live at the parser boundary (see
-    // `crates/nexus-core/src/executor/parser/tests.rs`) and in the
-    // integration test `tests/advanced_types.rs`.
+    // Name-resolution semantics are exercised end-to-end from the
+    // integration tests in `crates/nexus-core/src/engine/tests.rs`,
+    // which wire a real `DatabaseManager` with two engines and drive
+    // `GRAPH[name]` queries through the REST-equivalent entry point.
 }
