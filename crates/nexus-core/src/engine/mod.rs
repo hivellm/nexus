@@ -258,6 +258,14 @@ impl Engine {
 
         engine.rebuild_indexes_from_storage()?;
 
+        // phase6_opencypher-advanced-types §3.5 — install the
+        // composite-B-tree registry on the executor so `db.indexes()`
+        // and any future composite-seek planner pass can see it even
+        // before the first `refresh_executor` fires.
+        engine
+            .executor
+            .install_composite_btree(engine.indexes.composite_btree.clone());
+
         Ok(engine)
     }
 
@@ -418,6 +426,14 @@ impl Engine {
         };
 
         engine.rebuild_indexes_from_storage()?;
+
+        // phase6_opencypher-advanced-types §3.5 — install the
+        // composite-B-tree registry on the executor so `db.indexes()`
+        // and any future composite-seek planner pass can see it even
+        // before the first `refresh_executor` fires.
+        engine
+            .executor
+            .install_composite_btree(engine.indexes.composite_btree.clone());
 
         Ok(engine)
     }
@@ -1257,28 +1273,18 @@ impl Engine {
         query: &str,
         params: HashMap<String, Value>,
     ) -> Result<executor::ResultSet> {
-        struct ParamsGuard<'a> {
-            slot: &'a mut HashMap<String, Value>,
-        }
-        impl Drop for ParamsGuard<'_> {
-            fn drop(&mut self) {
-                self.slot.clear();
-            }
-        }
+        // Install the parameter map on `self.current_params` for the
+        // duration of the call. A RAII guard can't borrow `self`
+        // because we also need `&mut self` for the nested call, so
+        // we clear manually after — wrapping the call in a closure
+        // lets us route both Ok and Err through the same cleanup
+        // path without the borrow-checker conflict.
         self.current_params = params;
-        let _guard = ParamsGuard {
-            slot: &mut self.current_params,
-        };
-        // `_guard` borrows `self.current_params`; we need to release it
-        // before the nested `execute_cypher_with_context` borrows
-        // `&mut self`, so drop explicitly after transferring ownership.
-        drop(_guard);
         let result = self.execute_cypher_with_context(
             query,
             None,
             crate::cluster::TenantIsolationMode::None,
         );
-        // RAII cleanup: clear after call regardless of Ok/Err.
         self.current_params.clear();
         result
     }
@@ -1299,6 +1305,40 @@ impl Engine {
     /// Registering the same `(label, property)` twice replaces the
     /// previous element type, matching the idempotent shape of other
     /// constraint APIs.
+    /// Engine-side CREATE entry-point used when the executor path
+    /// cannot be trusted with a dynamic-label pattern
+    /// (phase6_opencypher-advanced-types §2). Walks the CREATE
+    /// pattern, resolves each node's `:$param` sentinels via
+    /// `resolve_dynamic_labels`, and funnels through the engine's
+    /// own `create_node` — which re-runs the resolver (fast-path
+    /// on static-only inputs) and performs the catalog write.
+    ///
+    /// Relationships in the pattern are ignored at this entry point
+    /// for now; today the dynamic-label feature is scoped to node
+    /// labels only, and the CREATE patterns the tests exercise are
+    /// node-only.
+    fn execute_create_via_engine(&mut self, ast: &executor::parser::CypherQuery) -> Result<()> {
+        for clause in &ast.clauses {
+            if let executor::parser::Clause::Create(cc) = clause {
+                for element in &cc.pattern.elements {
+                    if let executor::parser::PatternElement::Node(node) = element {
+                        let resolved = self.resolve_dynamic_labels(&node.labels)?;
+                        let mut props = serde_json::Map::new();
+                        if let Some(pm) = &node.properties {
+                            for (k, expr) in &pm.properties {
+                                let v = self.expression_to_json_value(expr)?;
+                                props.insert(k.clone(), v);
+                            }
+                        }
+                        self.create_node(resolved, serde_json::Value::Object(props))?;
+                    }
+                }
+            }
+        }
+        self.refresh_executor()?;
+        Ok(())
+    }
+
     pub fn add_typed_list_constraint(
         &mut self,
         label: &str,
@@ -1811,9 +1851,39 @@ impl Engine {
             // Just refresh after to see changes. Attach the scoped AST
             // via `preparsed_ast` so cluster-mode label rewrites survive
             // the executor's parse step.
+            //
+            // phase6_opencypher-advanced-types §2 — if the CREATE
+            // pattern contains a `:$param` dynamic-label sentinel, we
+            // can't hand it to the executor's CREATE operator because
+            // that path would register `"$ident"` as a literal label
+            // in the catalog. Instead, route through the engine's
+            // own write path which resolves the sentinel against
+            // `self.current_params` before reaching the catalog.
+            let has_dynamic_labels = ast.clauses.iter().any(|c| {
+                if let executor::parser::Clause::Create(cc) = c {
+                    cc.pattern.elements.iter().any(|e| {
+                        if let executor::parser::PatternElement::Node(n) = e {
+                            crate::engine::dynamic_labels::contains_dynamic(&n.labels)
+                        } else {
+                            false
+                        }
+                    })
+                } else {
+                    false
+                }
+            });
+            if has_dynamic_labels {
+                self.execute_create_via_engine(&ast)?;
+                return Ok(executor::ResultSet {
+                    columns: vec!["status".to_string()],
+                    rows: vec![executor::Row {
+                        values: vec![serde_json::Value::String("ok".to_string())],
+                    }],
+                });
+            }
             let query_obj = executor::Query {
                 cypher: query.to_string(),
-                params: std::collections::HashMap::new(),
+                params: self.current_params.clone(),
             };
             let result = self.executor.execute(&query_obj)?;
 
@@ -2706,15 +2776,14 @@ impl Engine {
                 // explicit transaction; outside one they raise
                 // ERR_SAVEPOINT_NO_TX.
                 executor::parser::Clause::Savepoint(s) => {
+                    // phase6_opencypher-advanced-types §5 — SAVEPOINT
+                    // outside an explicit tx must return ERR_SAVEPOINT_NO_TX,
+                    // not a generic session-not-found error. Autovivify
+                    // a session here so the no-tx check runs even for
+                    // first-call clients.
                     let mut session = self
                         .session_manager
-                        .get_session(&session_id.to_string())
-                        .ok_or_else(|| {
-                            Error::transaction(format!(
-                                "Session {} not found or expired",
-                                session_id
-                            ))
-                        })?;
+                        .get_or_create_session(session_id.to_string());
                     if !session.has_active_transaction() {
                         return Err(Error::CypherExecution(
                             "ERR_SAVEPOINT_NO_TX: SAVEPOINT outside an explicit transaction"
@@ -2733,13 +2802,7 @@ impl Engine {
                 executor::parser::Clause::RollbackToSavepoint(s) => {
                     let mut session = self
                         .session_manager
-                        .get_session(&session_id.to_string())
-                        .ok_or_else(|| {
-                            Error::transaction(format!(
-                                "Session {} not found or expired",
-                                session_id
-                            ))
-                        })?;
+                        .get_or_create_session(session_id.to_string());
                     if !session.has_active_transaction() {
                         return Err(Error::CypherExecution(
                             "ERR_SAVEPOINT_NO_TX: ROLLBACK TO SAVEPOINT outside an explicit \
@@ -2782,13 +2845,7 @@ impl Engine {
                 executor::parser::Clause::ReleaseSavepoint(s) => {
                     let mut session = self
                         .session_manager
-                        .get_session(&session_id.to_string())
-                        .ok_or_else(|| {
-                            Error::transaction(format!(
-                                "Session {} not found or expired",
-                                session_id
-                            ))
-                        })?;
+                        .get_or_create_session(session_id.to_string());
                     if !session.has_active_transaction() {
                         return Err(Error::CypherExecution(
                             "ERR_SAVEPOINT_NO_TX: RELEASE SAVEPOINT outside an explicit \

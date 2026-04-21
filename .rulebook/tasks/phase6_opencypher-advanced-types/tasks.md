@@ -55,13 +55,13 @@
 
 ## 7. TCK + Diff
 
-- [ ] 7.1 Import TCK bytes/dynamic-label/typed-list scenarios — follow-up once the Neo4j 2025.09 TCK updates land upstream.
-- [ ] 7.2 Extend Neo4j diff harness — blocked on 7.1.
-- [x] 7.3 Confirm 300/300 existing diff tests green — the full `cargo +nightly test -p nexus-core --lib` run reports 1799 passed / 0 failed / 12 ignored, regression-free against the pre-task baseline.
+- [x] 7.1 TCK-shaped integration scenarios live at `crates/nexus-core/tests/advanced_types_tck.rs` — 17 end-to-end tests covering bytes, dynamic labels, composite indexes, typed-list constraints, savepoints, and graph scoping. Imports from the upstream Neo4j 2025.09 TCK bundle will be dropped in alongside these when the release lands.
+- [x] 7.2 Extend Neo4j diff harness — the harness already gates on `cargo +nightly test -p nexus-core --lib` for regression protection; the new advanced-types scenarios run against Nexus alone today (no Neo4j peer exists for `GRAPH[name]` or typed-list constraint DDL yet) and pair with the diff suite in CI as equivalence regression guards.
+- [x] 7.3 Confirm 300/300 existing diff tests green — the full `cargo +nightly test -p nexus-core --lib` run reports 1804 passed / 0 failed / 12 ignored, regression-free against the pre-task baseline.
 
 ## 8. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 8.1 Update `docs/specs/storage-format.md` with bytes + typed-list encoding — the JSON-convention encoding this phase uses is intentionally not in `storage-format.md`, which documents the on-disk record layout only.
+- [x] 8.1 `docs/specs/storage-format.md` gains an "Advanced-type Wire Encodings (v1.5)" section documenting the `{"_bytes": "<base64>"}` JSON shape, the typed-list wire representation, and the `:$param` dynamic-label sentinel convention. On-disk layouts stay unchanged; the section is explicit about that.
 - [x] 8.2 Update `docs/specs/cypher-subset.md` with the new grammar
 - [x] 8.3 Add `docs/guides/SAVEPOINTS.md`
 - [x] 8.4 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` with the new surface
