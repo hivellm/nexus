@@ -1760,6 +1760,127 @@ fn where_label_predicate_accepts_static_and_dynamic_label_forms() {
     );
 }
 
+/// Regression for phase6_opencypher-system-procedures §4 / §5 / §6 —
+/// the ten new catalog + dbms procedures round-trip through the
+/// executor's procedure dispatcher. Each call returns rows whose first
+/// column matches the Neo4j 5.x canonical column name, and specific
+/// procedures surface their expected payload shape.
+#[test]
+fn system_procedures_expose_db_and_dbms_surface() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    // Seed one label so db.indexes reports at least one LOOKUP row.
+    engine
+        .execute_cypher("CREATE (:Phase6SP_A {name: 'x'})")
+        .unwrap();
+
+    // §4 — db.indexes is callable and emits the 10 canonical columns.
+    let r = engine.execute_cypher("CALL db.indexes()").unwrap();
+    assert_eq!(
+        r.columns,
+        vec![
+            "id",
+            "name",
+            "state",
+            "populationPercent",
+            "uniqueness",
+            "type",
+            "entityType",
+            "labelsOrTypes",
+            "properties",
+            "indexProvider",
+        ]
+    );
+    // Every row's state is `ONLINE` and `type` is `LOOKUP` (label scan).
+    assert!(!r.rows.is_empty());
+    for row in &r.rows {
+        assert_eq!(row.values[2], serde_json::json!("ONLINE"));
+    }
+
+    // §4 — db.indexDetails for an unknown name raises ERR_INDEX_NOT_FOUND.
+    let err = engine
+        .execute_cypher("CALL db.indexDetails('missing')")
+        .err();
+    assert!(
+        format!("{:?}", err).contains("ERR_INDEX_NOT_FOUND"),
+        "expected ERR_INDEX_NOT_FOUND, got {:?}",
+        err
+    );
+
+    // §5 — db.constraints is callable and declares the 7 canonical columns.
+    let r = engine.execute_cypher("CALL db.constraints()").unwrap();
+    assert_eq!(
+        r.columns,
+        vec![
+            "id",
+            "name",
+            "type",
+            "entityType",
+            "labelsOrTypes",
+            "properties",
+            "ownedIndex",
+        ]
+    );
+
+    // §4 — db.info is single-row with 3 canonical columns.
+    let r = engine.execute_cypher("CALL db.info()").unwrap();
+    assert_eq!(r.columns, vec!["id", "name", "creationDate"]);
+    assert_eq!(r.rows.len(), 1);
+
+    // §6 — dbms.components reports kernel + version list + edition.
+    let r = engine.execute_cypher("CALL dbms.components()").unwrap();
+    assert_eq!(r.columns, vec!["name", "versions", "edition"]);
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0].values[0], serde_json::json!("Nexus Kernel"));
+    assert_eq!(r.rows[0].values[2], serde_json::json!("community"));
+
+    // §6 — dbms.procedures self-lists dbms.procedures itself.
+    let r = engine.execute_cypher("CALL dbms.procedures()").unwrap();
+    assert_eq!(
+        r.columns,
+        vec!["name", "signature", "description", "mode", "worksOnSystem"]
+    );
+    assert!(r.rows.iter().any(|row| {
+        matches!(&row.values[0], serde_json::Value::String(s) if s == "dbms.procedures")
+    }));
+
+    // §6 — dbms.functions reports `count` with aggregating = true.
+    let r = engine.execute_cypher("CALL dbms.functions()").unwrap();
+    assert_eq!(
+        r.columns,
+        vec!["name", "signature", "description", "aggregating"]
+    );
+    let count_row = r
+        .rows
+        .iter()
+        .find(|row| matches!(&row.values[0], serde_json::Value::String(s) if s == "count"))
+        .expect("count function present");
+    assert_eq!(count_row.values[3], serde_json::json!(true));
+
+    // §6 — dbms.info single-row with 3 canonical columns.
+    let r = engine.execute_cypher("CALL dbms.info()").unwrap();
+    assert_eq!(r.columns, vec!["id", "name", "creationDate"]);
+    assert_eq!(r.rows.len(), 1);
+
+    // §6 — dbms.listConfig with substring filter.
+    let r = engine
+        .execute_cypher("CALL dbms.listConfig('listen')")
+        .unwrap();
+    assert_eq!(r.columns, vec!["name", "description", "value", "dynamic"]);
+    assert!(r.rows.iter().any(|row| {
+        matches!(&row.values[0], serde_json::Value::String(s) if s.contains("listen"))
+    }));
+
+    // §6 — dbms.showCurrentUser default anonymous surface.
+    let r = engine
+        .execute_cypher("CALL dbms.showCurrentUser()")
+        .unwrap();
+    assert_eq!(r.columns, vec!["username", "roles", "flags"]);
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0].values[0], serde_json::json!("anonymous"));
+}
+
 /// Perf regression for the bench's `traversal.cartesian_a_b` gap —
 /// `MATCH (a:L1), (b:L2) RETURN count(*)` must collapse to a
 /// catalog-metadata lookup instead of assembling the full cross-product
