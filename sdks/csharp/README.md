@@ -702,7 +702,7 @@ See the [Examples](./Examples) directory for complete working examples:
 ## Requirements
 
 - .NET 8.0 or higher
-- Nexus server 0.11.0 or higher
+- Nexus server 1.0.0 or higher
 
 ## License
 

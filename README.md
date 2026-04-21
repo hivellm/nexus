@@ -6,8 +6,8 @@
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Status](https://img.shields.io/badge/status-v1.0.0-success.svg)
-![Tests](https://img.shields.io/badge/tests-3361%20passing-success.svg)
-![Compatibility](https://img.shields.io/badge/Neo4j%20compat-299%2F300-success.svg)
+![Tests](https://img.shields.io/badge/tests-2310%20passing-success.svg)
+![Compatibility](https://img.shields.io/badge/Neo4j%20compat-300%2F300-success.svg)
 
 [Quick Start](#-quick-start) • [Transports](#-transports) • [Documentation](#-documentation) • [SDKs](#-official-sdks) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
 
@@ -27,7 +27,7 @@ Nexus is a **property graph database** built for **read-heavy workloads** with *
 - **Full auth stack** — API keys, JWT, RBAC, rate limiting, audit log with fail-open policy.
 - **Multi-database** — isolated databases in a single server instance, CLI + Cypher + SDK.
 - **SIMD-accelerated hot paths** — AVX-512 / AVX2 / NEON runtime dispatch. 12.7× KNN dot @ dim=768 on Zen 4, 7.9× `sum_f64` @ 262K rows, all with proptest-enforced parity vs scalar.
-- **3361+ unit tests** across the workspace, 70%+ coverage.
+- **2310 workspace tests** passing on `cargo +nightly test --workspace` (0 failed, 67 ignored).
 
 ## 🚀 Quick Start
 

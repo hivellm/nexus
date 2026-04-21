@@ -744,7 +744,7 @@ See the [examples](./examples) directory for complete working examples:
 ## Requirements
 
 - Go 1.21 or higher
-- Nexus server 0.11.0 or higher
+- Nexus server 1.0.0 or higher
 
 ## License
 
