@@ -294,6 +294,16 @@ impl Executor {
         self.shared.label_index.read()
     }
 
+    /// Crate-visible label-index read for outside-of-executor
+    /// callers that need authoritative node-to-label membership
+    /// without scanning the (potentially stale) engine-side
+    /// `IndexManager::label_index`. Used by the FTS refresh hook in
+    /// phase6_fulltext-wal-integration to reconcile the engine's
+    /// cloned index with the executor's post-CREATE truth.
+    pub(crate) fn label_index_read(&self) -> parking_lot::RwLockReadGuard<'_, LabelIndex> {
+        self.shared.label_index.read()
+    }
+
     /// Write lock on label_index.
     pub(super) fn label_index_mut(&self) -> parking_lot::RwLockWriteGuard<'_, LabelIndex> {
         self.shared.label_index.write()

@@ -2492,6 +2492,92 @@ fn fulltext_create_node_skips_non_matching_label() {
     );
 }
 
+// phase6_fulltext-wal-integration §4.3 — DELETE evicts the doc.
+#[test]
+fn fulltext_delete_node_evicts_from_index() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    engine
+        .execute_cypher("CALL db.index.fulltext.createNodeIndex('posts', ['Post'], ['body'])")
+        .unwrap();
+    engine
+        .execute_cypher("CREATE (n:Post {id: 1, body: 'the quick brown fox'})")
+        .unwrap();
+    let pre = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('posts', 'fox')")
+        .unwrap();
+    assert!(!pre.rows.is_empty(), "auto-populate missing");
+
+    engine
+        .execute_cypher("MATCH (n:Post {id: 1}) DELETE n")
+        .unwrap();
+    let post = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('posts', 'fox')")
+        .unwrap();
+    assert!(
+        post.rows.is_empty(),
+        "DELETE must evict doc from FTS, got {:?}",
+        post.rows
+    );
+}
+
+// phase6_fulltext-wal-integration §4 — SET refreshes the doc.
+#[test]
+fn fulltext_set_property_refreshes_doc() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    engine
+        .execute_cypher("CALL db.index.fulltext.createNodeIndex('news', ['News'], ['headline'])")
+        .unwrap();
+    engine
+        .execute_cypher("CREATE (n:News {id: 1, headline: 'First headline'})")
+        .unwrap();
+
+    engine
+        .execute_cypher("MATCH (n:News {id: 1}) SET n.headline = 'Second breaking story'")
+        .unwrap();
+
+    let fresh = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('news', 'breaking')")
+        .unwrap();
+    assert!(
+        !fresh.rows.is_empty(),
+        "new term `breaking` missing after SET, got {:?}",
+        fresh.rows
+    );
+
+    let stale = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('news', 'First')")
+        .unwrap();
+    assert!(
+        stale.rows.is_empty(),
+        "old term `First` must be purged after SET, got {:?}",
+        stale.rows
+    );
+}
+
+// phase6_fulltext-wal-integration §4.3 — REMOVE drops the doc when
+// no indexed property is left.
+#[test]
+fn fulltext_remove_property_evicts_doc() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    engine
+        .execute_cypher("CALL db.index.fulltext.createNodeIndex('tags', ['Tag'], ['label'])")
+        .unwrap();
+    engine
+        .execute_cypher("CREATE (n:Tag {id: 1, label: 'urgent ticket'})")
+        .unwrap();
+    engine
+        .execute_cypher("MATCH (n:Tag {id: 1}) REMOVE n.label")
+        .unwrap();
+    let hits = engine
+        .execute_cypher("CALL db.index.fulltext.queryNodes('tags', 'urgent')")
+        .unwrap();
+    assert!(
+        hits.rows.is_empty(),
+        "REMOVE of the only indexed property must drop the FTS doc, got {:?}",
+        hits.rows
+    );
+}
+
 // phase6_fulltext-analyzer-catalogue — unknown analyzer is rejected.
 #[test]
 fn fulltext_unknown_analyzer_is_rejected() {

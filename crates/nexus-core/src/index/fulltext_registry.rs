@@ -141,6 +141,13 @@ impl Default for FullTextIndexMeta {
 pub struct NamedFullTextIndex {
     pub meta: FullTextIndexMeta,
     pub index: Arc<FullTextIndex>,
+    /// In-memory set of entity ids currently indexed. Tracked so
+    /// the SET / REMOVE / DELETE refresh paths can enumerate every
+    /// index a node belongs to without re-checking label
+    /// membership — the engine and executor label indexes can drift
+    /// across `refresh_executor` cycles, so FTS maintains its own
+    /// authoritative view.
+    pub members: Arc<RwLock<std::collections::HashSet<u64>>>,
 }
 
 /// Thread-safe registry of named full-text indexes.
@@ -284,7 +291,11 @@ impl FullTextRegistry {
         Self::write_meta_sidecar(&dir, &meta)?;
         self.inner.write().insert(
             name.to_string(),
-            Arc::new(NamedFullTextIndex { meta, index }),
+            Arc::new(NamedFullTextIndex {
+                meta,
+                index,
+                members: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            }),
         );
         Ok(())
     }
@@ -376,7 +387,11 @@ impl FullTextRegistry {
             };
             inner.insert(
                 persisted.name.clone(),
-                Arc::new(NamedFullTextIndex { meta, index }),
+                Arc::new(NamedFullTextIndex {
+                    meta,
+                    index,
+                    members: Arc::new(RwLock::new(std::collections::HashSet::new())),
+                }),
             );
             loaded += 1;
         }
@@ -447,6 +462,7 @@ impl FullTextRegistry {
             language: None,
             boost: None,
         })?;
+        entry.members.write().insert(node_id);
         Ok(())
     }
 
@@ -517,11 +533,39 @@ impl FullTextRegistry {
             WalEntry::FtsDel { name, entity_id } => {
                 if let Some(entry) = self.get(name) {
                     entry.index.remove_document(*entity_id, 0, 0)?;
+                    entry.members.write().remove(entity_id);
                 }
                 Ok(true)
             }
             _ => Ok(false),
         }
+    }
+
+    /// List every registered index name that currently contains the
+    /// given entity id. Used by the SET / REMOVE / DELETE refresh
+    /// paths to find matching indexes without consulting the
+    /// (potentially stale) engine-level label index.
+    pub fn indexes_containing(&self, entity_id: u64) -> Vec<String> {
+        let mut out = Vec::new();
+        for (name, entry) in self.inner.read().iter() {
+            if entry.members.read().contains(&entity_id) {
+                out.push(name.clone());
+            }
+        }
+        out
+    }
+
+    /// Remove the given entity from the named index's Tantivy
+    /// backend + membership set. No-op when the index is unknown
+    /// (mirrors `apply_wal_entry`'s forgiveness policy). Does not
+    /// touch the WAL — callers enqueue the matching `FtsDel` entry.
+    pub fn remove_entity(&self, name: &str, entity_id: u64) -> Result<()> {
+        let Some(entry) = self.get(name) else {
+            return Ok(());
+        };
+        entry.index.remove_document(entity_id, 0, 0)?;
+        entry.members.write().remove(&entity_id);
+        Ok(())
     }
 
     /// Bulk ingest variant of [`add_node_document`]. Opens a single
@@ -536,7 +580,14 @@ impl FullTextRegistry {
         let entry = self
             .get(name)
             .ok_or_else(|| Error::storage(format!("ERR_FTS_INDEX_NOT_FOUND: {name:?}")))?;
-        entry.index.add_documents_bulk(docs)
+        entry.index.add_documents_bulk(docs)?;
+        {
+            let mut members = entry.members.write();
+            for (node_id, _, _, _) in docs {
+                members.insert(*node_id);
+            }
+        }
+        Ok(())
     }
 
     /// Names known to the registry — used by duplicate-detection at

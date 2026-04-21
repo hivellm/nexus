@@ -67,8 +67,117 @@ impl Engine {
             let label_id = self.catalog.get_or_create_label(&label)?;
             label_ids.push(label_id);
         }
-        self.update_node_labels_with_ids(node_id, label_ids)?;
+        self.update_node_labels_with_ids(node_id, label_ids.clone())?;
+
+        // phase6_fulltext-wal-integration §4 — refresh every matching
+        // FTS index so SET / REMOVE / SET-label paths stay consistent
+        // with the authoritative node state.
+        //
+        // `label_ids` above is derived from the NodeWriteState's
+        // `labels` set, which is itself loaded via the `label_bits`
+        // bitmap. In practice that set can be empty — the MATCH
+        // pipeline resolves label membership through the catalog's
+        // label index, not the record bitmap, so a node matched by
+        // `(n:News)` may still surface here with an empty label set.
+        // Fall back to the stored record's bitmap when the resolved
+        // list is empty so FTS refresh can still find matching
+        // indexes.
+        let effective_label_ids = if label_ids.is_empty() {
+            self.effective_label_ids_from_record(node_id)
+                .unwrap_or_default()
+        } else {
+            label_ids
+        };
+        let props_value = Value::Object(properties);
+        self.fts_refresh_node(node_id, &effective_label_ids, &props_value);
         Ok(())
+    }
+
+    /// Read a node's label ids by decoding its stored `label_bits`
+    /// bitmap. Returns an empty vec on read failure — callers treat
+    /// that as "no labels", which is the same conservative default
+    /// the bitmap-based loader uses elsewhere.
+    fn effective_label_ids_from_record(&self, node_id: u64) -> Result<Vec<u32>> {
+        let record = self.storage.read_node(node_id)?;
+        let mut ids = Vec::new();
+        for bit in 0..64u32 {
+            if (record.label_bits & (1u64 << bit)) != 0 {
+                ids.push(bit);
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Delete-then-add the node's doc in every FTS index whose
+    /// label/property set still matches. Called after SET / REMOVE
+    /// / SET-label paths so the FTS view tracks the authoritative
+    /// property state. Emits the matching `FtsDel` + `FtsAdd` WAL
+    /// entries so crash recovery replays the refresh.
+    ///
+    /// All failures are logged via `tracing::warn!` and swallowed —
+    /// FTS is an index, never the source of truth.
+    fn fts_refresh_node(
+        &mut self,
+        node_id: u64,
+        _label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) {
+        let registry = self.indexes.fulltext.clone();
+        let props_obj = properties.as_object();
+        // Membership authority: ask the registry itself which
+        // indexes currently contain this entity. FTS tracks its own
+        // `members` set on every add/del so the SET / REMOVE refresh
+        // paths work even when the engine- and executor-side label
+        // indexes have drifted (a known consequence of
+        // `refresh_executor` cloning from engine state).
+        for name in registry.indexes_containing(node_id) {
+            let Some(entry) = registry.get(&name) else {
+                continue;
+            };
+            let meta = entry.meta.clone();
+            // Remove the stale doc first.
+            if let Err(e) = registry.remove_entity(&name, node_id) {
+                tracing::warn!("FTS: refresh-remove on {name:?} for node {node_id} failed: {e}");
+                continue;
+            }
+            let del = wal::WalEntry::FtsDel {
+                name: name.clone(),
+                entity_id: node_id,
+            };
+            if let Err(e) = self.write_wal_async(del) {
+                tracing::warn!("FTS: WAL FtsDel on refresh for {name:?} / {node_id} failed: {e}");
+            }
+            // Re-add if any indexed string property is still present.
+            let Some(obj) = props_obj else {
+                continue;
+            };
+            let mut parts: Vec<String> = Vec::new();
+            for prop in &meta.properties {
+                if let Some(v) = obj.get(prop) {
+                    if let Some(s) = v.as_str() {
+                        parts.push(s.to_string());
+                    }
+                }
+            }
+            if parts.is_empty() {
+                continue;
+            }
+            let content = parts.join(" ");
+            if let Err(e) = registry.add_node_document(&name, node_id, 0, 0, &content) {
+                tracing::warn!("FTS: refresh-add on {name:?} for node {node_id} failed: {e}");
+                continue;
+            }
+            let add = wal::WalEntry::FtsAdd {
+                name: name.clone(),
+                entity_id: node_id,
+                label_or_type_id: 0,
+                key_id: 0,
+                content,
+            };
+            if let Err(e) = self.write_wal_async(add) {
+                tracing::warn!("FTS: WAL FtsAdd on refresh for {name:?} / {node_id} failed: {e}");
+            }
+        }
     }
 
     /// Insert `node_id`'s tuple into every composite B-tree that
@@ -629,6 +738,13 @@ impl Engine {
             // This removes the node from all labels it belongs to
             self.indexes.label_index.remove_node(id)?;
 
+            // phase6_fulltext-wal-integration §4.3 — evict the node
+            // from every registered FTS index before the storage
+            // record is marked deleted. Best-effort + `tracing::warn!`
+            // so an index-side failure cannot cascade into a write
+            // failure.
+            self.fts_evict_node(id);
+
             // Mark node as deleted
             let mut deleted_record = node_record;
             deleted_record.mark_deleted();
@@ -649,6 +765,27 @@ impl Engine {
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// phase6_fulltext-wal-integration §4.3 — evict a node from
+    /// every registered FTS index. Called from DELETE paths. Emits
+    /// an `FtsDel` WAL entry alongside the Tantivy removal so crash
+    /// recovery can replay the delete.
+    fn fts_evict_node(&mut self, node_id: u64) {
+        let registry = self.indexes.fulltext.clone();
+        for name in registry.indexes_containing(node_id) {
+            if let Err(e) = registry.remove_entity(&name, node_id) {
+                tracing::warn!("FTS: remove_entity on {name:?} for node {node_id} failed: {e}");
+                continue;
+            }
+            let wal_entry = wal::WalEntry::FtsDel {
+                name: name.clone(),
+                entity_id: node_id,
+            };
+            if let Err(e) = self.write_wal_async(wal_entry) {
+                tracing::warn!("FTS: WAL FtsDel for {name:?} / {node_id} failed: {e}");
+            }
         }
     }
 
