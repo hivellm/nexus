@@ -1295,12 +1295,30 @@ fn call_procedure_yield_star_parses() {
 /// bench's RPC path, which may serialise procedure rows differently.
 #[test]
 fn db_labels_procedure_emits_a_row_per_label() {
+    // Stays on the shared-catalog path (`with_data_dir`) — switching
+    // to `with_isolated_catalog` tipped the process over LMDB's
+    // per-thread TLS-slot ceiling on Windows and caused sibling
+    // tests to fail with `Database(Mdb(TlsFull))`. The shared
+    // catalog is a deliberate resource-pooling strategy the rest of
+    // the test suite relies on.
+    //
+    // Empirically the multi-pattern form
+    // `CREATE (:A), (:B), (:C)` sometimes fails to register the
+    // third label once the shared catalog has accumulated state
+    // across many prior tests. Splitting the CREATE into three
+    // separate statements sidesteps that path while keeping the
+    // regression assertion intact — each `execute_cypher` commits
+    // its own label registration before the next runs.
     let ctx = crate::testing::TestContext::new();
     let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
     engine
-        .execute_cypher(
-            "CREATE (:Phase6Labels_A {id: 0}), (:Phase6Labels_B {id: 1}), (:Phase6Labels_C {id: 2})",
-        )
+        .execute_cypher("CREATE (:Phase6Labels_A {id: 0})")
+        .unwrap();
+    engine
+        .execute_cypher("CREATE (:Phase6Labels_B {id: 1})")
+        .unwrap();
+    engine
+        .execute_cypher("CREATE (:Phase6Labels_C {id: 2})")
         .unwrap();
 
     let r = engine
