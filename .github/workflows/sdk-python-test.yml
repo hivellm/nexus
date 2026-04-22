@@ -5,15 +5,15 @@ on:
     branches: [master, main, develop]
     paths:
       - 'sdks/python/**'
-      - 'nexus-server/**'
-      - 'nexus-protocol/**'
+      - 'crates/nexus-server/**'
+      - 'crates/nexus-protocol/**'
       - '.github/workflows/sdk-python-test.yml'
   pull_request:
     branches: ['**']
     paths:
       - 'sdks/python/**'
-      - 'nexus-server/**'
-      - 'nexus-protocol/**'
+      - 'crates/nexus-server/**'
+      - 'crates/nexus-protocol/**'
       - '.github/workflows/sdk-python-test.yml'
 
 jobs:
