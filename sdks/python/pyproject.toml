@@ -3,8 +3,13 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nexus_sdk"
-version = "1.13.0"
+# PyPI distribution name. `nexus-sdk` is owned by an unrelated project,
+# so we publish under the `hivehub-` org prefix (same convention as the
+# npm scope `@hivehub/nexus-sdk` and the Docker repo `hivehub/nexus`).
+# The Python import path is still `nexus_sdk` — `pip install
+# hivehub-nexus-sdk` followed by `from nexus_sdk import NexusClient`.
+name = "hivehub-nexus-sdk"
+version = "1.14.0"
 description = "Official Python SDK for Nexus graph database"
 readme = "README.md"
 requires-python = ">=3.8"
