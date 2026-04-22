@@ -12,6 +12,9 @@ use tokio::sync::RwLock as TokioRwLock;
 
 /// Helper function to create a test server instance
 async fn create_test_server() -> (Arc<NexusServer>, TestContext) {
+    use nexus_core::catalog::Catalog;
+    use nexus_core::index::{DEFAULT_VECTORIZER_DIMENSION, KnnIndex, LabelIndex};
+    use nexus_core::storage::RecordStore;
     use nexus_core::{Engine, database::DatabaseManager, executor::Executor};
 
     let ctx = TestContext::new();
@@ -20,12 +23,35 @@ async fn create_test_server() -> (Arc<NexusServer>, TestContext) {
     // Ensure data directory exists
     std::fs::create_dir_all(&data_dir).unwrap();
 
-    // Initialize Engine
-    let engine = Engine::with_data_dir(&data_dir).unwrap();
+    // Initialize Engine with an isolated catalog. The shared test
+    // catalog racks up labels from every concurrent test in this
+    // binary (Person / Company / Manager / Employee / ...), and
+    // GraphQL queries that filter by `labels: [...]` occasionally
+    // return rows from sibling-test label-index state — surfaced
+    // as `test_graphql_filtering_by_labels` flakily seeing a
+    // Company row even after filtering for Person. Isolated catalog
+    // gives each test its own label-id space.
+    let engine = Engine::with_isolated_catalog(&data_dir).unwrap();
     let engine_arc = Arc::new(TokioRwLock::new(engine));
 
-    // Initialize executor
-    let executor = Executor::default();
+    // Build an Executor from the SAME isolated catalog + a fresh
+    // RecordStore / LabelIndex / KnnIndex rooted in this test's
+    // tempdir. `Executor::default()` would otherwise open a brand-new
+    // store at a new tempdir AND pull the shared test catalog — the
+    // GraphQL resolver would then execute against an id-name mapping
+    // populated by every other test in the binary. With the explicit
+    // build here, `MATCH (n:Person)` resolves Person to an id this
+    // test's LabelIndex knows about, and CREATE / MATCH share state
+    // end-to-end.
+    let catalog = Catalog::with_isolated_path(
+        data_dir.join("executor_catalog.mdb"),
+        nexus_core::catalog::CATALOG_MMAP_INITIAL_SIZE,
+    )
+    .unwrap();
+    let store = RecordStore::new(&data_dir).unwrap();
+    let label_index = LabelIndex::new();
+    let knn_index = KnnIndex::new_default(DEFAULT_VECTORIZER_DIMENSION).unwrap();
+    let executor = Executor::new(&catalog, &store, &label_index, &knn_index).unwrap();
     let executor_arc = Arc::new(executor);
 
     // Initialize DatabaseManager
@@ -580,7 +606,14 @@ async fn test_graphql_pagination() {
     );
 }
 
+// GraphQL `nodes(filter: { labels: [...] })` reads through the
+// Engine's label index. Under parallel load with the test binary's
+// ~30 sibling tests all writing to the same Engine process state,
+// the label filter occasionally sees rows indexed under another
+// test's label set. `#[serial_test::serial]` keeps this assertion
+// deterministic.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_graphql_filtering_by_labels() {
     let (server, _ctx) = create_test_server().await;
 

@@ -91,6 +91,7 @@ memory-profiling = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+serial_test = "3.0"
 
 [package.metadata.deb]
 maintainer = "HiveLLM Contributors <info@hivellm.org>"
