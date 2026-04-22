@@ -9,12 +9,12 @@
 
     <!-- Package Metadata -->
     <PackageId>Nexus.SDK</PackageId>
-    <Version>0.1.0</Version>
+    <Version>1.13.0</Version>
     <Authors>HiveLLM Contributors</Authors>
     <Company>HiveLLM</Company>
     <Description>Official .NET client library for Nexus, a high-performance Neo4j-compatible graph database</Description>
     <PackageTags>graph-database;neo4j;cypher;database;nexus</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/hivellm/nexus</PackageProjectUrl>
     <RepositoryUrl>https://github.com/hivellm/nexus</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -23,6 +23,13 @@
 
   <ItemGroup>
     <PackageReference Include="System.Text.Json" Version="8.0.0" />
+    <PackageReference Include="MessagePack" Version="2.5.187" />
+  </ItemGroup>
+
+  <!-- Test project lives in Tests/ and is a separate csproj. -->
+  <ItemGroup>
+    <Compile Remove="Tests/**/*.cs" />
+    <None Remove="Tests/**/*" />
   </ItemGroup>
 
   <ItemGroup>

@@ -9,7 +9,6 @@ use nexus_core::graph::correlation::{
     NodeType, hierarchical_layout::HierarchicalCallGraphConfig,
 };
 use std::collections::HashMap;
-use tracing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("🔗 Hierarchical Call Graph Layout Example");

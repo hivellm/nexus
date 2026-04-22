@@ -1,0 +1,117 @@
+[package]
+name = "nexus-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HTTP server for Nexus graph database"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+
+[lints.clippy]
+# Hold-lock-across-await is a hard deny so the DatabaseManager lock can never
+# be re-acquired inside an async fn without `spawn_blocking` (see
+# docs/performance/CONCURRENCY.md).
+await_holding_lock = "deny"
+
+[[bin]]
+name = "nexus-server"
+path = "src/main.rs"
+
+[dependencies]
+# Core engine
+nexus-core = { workspace = true, features = ["axum"] }
+nexus-protocol.workspace = true
+
+# Web framework
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+
+# MCP (Model Context Protocol) dependencies
+rmcp.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+
+# GraphQL dependencies
+async-graphql.workspace = true
+async-graphql-axum.workspace = true
+
+# Async runtime
+tokio.workspace = true
+async-stream = "0.3"
+futures = "0.3"
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+toml = "1.1"
+rmp-serde.workspace = true
+chrono.workspace = true
+uuid = { version = "1.10", features = ["v4"] }
+argon2 = "0.5"
+parking_lot.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Temporary files
+tempfile.workspace = true
+
+# Observability
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# System monitoring
+sysinfo = "0.38"
+
+# Memory profiling (opt-in). Enables jemalloc as the global allocator with
+# heap profiling hooks so ops can dump pprof-compatible profiles on demand.
+# Only activated via `--features memory-profiling` — default builds pay no
+# allocator switch cost.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"], optional = true }
+# `stats` enables the mallctl stats::* accessors used by /debug/memory.
+tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
+
+[features]
+default = []
+memory-profiling = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[package.metadata.deb]
+maintainer = "HiveLLM Contributors <info@hivellm.org>"
+depends = "$auto"
+license-file = ["../../LICENSE", "0"]
+section = "database"
+priority = "optional"
+extended-description = """\
+Nexus is a high-performance, Neo4j-compatible graph database server built in Rust. \
+It provides full Cypher query language support, multi-database architecture, \
+vector search capabilities, and comprehensive authentication with RBAC. \
+Features include sub-millisecond query times, concurrent execution, and production-ready reliability.\
+"""
+assets = [
+    ["target/release/nexus-server", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/nexus-server/README", "644"],
+    ["../../config.yml", "etc/nexus/config.yml", "644"],
+    ["../../config.example.yml", "etc/nexus/", "644"],
+    ["../../config/auth.toml.example", "etc/nexus/", "644"],
+]
+conf-files = ["/etc/nexus/config.yml"]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "nexus-server", enable = false }
+

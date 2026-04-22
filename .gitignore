@@ -76,6 +76,7 @@ secrets/*.txt
 /.rulebook/*
 !/.rulebook/specs/
 !/.rulebook/tasks/
+!/.rulebook/archive/
 !/.rulebook/tasks/**/*.md
 !/.rulebook/rulebook.json
 
@@ -119,3 +120,5 @@ CLAUDE.local.md
 .rulebook/backup/
 .rulebook/handoff/_pending.md
 .rulebook/handoff/.urgent
+
+.rulebook/telemetry/

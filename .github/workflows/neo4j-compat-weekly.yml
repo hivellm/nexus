@@ -1,0 +1,126 @@
+name: Neo4j compatibility — weekly diff run
+
+# Re-runs the 300-test Neo4j diff suite
+# (`scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`)
+# against a live Neo4j 2025.09.0 community container and a fresh
+# release Nexus server every Monday 04:00 UTC.
+#
+# Context: `phase4_reconcile-docs-with-reality` tightened every
+# README / AGENTS / compat-report claim to cite a specific commit
+# + diff-run date. This workflow keeps that claim fresh — if Nexus
+# or Neo4j ever drifts, the Monday run fails and the docs can be
+# corrected before someone relies on a stale number.
+
+on:
+  schedule:
+    # Monday 04:00 UTC — low-traffic window, runner queues are short.
+    - cron: "0 4 * * 1"
+  # Manual re-trigger for on-demand verification (e.g. after a
+  # parser change that might affect compatibility).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  neo4j-compat:
+    runs-on: ubuntu-latest
+    # Budget: cold Docker build + 300-test diff runs in ~6-8 min on
+    # GitHub's ubuntu-latest. 30 min cap leaves room for queue /
+    # network variance without masking a real hang.
+    timeout-minutes: 30
+
+    services:
+      neo4j:
+        image: neo4j:2025.09.0-community
+        env:
+          NEO4J_AUTH: neo4j/password
+          # Accept the Apache 2.0 community license so the container
+          # starts unattended inside CI.
+          NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "curl -f http://localhost:7474/ || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache key from the other workflows so a churned
+          # `target/` from compat runs doesn't evict the faster-running
+          # lint + unit-test caches.
+          key: neo4j-compat-weekly
+
+      - name: Build release nexus-server
+        run: cargo +nightly build --release --package nexus-server
+
+      - name: Start nexus-server in the background
+        run: |
+          mkdir -p target/tmp-ci-compat
+          NEXUS_DATA_DIR=./target/tmp-ci-compat \
+            target/release/nexus-server &
+          echo $! > /tmp/nexus.pid
+
+      - name: Wait for Nexus to become healthy
+        run: |
+          until curl -sf --max-time 2 http://localhost:15474/health > /dev/null; do
+            sleep 2
+          done
+          echo "Nexus healthy"
+
+      - name: Verify Neo4j is reachable
+        run: |
+          until curl -sf --max-time 2 http://localhost:7474/ > /dev/null; do
+            sleep 2
+          done
+          echo "Neo4j healthy"
+
+      - name: Install PowerShell
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y powershell
+
+      - name: Run 300-test Neo4j diff suite
+        run: |
+          pwsh -ExecutionPolicy Bypass \
+            -File scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1 \
+            | tee /tmp/compat.log
+
+      - name: Enforce 300/300 pass rate
+        run: |
+          # The runner's banner is `Total Tests: 300 / Passed: N / Failed: M`.
+          # Parse the summary and fail the job if anything drifts off
+          # the canonical 300/300.
+          PASS=$(grep -oE 'Passed:\s+[0-9]+' /tmp/compat.log | awk '{print $2}' | tail -1)
+          FAIL=$(grep -oE 'Failed:\s+[0-9]+' /tmp/compat.log | awk '{print $2}' | tail -1)
+          echo "Parsed: passed=${PASS}, failed=${FAIL}"
+          if [ "${PASS}" != "300" ] || [ "${FAIL}" != "0" ]; then
+            echo "::error::Neo4j compat drift detected (expected 300/300 pass, got ${PASS}/${FAIL})"
+            exit 1
+          fi
+
+      - name: Upload raw runner output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: neo4j-compat-log
+          path: /tmp/compat.log
+          if-no-files-found: warn
+
+      - name: Stop nexus-server
+        if: always()
+        run: |
+          if [ -f /tmp/nexus.pid ]; then
+            kill "$(cat /tmp/nexus.pid)" || true
+          fi

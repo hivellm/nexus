@@ -1,0 +1,57 @@
+# Neo4j Community 5.15 for the nexus-bench comparative harness.
+#
+# Pinned by image digest — the tag `neo4j:5.15.0-community` is
+# mutable upstream, so bumping the version is a deliberate act
+# of updating the sha256 below. The digest was captured from
+# Docker Hub's public tag API on 2026-04-20.
+#
+# Ports are deliberately remapped off the Neo4j defaults so a
+# local Neo4j Desktop install on the operator's machine does not
+# collide with the bench container:
+#
+#   bolt   7687 -> 17687
+#   http   7474 -> 17474
+#
+# Memory budget is sized for a bench workstation, not production:
+# 256 MiB heap floor, 512 MiB heap ceiling, 512 MiB page cache.
+# The page cache is the only knob that matters for read-dominated
+# scenarios on the tiny dataset.
+#
+# No auth, no TLS, no external metrics — this container is meant
+# to live behind localhost only and be torn down with `neo4j-down.sh`
+# when the bench run ends. Never expose port 17687 publicly.
+
+services:
+  neo4j:
+    image: neo4j@sha256:d9e2fb1ba398536e50d22ebc3d5d585baa086c1c0cf8e5b96bdc9e11e87e002a
+    container_name: nexus-bench-neo4j
+    ports:
+      - "17687:7687"
+      - "17474:7474"
+    environment:
+      # Auth disabled — bolt connects with an empty principal. The
+      # container is only reachable on localhost; never expose it.
+      NEO4J_AUTH: "none"
+      # 256 MiB heap floor, 512 MiB heap ceiling.
+      NEO4J_server_memory_heap_initial__size: "256m"
+      NEO4J_server_memory_heap_max__size: "512m"
+      # 512 MiB page cache — the knob that actually moves the needle
+      # on read-only bench workloads.
+      NEO4J_server_memory_pagecache_size: "512m"
+      # `server.metrics.enabled` is an Enterprise-only setting in
+      # Neo4j 5.15; passing it on Community trips strict validation
+      # and the container exits before the bolt listener binds.
+      # Community has no metrics emitter to silence in the first
+      # place, so the knob is simply absent here.
+      # Accept the Community licence non-interactively so the image
+      # starts unattended on CI runners.
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+    volumes:
+      - nexus-bench-neo4j-data:/data
+    restart: "no"
+
+volumes:
+  # Dedicated named volume — `neo4j-down.sh` drops it on teardown
+  # so every bench run starts from an empty database.
+  nexus-bench-neo4j-data:
+    name: nexus-bench-neo4j-data

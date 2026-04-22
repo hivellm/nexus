@@ -32,7 +32,7 @@ pip install nexus-sdk
 ### TypeScript
 
 ```bash
-npm install @hivellm/nexus-sdk
+npm install @hivehub/nexus-sdk
 ```
 
 ### Rust
@@ -68,7 +68,7 @@ result = client.execute_cypher("MATCH (n) RETURN n LIMIT 10")
 ### TypeScript
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 const client = new NexusClient({ baseUrl: 'http://localhost:15474' });
 const result = await client.executeCypher('MATCH (n) RETURN n LIMIT 10');

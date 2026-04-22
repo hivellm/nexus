@@ -1,0 +1,49 @@
+.TH NEXUS-QUERY 1 "November 2025" "Nexus CLI 0.11.0" "User Commands"
+.SH NAME
+nexus-query \- execute Cypher queries against Nexus database
+.SH SYNOPSIS
+.B nexus query
+[\fIOPTIONS\fR] [\fIQUERY\fR]
+.SH DESCRIPTION
+Execute Cypher queries against the Nexus graph database.
+Supports direct query execution, file-based queries, and interactive REPL mode.
+.SH OPTIONS
+.TP
+.BR \-f ", " \-\-file " " \fIFILE\fR
+Execute queries from a file. Use "-" to read from stdin.
+.TP
+.BR \-i ", " \-\-interactive
+Start interactive REPL mode.
+.TP
+.BR \-p ", " \-\-params " " \fIJSON\fR
+Query parameters as JSON object.
+.SH EXAMPLES
+.TP
+Execute a simple query:
+.B nexus query "MATCH (n) RETURN n LIMIT 5"
+.TP
+Query with parameters:
+.B nexus query "MATCH (n) WHERE n.name = $name RETURN n" --params '{"name": "Alice"}'
+.TP
+Execute from file:
+.B nexus query --file queries.cypher
+.TP
+Interactive mode:
+.B nexus query --interactive
+.TP
+JSON output:
+.B nexus --json query "MATCH (n) RETURN n"
+.SH INTERACTIVE MODE
+In interactive mode, you can:
+.IP \(bu 2
+Enter multi-line queries (end with semicolon)
+.IP \(bu 2
+Use up/down arrows for history
+.IP \(bu 2
+Type 'exit' or 'quit' to exit
+.IP \(bu 2
+Press Ctrl+C to cancel current input
+.IP \(bu 2
+Press Ctrl+D to exit
+.SH SEE ALSO
+.BR nexus (1)

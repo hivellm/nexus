@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.6
 # Dockerfile for controlled memory-profiling runs.
 #
 # Differs from main Dockerfile:
@@ -9,6 +10,12 @@
 #   docker build -f scripts/memtest/Dockerfile.memtest -t nexus-memtest:latest .
 #
 # Run via scripts/memtest/docker-compose.memtest.yml (enforces mem_limit=512m).
+#
+# Uses the BuildKit `RUN --mount=type=cache` frontend to keep the
+# cargo registry + target directory warm across rebuilds (see the main
+# Dockerfile for the rationale). Needs BuildKit — the default in
+# Docker CLI ≥ 23.0, always on with `docker buildx build`. Export
+# `DOCKER_BUILDKIT=1` on older clients.
 
 FROM rustlang/rust:nightly AS builder
 
@@ -32,7 +39,17 @@ ENV CARGO_PROFILE_RELEASE_STRIP=false
 
 # Enable the memory-profiling feature (jemalloc + /debug/* endpoints) so we
 # can dump pprof heap profiles at runtime via `POST /debug/heap/dump`.
-RUN cargo +nightly build --release --package nexus-server --features memory-profiling
+#
+# The two cache mounts (registry + target) mirror the main Dockerfile
+# so repeated memtest rebuilds don't re-fetch every crate and
+# re-compile every dependency from scratch. We stage the built binary
+# into `/out/` because `/app/target/` is a build-only cache that
+# isn't visible to later `COPY --from=builder` invocations.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo +nightly build --release --package nexus-server --features memory-profiling \
+ && mkdir -p /out/release \
+ && cp target/release/nexus-server /out/release/nexus-server
 
 # Match the glibc of the builder image (rustlang/rust:nightly ≈ debian trixie);
 # using bookworm here produces `GLIBC_2.38 not found` at runtime.
@@ -53,13 +70,16 @@ RUN useradd -m -u 1000 nexus && \
     mkdir -p /app/data /app/config /output && \
     chown -R nexus:nexus /app /output
 
-COPY --from=builder /app/target/release/nexus-server /usr/local/bin/nexus-server
+COPY --from=builder /out/release/nexus-server /usr/local/bin/nexus-server
 RUN chmod +x /usr/local/bin/nexus-server
 
 WORKDIR /app
 USER nexus
 
-EXPOSE 15474
+# 15474 = HTTP, 15475 = native binary RPC (the SDK-default transport
+# since phase2_sdk-rpc-transport-default). Memtest usually only hits
+# one at a time; expose both so measure scripts can switch.
+EXPOSE 15474 15475
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:15474/health || exit 1

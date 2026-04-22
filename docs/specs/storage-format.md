@@ -534,6 +534,51 @@ nexus-cli inspect nodes.store --id 42
 # Relationships: 2 outgoing, 1 incoming
 ```
 
+## Advanced-type Wire Encodings (v1.5)
+
+phase6_opencypher-advanced-types introduces scalar shapes that ride
+through Nexus's JSON value representation. No on-disk record layout
+changed — the property store still serialises every value through
+`serde_json::Value` — but the wire / catalog conventions below are
+load-bearing for SDK interop.
+
+### BYTES
+
+A byte array is encoded as the single-key object:
+
+```json
+{"_bytes": "<base64-standard-encoded-string>"}
+```
+
+- One key only: `_bytes`. Adding sibling keys turns the value back
+  into a plain MAP as far as the type system is concerned.
+- Base64 uses the standard (RFC 4648 §4) alphabet with padding.
+- Per-property cap: 64 MiB. Exceeding raises `ERR_BYTES_TOO_LARGE`.
+
+Parameter binding also accepts a bare base64 STRING when the
+receiving parameter is declared as `BYTES` via the caller's
+coercion. This shorthand resolves to the canonical object shape
+before the value reaches the catalog.
+
+### Typed `LIST<T>`
+
+Typed lists travel as plain JSON arrays on the wire. Type
+discipline lives in the property-type constraint catalog
+(`Engine::add_typed_list_constraint`) and is enforced at write time
+via `typed_collections::validate_list`. An inline element-type tag
+lives with the future native-`Value` refactor (see the
+`phase6_opencypher-advanced-types` proposal's §4 rollout notes).
+
+### Dynamic-label sentinels
+
+The parser encodes a `:$param` label position as the sentinel
+string `"$ident"` in every label list it emits
+(`NodePattern.labels`, `SetItem::Label.label`,
+`RemoveItem::Label.label`). Engine write paths resolve the sentinel
+against the current query parameter map immediately before the
+catalog write; a leading `$` is never a valid catalog label
+character, so the mapping is unambiguous.
+
 ## Further Reading
 
 - RoaringBitmap Spec: https://github.com/RoaringBitmap/RoaringFormatSpec

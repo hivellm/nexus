@@ -9,7 +9,6 @@ use nexus_core::graph::correlation::{
     GraphType, NodeFilter, NodeType, PathSearch, RecursiveCallConfig,
 };
 use std::collections::HashMap;
-use tracing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("🔍 Call Graph Filtering and Search Example");

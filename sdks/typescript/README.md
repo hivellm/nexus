@@ -1,62 +1,82 @@
-# @hivellm/nexus-sdk
+# @hivehub/nexus-sdk
 
 Official TypeScript/JavaScript SDK for [Nexus Graph Database](https://github.com/hivellm/nexus).
 
-[![npm version](https://img.shields.io/npm/v/@hivellm/nexus-sdk.svg)](https://www.npmjs.com/package/@hivellm/nexus-sdk)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![npm version](https://img.shields.io/npm/v/@hivehub/nexus-sdk.svg)](https://www.npmjs.com/package/@hivehub/nexus-sdk)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## Features
 
-- 🚀 **Full TypeScript support** with complete type definitions
-- 🔐 **Multiple authentication methods** (API Key, username/password)
-- 🔄 **Automatic retry logic** with exponential backoff
-- 📦 **Batch operations** for improved performance
-- 🎯 **Cypher query execution** with parameter support
-- 🔗 **Node and relationship CRUD operations**
-- 📊 **Schema management** and introspection
-- 🗄️ **Multi-database support** (create, list, switch, drop databases)
-- 🛡️ **Comprehensive error handling**
-- ✅ **Well-tested** with high code coverage
+- **Binary RPC by default** — connects over `nexus://127.0.0.1:15475` using length-prefixed MessagePack; 3–10× lower latency and 40–60% smaller payloads than the legacy HTTP path.
+- **HTTP fallback in one line** — pass `http://…` or set `transport: 'http'` to use the REST transport (browser builds, firewalls, diagnostic).
+- **Full TypeScript support** with complete type definitions.
+- **Multiple authentication methods** — API Key or username/password (both work on RPC + HTTP).
+- **Cypher, CRUD, schema, multi-database** — every manager method routes through the same transport.
+- **Comprehensive error handling** with structured `NexusSDKError`.
 
 ## Installation
 
 ```bash
-npm install @hivellm/nexus-sdk
+npm install @hivehub/nexus-sdk
 ```
 
 or
 
 ```bash
-yarn add @hivellm/nexus-sdk
+yarn add @hivehub/nexus-sdk
 ```
 
 or
 
 ```bash
-pnpm add @hivellm/nexus-sdk
+pnpm add @hivehub/nexus-sdk
 ```
 
-## Quick Start
+## Quick Start (RPC — default)
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
-// Create client
-const client = new NexusClient({
-  baseUrl: 'http://localhost:7687',
-  auth: {
-    apiKey: 'your-api-key',
-  },
-});
+// Defaults to nexus://127.0.0.1:15475 (binary RPC).
+const client = new NexusClient();
 
-// Execute a query
 const result = await client.executeCypher(
   'MATCH (n:Person) WHERE n.age > $age RETURN n',
   { age: 25 }
 );
-
 console.log(result.rows);
+
+await client.close(); // release the persistent TCP socket
 ```
+
+## Transports
+
+| URL form                   | Transport                | Default port | Use case                                    |
+|----------------------------|--------------------------|--------------|---------------------------------------------|
+| `nexus://host[:port]`      | Binary RPC (MessagePack) | `15475`      | **Default.** Lowest latency.                |
+| `http://host[:port]`       | HTTP/JSON (axios)        | `15474`      | Browser, firewalls, diagnostic.             |
+| `https://host[:port]`      | HTTPS/JSON               | `443`        | Public-internet HTTP with TLS.              |
+| `resp3://host[:port]`      | RESP3 (reserved)         | `15476`      | Not yet shipped — throws on construction.  |
+
+Precedence: **URL scheme > `NEXUS_SDK_TRANSPORT` env var > `transport` field > default (`nexus`)**.
+
+```typescript
+// HTTP fallback
+const client = new NexusClient({
+  baseUrl: 'http://localhost:15474',
+  auth: { apiKey: process.env.NEXUS_API_KEY },
+});
+
+// Keep the URL but force HTTP via env var (`NEXUS_SDK_TRANSPORT=http`)
+
+// Or set the transport field explicitly
+const client2 = new NexusClient({
+  baseUrl: 'host:15474',        // bare form — URL scheme not set
+  transport: 'http',
+});
+```
+
+Full spec: [`docs/specs/sdk-transport.md`](../../docs/specs/sdk-transport.md).
 
 ## Authentication
 
@@ -297,7 +317,7 @@ Use the **master** for all write operations and **replicas** for read operations
 ### NexusCluster Class
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 /**
  * Client for Nexus cluster with master-replica topology.
@@ -345,7 +365,7 @@ class NexusCluster {
 ### Usage Example
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 async function main() {
   // Connect to cluster
@@ -460,7 +480,7 @@ import {
   ConnectionError,
   QueryExecutionError,
   ValidationError,
-} from '@hivellm/nexus-sdk';
+} from '@hivehub/nexus-sdk';
 
 try {
   await client.executeCypher('MATCH (n) RETURN n');
@@ -486,7 +506,7 @@ import type {
   Relationship,
   QueryResult,
   SchemaInfo,
-} from '@hivellm/nexus-sdk';
+} from '@hivehub/nexus-sdk';
 
 const result: QueryResult = await client.executeCypher('MATCH (n) RETURN n');
 const nodes: Node[] = await client.findNodes('Person');
@@ -523,7 +543,7 @@ Contributions are welcome! Please read our [contributing guidelines](../../CONTR
 
 ## License
 
-MIT © HiveLLM
+Apache-2.0 © HiveLLM — see [LICENSE](./LICENSE) for details.
 
 ## Links
 

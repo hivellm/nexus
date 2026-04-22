@@ -1,0 +1,114 @@
+name: nexus-bench — per-PR gate
+
+# §4.3 of phase6_bench-neo4j-docker-harness. Runs on every push
+# and PR that touches the bench crate, its docker-compose harness,
+# or the parity-report pipeline. No live servers: the bench
+# crate's guard rails keep every unit test off the network, and
+# the update-parity rewriter is a pure text transform on a
+# committed fixture.
+#
+# What this job catches that rust-test.yml does not:
+#
+# * Clippy + tests under the `live-bench` and `live-bench,neo4j`
+#   feature combinations. `rust-test.yml` only exercises the
+#   default-feature build of the workspace.
+# * Syntax of the bash + python scripts in `scripts/bench/`.
+# * Drift between `docs/benchmarks/report.example.json` and the
+#   parity block in `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`.
+#   If either changes without the other being re-rendered, the
+#   `git diff --exit-code` step fails.
+
+on:
+  push:
+    branches: [master, main, develop, 'release/**']
+    paths:
+      - 'crates/nexus-bench/**'
+      - 'scripts/bench/**'
+      - 'docs/benchmarks/**'
+      - 'docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md'
+      - '.github/workflows/rust-bench.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'crates/nexus-bench/**'
+      - 'scripts/bench/**'
+      - 'docs/benchmarks/**'
+      - 'docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md'
+      - '.github/workflows/rust-bench.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  bench-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        run: |
+          rustup toolchain install nightly --profile minimal --component clippy,rustfmt
+          rustup default nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache key so bench-feature `target/` doesn't
+          # evict the faster default-feature caches from other jobs.
+          key: rust-bench
+
+      # ── Rust check / clippy / test matrix ────────────────────────
+      - name: cargo check (default)
+        run: cargo +nightly check -p nexus-bench
+
+      - name: cargo check (live-bench)
+        run: cargo +nightly check -p nexus-bench --features live-bench --all-targets
+
+      - name: cargo check (live-bench + neo4j)
+        run: cargo +nightly check -p nexus-bench --features live-bench,neo4j --all-targets
+
+      - name: cargo clippy -D warnings (live-bench + neo4j)
+        run: cargo +nightly clippy -p nexus-bench --all-targets --features live-bench,neo4j -- -D warnings
+
+      - name: cargo test (live-bench + neo4j) — pure unit tests
+        run: cargo +nightly test -p nexus-bench --features live-bench,neo4j
+
+      # ── Shell + Python script syntax ─────────────────────────────
+      - name: bash -n on scripts/bench
+        run: |
+          for f in scripts/bench/*.sh; do
+            echo "checking $f"
+            bash -n "$f"
+          done
+
+      - name: python3 -m py_compile on scripts/bench
+        run: |
+          for f in scripts/bench/*.py; do
+            echo "compiling $f"
+            python3 -m py_compile "$f"
+          done
+
+      # ── Parity-report drift gate ─────────────────────────────────
+      - name: Regenerate parity block from committed example report
+        run: |
+          if [ -f docs/benchmarks/report.example.json ]; then
+            ./scripts/bench/update-parity.sh \
+              docs/benchmarks/report.example.json \
+              docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md
+          else
+            echo "no docs/benchmarks/report.example.json yet — skipping drift check"
+          fi
+
+      - name: Fail on parity-report drift
+        run: |
+          if [ -f docs/benchmarks/report.example.json ]; then
+            if ! git diff --exit-code docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md; then
+              echo "::error::NEO4J_COMPATIBILITY_REPORT.md is out of sync with docs/benchmarks/report.example.json."
+              echo "Run scripts/bench/update-parity.sh locally and commit the updated Markdown."
+              exit 1
+            fi
+          fi

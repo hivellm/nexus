@@ -5,7 +5,1196 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.14.0] — 2026-04-22
+
+### Added — openCypher geospatial predicates + `spatial.*` procedures (slice A)
+
+`phase6_opencypher-geospatial-predicates` slice A closes the
+user-facing Cypher surface around the existing `Point` type.
+Follow-up slices ship the packed R-tree index
+(`phase6_rtree-index-core`), the planner's `SpatialSeek` operator
+(`phase6_spatial-planner-seek`), and auto-populate on CREATE / SET
+(`phase6_spatial-index-autopopulate`).
+
+- **Namespaced function parsing.** The expression parser now
+  accepts `identifier.identifier(args)` as a function call
+  (`crates/nexus-core/src/executor/parser/expressions.rs`) — the
+  lookahead only fires when the `.identifier` is immediately
+  followed by `(`, so ordinary `n.prop` PropertyAccess keeps
+  precedence. Every test under `geospatial_integration_test.rs`
+  that exercises `n.prop` access stays green.
+- **Point predicate functions.** `point.withinBBox(p, bbox)`,
+  `point.withinDistance(a, b, distMeters)`, `point.azimuth(a, b)`,
+  and `point.distance(a, b)` (namespaced alias of the bare
+  `distance()` function) land in the projection evaluator
+  (`crates/nexus-core/src/executor/eval/projection.rs`). CRS or
+  dimensionality mismatches surface as `ERR_CRS_MISMATCH`;
+  malformed `bbox` maps surface as `ERR_BBOX_MALFORMED`; same
+  points to `point.azimuth` return `NULL` because the bearing is
+  undefined.
+- **`spatial.*` procedure dispatcher.** A new
+  `crates/nexus-core/src/spatial/mod.rs` mirrors the APOC
+  dispatch shape: pure-value procedures consume
+  `Vec<serde_json::Value>` and return `(columns, rows)`. Ships:
+  `spatial.bbox(points)`, `spatial.distance(a, b)`,
+  `spatial.interpolate(line, frac)`, `spatial.withinBBox(p, bbox)`,
+  `spatial.withinDistance(a, b, d)`, `spatial.azimuth(a, b)`. The
+  executor's `execute_call_procedure` routes `spatial.*` through
+  this dispatcher before the legacy `GraphProcedure` registry
+  (which can only represent single-arg procedures under the
+  current dispatch).
+- **Engine-aware spatial procedures.** `spatial.nearest(point,
+  label, k)` walks the `{label}.*` entry in the executor's
+  shared spatial-index registry and streams `(node, dist)` rows
+  ordered by distance ascending, ties broken by `node_id`
+  ascending. `spatial.addPoint(label, property, nodeId, point)`
+  is the Cypher-level bulk-loader that indexes a row into the
+  registered spatial index until the auto-populate task lands.
+- **Point helpers** (`crates/nexus-core/src/geospatial/mod.rs`):
+  `Point::same_crs`, `Point::crs_name`, `Point::azimuth_to`,
+  `Point::within_bbox`. Used by both the predicate functions and
+  the dispatcher so the semantics stay in one place.
+- **`dbms.procedures()` introspection** now lists every new
+  `spatial.*` procedure so BI tools that introspect the catalogue
+  see the full geo surface.
+- **RTreeIndex::entries().** Exposes an `(node_id, point)` snapshot
+  of the grid-backed spatial index so `spatial.nearest` can do a
+  bounded full-scan k-NN. The prior implementation walked an
+  `f64::MIN..=f64::MAX` bbox through the grid-cell math, which
+  iterated ≈4 × 10⁹ empty cells before returning. Direct
+  iteration keeps the walk bounded by `total_points`.
+- **Tests.** New integration suite
+  `crates/nexus-core/tests/geospatial_predicates_test.rs` (23
+  tests) covers every predicate + procedure end-to-end through
+  Cypher. Existing `geospatial_integration_test.rs` (55 tests)
+  and the spatial dispatcher unit tests (22 tests) all stay
+  green.
+
+## [1.13.0] — 2026-04-22
+
+### Added — FTS async writer + per-index cadence commits
+
+`phase6_fulltext-async-writer` closes §3 of the
+`phase6_fulltext-wal-integration` original spec and ships the
+crash-recovery integration harness that was deferred under §5.3 of
+that task.
+
+- **Per-index background writer.** `NamedFullTextIndex` now owns an
+  optional `WriterHandle`
+  (`crates/nexus-core/src/index/fulltext_writer.rs`). Each spawned
+  writer runs on a dedicated `std::thread`, owns the single Tantivy
+  `IndexWriter` Tantivy permits per index, and drains a bounded
+  `crossbeam-channel` (default capacity 1024).
+- **Cadence + batch commits.** The writer commits + reloads the
+  reader whenever the buffer reaches `max_batch_size` (default
+  256) or `refresh_ms` (read from `FullTextIndexMeta.refresh_ms`,
+  default 1000 ms) elapses since the last flush — whichever fires
+  first.
+- **Hot-path integration.** `FullTextRegistry::{add_node_document,
+  add_node_documents_bulk, remove_entity}` now route through the
+  writer when one is spawned, and fall back to the original
+  synchronous Tantivy-commit path otherwise. Async writers are
+  opt-in per registry via
+  `FullTextRegistry::enable_async_writers()` — the default
+  remains the synchronous read-your-writes contract every test
+  predating this task relies on.
+- **Graceful shutdown.** Dropping the `WriterHandle` drains the
+  channel, applies the final batch, commits, and joins the thread
+  before `Drop::drop` returns. `FullTextRegistry::flush_all` +
+  `disable_async_writers` expose both best-effort flushes and
+  explicit teardown for shutdown paths and tests.
+- **Crash-recovery harness**
+  (`crates/nexus-core/tests/fulltext_crash_recovery.rs`). Replays a
+  WAL containing committed `FtsCreateIndex` + `FtsAdd` entries
+  against a freshly-opened registry after simulating a kill-9
+  between WAL sync and writer commit. Asserts that every
+  WAL-committed doc surfaces after replay, that docs that never
+  reached the WAL stay absent, and that the registry's cadence
+  tick makes enqueued docs visible without an explicit
+  `flush_blocking`.
+
+### Fixed
+
+- `WriterHandle::enqueue` / `apply_batch` no longer mis-track the
+  `pending` counter. The prior implementation held a write guard
+  while attempting another lock acquisition in the same expression
+  (a deadlock on recursive acquire under `parking_lot::RwLock`),
+  and the drained-buffer decrement used `buffer.capacity() -
+  buffer.len()` — the allocation size rather than the number of
+  commands drained — so `pending_count()` never returned to zero
+  once the buffer had grown past its initial cap.
+
+## [1.12.0] — 2026-04-21
+
+### Added — FTS auto-maintenance on CREATE / SET / REMOVE / DELETE
+
+Slices 2+3 of `phase6_fulltext-wal-integration` close the
+write-path integration. Every mutating Cypher path now keeps the
+FTS view in lockstep with the authoritative node state and emits
+matching WAL entries for crash recovery.
+
+- **CREATE auto-populate** — `Executor::fts_autopopulate_node` is
+  wired into all three CREATE operators (standalone node,
+  relationship-target node, MATCH-combined-pattern node) plus the
+  programmatic `Engine::create_node` path. Match rule: node
+  carries ≥1 of the index's labels AND has a string value for ≥1
+  of the indexed properties; content is the whitespace-joined
+  concatenation of matching string properties in declared order.
+- **SET / REMOVE auto-refresh** — `Engine::persist_node_state`
+  now calls `fts_refresh_node`, which delete-then-conditional-adds
+  against every FTS index currently containing the node. When
+  the refresh clears the last indexed property (e.g. `REMOVE n.p`)
+  the doc stays evicted; when the property changes (e.g. SET
+  n.title = 'New'), the reindex surfaces the new terms and
+  purges the old.
+- **DELETE auto-evict** — `Engine::delete_node` drops the node
+  from every matching FTS index before marking the storage record
+  deleted and emits `FtsDel` WAL entries.
+- **Membership tracking** — `NamedFullTextIndex.members` is a
+  per-index `HashSet<u64>` updated on every add/del so refresh /
+  evict paths can enumerate matching indexes without consulting
+  the engine-side label index (which diverges from the
+  executor's cloned view after `refresh_executor`).
+- **`FullTextIndex::remove_document`** now reloads the reader
+  after commit — fixes an existing bug where replayed `FtsDel`
+  ops were invisible to same-process searchers.
+
+WAL emissions go through the existing `write_wal_async` path so
+recovery replay (slice 1) can reconstruct the full index state
+from the log.
+
+Tests (+3): `fulltext_create_node_auto_populates_matching_index`,
+`fulltext_create_node_skips_non_matching_label`,
+`fulltext_wal_replay_reconstructs_registry_and_content`,
+`fulltext_delete_node_evicts_from_index`,
+`fulltext_set_property_refreshes_doc`,
+`fulltext_remove_property_evicts_doc`. Full lib suite: 2019
+passed / 0 failed / 12 ignored.
+
+**Follow-up task**: `phase6_fulltext-async-writer` covers the
+per-index background writer with `refresh_ms` cadence + the
+crash-during-bulk-ingest integration test. Current sync commit
+path already beats the >5 k docs/sec SLO so the async pipeline
+is purely a concurrency optimisation.
+
+## [1.11.0] — 2026-04-21
+
+### Added — FTS WAL integration (slice 1: op-codes + persistence + replay)
+
+First slice of `phase6_fulltext-wal-integration`. Wires the FTS
+backend into the WAL durability model and the engine's restart
+path; the commit-hook that turns every `CREATE` / `MERGE` / `SET`
+into enqueued WAL entries ships as the next slice of the same
+task.
+
+- **WAL op-codes** — four new entry kinds in `WalEntryType` /
+  `WalEntry`:
+  - `FtsCreateIndex` (`0x40`): name + entity + labels/types +
+    properties + resolved analyzer name.
+  - `FtsDropIndex` (`0x41`): name.
+  - `FtsAdd` (`0x42`): name + entity_id + label_or_type_id +
+    key_id + content.
+  - `FtsDel` (`0x43`): name + entity_id.
+  Round-trip covered by `wal::tests::fts_wal_ops_encode_decode_roundtrip`.
+- **On-disk catalogue** — every create writes a `_meta.json`
+  sidecar into the index directory carrying the registry-level
+  metadata. `FullTextRegistry::load_from_disk` scans the base
+  directory at engine startup and re-opens every catalogued
+  index; parameterised ngram analyzers round-trip through the
+  `ngram(m,n)` display name.
+- **Reopen-aware `FullTextIndex`** — `with_analyzer` now falls
+  back to `Index::open_in_dir` when the Tantivy directory already
+  exists, so restart does not throw `IndexAlreadyExists`.
+- **WAL replay dispatcher** — `FullTextRegistry::apply_wal_entry`
+  consumes a single `WalEntry` and dispatches FTS-shaped ops into
+  the registry. Idempotent: duplicate create = no-op; add/del on
+  a missing index = no-op. Non-FTS ops return `Ok(false)` so the
+  caller can skip them.
+- **Startup hook** — `IndexManager::new` calls `load_from_disk`
+  before returning so the engine boots with the full FTS
+  catalogue already in memory.
+
+Tests: +7 (1 WAL encode/decode + 3 sidecar/load + 3 replay
+dispatcher). Full lib suite: 2013 passed / 0 failed.
+
+Scoped out to the next slice:
+- Per-index async writer + `refresh_ms` cadence (Tantivy's
+  synchronous commit already cleared the >5k docs/sec SLO — see
+  `docs/performance/PERFORMANCE_V1.md` — so async is pure
+  optimisation, not correctness).
+- Commit-hook: `CREATE` / `MERGE` / `SET` paths emit WAL ops that
+  match registered FTS indexes. Today callers drive the
+  programmatic API.
+- Crash-during-bulk-ingest integration test.
+
+## [1.10.0] — 2026-04-21
+
+### Added — FTS benchmarks + bulk-ingest path + ranking regression
+
+phase6_fulltext-benchmarks establishes performance baselines and a
+ranking-regression guard for the full-text search backend:
+
+- **Criterion harness** `crates/nexus-core/benches/fulltext_bench.rs`
+  with three scenarios over a deterministic 100 k × 1 KB corpus:
+  - `fulltext_single_term/corpus_100k_1kb` — BM25 single-term.
+  - `fulltext_phrase/corpus_100k_1kb` — 2-term phrase query.
+  - `fulltext_ingest/bulk_10k_docs` — bulk-ingest throughput.
+- **Measured numbers** (Ryzen 9 7950X3D, all SLOs cleared):
+  - single-term: 150 µs median (target < 5 ms p95) → ≈33× headroom.
+  - phrase query: 4.57 ms median (target < 20 ms p95) → ≈4.4×.
+  - bulk ingest: ≈60 k docs/sec (target > 5 k) → ≈12×.
+- **Bulk-ingest API** — `FullTextIndex::add_documents_bulk` and
+  `FullTextRegistry::add_node_documents_bulk` open one Tantivy
+  writer, push every doc, and commit once. The per-doc path keeps
+  its commit-after-every-write cadence for interactive callers;
+  bulk loaders pick the batched path.
+- **Ranking regression suite** `tests/fulltext_ranking_regression.rs`
+  with 7 golden top-N assertions over a 10-doc hand-curated corpus
+  (graph-family dominance, vector-family dominance, phrase pins,
+  boolean-must narrowing, empty query, limit respected).
+
+Baseline numbers land in
+[docs/performance/PERFORMANCE_V1.md](docs/performance/PERFORMANCE_V1.md).
+Async-writer + WAL-driven enqueue remain scoped for
+phase6_fulltext-wal-integration.
+
+## [1.9.0] — 2026-04-21
+
+### Added — FTS analyzer catalogue
+
+phase6_fulltext-analyzer-catalogue fills in the analyzer surface
+left parked by v1.8. `db.index.fulltext.createNodeIndex /
+createRelationshipIndex` now accepts a full Neo4j-parity config
+map that picks the per-index tokenizer chain:
+
+- **Catalogue**: `standard`, `whitespace`, `simple`, `keyword`,
+  `ngram`, `english`, `spanish`, `portuguese`, `german`, `french`.
+  Every name matches Neo4j's `listAvailableAnalyzers()` output
+  verbatim; rows are alphabetical.
+- **`standard`** — default; lowercase + English stopword removal
+  (Lucene's English stopword list, bundled via Tantivy 0.22).
+- **Language analyzers** — stemmer + lowercase + stopword filter
+  for English / Spanish / Portuguese / German / French. Built on
+  Tantivy's `Stemmer` + `StopWordFilter::new(Language)` with the
+  `stopwords` feature enabled upstream.
+- **`ngram`** — character n-grams with configurable `ngram_min`
+  / `ngram_max` (default `2..3`). Useful for autocomplete and
+  substring match. Rejected when `min > max` or `min == 0`.
+- **`keyword`** — single-token pass-through. Case-sensitive exact
+  match, no tokenisation.
+- **`options.analyzer`** column on every `db.indexes()` FULLTEXT
+  row echoes the resolved analyzer name (including `ngram(m,n)`
+  for parameterised ngram indexes), so driver tooling can render
+  the tokenisation choice without probing the backend.
+
+Config map shape:
+
+```cypher
+CALL db.index.fulltext.createNodeIndex(
+  'movies', ['Movie'], ['title', 'overview'],
+  {analyzer: 'english'}
+)
+
+CALL db.index.fulltext.createNodeIndex(
+  'imgs', ['Image'], ['caption'],
+  {analyzer: 'ngram', ngram_min: 3, ngram_max: 5}
+)
+```
+
+Unknown analyzer names and invalid ngram sizes surface as
+`ERR_FTS_UNKNOWN_ANALYZER`. The `db.indexes()` row shape grew one
+column — `options` — at position 10; non-FTS rows emit an empty
+map so existing consumers that read by column name keep working.
+
+See [docs/guides/FULL_TEXT_SEARCH.md](docs/guides/FULL_TEXT_SEARCH.md).
+
+## [1.8.0] — 2026-04-21
+
+### Added — Full-text search (Tantivy)
+
+phase6_opencypher-fulltext-search ships the Neo4j
+`db.index.fulltext.*` procedure namespace on top of a Tantivy 0.22
+backend. Nexus now maintains named BM25-scored full-text indexes
+over node / relationship property sets and exposes them through the
+same CALL surface Neo4j drivers already use.
+
+- **Named FTS registry** — `FullTextRegistry` keyed by user-supplied
+  name, backed by per-index Tantivy directories under
+  `<data_dir>/indexes/fulltext/<name>/`. Cross-kind name uniqueness
+  is enforced.
+- **Procedures**:
+  - `db.index.fulltext.createNodeIndex(name, labels, properties, config?)`
+  - `db.index.fulltext.createRelationshipIndex(...)`
+  - `db.index.fulltext.queryNodes(name, query, limit?)` → `(node, score)`
+  - `db.index.fulltext.queryRelationships(...)` → `(relationship, score)`
+  - `db.index.fulltext.drop(name)`
+  - `db.index.fulltext.awaitEventuallyConsistentIndexRefresh()`
+  - `db.index.fulltext.listAvailableAnalyzers()`
+- **`db.indexes()` integration** — FTS indexes surface with
+  `type = "FULLTEXT"` and `indexProvider = "tantivy-0.22"`.
+- **BM25 ranking** — Tantivy default scorer, `top_k` default 100,
+  tie-breaks on node id ascending.
+- **Synchronous reader reload** — `FullTextIndex::add_document`
+  now calls `reader.reload()` after every commit so the next query
+  sees the write without waiting for a refresh tick.
+
+Errors surface as `ERR_FTS_INDEX_EXISTS`, `ERR_FTS_INDEX_NOT_FOUND`,
+`ERR_FTS_INDEX_INVALID`, or `ERR_FTS_PARSE`.
+
+See [docs/guides/FULL_TEXT_SEARCH.md](docs/guides/FULL_TEXT_SEARCH.md).
+
+**Parked for follow-up tasks** (outside this release's scope): WAL
+integration for auto-populate on `CREATE`/`MERGE`/`SET`, per-index
+analyzer catalogue (whitespace / simple / keyword / n-gram), bench
+targets (<5 ms p95 single-term / <20 ms p95 phrase / >5k docs/sec
+ingest), and the Neo4j TCK fulltext scenarios. Today, ingest goes
+through the programmatic `FullTextRegistry::add_node_document`
+API; query path is fully wired through Cypher `CALL`.
+
+## [1.7.0] — 2026-04-21
+
+### Added — Constraint enforcement for every advertised kind
+
+phase6_opencypher-constraint-enforcement closes the correctness gap
+where Nexus accepted DDL for NODE KEY / NOT NULL / property-type
+constraints but silently ignored them on writes. Every kind now
+enforces on CREATE / MERGE / SET / REMOVE / SET LABEL:
+
+- **NODE KEY** — composite `(p1, p2, ...)` uniqueness + implicit
+  NOT NULL on each component. Backed by the composite B-tree from
+  phase6_opencypher-advanced-types with the `unique` flag set.
+- **Relationship NOT NULL** — rejects rel CREATE that lacks the
+  required property, rejects SET r.p = NULL / REMOVE r.p.
+- **Property-type** (`IS :: INTEGER / FLOAT / STRING / BOOLEAN /
+  BYTES / LIST / MAP`) — strict Neo4j semantics (INTEGER ≠ FLOAT),
+  node and relationship scope.
+- **NOT NULL alias** — `ASSERT n.p IS NOT NULL` parses as an alias
+  of the legacy `EXISTS(n.p)` form.
+- **Label-add guard** — `SET n:L` that violates any constraint on
+  `L` is rejected before the label lands on the pending state.
+- **Backfill validator** — registering a constraint on an existing
+  dataset runs a one-shot streaming scan; the first 100 offending
+  rows surface in the error payload; abort is atomic (no partial
+  constraint state survives).
+- **Relaxed-enforcement flag** — `Engine::set_relaxed_constraint_
+  enforcement(true)` downgrades violations to `WARN` logs so users
+  can port dirty datasets in stages. Emits a loud server-startup
+  warning. Scheduled for removal at v1.5.
+
+Registration today goes through the programmatic API
+(`Engine::add_node_key_constraint`, `add_rel_not_null_constraint`,
+`add_property_type_constraint`, `add_rel_property_type_constraint`);
+the Cypher 25 `FOR (n:L) REQUIRE (...) IS NODE KEY` surface grammar
+lands in the follow-up DDL-reshape task.
+
+Errors surface as `ERR_CONSTRAINT_VIOLATED: kind=<KIND> ...` where
+`<KIND>` is `UNIQUENESS` / `NODE_PROPERTY_EXISTENCE` / `NODE_KEY` /
+`RELATIONSHIP_PROPERTY_EXISTENCE` / `PROPERTY_TYPE`. HTTP mapping:
+409 for UNIQUENESS + NODE_KEY; 400 for NOT NULL + PROPERTY_TYPE.
+
+See [docs/guides/CONSTRAINTS.md](docs/guides/CONSTRAINTS.md).
+
+**Behaviour change**: workloads that relied on the silent
+acceptance of non-unique constraint violations will start failing.
+Set `relaxed_constraint_enforcement = true` during the migration
+window if that applies.
+
+## [1.6.0] — 2026-04-21
+
+### Added — APOC procedure ecosystem (~100 procedures)
+
+phase6_opencypher-apoc-ecosystem ships an in-tree APOC compatibility
+surface across five namespaces:
+
+- **`apoc.coll.*`** (30) — union, intersection, disjunction, subtract,
+  sort / sortMaps / sortNodes, shuffle, reverse, zip, pairs / pairsMin,
+  combinations, partitions, flatten (deep or shallow), frequencies /
+  frequenciesAsMap, duplicates, toSet, indexOf, contains / containsAll,
+  max / min / sum / avg / stdev, remove, fill, runningTotal.
+- **`apoc.map.*`** (20) — merge / mergeList, fromPairs / fromLists /
+  fromValues / fromEntries, setKey / removeKey / removeKeys, clean,
+  flatten / unflatten, values, groupBy / groupByMulti, updateTree,
+  submap, get / getOrDefault.
+- **`apoc.text.*`** (20) — Levenshtein (distance + similarity), Jaro-
+  Winkler, Sorensen-Dice, Hamming, regex groups / replace / split,
+  phonetic (American Soundex), doubleMetaphone (Philips Metaphone),
+  clean, lpad / rpad, format (`{0}` + `{name}`), base64 encode/decode,
+  camelCase, capitalize, hexValue, byteCount.
+- **`apoc.date.*`** (25) — format / parse / convertFormat (with Java
+  `yyyy-MM-dd HH:mm:ss` tokens), currentMillis, systemTimezone,
+  toYears / toMonths / toDays / toHours / toMinutes / toSeconds,
+  add / subtract, fromISO / toISO, yearQuarter, week (ISO), weekday
+  (Monday=1), dayOfYear, startOfDay / endOfDay, diff / between.
+- **`apoc.schema.*`** (10) — assert (idempotent DDL row-shape),
+  nodes, relationships, properties.distinctCount, node /
+  relationship indexExists / constraintExists, stats, info.
+
+Dispatch routes through the existing
+`executor::operators::procedures::execute_call_procedure`; every
+APOC name surfaces in `dbms.procedures()`. Compatibility matrix:
+[docs/procedures/APOC_COMPATIBILITY.md](docs/procedures/APOC_COMPATIBILITY.md).
+
+82 new unit tests. Full `cargo +nightly test -p nexus-core --lib`
+run reports 1907 passed / 0 failed / 12 ignored.
+
+## [1.5.0] — 2026-04-21
+
+### Added — Advanced types (phase6_opencypher-advanced-types)
+
+Six concurrent openCypher / Cypher 25 surface additions landing
+together so downstream SDKs can consume a single compatibility level:
+
+- **BYTES scalar family** — `bytes(s)`, `bytesFromBase64(s)`,
+  `bytesToBase64(b)`, `bytesToHex(b)`, `bytesLength(b)`,
+  `bytesSlice(b, start, len)`. JSON wire format is
+  `{"_bytes": "<base64>"}`. Parameter binding also accepts a plain
+  base64 STRING for convenience. 64 MiB per-property cap enforced.
+- **Write-side dynamic labels** — `CREATE (n:$label)`,
+  `SET n:$label`, `REMOVE n:$label`. Parameter may resolve to a
+  STRING or a `LIST<STRING>` (multi-label fan-out). Comprehensive
+  `ERR_INVALID_LABEL` surface for null, empty, or malformed inputs.
+- **Composite B-tree indexes** — `CREATE INDEX <name> FOR (n:Label)
+  ON (n.p1, n.p2, ...)`. Exact / prefix / range seeks and a
+  uniqueness flag available through `CompositeBtreeRegistry`.
+- **Typed-collection validation** —
+  `LIST<INTEGER|FLOAT|STRING|BOOLEAN|BYTES|ANY>` parse helper +
+  `validate_list` enforcement for the constraint engine.
+- **Transaction savepoints** — `SAVEPOINT <name>`,
+  `ROLLBACK TO SAVEPOINT <name>`, `RELEASE SAVEPOINT <name>`.
+  Nested savepoints unwind LIFO. See
+  [docs/guides/SAVEPOINTS.md](docs/guides/SAVEPOINTS.md).
+- **Graph scoping** — `GRAPH[<name>]` preamble parsed into
+  `CypherQuery.graph_scope`. The single-engine path surfaces
+  `ERR_GRAPH_NOT_FOUND` when a scope cannot be served in place;
+  multi-database routing happens above the engine.
+
+1799 unit tests passing (1742 pre-task + 57 new). Regression-free
+against the Neo4j 2025.09 diff suite.
+
+## [1.0.0] — 2026-04-20
+
+### Fixed — CREATE with bound-variable edges duplicated nodes (2026-04-20)
+
+`CREATE (a:X {id:1}), (b:X {id:2}), (a)-[:R]->(b)` produced 4
+nodes instead of 2 on Nexus: the edge pattern's `(a)` and `(b)`
+re-created the declared variables as anonymous `:X` duplicates
+instead of binding to the earlier declarations.
+
+Root cause in
+`crates/nexus-core/src/executor/operators/create.rs`'s
+`execute_create_pattern_internal`: the pattern-walker
+unconditionally created a new node every time it saw a
+`PatternElement::Node`, never checking whether that element's
+variable was already populated in the `created_nodes` map the
+same walker had just written to. Same problem on the target
+side of `PatternElement::Relationship`.
+
+Fix: before creating a new node, check if the pattern's variable
+is already in `created_nodes`. If so, rebind `last_node_id` to
+the existing id and continue — no duplicate record, no extra
+catalog update. Applied on both branches.
+
+Verified end-to-end:
+
+- `create_bound_variable_edge_does_not_duplicate_nodes` and
+  `create_bound_variable_chain_reuses_nodes` (new unit tests in
+  `crates/nexus-core/src/engine/tests.rs`) — single edge + chain
+  variant; cover 2-node / 3-node patterns.
+- `nexus-bench::TinyDataset.load_statement` now produces 100
+  nodes + 50 relationships on Nexus (was 200 + 50). Locked in by
+  strengthened assertions in `tests/live_rpc.rs` +
+  `tests/live_compare.rs`.
+- `cargo test --workspace` on `nexus-core`: 1722 passed, 0
+  failed (no regressions).
+
+Source task: `phase6_nexus-create-bound-var-duplication`.
+
+### Fixed — RPC DELETE / DETACH DELETE no-op (2026-04-20)
+
+Queries like `MATCH (n) DETACH DELETE n` issued over the native
+MessagePack RPC protocol parsed and returned `Ok(0 rows)` but left
+the database untouched. Root cause: the RPC CYPHER dispatch in
+`crates/nexus-server/src/protocol/rpc/dispatch/cypher.rs` called
+`executor.execute(&q)` directly for every non-admin query. The
+operator pipeline's `Operator::Delete` / `Operator::DetachDelete`
+handlers are explicit no-ops — they rely on the engine's
+higher-level interception (`execute_cypher_with_context` at
+`crates/nexus-core/src/engine/mod.rs:1427`) to perform the actual
+mutation. REST always went through that path; RPC bypassed it.
+
+The fix adds a `needs_engine_interception(&ast)` router: any AST
+that carries `Match` / `Create` / `Delete` / `Merge` / `Set` /
+`Remove` / `Foreach` now routes through `engine.execute_cypher`,
+preserving parity with the REST transport. Read-only queries
+(no MATCH, no mutation) keep the parallel executor path —
+unchanged throughput, unchanged params handling.
+
+Verified end-to-end against a live Nexus RPC listener + docker
+Neo4j 2025.09.0: `nexus-bench`'s 9 `#[ignore]` integration tests
+now run cleanly as a single `cargo test -p nexus-bench
+--features live-bench,neo4j -- --ignored` parallel batch (used to
+require per-test manual wipes). A new engine-level regression
+test (`detach_delete_actually_clears_nodes_via_execute_cypher` in
+`crates/nexus-core/src/engine/tests.rs`) locks the interception
+contract.
+
+Source task: `phase6_nexus-delete-executor-bug`.
+
+### Added — server admission control (2026-04-20)
+
+Third back-pressure layer on top of the existing per-key rate limiter
+and per-connection RPC semaphore. A global `AdmissionQueue`
+(`crates/nexus-server/src/middleware/admission.rs`) gates every
+query-bearing HTTP route (`/cypher`, `/ingest`, `/knn_traverse`,
+`/graphql`, `/umicp`) through a shared tokio semaphore. Callers that
+would push concurrency over `NEXUS_ADMISSION_MAX_CONCURRENT` (default
+CPU-count clamped to `[4, 32]`) wait in a FIFO queue up to
+`NEXUS_ADMISSION_QUEUE_TIMEOUT_MS` (default 5 s); after that they
+are rejected with `503 Service Unavailable + Retry-After`.
+
+Motivation: a single authenticated client can fan out tens of
+thousands of legitimate-looking `CREATE` statements through one
+HTTP keep-alive — enough to saturate the engine's single-writer
+discipline and wedge the process even though every request sat under
+the per-key rate limit. The new layer bounds **global** engine-facing
+concurrency rather than per-key volume.
+
+Light-weight endpoints (`/health`, `/prometheus`, `/auth`,
+`/schema/*`, `/stats`, `/cluster/status`) bypass the queue via a
+`HEAVY_PATH_PREFIXES` matcher so diagnostics stay reachable when
+the engine is saturated. RPC + RESP3 surfaces continue to rely on
+their per-connection semaphore; unified gating is a follow-up.
+
+Config knobs:
+
+- `NEXUS_ADMISSION_ENABLED` (bool, default `true`)
+- `NEXUS_ADMISSION_MAX_CONCURRENT` (u32, default CPU-clamped)
+- `NEXUS_ADMISSION_QUEUE_TIMEOUT_MS` (u64, default 5000)
+
+Prometheus metric names reserved (counters + histogram wiring ships
+in a subsequent patch):
+`nexus_admission_permits_granted_total`,
+`nexus_admission_permits_rejected_total`,
+`nexus_admission_in_flight`,
+`nexus_admission_wait_seconds`.
+
+Docs: [`docs/security/OVERLOAD_PROTECTION.md`](docs/security/OVERLOAD_PROTECTION.md).
+17 tests (unit + axum middleware) covering concurrency cap, timeout,
+FIFO progress under contention, light-path short-circuit, heavy-path
+rejection, counter integrity on drop.
+
+### Added — V2 horizontal scaling (2026-04-20, commit `15715a24`)
+
+Nexus gains horizontal scalability through hash-based sharding, per-shard
+Raft consensus, and a distributed query coordinator. See
+[`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md)
+and [`.rulebook/tasks/phase5_implement-v2-sharding/design.md`](.rulebook/tasks/phase5_implement-v2-sharding/design.md).
+
+- **Sharding** (`crates/nexus-core/src/sharding/`): deterministic xxh3-based
+  shard assignment, generation-tagged cluster metadata, iterative
+  rebalancer, per-shard health model. Standalone deployments are
+  unchanged — sharding is opt-in via `[cluster.sharding]` config.
+- **Raft consensus per shard** (`crates/nexus-core/src/sharding/raft/`):
+  purpose-built Raft (openraft 0.10 is still alpha; its trait surface
+  would require an adapter larger than the Raft itself). Leader
+  election within 3× election timeout, §5.3 truncate-on-conflict,
+  §5.4.2 leader-only current-term commit, snapshot install, bincode
+  wire format with shard-id prefix. 5-node clusters tolerate 2
+  replica failures.
+- **Distributed query coordinator** (`crates/nexus-core/src/coordinator/`):
+  scatter/gather with atomic per-query failure, leader-hint retry
+  (3 attempts), stale-generation refresh, COUNT/SUM/AVG/MIN/MAX/
+  COLLECT aggregation decomposition, ORDER BY + LIMIT top-k merge.
+- **Cross-shard traversal**: TTL + generation-aware LRU cache (10k
+  entries default), per-query fetch budget (1k default) with
+  `ERR_TOO_MANY_REMOTE_FETCHES` for runaway traversals.
+- **Cluster management API** (`crates/nexus-server/src/api/cluster.rs`):
+  `GET /cluster/status`, `POST /cluster/{add_node,remove_node,rebalance}`,
+  `GET /cluster/shards/{id}`. Admin-gated, `307 Temporary Redirect` on
+  follower writes, drain semantics for graceful node removal.
+
+### Changed — workspace layout
+
+The four Rust crates moved from repo-root children into a single
+`crates/` directory, following the standard Rust workspace layout:
+
+```
+Nexus/
+├── crates/
+│   ├── nexus-core/      # was ./nexus-core/
+│   ├── nexus-server/    # was ./nexus-server/
+│   ├── nexus-protocol/  # was ./nexus-protocol/
+│   └── nexus-cli/       # was ./nexus-cli/
+├── docs/                # unchanged
+├── sdks/                # unchanged
+└── scripts/             # unchanged
+```
+
+Follow-up edits:
+
+- `Cargo.toml` root: `workspace.members` + `workspace.dependencies`
+  paths updated to `crates/…`.
+- `crates/nexus-core/Cargo.toml`: `[[example]]` paths `../examples/` →
+  `../../examples/`.
+- `crates/nexus-server/Cargo.toml` + `crates/nexus-cli/Cargo.toml`:
+  `[package.metadata.deb]` asset paths (`../LICENSE`, `../README.md`,
+  `../config.yml`, …) updated to `../../…`.
+- `.github/workflows/rust-lint.yml`, `release-server.yml`,
+  `release-cli.yml`: path filters + `manifest_path` point at `crates/…`.
+- `scripts/ci/check_no_unwrap_in_bin.sh`: `SCOPES` + repo-root detection
+  updated.
+- Inter-crate paths (`../nexus-protocol`) unchanged — both live under
+  `crates/` so the relative form still resolves.
+
+No functional change; no public API moved or renamed.
+
+### Test coverage
+
+**201 V2-dedicated tests** — 143 sharding unit tests, 46 coordinator
+unit tests, 12 E2E integration scenarios
+(`crates/nexus-core/tests/v2_sharding_e2e.rs`) covering every §Scenario
+in the specs:
+
+- Deterministic assignment across restarts
+- Metadata consistency after leader change
+- Single-shard + broadcast query classification
+- AVG / SUM / MIN / MAX / COLLECT aggregation decomposition
+- Shard-failure atomicity (partial rows never leaked)
+- Raft failover within spec bound (≤90 ticks = 900ms)
+- Minority-failure replication continuity
+- Rebalance convergence
+- Leader-redirect on followers
+- Stale-generation refresh round-trip
+
+Full workspace on nightly: **2169 tests passing, 0 failed** (1694
+nexus-core lib + 364 nexus-server lib + 83 nexus-protocol lib + 28
+nexus-cli lib + 12 V2 E2E). Zero warnings on `cargo clippy
+--workspace --all-targets -- -D warnings`. Release build (`cargo
++nightly build --release --workspace`) succeeds in ~3 minutes.
+
+### Breaking changes (when sharding is enabled)
+
+- Record-store files gain a 64-byte V2 header. Standalone deployments
+  use deterministic defaults (`shard_id = 0`, `generation = 0`); a
+  future `nexus migrate --to v2` CLI rewrites headers in place.
+
+### Follow-up
+
+- [`phase5_v2-tcp-transport-bridge`](.rulebook/tasks/phase5_v2-tcp-transport-bridge/)
+  — TCP transport between Raft replicas for multi-host deployments.
+  Current in-process transport covers single-host + all integration
+  scenarios; the TCP bridge is an I/O adapter over the already-stable
+  `RaftTransport` and `ShardClient` traits.
+
+### Added — cluster mode (multi-tenant deployments, 2026-04-19)
+
+Nexus can now run as a shared multi-tenant service. One server
+instance hosts data for many tenants while guaranteeing that a
+tenant's nodes, relationships, property keys, and label names stay
+strictly isolated from every other tenant. See `docs/CLUSTER_MODE.md`
+for the operator guide.
+
+Enable with `NEXUS_CLUSTER_ENABLED=true` (opt-in; standalone mode
+remains the default and is byte-identical to the pre-cluster
+behaviour). Once on:
+
+- **Mandatory authentication on every URI.** Cluster mode removes
+  every public endpoint — `/`, `/health`, `/stats`, `/openapi.json`
+  all require a valid API key. A shared multi-tenant server must
+  identify every caller before exposing any surface.
+- **Per-tenant data isolation.** Labels / relationship types /
+  property keys registered by tenant A get different catalog IDs
+  than the same names registered by tenant B, so every downstream
+  layer (label bitmap index, KNN, record stores) sees tenant-
+  distinct state for free. Data leakage is structurally impossible
+  — not an invariant maintained by discipline. Proven end-to-end
+  by the integration tests in `nexus-core/tests/cluster_isolation_tests.rs`.
+- **Per-tenant rate limiting.** Every request is gated by
+  `LocalQuotaProvider` (per-minute + per-hour windows, configurable
+  via `ClusterConfig::default_quotas`). 429 responses carry
+  `Retry-After` and `X-RateLimit-Remaining` headers so SDK clients
+  can back off cleanly.
+- **Function-level MCP permissions.** API keys gain an optional
+  `allowed_functions` allow-list. Handlers can call
+  `UserContext::require_may_call("tool.name")?` to gate specific
+  MCP / RPC operations per-key, and discovery endpoints can use
+  `filter_callable` to advertise only callable tools.
+
+New public surface: `nexus_core::cluster::{ClusterConfig,
+TenantIsolationMode, UserNamespace, UserContext, QuotaProvider,
+LocalQuotaProvider, FunctionAccessError}`.
+
+New env var: `NEXUS_CLUSTER_ENABLED`. Architecturally documented in
+ADR-7 (catalog-prefix isolation over byte-level or per-database
+alternatives).
+
+### Changed — API key storage migrated from bincode to JSON
+
+`nexus-core/src/auth/storage.rs` switched from `SerdeBincode<ApiKey>`
+to `SerdeJson<ApiKey>` for the `api_keys` LMDB database. Bincode's
+default config is NOT forward-compatible for appended fields —
+adding cluster mode's new `allowed_functions: Option<Vec<String>>`
+field would have panicked on every existing record with
+`unexpected end of file`. JSON + `#[serde(default)]` gives us room
+to grow the schema without a migration script.
+
+**Operational note:** existing auth data is NOT automatically
+migrated on upgrade. Cluster-mode deployments should regenerate API
+keys from scratch; standalone deployments that already persist API
+keys should expect to re-seed on first boot under the new binary.
+The shared test-suite catalog was bumped to a new path
+(`nexus_test_auth_shared_v2`) so stale bincode records from earlier
+runs are orphaned cleanly instead of failing to decode.
+
+### Fixed — parser no longer accepts standalone `WHERE` (Neo4j parity)
+
+Closes the last outlier in the 300-test Neo4j compat suite. Before
+this change, Nexus accepted `UNWIND [1,2,3,4,5] AS x WHERE x > 2
+RETURN x` and returned `[3, 4, 5]`, while Neo4j 2025.09.0 rejects the
+same query with a syntax error (`Invalid input 'WHERE': expected
+'ORDER BY', 'CALL', ...`). Standard Cypher only allows `WHERE`
+attached to `MATCH` / `OPTIONAL MATCH` / `WITH` — never as a
+standalone top-level clause.
+
+The parser now matches Neo4j's grammar exactly: a bare `WHERE` after
+any clause other than those three rejects with the same error
+message shape Neo4j produces, pointing callers at the migration.
+
+**Breaking change — migration.** Any query that glued `WHERE`
+directly onto the output of `UNWIND` / `CREATE` / `DELETE` (or any
+other non-MATCH/WITH producer) must insert a `WITH <vars>`
+pass-through projection before the predicate:
+
+```cypher
+-- before
+UNWIND [1, 2, 3, 4, 5] AS x WHERE x > 2 RETURN x
+
+-- after
+UNWIND [1, 2, 3, 4, 5] AS x WITH x WHERE x > 2 RETURN x
+```
+
+The new syntax error points at the exact column and lists the
+valid clauses, so stale call sites surface immediately on the next
+request instead of going silent.
+
+**Result.** Neo4j compat suite now reports **300/300 passing**
+(previously 299/300 with 14.05 the one outlier). Every other test
+across all 17 sections — Basic Queries, Pattern Matching,
+Aggregations, Type Conversion, DELETE/SET, etc. — keeps its
+scalar-path parity.
+
+### SDK + workspace version unification
+
+Every first-party crate and SDK bumped to **1.0.0** (previously a
+mix of `0.12.0` for the server workspace and `0.1.0` for some SDKs).
+One version number governs the CLI, server, protocol crate, Rust
+SDK, Python SDK, TypeScript SDK, Go SDK, C# SDK, and PHP SDK.
+
+### Removed ecosystem SDKs
+
+The following integrations were dropped to focus on first-party wire
+clients:
+
+- `sdks/n8n/` — the community n8n node. Users can still invoke the
+  Nexus HTTP endpoint or wrap the TypeScript SDK inline.
+- `sdks/langchain/` and `sdks/langflow/` — Python ecosystem
+  wrappers. The underlying Python SDK covers the same API surface;
+  higher-level orchestration wrappers are better maintained
+  out-of-tree where they can track upstream LangChain / LangFlow
+  releases on their own cadence.
+- `sdks/TestConsoleSimple/` — redundant C# test harness (the
+  canonical tests live in `sdks/csharp/Tests/`).
+
+### Documentation reorganisation
+
+- New `sdks/README.md` — canonical index of shipped SDKs with the
+  shared transport contract referenced up front.
+- `sdks/SDK_TEST_RESULTS.md`, `sdks/SDK_TEST_RESULTS_FINAL.md`, and
+  `sdks/TEST_COVERAGE_REPORT.md` moved to `docs/sdks/` so the `sdks/`
+  root only holds runnable client code + the test-matrix script.
+- Per-SDK `CHANGELOG.md` created for every remaining SDK (Rust,
+  Python, TypeScript, Go, C#, PHP) — the Rust SDK entry has the
+  full 1.0.0 RPC-default details, the others carry a "1.0.0 version
+  alignment, RPC default queued under
+  phase2_sdk-rpc-transport-default" entry.
+
+### Native Binary RPC transport (2026-04-18)
+
+**First-party SDKs now have a MessagePack RPC port.** Length-prefixed
+frames (`[u32 LE][rmp-serde body]`) on port `15475`, multiplexed over
+a single TCP connection via caller-chosen `Request.id`. Enabled by
+default (`[rpc].enabled = true`); RESP3 and HTTP continue to run
+unchanged alongside it.
+
+```
+NEW nexus-protocol/src/rpc/{mod,types,codec}.rs   (shared w/ SDKs)
+NEW nexus-server/src/protocol/rpc/
+    mod.rs, server.rs, metrics.rs,
+    dispatch/{mod, admin, convert, cypher, database, graph, ingest, knn, schema}.rs
+NEW nexus-server/tests/rpc_integration_test.rs
+NEW docs/specs/rpc-wire-format.md
+```
+
+Command set: admin handshake (PING / HELLO / AUTH / QUIT / STATS /
+HEALTH), CYPHER (with optional params map; EXPLAIN inline), graph CRUD
+(CREATE_NODE / CREATE_REL / UPDATE_NODE / DELETE_NODE / MATCH_NODES),
+KNN (KNN_SEARCH accepting embedding as Bytes-of-f32 or Array<Float>
+with optional property filter, KNN_TRAVERSE with seed list + depth),
+bulk ingest (INGEST, single-batch atomic), schema introspection
+(LABELS / REL_TYPES / PROPERTY_KEYS / INDEXES from the catalog
+directly), multi-database (DB_LIST / DB_CREATE / DB_DROP / DB_USE).
+
+64 MiB cap per frame (tunable via `rpc.max_frame_bytes`), per-
+connection in-flight cap (`max_in_flight_per_conn`, default 1024),
+`u32::MAX` reserved as `PUSH_ID` for future streaming, slow-command
+WARN logging at `rpc.slow_threshold_ms` (default 2 ms).
+
+Prometheus: `nexus_rpc_connections` (gauge), `nexus_rpc_commands_total`
+/ `_error_total`, `nexus_rpc_command_duration_microseconds_total`,
+`nexus_rpc_frame_bytes_in_total` / `_out_total`,
+`nexus_rpc_slow_commands_total`. Env overrides:
+`NEXUS_RPC_{ENABLED, ADDR, REQUIRE_AUTH, MAX_FRAME_BYTES,
+MAX_IN_FLIGHT, SLOW_MS}`.
+
+The wire-format layer (RPC types + codec, RESP3 parser + writer) moved
+from `nexus-server::protocol` into `nexus-protocol::{rpc, resp3}` so
+the Rust SDK can depend on it without pulling the whole server crate.
+Command dispatch and the TCP accept loop stay in `nexus-server`.
+
+121 new tests (113 unit + 8 integration) covering every command,
+wrong-arity / wrong-type guards, NOAUTH gating, pipelined multiplexing,
+PUSH_ID rejection, and end-to-end CRUD round-trips over TCP.
+
+### 🔌 RESP3 Transport (2026-04-18)
+
+**Any RESP3 client — `redis-cli`, `iredis`, RedisInsight, Jedis, redis-rb,
+Redix — can now talk to Nexus using a Nexus command vocabulary.** The port
+is additive (HTTP, MCP, UMICP all keep running), disabled by default, and
+loopback-only out of the box so a plaintext debug port never accidentally
+escapes a dev machine.
+
+```
+NEW nexus-server/src/protocol/resp3/
+  mod.rs, parser.rs, writer.rs, server.rs
+  command/{mod, admin, cypher, graph, knn, schema}.rs
+NEW nexus-server/tests/resp3_integration_test.rs
+NEW docs/specs/resp3-nexus-commands.md
+```
+
+**25+ commands** implemented in the Nexus vocabulary:
+
+- Admin: `PING`, `HELLO [2|3] [AUTH user pass]`, `AUTH <api-key|user pass>`,
+  `QUIT`, `HELP`, `COMMAND`.
+- Cypher: `CYPHER`, `CYPHER.WITH`, `CYPHER.EXPLAIN`.
+- Graph CRUD: `NODE.CREATE/GET/UPDATE/DELETE/MATCH`, `REL.CREATE/GET/DELETE`.
+- KNN / ingest: `KNN.SEARCH`, `KNN.TRAVERSE`, `INGEST.NODES`, `INGEST.RELS`.
+- Schema / databases: `INDEX.CREATE/DROP/LIST`, `DB.LIST/CREATE/DROP/USE`,
+  `LABELS`, `REL_TYPES`, `PROPERTY_KEYS`, `STATS`, `HEALTH`.
+
+**Wire format**: all 12 RESP3 type prefixes (`+`, `-`, `:`, `$`, `*`, `_`,
+`,`, `#`, `=`, `~`, `%`, `|`, `(`) supported on both parse and write, with
+automatic RESP2 degradation (Null → `$-1`, Map → flat array, Boolean →
+`:0`/`:1`, Verbatim → BulkString) when the peer negotiates `HELLO 2`.
+`redis-cli`-style inline commands (`PING\r\n`) tokenised with quote and
+escape support, so plain `telnet` sessions work too.
+
+**Explicitly not Redis emulation.** `SET key value` returns
+`-ERR unknown command 'SET' (Nexus is a graph DB, see HELP)`. No KV
+semantics.
+
+**Auth**: `HELLO 3 AUTH <user> <pass>` negotiates protocol + auth in one
+round-trip. Pre-auth commands (`PING`/`HELLO`/`AUTH`/`QUIT`/`HELP`/`COMMAND`)
+always run; everything else bounces with `-NOAUTH Authentication required.`
+when the listener was configured with `require_auth = true` and the
+session hasn't authenticated.
+
+**Concurrency**: every handler that touches `Engine` or `DatabaseManager`
+acquires the `parking_lot::RwLock` inside `tokio::task::spawn_blocking` —
+same policy as the HTTP handlers (see `docs/performance/CONCURRENCY.md`).
+A tokio worker thread is never pinned on a graph-engine lock.
+
+**Metrics** (exported at `GET /prometheus`):
+- `nexus_resp3_connections` (gauge)
+- `nexus_resp3_commands_total` (counter)
+- `nexus_resp3_commands_error_total` (counter)
+- `nexus_resp3_command_duration_microseconds_total` (counter — divide by
+  `commands_total` for an average)
+- `nexus_resp3_bytes_read_total` / `nexus_resp3_bytes_written_total`
+
+**Config**: `[resp3]` section in `config.yml` with `enabled`, `addr`,
+`require_auth`. Env overrides `NEXUS_RESP3_{ENABLED,ADDR,REQUIRE_AUTH}`.
+Default port `15476` (HTTP stays on `15474`).
+
+**Testing**: 77 new tests green (69 in-crate unit + 8 raw-TCP integration).
+
+### 🛡️ Audit-log Failure Propagation (2026-04-18)
+
+**Eight `let _ = audit_logger.log_*(...).await` sites were silently
+swallowing audit-log write failures.** All now go through a new helper
+`nexus_core::auth::record_audit_log_failure(context, err)` that bumps a
+process-global `AtomicU64` counter and emits a
+`tracing::error!(target = "audit_log", context, error)` event.
+
+**Policy: fail-open with metric.** The originating request keeps its
+original HTTP status (401/429/500/200) — we do NOT convert audit-sink
+failures into 500s, because doing so hands an attacker who can cause IO
+pressure (disk fill, permission flap) a lever to mass-reject legitimate
+traffic. Operators alarm on the Prometheus counter instead:
+
+```promql
+increase(nexus_audit_log_failures_total[5m]) > 0
+```
+
+**Call sites patched**:
+- `nexus-core/src/auth/middleware.rs` × 4 (missing/invalid/errored API
+  key, rate-limit exceeded).
+- `nexus-server/src/api/cypher/execute.rs` × 4 (SET-property + SET-label
+  success/failure on the Cypher write path).
+
+**Metric**: `nexus_audit_log_failures_total` exported at `GET /prometheus`
+with HELP text pointing operators at the alert template.
+
+**Docs**: [docs/security/SECURITY_AUDIT.md §5](docs/security/SECURITY_AUDIT.md) documents the
+full policy (behaviour, rationale, alarm template, code-location
+inventory, "not fail-closed" guard). [docs/security/AUTHENTICATION.md](docs/security/AUTHENTICATION.md)
+cross-links from its audit section.
+
+### ⚡ Async Lock Migration — `DatabaseManager` off tokio workers (2026-04-18)
+
+**14 async HTTP handlers acquired `Arc<parking_lot::RwLock<DatabaseManager>>`
+directly inside `async fn`, pinning a tokio worker for the whole lock-held
+window.** Under concurrent load this starved the runtime — observed during
+the `fix/memory-leak-v1` debug session as the container dropping requests
+well before hitting any memory limit.
+
+**Fix**: wrap every async-context lock acquisition in
+`tokio::task::spawn_blocking` so the read/write runs on the blocking
+pool while tokio workers stay free. The lock type stays
+`parking_lot::RwLock` because it is shared with sync Cypher execution in
+`nexus-core/src/executor/shared.rs` — migrating the type would ripple into
+~20 files and force every sync caller onto `.blocking_read()` (which
+panics if ever reached from an async context). The `spawn_blocking`
+approach fixes the starvation at the source with a fraction of the blast
+radius.
+
+**Touched call sites (14 total)**:
+- `nexus-server/src/api/database.rs` — 6 handlers
+  (`create`/`drop`/`list`/`get`/`get_session`/`switch_session`).
+- `nexus-server/src/api/cypher/commands.rs` — 4 admin-Cypher sites
+  (`UseDatabase`/`ShowDatabases`/`CreateDatabase`/`DropDatabase`).
+
+**Enforcement**: `nexus-server/Cargo.toml` sets
+`clippy::await_holding_lock = "deny"` so any future regression fails CI.
+
+**Regression test**:
+`test_concurrent_list_databases_does_not_starve_runtime` fires 32
+concurrent `list_databases` calls on a 2-worker tokio runtime and asserts
+all 32 return `200 OK` inside a 30 s pathological timeout. Runs in 0.15 s
+post-migration.
+
+**Docs**: [docs/performance/CONCURRENCY.md](docs/performance/CONCURRENCY.md)
+documents the lock model end-to-end — primitives, the `DatabaseManager`
+rule, clippy enforcement, migration-vs-wrap tradeoff, and which
+`tokio::sync` locks legitimately stay.
+
+### 🧱 Neo4j Compatibility Test Split (Tier 3.2) (2026-04-18)
+
+**`nexus-core/tests/neo4j_compatibility_test.rs` was 2,103 LOC in a single
+`#[serial]`-gated integration binary. The whole file ran end-to-end on every
+test invocation even though only one section had changed. Split by semantic
+section into three independent binaries.**
+
+```
+neo4j_compatibility_test.rs                 2,103 LOC → removed
+neo4j_compatibility_core_test.rs            NEW →  317 LOC — 7 fixture-driven tests
+                                            (multi-label MATCH, UNION, bidirectional
+                                             relationships, property access). Hosts
+                                             the shared `setup_test_data` fixture.
+neo4j_compatibility_extended_test.rs        NEW → 1,063 LOC — 34 tests covering
+                                             UNION variants, labels()/keys()/type(),
+                                             DISTINCT, ORDER BY with UNION, multi-label
+                                             aggregations + the count(*) suite (8 tests).
+neo4j_compatibility_additional_test.rs      NEW →  825 LOC — 68 numbered
+                                             `neo4j_compat_*` / `neo4j_test_*`
+                                             micro-scenarios (count/labels/keys/id/type
+                                             / LIMIT / DISTINCT / property types).
+```
+
+Pure refactor — every test body is byte-identical to the original, `#[serial]`
+gating preserved, same helper `execute_query` function duplicated in each
+file. `setup_test_data` lives only in `core_test.rs` (the only caller).
+
+All 109 tests pass (7 + 34 + 68) under
+`cargo +nightly test --package nexus-core --test neo4j_compatibility_*_test`;
+clippy warning-clean.
+
+**Benefits**:
+- Granular test targeting — `cargo test --test neo4j_compatibility_core_test`
+  runs only the 7 fixture-driven scenarios (~0.3s).
+- Parallel binary compilation — the three binaries link independently.
+- Each file is under 1,100 LOC, well under the 1,500 LOC target.
+
+### 🧱 Regression Test Split (Tier 3.1) (2026-04-18)
+
+**`nexus-core/tests/regression_extended.rs` was 2,184 LOC covering seven
+feature areas in a single integration-test binary. Split by feature area
+into seven cohesive test binaries — each one now compiles and runs
+independently, and `cargo test --test regression_extended_match`
+(etc.) exercises just the relevant slice.**
+
+```
+regression_extended.rs                 2,184 LOC  → removed
+regression_extended_create.rs          NEW →  423 LOC  — 25 CREATE tests
+regression_extended_match.rs           NEW →  312 LOC  — 17 MATCH/WHERE tests
+regression_extended_relationships.rs   NEW →  583 LOC  — 24 relationship tests
+regression_extended_functions.rs       NEW →  343 LOC  — 20 function tests
+regression_extended_union.rs           NEW →  225 LOC  — 10 UNION tests
+regression_extended_engine.rs          NEW →  172 LOC  — 12 Engine-API tests
+regression_extended_simple.rs          NEW →  140 LOC  — 10 smoke tests
+```
+
+Pure refactor — every test body is byte-identical to the original
+(comments and `setup_test_engine` / `setup_isolated_test_engine` calls
+preserved). Dead `use nexus_core::Engine` import dropped (the type name
+was never referenced at the call sites). All 118 tests pass under
+`cargo +nightly test --package nexus-core --test regression_extended_*`
+and workspace-wide clippy is warning-clean.
+
+**Benefits**:
+- Merge-conflict surface reduced — unrelated test additions no longer
+  collide on a single file.
+- Parallel `cargo test` scheduling — the seven binaries run concurrently
+  (~0.4 s wall-clock for the full suite versus the old serialized run).
+- AI-agent-friendly file sizes — largest file (`relationships`, 583 LOC)
+  is well under the 1,500 LOC target.
+
+### 🧱 Engine Module Split (Tier 1.5) (2026-04-18)
+
+**`nexus-core/src/engine/mod.rs` was 4,636 LOC — the largest remaining
+source file in the tree after the Tier 1 + Tier 2 splits. Carved out
+into five focused submodules in four atomic commits.**
+
+```
+engine/mod.rs         4,636 → 3,624 LOC   (−1012, −21.8%)
+engine/config.rs      NEW → 45 LOC        — GraphStatistics, EngineConfig
+engine/stats.rs       NEW → 39 LOC        — EngineStats, HealthStatus, HealthState
+engine/clustering.rs  NEW → 135 LOC       — cluster_nodes + 5 wrappers + convert_to_simple_graph
+engine/maintenance.rs NEW → 193 LOC       — knn_search, export_to_json, get_graph_statistics,
+                                              clear_all_data, validate_graph, graph_health_check,
+                                              health_check
+engine/crud.rs        NEW → 651 LOC       — create/get/update/delete nodes + relationships +
+                                              index_node_properties + apply_pending_index_updates +
+                                              NodeWriteState (Cypher write-pass staging)
+```
+
+Pure refactor — public API surface unchanged (every method still
+resolves as `Engine::*` via Rust's multi-file `impl` blocks), all
+2,567 nexus-core tests green across every split commit, pre-commit
+hooks (fmt + clippy deny-warnings) enforced on each step.
+
+mod.rs remains the largest file in the tree; the residual ~2,400 LOC
+are the Cypher execution core (33 private helpers with shared state
+needing a deeper reshape than a pure file split). Tracked under
+`phase1_split-oversized-modules` Tier 3 for a follow-up.
+
+### ⚡ SIMD Runtime-Dispatched Kernels + Parser O(N²) Fix (2026-04-18)
+
+**New `nexus-core::simd` module — always compiled, runtime-dispatched,
+no Cargo feature flags. Kernels span distance (f32 dot / l2_sq / cosine
+/ normalize), bitmap popcount, numeric reductions (sum / min / max i64
+/ f64 / f32), compare (eq / ne / lt / le / gt / ge i64 / f64), RLE run
+scanning, CRC32C, and a size-threshold JSON dispatcher.**
+
+Per ADR-003, every kernel ships as scalar reference + SSE4.2 + AVX2 +
+AVX-512F + NEON with proptest parity (>= 40 cases, 256–1024 inputs
+each). Selection is cached in `OnceLock<unsafe fn>` on first call;
+`NEXUS_SIMD_DISABLE=1` env var forces scalar runtime-wide for
+emergency rollback.
+
+**Measured on Ryzen 9 7950X3D (Zen 4, AVX-512F + VPOPCNTQ):**
+
+| Op                  | Scale       | Scalar   | Dispatch  | Speedup  |
+|---------------------|-------------|----------|-----------|----------|
+| `dot_f32`           | dim=768     | 438 ns   | 34.5 ns   | 12.7×    |
+| `dot_f32`           | dim=1024    | 580 ns   | 50.8 ns   | 11.4×    |
+| `dot_f32`           | dim=1536    | 893 ns   | 70.3 ns   | 12.7×    |
+| `l2_sq_f32`         | dim=512     | 285 ns   | 21.0 ns   | 13.5×    |
+| `popcount_u64`      | 4096 words  | 1.52 µs  | 136 ns    | ≈11×     |
+| `sum_f64`           | n=262 144   | 150 µs   | 19 µs     | 7.9×     |
+| `sum_f32`           | n=262 144   | 152 µs   | 9.5 µs    | 15.9×    |
+| `lt_i64`            | n=262 144   | 110 µs   | 25 µs     | 4.4×     |
+| `eq_i64`            | n=262 144   | 69 µs    | 24 µs     | 2.9×     |
+| `find_run_length`   | uniform 16k | 3.2 µs   | 1.0 µs    | 3.2×     |
+| **Cypher parse**    | **31.5 KiB**| **≈1 s** | **3.7 ms**| **≈290×**|
+
+Cypher parse speedup is the non-SIMD O(N²) → O(N) fix uncovered while
+auditing phase-3 §8–9: `self.input.chars().nth(self.pos)` (O(n) per
+call) replaced with `self.input[self.pos..].chars().next()` (O(1)) in
+`peek_char`, `consume_char`, `peek_keyword`, `peek_keyword_at`,
+`skip_whitespace`, `peek_char_at`. Cost-per-byte now flat at
+92–117 ns/byte across three orders of magnitude — linear scaling
+confirmed.
+
+**Production call sites wired to SIMD:**
+
+- `index::KnnIndex` — `DistSimdCosine` / `DistSimdL2` implement
+  `hnsw_rs::dist::Distance<f32>` via `simd::distance::cosine_f32` /
+  `l2_sq_f32`. Every HNSW insert and query distance flows through
+  AVX-512 / AVX2 / NEON on supported hardware.
+- `index::KnnIndex::normalize_vector` — delegates to
+  `simd::distance::normalize_f32`.
+- `graph::algorithms::traversal::{cosine_similarity, jaccard_similarity}`
+  — refactored from full-universe f64 fold to packed `Vec<u64>`
+  bitmaps + `simd::bitmap::{popcount_u64, and_popcount_u64}`.
+- `storage::graph_engine::compression::compress_simd_rle` — inner
+  run-length scan replaced with `simd::rle::find_run_length` (was
+  misnamed "SIMD-accelerated", now actually SIMD).
+- `wal::Wal::append` / `recover` — dual-format (v1/v2) frames with
+  pluggable `ChecksumAlgo` field; reads both, writes default to
+  `Crc32Fast` (benchmark showed 3-way parallel PCLMUL in `crc32fast`
+  beats sequential `_mm_crc32_u64` on modern x86; CRC32C primitive
+  kept available via `append_with_algo(entry, Crc32C)`).
+- `executor::parser::{tokens, expressions}` — O(N²) tokenizer fix.
+
+**New files (all under `nexus-core/src/simd/`):** `mod.rs`, `dispatch.rs`,
+`scalar.rs`, `distance.rs`, `bitmap.rs`, `reduce.rs`, `compare.rs`,
+`rle.rs`, `crc32c.rs`, `json.rs`, `x86.rs`, `aarch64.rs`.
+
+**New benches (under `nexus-core/benches/`):** `simd_distance.rs`,
+`simd_popcount.rs`, `simd_reduce.rs`, `simd_compare.rs`, `simd_rle.rs`,
+`simd_crc.rs`, `simd_json.rs`, `parser_tokenize.rs`.
+
+**New proptest parity suites (under `nexus-core/tests/`):**
+`simd_scalar_properties.rs`, `simd_distance_parity.rs`,
+`simd_bitmap_parity.rs`, `simd_reduce_parity.rs`,
+`simd_compare_parity.rs`, `simd_rle_parity.rs`, `simd_json_parity.rs`.
+
+**New spec:** `docs/specs/simd-dispatch.md` — CpuFeatures probe,
+cascade rules, tolerances, per-kernel tier tables, measured
+benchmark numbers, phase-3 per-item status including honest writeups
+of the three items that did not deliver as the task spec anticipated
+(CRC32C hardware, simd-json on Value-field payloads, record codec
+batch — the last already LLVM-auto-vectorised).
+
+**ADRs:** ADR-001 (RPC wire format), ADR-002 (SDK default transport),
+ADR-003 (SIMD dispatch — runtime detection, no feature flags, tiered
+fallback with proptest parity).
+
+**Rollout safety:**
+
+- `NEXUS_SIMD_DISABLE=1` — scalar fallback for every dispatched op.
+- `NEXUS_SIMD_JSON_DISABLE=1` — forces serde_json in the
+  `simd::json` dispatcher.
+- Single `tracing::info!` on first `cpu()` call reports the
+  selected tier + all flag values.
+
+**Verification across all SIMD commits:**
+
+- `cargo +nightly fmt --all` — clean (pre-commit hook enforces).
+- `cargo +nightly clippy -p nexus-core --tests --benches -- -D warnings`
+  — clean.
+- `cargo +nightly test -p nexus-core` — 2566 passed, 0 failed.
+- 300/300 Neo4j compatibility suite unaffected (no wire format change).
 
 ### 🧱 Oversized-Module Split — Tier 1 + Tier 2 (2026-04-18)
 
@@ -292,7 +1481,7 @@ Tuning and troubleshooting guidance in `docs/performance/MEMORY_TUNING.md`.
   - `NEXUS_REPLICATION_SYNC_QUORUM`: Quorum size for sync mode
 
 - **Documentation**:
-  - `docs/REPLICATION.md` - Complete replication guide
+  - `docs/operations/REPLICATION.md` - Complete replication guide
   - OpenAPI specification updated with replication endpoints
 
 - **Testing**: 26 unit tests covering all replication components

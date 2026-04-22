@@ -5,9 +5,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: nexus-graph-db
+    container_name: nexus
     ports:
+      # HTTP API
       - "15474:15474"
+      # Native binary RPC (`nexus://`), the SDK-default transport
+      # since phase2_sdk-rpc-transport-default. Comment out or set
+      # `[rpc].enabled = false` in config.yml for HTTP-only deployments.
+      - "15475:15475"
     volumes:
       - nexus-data:/app/data
       - ./config:/app/config:ro

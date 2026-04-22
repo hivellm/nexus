@@ -1,0 +1,81 @@
+[package]
+name = "nexus-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Nexus ↔ Neo4j comparative benchmark harness (Nexus native RPC ↔ Neo4j Bolt, sandboxed)"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+
+# ---- GUARD RAILS ----
+#
+# This crate was rebuilt after the first draft repeatedly saturated a
+# developer's workstation by spawning an in-process Nexus engine and
+# replaying hundreds of Cypher CREATEs on every `cargo test`. The new
+# design:
+#
+# * No `nexus-core` dependency. The harness speaks **only the native
+#   binary RPC** (length-prefixed MessagePack, `nexus_protocol::rpc`)
+#   to a server the operator has already started; it cannot
+#   instantiate an engine by itself. HTTP/JSON is intentionally not a
+#   transport option — comparing Nexus-HTTP against Neo4j-Bolt would
+#   measure JSON serialisation overhead, not engine work.
+# * `default-features = []` compiles a pure-logic library. No
+#   network client, no CLI binary, no integration tests. `cargo test
+#   -p nexus-bench` is a few-millisecond operation on unit tests that
+#   never touch the network.
+# * `live-bench` opts in to the RPC client + CLI binary + the
+#   integration tests. The binary additionally requires a runtime
+#   `--i-have-a-server-running` flag (or the `NEXUS_BENCH_RPC_ADDR`
+#   env var) to do anything destructive.
+# * Debug-build guard: the binary refuses to run when compiled with
+#   `debug_assertions` on — measurements there are meaningless and
+#   10×–100× slower than release, which is what wedged the engine
+#   last time. Override with `NEXUS_BENCH_ALLOW_DEBUG=1`.
+
+[lib]
+name = "nexus_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nexus-bench"
+path = "src/bin/nexus-bench.rs"
+required-features = ["live-bench"]
+
+[features]
+default = []
+# Enables the native RPC BenchClient + CLI binary + all integration
+# tests that touch a running server. Off by default so `cargo build`
+# and `cargo test` stay cheap and sandboxed. The Nexus side of every
+# comparison goes over the native MessagePack RPC protocol — not
+# HTTP/JSON — so transport overhead does not drown engine timings.
+live-bench = ["dep:tokio", "dep:nexus-protocol"]
+# Adds the Neo4j Bolt BenchClient on top of `live-bench`. Split out
+# so CI jobs that only care about the Nexus-only flow don't pull in
+# `neo4rs` + its tokio-based transport stack.
+neo4j = ["live-bench", "dep:neo4rs"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Gated so the no-live-bench build is self-contained. The bench
+# speaks the native RPC wire directly — length-prefixed MessagePack
+# via `nexus_protocol::rpc::codec`. No reqwest, no JSON over HTTP.
+nexus-protocol = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+# Gated on `neo4j`. Pinned to 0.8 — the latest 0.x stable as of
+# 2026-04-20. 0.9.x is pre-release at time of writing.
+neo4rs = { version = "0.8", optional = true }
+
+[dev-dependencies]
+# Only the pure-logic tests depend on this; the integration tests
+# under `tests/` are themselves feature-gated.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

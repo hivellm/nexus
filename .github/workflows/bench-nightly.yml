@@ -1,0 +1,154 @@
+name: nexus-bench — nightly comparative run
+
+# §4.4 of phase6_bench-neo4j-docker-harness. Every night, stand
+# up a Neo4j 5.15 container via the pinned compose file, launch a
+# release Nexus server, run the full comparative harness, and
+# publish the artefacts:
+#
+#   * `report.json` + `report.md` as workflow artefacts.
+#   * A per-scenario Markdown table rendered straight into the
+#     workflow run's step summary — browsing to the Actions tab
+#     shows the numbers without downloading the artefact.
+#   * `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` rewritten
+#     in place via `scripts/bench/update-parity.sh` so the
+#     committed "Benchmark Parity" section always reflects the
+#     latest run (the file is uploaded as an artefact too; this
+#     workflow does not push commits back to the branch).
+#
+# Manual re-trigger via `workflow_dispatch` is available for
+# ad-hoc verification after a perf-sensitive change.
+
+on:
+  schedule:
+    # 03:30 UTC — avoids the 04:00 neo4j-compat-weekly slot so
+    # GitHub's runner queue doesn't back up on two Neo4j jobs
+    # starting simultaneously.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NEXUS_RPC_ADDR: "127.0.0.1:15475"
+  NEO4J_BENCH_URL: "bolt://127.0.0.1:17687"
+  # Arms the comparative integration tests in tests/live_compare.rs
+  # + the CLI's --compare flag without needing a custom step env.
+  NEXUS_BENCH_RPC_ADDR: "127.0.0.1:15475"
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    # Budget: compose up (cold image pull) + release build of
+    # nexus-server + comparative run over 25 scenarios. 45 min cap
+    # leaves room for runner / network variance without masking a
+    # genuine hang.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache from rust-bench.yml — this job builds
+          # release nexus-server which churns its own target dir.
+          key: bench-nightly
+
+      - name: Build release nexus-server + nexus-bench
+        run: |
+          cargo +nightly build --release --package nexus-server
+          cargo +nightly build --release --package nexus-bench \
+            --features live-bench,neo4j --bin nexus-bench
+
+      # ── Neo4j: pinned compose ────────────────────────────────────
+      - name: Bring up Neo4j compose container
+        run: ./scripts/bench/neo4j-up.sh
+
+      # ── Nexus: background release server ─────────────────────────
+      - name: Start nexus-server in the background
+        run: |
+          mkdir -p target/tmp-ci-bench
+          NEXUS_DATA_DIR=./target/tmp-ci-bench \
+          NEXUS_RPC_ADDR="${NEXUS_RPC_ADDR}" \
+            target/release/nexus-server &
+          echo $! > /tmp/nexus.pid
+
+      - name: Wait for Nexus RPC listener
+        run: |
+          # The release binary binds the RPC listener alongside the
+          # HTTP one; `nexus-bench` itself drives HELLO+PING, but we
+          # want a fast-fail here if the server is not listening
+          # at all. A simple TCP connect loop does the job without
+          # dragging in extra tooling.
+          for _ in $(seq 1 30); do
+            if bash -c "exec 3<>/dev/tcp/127.0.0.1/15475" 2>/dev/null; then
+              echo "Nexus RPC listener reachable"
+              exec 3>&-
+              break
+            fi
+            sleep 2
+          done
+
+      # ── Comparative run ──────────────────────────────────────────
+      - name: Run comparative harness
+        run: |
+          mkdir -p target/bench
+          target/release/nexus-bench \
+            --rpc-addr "${NEXUS_RPC_ADDR}" \
+            --neo4j-url "${NEO4J_BENCH_URL}" \
+            --compare \
+            --i-have-a-server-running \
+            --load-dataset \
+            --format both \
+            --output target/bench/report \
+            | tee target/bench/bench-stdout.log
+
+      - name: Regenerate compat report parity section
+        run: |
+          ./scripts/bench/update-parity.sh \
+            target/bench/report.json \
+            docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md
+
+      # ── Publish ──────────────────────────────────────────────────
+      - name: Render step summary
+        if: always()
+        run: |
+          {
+            echo "# Nexus ↔ Neo4j comparative bench"
+            echo ""
+            if [ -f target/bench/report.md ]; then
+              cat target/bench/report.md
+            else
+              echo "_No report.md produced — check the log step above._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-nightly
+          path: |
+            target/bench/report.json
+            target/bench/report.md
+            target/bench/bench-stdout.log
+            docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md
+          if-no-files-found: warn
+
+      # ── Teardown ─────────────────────────────────────────────────
+      - name: Stop nexus-server
+        if: always()
+        run: |
+          if [ -f /tmp/nexus.pid ]; then
+            kill "$(cat /tmp/nexus.pid)" || true
+          fi
+
+      - name: Bring Neo4j compose down
+        if: always()
+        run: ./scripts/bench/neo4j-down.sh

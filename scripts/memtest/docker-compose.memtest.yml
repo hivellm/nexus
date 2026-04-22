@@ -16,7 +16,8 @@ services:
     image: nexus-memtest:latest
     container_name: nexus-memtest
     ports:
-      - "15474:15474"
+      - "15474:15474"    # HTTP API
+      - "15475:15475"    # Native binary RPC (SDK default transport)
     volumes:
       - nexus-memtest-data:/app/data
       - ../../config/memtest.yml:/app/config/memtest.yml:ro

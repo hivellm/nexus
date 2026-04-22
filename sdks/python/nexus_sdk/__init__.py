@@ -42,8 +42,17 @@ from nexus_sdk.models import (
 )
 from nexus_sdk.query_builder import QueryBuilder
 from nexus_sdk.transaction import Transaction, TransactionStatus
+from nexus_sdk.transport import (
+    Endpoint,
+    NexusValue,
+    Transport,
+    TransportCredentials,
+    TransportMode,
+    default_local_endpoint,
+    parse_endpoint,
+)
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 __all__ = [
     "NexusClient",
     "NexusError",
@@ -86,5 +95,13 @@ __all__ = [
     "SessionDatabaseResponse",
     "SwitchDatabaseRequest",
     "SwitchDatabaseResponse",
+    # Transport layer
+    "Endpoint",
+    "NexusValue",
+    "Transport",
+    "TransportCredentials",
+    "TransportMode",
+    "default_local_endpoint",
+    "parse_endpoint",
 ]
 

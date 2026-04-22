@@ -11,6 +11,62 @@ tags: [logs, logging, debugging, troubleshooting]
 
 Complete guide for viewing, filtering, and analyzing Nexus logs.
 
+## Default log levels
+
+Nexus's default filter is deliberately quiet — production logs carry
+`WARN` and above only, so per-query flavour text never shows up in
+the default stream. The server's `tracing_subscriber::EnvFilter`
+resolves in this order:
+
+1. `RUST_LOG` environment variable (if set).
+2. `--verbose` flag on `nexus-server` — enables a development-grade
+   default: `nexus_server=debug,nexus_core=debug,tower_http=debug,hnsw_rs=warn`.
+3. No env, no flag — production default:
+   `nexus_server=error,nexus_core=warn,tower_http=error,hnsw_rs=warn`.
+
+The `hnsw_rs=warn` floor is load-bearing: without it, the upstream
+KNN crate emits an `INFO` line per index access (`Hnsw
+max_nb_connection 16 … entering PointIndexation drop`) that in a
+previous incident accounted for **95 %** of a production log
+stream, masking actual errors.
+
+## Re-enabling deep tracing
+
+Every hot-path log line inside `executor/` was downgraded to `trace!`
+in `phase4_tracing-hotpath-hygiene`, and three core entry points —
+`Executor::execute`, `execute_create_with_context`, and
+`execute_expand` — now carry `#[tracing::instrument(skip_all,
+level = "debug")]` spans. That means callers get:
+
+- **Default:** zero per-query log lines. Warnings and errors only.
+- **`--verbose` (or `RUST_LOG=nexus_core=debug`):** one span per
+  `execute` call with the Cypher source as a field, plus one nested
+  span per `CREATE` and per `EXPAND`. Enough to answer "which
+  query was slow" without drowning in per-row chatter.
+- **`RUST_LOG=nexus_core=trace`:** the full per-row detail the
+  operators had before the cleanup — every input row, every
+  relationship skip, every node-id lookup. Use only while actively
+  debugging a specific query.
+
+Example — turn on operator-level tracing without touching the
+server config:
+
+```bash
+RUST_LOG=nexus_core=debug,hnsw_rs=warn \
+  ./target/release/nexus-server
+```
+
+Example — full per-row detail (heavy output; scope to a short
+window):
+
+```bash
+RUST_LOG=nexus_core=trace,hnsw_rs=warn \
+  ./target/release/nexus-server 2>&1 | grep -v 'EXPAND\|CREATE'
+```
+
+The filter additions for `hnsw_rs=warn` are retained in every mode
+so the KNN firehose stays muzzled.
+
 ## Log Locations
 
 ### Linux

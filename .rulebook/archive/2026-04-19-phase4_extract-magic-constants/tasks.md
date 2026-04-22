@@ -1,0 +1,11 @@
+## 1. Implementation
+- [x] 1.1 Declare `pub const DEFAULT_VECTORIZER_DIMENSION: usize = 128;` in `nexus-core/src/index/mod.rs` with a docstring explaining the choice (MiniLM-compatible, smallest HiveLLM vectorizer profile).
+- [x] 1.2 Replace `KnnIndex::new_default(128)` and `KnnIndex::new(128)` with `KnnIndex::new_default(DEFAULT_VECTORIZER_DIMENSION)` everywhere inside `nexus-core/src/` — 23 sites in `executor/planner/tests.rs` (16) + `testing/executor.rs` (3) + `executor/mod.rs` (2) + `index/mod.rs` (2) + `execution/integration_bench.rs` (1). Examples and non-crate tests outside `nexus-core/src/` left untouched — the constant is public, callers can adopt it as they next touch each file.
+- [x] 1.3 Declare `pub const CATALOG_MMAP_INITIAL_SIZE: usize = 100 * 1024 * 1024;` in `nexus-core/src/catalog/mod.rs`; replace the *catalog-map-size* occurrences of the literal. The audit found 22 total `100 * 1024 * 1024` literals in nexus-core but only 12 are genuinely catalog map size; the remaining 10 are unrelated cache / memory / auth-LMDB thresholds and correctly stay inline (different semantic knobs).
+- [x] 1.4 Page-size literal audit: `nexus-core/src/page_cache/mod.rs::PAGE_SIZE = 8192` and `nexus-core/src/execution/memory.rs::PAGE_SIZE = 64 * 1024` are two different constants with different meanings (graph-engine page vs. allocator huge page); consolidating them would conflate them. Left as-is.
+- [x] 1.5 Root `Cargo.toml` has no `example.1.num_cpus` key today; nothing to remove.
+
+## 2. Tail (mandatory — enforced by rulebook v5.3.0)
+- [x] 2.1 Update or create documentation covering the implementation: the new `DEFAULT_VECTORIZER_DIMENSION` and `CATALOG_MMAP_INITIAL_SIZE` constants each carry a docstring explaining the rationale (dimension choice, memory/address-space tradeoff) so `cargo doc` picks them up — sufficient for a rename-only task.
+- [x] 2.2 Write tests covering the new behavior: no new tests required (existing `index::tests::test_knn_index_new_default`, `index::tests::test_knn_index_creation`, and every `catalog::tests::*` call continue to exercise the paths post-rename; 1403 nexus-core lib tests green).
+- [x] 2.3 Run tests and confirm they pass: `cargo +nightly test -p nexus-core --lib` → 1403 passed, 0 failed.

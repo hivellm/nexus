@@ -27,7 +27,7 @@ jobs:
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: nexus-server
-          manifest_path: nexus-server/Cargo.toml
+          manifest_path: crates/nexus-server/Cargo.toml
           target: x86_64-unknown-linux-gnu
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -127,7 +127,7 @@ jobs:
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: nexus-server
-          manifest_path: nexus-server/Cargo.toml
+          manifest_path: crates/nexus-server/Cargo.toml
           target: ${{ matrix.target }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -145,5 +145,5 @@ jobs:
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: nexus-server
-          manifest_path: nexus-server/Cargo.toml
+          manifest_path: crates/nexus-server/Cargo.toml
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -4,6 +4,8 @@ Official PHP client library for [Nexus](https://github.com/hivellm/nexus), a hig
 
 ## Features
 
+- **Binary RPC by default** — connects over `nexus://127.0.0.1:15475` using length-prefixed MessagePack; 3–10× lower latency and 40–60% smaller payloads than the legacy HTTP path.
+- **HTTP fallback in one line** — pass an `http://…` URL or set `Config::$transport = TransportMode::Http` to use the REST transport.
 - **Complete Cypher Support** - Execute any Cypher query with parameters
 - **CRUD Operations** - Simplified methods for nodes and relationships
 - **Batch Operations** - Create multiple nodes/relationships efficiently
@@ -18,7 +20,7 @@ Official PHP client library for [Nexus](https://github.com/hivellm/nexus), a hig
 
 - PHP 8.1 or higher
 - Composer
-- Nexus server 0.11.0 or higher
+- Nexus server 1.0.0 or higher
 
 ## Installation
 
@@ -26,7 +28,7 @@ Official PHP client library for [Nexus](https://github.com/hivellm/nexus), a hig
 composer require hivellm/nexus-php
 ```
 
-## Quick Start
+## Quick Start (RPC — default)
 
 ```php
 <?php
@@ -36,9 +38,9 @@ require 'vendor/autoload.php';
 use Nexus\SDK\Config;
 use Nexus\SDK\NexusClient;
 
-// Create client
+// Defaults to nexus://127.0.0.1:15475 (binary RPC).
 $config = new Config(
-    baseUrl: 'http://localhost:15474',
+    baseUrl: 'nexus://127.0.0.1:15475',
     apiKey: 'your-api-key', // Optional
     timeout: 30
 );
@@ -226,7 +228,7 @@ try {
 
 ```php
 $config = new Config(
-    baseUrl: 'http://localhost:15474',
+    baseUrl: 'nexus://127.0.0.1:15475',
     apiKey: 'your-api-key'
 );
 $client = new NexusClient($config);
@@ -236,7 +238,7 @@ $client = new NexusClient($config);
 
 ```php
 $config = new Config(
-    baseUrl: 'http://localhost:15474',
+    baseUrl: 'nexus://127.0.0.1:15475',
     username: 'admin',
     password: 'password'
 );
@@ -246,7 +248,7 @@ $client = new NexusClient($config);
 ### Bearer Token
 
 ```php
-$config = new Config(baseUrl: 'http://localhost:15474');
+$config = new Config(baseUrl: 'nexus://127.0.0.1:15475');
 $client = new NexusClient($config);
 
 // Set token manually after authentication
@@ -259,11 +261,14 @@ $client->setToken('your-jwt-token');
 class Config
 {
     public function __construct(
-        public string $baseUrl = 'http://localhost:15474',
+        public string $baseUrl = 'nexus://127.0.0.1:15475',
         public ?string $apiKey = null,
         public ?string $username = null,
         public ?string $password = null,
-        public int $timeout = 30
+        public int $timeout = 30,
+        public ?\Nexus\SDK\Transport\TransportMode $transport = null,
+        public ?int $rpcPort = null,
+        public ?int $resp3Port = null,
     ) {}
 }
 ```
@@ -360,7 +365,7 @@ See the [examples](./examples) directory for complete working examples:
 
 ## License
 
-MIT License - see [LICENSE](../../LICENSE) file for details
+Apache License 2.0 - see [LICENSE](./LICENSE) file for details
 
 ## Contributing
 

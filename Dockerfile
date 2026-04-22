@@ -1,19 +1,31 @@
+# syntax=docker/dockerfile:1.6
 # Multi-stage Dockerfile for Nexus Graph Database
 #
 # HOW TO BUILD:
-#   docker build -t nexus-graph-db:latest .
-#   docker build -t nexus-graph-db:v0.11.0 -t nexus-graph-db:latest .
+#   docker build -t nexus:latest .
+#   docker build -t nexus:v1.14.0 -t nexus:latest .
+#
+# The `# syntax=docker/dockerfile:1.6` header opts into the
+# `RUN --mount=type=cache` frontend so the cargo registry + target
+# directory are cached across rebuilds (see the build stage below).
+# Works out of the box with BuildKit — the default Docker CLI since
+# 23.0 and always on with `docker buildx build`. For older clients,
+# export `DOCKER_BUILDKIT=1` before `docker build`.
 #
 # HOW TO RUN:
 #   # Using docker run (basic):
+#   #   Publish 15474 (HTTP API) and 15475 (native RPC transport, default
+#   #   for first-party SDKs). Drop `-p 15475:15475` for HTTP-only
+#   #   deployments and also set `[rpc].enabled = false` in config.yml.
 #   docker run -d \
 #     --name nexus \
 #     -p 15474:15474 \
+#     -p 15475:15475 \
 #     -v nexus-data:/app/data \
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
 #     -e NEXUS_AUTH_ENABLED=true \
-#     nexus-graph-db:latest
+#     nexus:latest
 #
 #   # Using docker run with Docker secrets (recommended for production):
 #   echo "secure_password" > secrets/root_password.txt
@@ -21,13 +33,14 @@
 #   docker run -d \
 #     --name nexus \
 #     -p 15474:15474 \
+#     -p 15475:15475 \
 #     -v nexus-data:/app/data \
 #     -v $(pwd)/secrets/root_password.txt:/run/secrets/nexus_root_password:ro \
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
 #     -e NEXUS_AUTH_ENABLED=true \
 #     -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-#     nexus-graph-db:latest
+#     nexus:latest
 #
 #   # Using docker-compose (recommended):
 #   docker-compose up -d
@@ -36,7 +49,7 @@
 #   curl http://localhost:15474/health
 #   docker logs nexus
 #
-# For more details, see docs/DEPLOYMENT_GUIDE.md
+# For more details, see docs/guides/DEPLOYMENT_GUIDE.md
 
 # Build stage
 FROM rustlang/rust:nightly AS builder
@@ -55,22 +68,52 @@ COPY Cargo.toml Cargo.lock ./
 
 # Copy source for every workspace member declared in the root Cargo.toml.
 # `cargo build --workspace` fails with "failed to load manifest for
-# workspace member" if any member directory is missing — notably nexus-cli,
-# which was absent from this Dockerfile previously.
-COPY nexus-core ./nexus-core
-COPY nexus-server ./nexus-server
-COPY nexus-protocol ./nexus-protocol
-COPY nexus-cli ./nexus-cli
+# workspace member" if any member directory is missing.
+# All crates live under `crates/` per the workspace manifest.
+COPY crates/nexus-core ./crates/nexus-core
+COPY crates/nexus-server ./crates/nexus-server
+COPY crates/nexus-protocol ./crates/nexus-protocol
+COPY crates/nexus-cli ./crates/nexus-cli
+COPY crates/nexus-bench ./crates/nexus-bench
 
-# Build in release mode
-RUN cargo +nightly build --release --workspace
+# Build in release mode.
+#
+# Two BuildKit cache mounts cut rebuild time from ~4 min (observed
+# during the memtest debugging session) to a fraction of that on warm
+# caches:
+#   - `/usr/local/cargo/registry` keeps the downloaded index + source
+#     of every crate (`tantivy`, `hnsw_rs`, `heed`, ...) across builds
+#     so `cargo fetch` doesn't re-download them every time.
+#   - `/app/target` keeps the compiled artifacts — when only one
+#     source file changed, rustc + cargo only recompile the
+#     touched crates + their dependents, not the full 300-crate
+#     workspace.
+# The cache is build-local (not in the final image), so the runtime
+# stage is still the same size and shape as before.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo +nightly build --release --workspace \
+ && mkdir -p /out/release \
+ && cp target/release/nexus-server /out/release/nexus-server
 
 # Runtime stage
-FROM debian:bookworm-slim
+#
+# `debian:trixie-slim` carries glibc 2.41, matching the
+# `rustlang/rust:nightly` builder (Debian trixie, glibc 2.41 as of
+# 2026-04). The previous `debian:bookworm-slim` runtime carried
+# glibc 2.36 and caused
+#   nexus-server: /lib/x86_64-linux-gnu/libc.so.6: version
+#   `GLIBC_2.38' not found (required by nexus-server)
+# at container startup.
+FROM debian:trixie-slim
 
-# Install runtime dependencies
+# Install runtime dependencies.
+# `curl` is required by the HEALTHCHECK instruction below — the
+# previous image omitted it and `docker inspect` reported every
+# container as `unhealthy` because the health probe exited 127.
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -79,8 +122,11 @@ RUN useradd -m -u 1000 nexus && \
     mkdir -p /app/data /app/config /run/secrets && \
     chown -R nexus:nexus /app /run/secrets
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/nexus-server /usr/local/bin/nexus-server
+# Copy binary from builder. The build stage staged the binary under
+# `/out/release/` precisely because `/app/target/` is a cache mount
+# that does not persist into the image — only paths *outside* the
+# mount survive into subsequent stages.
+COPY --from=builder /out/release/nexus-server /usr/local/bin/nexus-server
 RUN chmod +x /usr/local/bin/nexus-server
 
 # Set working directory
@@ -89,8 +135,14 @@ WORKDIR /app
 # Switch to non-root user
 USER nexus
 
-# Expose default port
-EXPOSE 15474
+# Expose default ports.
+#   15474 — HTTP API (`/cypher`, `/knn_traverse`, `/health`, …).
+#   15475 — Native binary RPC transport (`nexus://host:15475`), the
+#           default for every first-party SDK since
+#           `phase2_sdk-rpc-transport-default`. Operators who want
+#           HTTP-only can leave 15475 unpublished on the host side
+#           or set `[rpc].enabled = false` in `config.yml`.
+EXPOSE 15474 15475
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

@@ -14,9 +14,12 @@ This file is never overwritten by `rulebook init` or `rulebook update`.
 
 # Nexus - Claude Code Development Guide
 
-> **Last Updated**: 2025-12-01
-> **Version**: 0.12.0
-> **Status**: ✅ Production Ready - 293/300 Neo4j Compatibility Tests Passing (97.99%)
+> **Last Updated**: 2026-04-19
+> **Version**: 1.0.0 (workspace)
+> **Status**: 300/300 Neo4j compatibility (Neo4j 2025.09.0 diff, matches the claim on line 81). Workspace
+> `cargo +nightly test --workspace` reports **2310 passed / 67 ignored / 0 failed**. Production-readiness
+> statement intentionally dropped from this header — see the "Production readiness" criterion section below
+> for the maintainers' explicit gate (auth + persistence + compat + RPC transport).
 
 ---
 
@@ -82,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts/compatibility/test-neo4j-nexus-
 - **Native Vector Search**: First-class HNSW KNN indexes per label
 - **ACID Transactions**: Simplified MVCC via epochs, single-writer model
 - **Multi-Database Support**: Isolated databases within single server instance
-- **Production Ready**: 2949+ tests passing, 70%+ coverage
+- **Test surface**: 2310 workspace tests passing on `cargo +nightly test --workspace` (0 failed, 67 ignored); 300/300 on the Neo4j diff suite. Re-run the numbers via `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` (diff) and `cargo +nightly test --workspace` (unit + integration). See [docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) for the canonical feature-by-feature status.
 
 ### Target Use Cases
 
@@ -179,10 +182,10 @@ powershell -ExecutionPolicy Bypass -File sdks/run-all-comprehensive-tests.ps1
 # Test individual SDKs
 cd sdks/python && python test_sdk_comprehensive.py
 cd sdks/typescript && npx tsx test-sdk-comprehensive.ts
-cd sdks/rust && cargo run --example test_sdk
+cd sdks/rust && cargo test
 cd sdks/go/test && go run test_sdk.go
-cd sdks/TestConsoleSimple && dotnet run
-cd sdks/n8n && npx tsx test-integration.ts
+cd sdks/csharp && dotnet test
+cd sdks/php && vendor/bin/phpunit
 ```
 
 ### CLI Development
@@ -252,40 +255,43 @@ cargo build --release --package nexus-cli
 
 ```
 nexus/
-├── nexus-core/           # 🧠 Core graph engine library
-│   ├── src/
-│   │   ├── catalog/      # Label/type/key mappings (LMDB)
-│   │   ├── storage/      # Record stores (nodes, rels, props)
-│   │   ├── page_cache/   # Memory management (8KB pages)
-│   │   ├── wal/          # Write-ahead log
-│   │   ├── index/        # Indexes (bitmap, KNN, full-text)
-│   │   ├── executor/     # Cypher parser & execution
-│   │   ├── transaction/  # MVCC & locking
-│   │   ├── graph/        # Graph algorithms & correlation analysis
-│   │   └── auth/         # Authentication & authorization
-│   └── tests/            # Core tests
-├── nexus-server/         # 🌐 HTTP server (Axum)
-│   ├── src/
-│   │   ├── api/          # REST endpoints
-│   │   ├── middleware/   # Auth, rate limiting
-│   │   └── config.rs     # Server configuration
-│   └── tests/            # Server tests
-├── nexus-protocol/       # 🔌 Integration protocols
-│   └── src/
-│       ├── rest.rs       # REST client
-│       ├── mcp.rs        # MCP client
-│       └── umicp.rs      # UMICP client
-├── nexus-cli/            # 💻 Command-line interface
-│   └── src/
-│       ├── commands/     # CLI commands
-│       └── config.rs     # CLI configuration
+├── crates/                # 🦀 Rust workspace crates (standard layout)
+│   ├── nexus-core/        # 🧠 Core graph engine library
+│   │   ├── src/
+│   │   │   ├── catalog/   # Label/type/key mappings (LMDB)
+│   │   │   ├── storage/   # Record stores (nodes, rels, props)
+│   │   │   ├── page_cache/ # Memory management (8KB pages)
+│   │   │   ├── wal/       # Write-ahead log
+│   │   │   ├── index/     # Indexes (bitmap, KNN, full-text)
+│   │   │   ├── executor/  # Cypher parser & execution
+│   │   │   ├── transaction/ # MVCC & locking
+│   │   │   ├── graph/     # Graph algorithms & correlation analysis
+│   │   │   ├── sharding/  # V2 sharding + Raft consensus
+│   │   │   ├── coordinator/ # V2 distributed query coordinator
+│   │   │   └── auth/      # Authentication & authorization
+│   │   └── tests/         # Core tests
+│   ├── nexus-server/      # 🌐 HTTP server (Axum)
+│   │   ├── src/
+│   │   │   ├── api/       # REST endpoints
+│   │   │   ├── middleware/ # Auth, rate limiting
+│   │   │   └── config.rs  # Server configuration
+│   │   └── tests/         # Server tests
+│   ├── nexus-protocol/    # 🔌 Integration protocols
+│   │   └── src/
+│   │       ├── rest.rs    # REST client
+│   │       ├── mcp.rs     # MCP client
+│   │       └── umicp.rs   # UMICP client
+│   └── nexus-cli/         # 💻 Command-line interface
+│       └── src/
+│           ├── commands/  # CLI commands
+│           └── config.rs  # CLI configuration
 ├── sdks/                 # 📦 Official SDKs
 │   ├── rust/             # Rust SDK
 │   ├── python/           # Python SDK
 │   ├── typescript/       # TypeScript SDK
 │   ├── go/               # Go SDK
 │   ├── csharp/           # C# SDK
-│   └── n8n/              # n8n community node
+│   └── php/              # PHP SDK
 ├── tests/                # 🧪 Integration tests
 │   └── cross-compatibility/ # Neo4j compatibility tests
 ├── docs/                 # 📚 Documentation
@@ -396,14 +402,14 @@ git commit -m "perf(cache): Optimize cache hit rate"
 ### Test Organization
 
 ```
-nexus-core/
+crates/nexus-core/
 ├── src/
 │   ├── module.rs           # Implementation
 │   └── module.rs (tests)   # Unit tests (#[cfg(test)] module)
 └── tests/
     └── integration_test.rs # Integration tests
 
-nexus-server/
+crates/nexus-server/
 ├── src/
 │   └── api/endpoint.rs     # Implementation + unit tests
 └── tests/
@@ -497,7 +503,7 @@ All SDKs follow consistent patterns:
 - **Python**: Uses `list[Any]` (flexible types)
 - **TypeScript**: Uses `any[]` (flexible types)
 - **Rust**: Uses `serde_json::Value` (flexible types)
-- **n8n**: Uses TypeScript types (flexible)
+- **PHP**: Uses native arrays (flexible types)
 
 #### Languages with Helper Methods
 - **Go**: `QueryResult.RowsAsMap()` converts `[][]interface{}` to `[]map[string]interface{}`
@@ -717,6 +723,35 @@ Each database is completely isolated:
 - Epoch-based MVCC for readers
 - No distributed transactions (V1)
 
+#### 6. Binary-Boundary Error Handling
+
+The CLI and server entry points must **never panic on user-facing
+input**. `.unwrap()` is banned in `crates/nexus-cli/src/main.rs`,
+`crates/nexus-cli/src/commands/*`, and `crates/nexus-server/src/main.rs` outside
+their `#[cfg(test)]` modules. The preferred patterns are:
+
+```rust
+// Propagate via `?` + `anyhow::Context` where the caller can handle it.
+let parsed: Config = serde_json::from_str(&body)
+    .with_context(|| format!("parsing config file {}", path.display()))?;
+
+// Explicit invariant with `.expect("...why this cannot fail...")` for
+// values whose failure mode is impossible to reach (e.g. compile-time
+// string literals passed to `ProgressStyle::template()`).
+.template("{msg}")
+.expect("template is a valid compile-time literal")
+
+// Best-effort side effects: match + log to stderr, never `let _ = ...`
+// silently.
+if let Err(e) = std::fs::create_dir_all(parent) {
+    eprintln!("warning: failed to create {}: {}", parent.display(), e);
+}
+```
+
+Enforced by `scripts/ci/check_no_unwrap_in_bin.sh` on every CI run.
+The script skips `#[cfg(test)] mod tests { ... }` trailing modules so
+unit tests that need `.unwrap()` for brevity continue to compile.
+
 ### Performance Constraints
 
 - **Target Throughput**: 100K+ point reads/sec, 10K+ KNN queries/sec
@@ -766,7 +801,7 @@ RUST_TEST_THREADS=1 cargo test --workspace -- --nocapture
 
 # Issue: Database locked
 # Solution: Clean test databases
-rm -rf nexus-core/test_data
+rm -rf crates/nexus-core/test_data
 ```
 
 #### 3. Server Issues
@@ -859,9 +894,9 @@ curl http://localhost:15474/health
 
 - **Architecture**: `docs/ARCHITECTURE.md` - Complete system design
 - **Roadmap**: `docs/ROADMAP.md` - Development phases and milestones
-- **User Guide**: `docs/USER_GUIDE.md` - Usage documentation
-- **Authentication**: `docs/AUTHENTICATION.md` - Security setup
-- **Performance**: `docs/PERFORMANCE.md` - Benchmarks and tuning
+- **User Guide**: `docs/guides/USER_GUIDE.md` - Usage documentation
+- **Authentication**: `docs/security/AUTHENTICATION.md` - Security setup
+- **Performance**: `docs/performance/PERFORMANCE_V1.md` - Benchmarks and tuning
 
 ### Specifications
 
@@ -884,7 +919,7 @@ curl http://localhost:15474/health
 
 ### Easy First Tasks
 
-1. **Add new Cypher function** - See `nexus-core/src/executor/mod.rs`
+1. **Add new Cypher function** - See `crates/nexus-core/src/executor/mod.rs`
 2. **Improve error messages** - Make errors more descriptive
 3. **Add examples** - Create example queries in `examples/`
 4. **Fix typos in docs** - Documentation improvements always welcome

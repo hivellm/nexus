@@ -4,22 +4,78 @@ Official Go client library for [Nexus](https://github.com/hivellm/nexus), a high
 
 ## Features
 
-- **Complete Cypher Support** - Execute any Cypher query with parameters
-- **CRUD Operations** - Simplified methods for nodes and relationships
-- **Batch Operations** - Create multiple nodes/relationships efficiently
-- **Transaction Support** - Full ACID transaction management
-- **Schema Management** - Indexes, labels, and relationship types
-- **Authentication** - API keys and bearer tokens
-- **Context Support** - Full Go context integration for cancellation and timeouts
-- **Type-Safe** - Strongly typed API with proper error handling
+- **Binary RPC by default** — connects over `nexus://127.0.0.1:15475` using length-prefixed MessagePack; 3–10× lower latency and 40–60% smaller payloads than the legacy HTTP path.
+- **HTTP fallback in one line** — pass `http://…` or set `Transport: transport.ModeHttp` to use the REST transport.
+- **Complete Cypher Support** — execute any Cypher query with parameters.
+- **CRUD helpers** — simplified methods for nodes and relationships (REST under the hood; for full RPC coverage call `ExecuteCypher`).
+- **Transaction support** — full ACID transaction management.
+- **Schema management** — indexes, labels, and relationship types.
+- **Authentication** — API keys or basic auth over both transports.
+- **Context support** — full `context.Context` integration for cancellation and timeouts.
+- **Type-safe** — strongly typed API with structured `*Error` returns.
 
 ## Installation
 
 ```bash
-go get github.com/hivellm/nexus-go
+go get github.com/hivellm/nexus-go@v1.13.0
 ```
 
-## Quick Start
+## Quick Start (RPC — default)
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    nexus "github.com/hivellm/nexus-go"
+)
+
+func main() {
+    // Defaults to nexus://127.0.0.1:15475 (binary RPC).
+    client := nexus.NewClient(nexus.Config{})
+    defer client.Close()
+
+    ctx := context.Background()
+    result, err := client.ExecuteCypher(ctx, "RETURN 1 AS one", nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("%v via %s\n", result.Rows, client.EndpointDescription())
+}
+```
+
+## Transports
+
+| URL form                   | Transport                  | Default port | Use case                       |
+|----------------------------|----------------------------|--------------|--------------------------------|
+| `nexus://host[:port]`      | Binary RPC (MessagePack)   | `15475`      | **Default.** Lowest latency.   |
+| `http://host[:port]`       | HTTP/JSON (net/http)       | `15474`      | Proxies, firewalls, tooling.   |
+| `https://host[:port]`      | HTTPS/JSON                 | `443`        | Public-internet HTTP with TLS. |
+| `resp3://host[:port]`      | RESP3 (reserved)           | `15476`      | Not yet shipped — errors.      |
+
+Precedence: **URL scheme > `NEXUS_SDK_TRANSPORT` env var > `Config.Transport` > default (`nexus`)**.
+
+```go
+// HTTP fallback
+client := nexus.NewClient(nexus.Config{
+    BaseURL: "http://localhost:15474",
+    APIKey:  "nexus_sk_...",
+})
+
+// Transport hint on a bare URL
+import "github.com/hivellm/nexus-go/transport"
+client := nexus.NewClient(nexus.Config{
+    BaseURL:   "host:15474",
+    Transport: transport.ModeHttp,
+})
+```
+
+Full cross-SDK spec: [`docs/specs/sdk-transport.md`](../../docs/specs/sdk-transport.md).
+
+## Advanced Usage
 
 ```go
 package main
@@ -34,12 +90,12 @@ import (
 )
 
 func main() {
-    // Create client
     client := nexus.NewClient(nexus.Config{
-        BaseURL:  "http://localhost:15474",
-        APIKey:   "your-api-key", // Optional
-        Timeout:  30 * time.Second,
+        BaseURL: "nexus://127.0.0.1:15475",
+        APIKey:  "your-api-key",   // Optional
+        Timeout: 30 * time.Second,
     })
+    defer client.Close()
 
     ctx := context.Background()
 
@@ -688,11 +744,11 @@ See the [examples](./examples) directory for complete working examples:
 ## Requirements
 
 - Go 1.21 or higher
-- Nexus server 0.11.0 or higher
+- Nexus server 1.0.0 or higher
 
 ## License
 
-MIT License - see [LICENSE](../../LICENSE) file for details
+Apache License 2.0 - see [LICENSE](./LICENSE) file for details
 
 ## Contributing
 

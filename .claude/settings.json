@@ -17,6 +17,14 @@
             "command": "bash E:/HiveLLM/Nexus/.claude/hooks/resume-from-handoff.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/terse-activate.sh"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -51,6 +59,16 @@
           {
             "type": "command",
             "command": "bash E:/HiveLLM/Nexus/.claude/hooks/enforce-mcp-for-tasks.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/terse-mode-tracker.sh"
           }
         ]
       }

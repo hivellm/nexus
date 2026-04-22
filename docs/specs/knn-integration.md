@@ -627,6 +627,12 @@ async fn test_knn_procedure() {
 - **Distributed KNN**: Sharded vector indexes
 - **GPU acceleration**: CUDA/ROCm for batch searches
 - **Hybrid sparse-dense**: Combine BM25 + KNN (SPLADE, ColBERT)
+  - **v1.8 status**: BM25 is available today via `db.index.fulltext.*`
+    (Tantivy 0.22). Hybrid retrieval pattern: run `queryNodes`
+    against the FTS index and `knn_traverse` against the KNN index
+    in the same Cypher script, then merge / re-rank in the calling
+    layer. Fused scoring at the planner level is still V2. See
+    `docs/guides/FULL_TEXT_SEARCH.md`.
 - **Graph-based retrieval**: Use graph structure to improve KNN
 
 ## References

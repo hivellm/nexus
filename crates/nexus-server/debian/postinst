@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create nexus user if it doesn't exist
+        if ! getent passwd nexus > /dev/null; then
+            useradd --system --home-dir /var/lib/nexus \
+                    --shell /usr/sbin/nologin \
+                    --comment "Nexus Graph Database" \
+                    nexus
+        fi
+
+        # Create necessary directories
+        mkdir -p /var/lib/nexus
+        mkdir -p /var/log/nexus
+        mkdir -p /etc/nexus
+
+        # Set ownership
+        chown -R nexus:nexus /var/lib/nexus
+        chown -R nexus:nexus /var/log/nexus
+        chown -R nexus:nexus /etc/nexus
+
+        # Set permissions
+        chmod 755 /var/lib/nexus
+        chmod 755 /var/log/nexus
+        chmod 755 /etc/nexus
+        chmod 644 /etc/nexus/config.yml
+
+        echo "Nexus Server installed successfully!"
+        echo "Start the service with: sudo systemctl start nexus-server"
+        echo "Enable on boot with: sudo systemctl enable nexus-server"
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

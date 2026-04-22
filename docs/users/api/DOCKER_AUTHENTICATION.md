@@ -26,7 +26,7 @@ docker run -d \
   -e NEXUS_ROOT_USERNAME=admin \
   -e NEXUS_ROOT_PASSWORD=secure_password \
   -e NEXUS_AUTH_ENABLED=true \
-  nexus-graph-db:latest
+  nexus:latest
 ```
 
 ## Docker Secrets
@@ -38,7 +38,7 @@ version: '3.8'
 
 services:
   nexus:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     secrets:
       - root_password
     environment:
@@ -65,7 +65,7 @@ version: '3.8'
 
 services:
   nexus:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     secrets:
       - root_password
       - api_key

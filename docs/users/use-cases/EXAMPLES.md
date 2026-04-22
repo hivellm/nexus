@@ -211,7 +211,7 @@ result = client.execute_cypher(
 ### Basic Usage
 
 ```typescript
-import { NexusClient } from '@hivellm/nexus-sdk';
+import { NexusClient } from '@hivehub/nexus-sdk';
 
 const client = new NexusClient({
   baseUrl: 'http://localhost:15474'

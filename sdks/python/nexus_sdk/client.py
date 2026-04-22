@@ -44,45 +44,110 @@ from nexus_sdk.models import (
     SwitchDatabaseRequest,
     SwitchDatabaseResponse,
 )
+from nexus_sdk.transport import (
+    Transport,
+    TransportCredentials,
+    TransportMode,
+    TransportRequest,
+    build_transport,
+    nx,
+)
+from nexus_sdk.transport.command_map import json_to_nexus, nexus_to_json
 
 
 class NexusClient:
-    """Nexus client for interacting with the Nexus graph database."""
+    """Nexus client for interacting with the Nexus graph database.
+
+    Defaults to the native binary RPC transport on
+    ``nexus://127.0.0.1:15475``. Callers can opt down to HTTP with a
+    ``transport='http'`` kwarg or by passing an ``http://`` URL.
+
+    Precedence for picking the transport (highest wins):
+
+    1. URL scheme in ``base_url`` (``nexus://`` -> RPC, ``http://`` -> HTTP, ...)
+    2. ``NEXUS_SDK_TRANSPORT`` env var
+    3. ``transport`` kwarg
+    4. Default: ``nexus``
+
+    Example::
+
+        # RPC (default)
+        async with NexusClient() as client:
+            r = await client.execute_cypher("RETURN 1 AS one")
+
+        # HTTP fallback
+        async with NexusClient(
+            base_url="http://localhost:15474",
+            api_key="nexus_sk_...",
+        ) as client:
+            r = await client.execute_cypher("RETURN 1 AS one")
+    """
 
     def __init__(
         self,
-        base_url: str,
+        base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
         timeout: float = 30.0,
         max_retries: int = 3,
+        transport: Optional[TransportMode] = None,
+        rpc_port: Optional[int] = None,
+        resp3_port: Optional[int] = None,
     ):
         """Create a new Nexus client.
 
         Args:
-            base_url: Base URL of the Nexus server (e.g., "http://localhost:15474")
-            api_key: Optional API key for authentication
-            username: Optional username for authentication
-            password: Optional password for authentication
-            timeout: Request timeout in seconds (default: 30.0)
-            max_retries: Maximum number of retries for failed requests (default: 3)
+            base_url: Endpoint URL. Accepts ``nexus://`` (binary RPC, default),
+                ``http://`` / ``https://``, ``resp3://``, or bare ``host[:port]``.
+                Defaults to ``nexus://127.0.0.1:15475`` when omitted.
+            api_key: Optional API key for authentication.
+            username: Optional username for authentication.
+            password: Optional password for authentication.
+            timeout: Request timeout in seconds (default: 30.0).
+            max_retries: Maximum number of retries for failed HTTP requests
+                (default: 3). Ignored by the RPC transport.
+            transport: Explicit transport hint. The URL scheme wins if set.
+            rpc_port: RPC port override when ``transport='nexus'`` (default 15475).
+            resp3_port: RESP3 port override (default 15476).
 
         Raises:
-            ConfigurationError: If the base URL is invalid
+            ConfigurationError: If the configuration is invalid.
         """
         try:
-            self.base_url = base_url.rstrip("/")
+            credentials = TransportCredentials(
+                api_key=api_key,
+                username=username,
+                password=password,
+            )
+            built = build_transport(
+                base_url=base_url,
+                credentials=credentials,
+                transport_hint=transport,
+                rpc_port=rpc_port,
+                resp3_port=resp3_port,
+                timeout_s=timeout,
+            )
+            self._transport: Transport = built.transport
+            self._endpoint = built.endpoint
+            self._mode = built.mode
+
+            self.base_url = str(built.endpoint.as_http_url()).rstrip("/")
             self.api_key = api_key
             self.username = username
             self.password = password
             self.timeout = timeout
             self.max_retries = max_retries
 
+            # Keep a dedicated httpx client for the REST-specific endpoints
+            # (``/data/nodes``, ``/schema/*``) that do not yet have RPC
+            # equivalents. Core methods route through ``self._transport``.
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(timeout),
-                headers={"User-Agent": "nexus-sdk/0.1.0"},
+                headers={"User-Agent": "nexus-sdk/1.0.0"},
             )
+        except (ValueError, TypeError) as e:
+            raise ConfigurationError(f"Invalid configuration: {e}") from e
         except Exception as e:
             raise ConfigurationError(f"Invalid configuration: {e}") from e
 
@@ -95,8 +160,18 @@ class NexusClient:
         await self.close()
 
     async def close(self):
-        """Close the HTTP client."""
+        """Close the HTTP client and transport."""
+        await self._transport.close()
         await self._client.aclose()
+
+    @property
+    def transport_mode(self) -> TransportMode:
+        """Active transport mode after the precedence chain was resolved."""
+        return self._mode
+
+    def endpoint_description(self) -> str:
+        """Human-readable endpoint + transport label."""
+        return self._transport.describe()
 
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers."""
@@ -161,68 +236,59 @@ class NexusClient:
     async def execute_cypher(
         self, query: str, parameters: Optional[Dict[str, Any]] = None
     ) -> QueryResult:
-        """Execute a Cypher query.
+        """Execute a Cypher query via the active transport.
 
         Args:
-            query: Cypher query string
-            parameters: Optional query parameters
+            query: Cypher query string.
+            parameters: Optional query parameters.
 
         Returns:
-            QueryResult containing columns, rows, and execution metadata
+            QueryResult containing columns, rows, and execution metadata.
 
         Raises:
-            ApiError: If the API returns an error
-            HttpError: If there's an HTTP error
+            ApiError: If the server returns an error.
         """
-        url = urljoin(self.base_url, "/cypher")
-        payload = {"query": query, "parameters": parameters or {}}
-
-        response = await self._execute_with_retry("POST", url, json=payload)
-        status = response.status_code
-
-        if status == 200:
-            data = response.json()
-            return QueryResult(**data)
-        else:
-            try:
-                error_text = response.text
-            except Exception:
-                error_text = f"HTTP {status}"
-            raise ApiError(error_text, status)
+        args = [nx.Str(query)]
+        if parameters:
+            args.append(json_to_nexus(parameters))
+        try:
+            resp = await self._transport.execute(TransportRequest(command="CYPHER", args=args))
+        except RuntimeError as e:
+            raise ApiError(str(e), 0) from e
+        data = nexus_to_json(resp.value)
+        if not isinstance(data, dict):
+            raise ApiError(f"CYPHER: expected object response, got {type(data).__name__}", 0)
+        return QueryResult(**data)
 
     async def get_stats(self) -> DatabaseStats:
-        """Get database statistics.
-
-        Returns:
-            DatabaseStats containing catalog and storage information
-
-        Raises:
-            ApiError: If the API returns an error
-        """
-        url = urljoin(self.base_url, "/stats")
-        response = await self._execute_with_retry("GET", url)
-        status = response.status_code
-
-        if status == 200:
-            data = response.json()
-            return DatabaseStats(**data)
-        else:
-            try:
-                error_text = response.text
-            except Exception:
-                error_text = f"HTTP {status}"
-            raise ApiError(error_text, status)
+        """Get database statistics via the active transport."""
+        try:
+            resp = await self._transport.execute(TransportRequest(command="STATS"))
+        except RuntimeError as e:
+            raise ApiError(str(e), 0) from e
+        data = nexus_to_json(resp.value)
+        if not isinstance(data, dict):
+            raise ApiError(f"STATS: expected object response, got {type(data).__name__}", 0)
+        # The RPC STATS reply surfaces flat counters; the REST path
+        # nests them under ``catalog``. Fold the RPC shape onto the
+        # DatabaseStats model so both transports return the same type.
+        if "catalog" not in data and "nodes" in data:
+            data = {
+                "catalog": {
+                    "node_count": data.get("nodes", 0),
+                    "relationship_count": data.get("relationships", 0),
+                    "label_count": data.get("labels", 0),
+                    "rel_type_count": data.get("rel_types", 0),
+                },
+                "storage": data.get("storage", {}),
+            }
+        return DatabaseStats(**data)
 
     async def health_check(self) -> bool:
-        """Check server health.
-
-        Returns:
-            True if server is healthy, False otherwise
-        """
+        """Check server health via the active transport."""
         try:
-            url = urljoin(self.base_url, "/health")
-            response = await self._execute_with_retry("GET", url)
-            return response.status_code == 200
+            await self._transport.execute(TransportRequest(command="HEALTH"))
+            return True
         except Exception:
             return False
 

@@ -13,6 +13,44 @@ Official Python SDK for Nexus graph database.
 pip install nexus-sdk
 ```
 
+## Quick Start (RPC — default)
+
+```python
+import asyncio
+from nexus_sdk import NexusClient
+
+async def main():
+    # Defaults to nexus://127.0.0.1:15475 (binary RPC).
+    async with NexusClient() as client:
+        result = await client.execute_cypher("RETURN 1 AS one")
+        print(f"{result.rows[0]}  (transport: {client.endpoint_description()})")
+
+asyncio.run(main())
+```
+
+## Transports
+
+| URL form                   | Transport                  | Default port | Use case                       |
+|----------------------------|----------------------------|--------------|--------------------------------|
+| `nexus://host[:port]`      | Binary RPC (MessagePack)   | `15475`      | **Default.** Lowest latency.   |
+| `http://host[:port]`       | HTTP/JSON (httpx)          | `15474`      | Browser proxies, firewalls.    |
+| `https://host[:port]`      | HTTPS/JSON                 | `443`        | Public-internet HTTP with TLS. |
+| `resp3://host[:port]`      | RESP3 (reserved)           | `15476`      | Not yet shipped — raises.      |
+
+Precedence: **URL scheme > `NEXUS_SDK_TRANSPORT` env var > `transport` kwarg > default (`nexus`)**.
+
+```python
+# HTTP fallback
+client = NexusClient(base_url="http://localhost:15474", api_key="nexus_sk_...")
+
+# Transport hint on a bare URL
+client = NexusClient(base_url="host:15474", transport="http")
+
+# Env override (`NEXUS_SDK_TRANSPORT=http`) honoured automatically
+```
+
+Full cross-SDK spec: [`docs/specs/sdk-transport.md`](../../docs/specs/sdk-transport.md).
+
 ## Usage
 
 ### Basic Example
@@ -22,26 +60,17 @@ import asyncio
 from nexus_sdk import NexusClient
 
 async def main():
-    # Create a client
-    client = NexusClient("http://localhost:15474")
+    async with NexusClient() as client:
+        # Cypher (routes through the active transport)
+        result = await client.execute_cypher("MATCH (n) RETURN n LIMIT 10")
+        print(f"Found {len(result.rows)} rows")
 
-    # Execute a Cypher query
-    result = await client.execute_cypher("MATCH (n) RETURN n LIMIT 10", None)
-    print(f"Found {len(result.rows)} rows")
-
-    # Create a node
-    create_response = await client.create_node(
-        labels=["Person"],
-        properties={"name": "Alice"}
-    )
-    print(f"Created node with ID: {create_response.node_id}")
-
-    # Get a node
-    node = await client.get_node(create_response.node_id)
-    if node:
-        print(f"Node: {node}")
-
-    await client.close()
+        # Convenience helpers call into Cypher under the hood
+        create_response = await client.create_node(
+            labels=["Person"],
+            properties={"name": "Alice"},
+        )
+        print(f"Created node with ID: {create_response.node_id}")
 
 asyncio.run(main())
 ```

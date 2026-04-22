@@ -1,0 +1,390 @@
+//! [`Executor`] struct and its foundational methods: constructors, accessor
+//! shims over [`ExecutorShared`], and row-lock helpers. Operator-execution
+//! methods live in sibling modules (`operators/*`, `eval/*`) — each of those
+//! adds its own `impl Executor { … }` block against this same type.
+
+use super::shared::ExecutorShared;
+use super::types::ExecutorConfig;
+use crate::Result;
+use crate::catalog::Catalog;
+use crate::database::DatabaseManager;
+use crate::index::{KnnIndex, LabelIndex};
+use crate::relationship::{RelationshipPropertyIndex, RelationshipStorageManager};
+use crate::storage::{
+    RecordStore,
+    row_lock::{RowLockGuard, RowLockManager},
+};
+use crate::udf::UdfRegistry;
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Query executor.
+///
+/// Cloneable for concurrent execution — each clone shares the same
+/// underlying data through [`ExecutorShared`]. The per-clone state
+/// (query count, property-access stats) is kept distinct per clone.
+pub struct Executor {
+    /// Shared state (catalog, store, indexes)
+    pub(super) shared: ExecutorShared,
+    /// Query execution counter for lazy cache warming
+    pub(super) query_count: std::sync::atomic::AtomicUsize,
+    /// Property access statistics for automatic indexing
+    pub(super) property_access_stats: Arc<RwLock<HashMap<String, usize>>>,
+    /// Executor configuration for controlling execution behavior
+    pub(super) config: ExecutorConfig,
+    // JIT and parallel execution hooks are gated behind ExecutorConfig flags;
+    // they remain inert until the core optimiser stabilises.
+    /// Phase 8: Relationship processing optimizations enabled
+    pub(super) enable_relationship_optimizations: bool,
+}
+
+impl Clone for Executor {
+    fn clone(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            query_count: std::sync::atomic::AtomicUsize::new(
+                self.query_count.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            property_access_stats: self.property_access_stats.clone(),
+            config: self.config.clone(),
+            enable_relationship_optimizations: self.enable_relationship_optimizations,
+        }
+    }
+}
+
+impl Executor {
+    /// Create a new executor with default configuration
+    pub fn new(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+    ) -> Result<Self> {
+        Self::new_with_config(
+            catalog,
+            store,
+            label_index,
+            knn_index,
+            ExecutorConfig::default(),
+        )
+    }
+
+    /// Create a new executor with custom configuration
+    pub fn new_with_config(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+        config: ExecutorConfig,
+    ) -> Result<Self> {
+        Ok(Self {
+            shared: ExecutorShared::new(catalog, store, label_index, knn_index)?,
+            query_count: std::sync::atomic::AtomicUsize::new(0),
+            property_access_stats: Arc::new(RwLock::new(HashMap::new())),
+            config,
+            enable_relationship_optimizations: true, // Phase 8: Enable by default
+        })
+    }
+
+    /// Create a new executor with custom UDF registry
+    pub fn with_udf_registry(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+        udf_registry: UdfRegistry,
+    ) -> Result<Self> {
+        Self::with_udf_registry_and_config(
+            catalog,
+            store,
+            label_index,
+            knn_index,
+            udf_registry,
+            ExecutorConfig::default(),
+        )
+    }
+
+    /// Create a new executor with custom UDF registry and configuration
+    pub fn with_udf_registry_and_config(
+        catalog: &Catalog,
+        store: &RecordStore,
+        label_index: &LabelIndex,
+        knn_index: &KnnIndex,
+        udf_registry: UdfRegistry,
+        config: ExecutorConfig,
+    ) -> Result<Self> {
+        Ok(Self {
+            shared: ExecutorShared::with_udf_registry(
+                catalog,
+                store,
+                label_index,
+                knn_index,
+                udf_registry,
+            )?,
+            query_count: std::sync::atomic::AtomicUsize::new(0),
+            property_access_stats: Arc::new(RwLock::new(HashMap::new())),
+            config,
+            enable_relationship_optimizations: true, // Phase 8: Enable by default
+        })
+    }
+
+    /// Override the `columnar_threshold` knob on this executor.
+    ///
+    /// Exposed as a narrow public mutator so benchmarks and profiling
+    /// tools can pin the filter / groupless-aggregate paths to the
+    /// row or columnar branch without mutating `ExecutorConfig`
+    /// directly. See [`docs/specs/executor-columnar.md`] for the
+    /// semantics of the knob.
+    pub fn set_columnar_threshold(&mut self, threshold: usize) {
+        self.config.columnar_threshold = threshold;
+    }
+
+    /// Run the filter operator over an in-memory working set.
+    ///
+    /// Builds a fresh `ExecutionContext`, binds `rows` to `variable`,
+    /// and runs `execute_filter` with `predicate`. Returns the number
+    /// of rows that survived the predicate. Useful for benches,
+    /// profiling, and tooling that wants to drive a single operator
+    /// without the full query pipeline.
+    pub fn run_in_memory_filter(
+        &self,
+        variable: &str,
+        rows: Vec<serde_json::Value>,
+        predicate: &str,
+    ) -> Result<usize> {
+        use super::context::ExecutionContext;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable(variable, serde_json::Value::Array(rows));
+        self.execute_filter(&mut context, predicate)?;
+        Ok(context.result_set.rows.len())
+    }
+
+    /// Run the groupless-aggregate operator over an in-memory working
+    /// set. See [`Self::run_in_memory_filter`] for the mechanics;
+    /// this variant takes an [`Aggregation`] and ignores `GROUP BY`
+    /// (same shape as the columnar fast path).
+    pub fn run_in_memory_aggregate(
+        &self,
+        variable: &str,
+        rows: Vec<serde_json::Value>,
+        aggregation: &super::types::Aggregation,
+    ) -> Result<usize> {
+        use super::context::ExecutionContext;
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable(variable, serde_json::Value::Array(rows));
+        self.execute_aggregate(&mut context, &[], std::slice::from_ref(aggregation))?;
+        Ok(context.result_set.rows.len())
+    }
+
+    /// Get reference to UDF registry
+    pub fn udf_registry(&self) -> &UdfRegistry {
+        &self.shared.udf_registry
+    }
+
+    /// Get mutable reference to UDF registry (creates new Arc if needed)
+    pub fn udf_registry_mut(&mut self) -> &mut UdfRegistry {
+        // Arc::make_mut clones if there are other strong references; the
+        // caller must treat this path as read-write only when the registry
+        // is uniquely owned.
+        Arc::get_mut(&mut self.shared.udf_registry)
+            .expect("UDF registry should be uniquely owned for mutation")
+    }
+
+    /// Set the database manager for multi-database support
+    pub fn set_database_manager(
+        &self,
+        manager: Arc<parking_lot::RwLock<DatabaseManager>>,
+    ) -> std::result::Result<(), Arc<parking_lot::RwLock<DatabaseManager>>> {
+        self.shared.set_database_manager(manager)
+    }
+
+    /// Get a clone of the internal store (for syncing changes back to engine)
+    pub fn get_store(&self) -> RecordStore {
+        self.shared.store.read().clone()
+    }
+
+    /// Get reference to shared state (for internal use)
+    pub(crate) fn shared(&self) -> &ExecutorShared {
+        &self.shared
+    }
+
+    /// Install a one-shot pre-parsed AST that the next `execute()`
+    /// call will use in place of parsing `Query.cypher`. Returns the
+    /// previous override (if any) so callers doing nested cluster-
+    /// mode dispatches can save-and-restore.
+    ///
+    /// Used by the engine's cluster-mode path:
+    /// `execute_cypher_with_context` parses the query, rewrites
+    /// label / type strings through `cluster::scope_query`,
+    /// installs the rewritten AST via this method, then invokes the
+    /// classic `execute` entry point. The override is one-shot — the
+    /// executor clears the slot on each call so an override cannot
+    /// leak into a subsequent unrelated query.
+    /// Share the engine's composite B-tree registry with this executor.
+    /// Called from `Engine::refresh_executor` after every engine-side
+    /// index update so the executor sees the current registry through
+    /// the `composite_btree()` accessor. Subsequent calls are no-ops
+    /// (OnceLock semantics) — the registry itself is internally
+    /// mutable via `Arc<RwLock>`, so one install is enough.
+    pub(crate) fn install_composite_btree(
+        &self,
+        registry: crate::index::composite_btree::CompositeBtreeRegistry,
+    ) {
+        self.shared.set_composite_btree(registry);
+    }
+
+    /// Borrow the composite B-tree registry installed by the engine.
+    /// Returns `None` for executors built outside an engine (test
+    /// harness in `crate::testing`).
+    pub(super) fn composite_btree(
+        &self,
+    ) -> Option<&crate::index::composite_btree::CompositeBtreeRegistry> {
+        self.shared.composite_btree()
+    }
+
+    /// Share the engine's full-text search registry with this executor.
+    pub(crate) fn install_fulltext(
+        &self,
+        registry: crate::index::fulltext_registry::FullTextRegistry,
+    ) {
+        self.shared.set_fulltext(registry);
+    }
+
+    pub(crate) fn install_preparsed_ast_override(
+        &self,
+        ast: Option<super::parser::CypherQuery>,
+    ) -> Option<super::parser::CypherQuery> {
+        let mut slot = self.shared.preparsed_ast_override.lock();
+        std::mem::replace(&mut *slot, ast)
+    }
+
+    /// Phase 8: Get relationship storage manager (for synchronization)
+    pub(crate) fn relationship_storage(
+        &self,
+    ) -> Option<&Arc<parking_lot::RwLock<RelationshipStorageManager>>> {
+        self.shared.relationship_storage.as_ref()
+    }
+
+    /// Phase 8: Get relationship property index (for synchronization)
+    pub(crate) fn relationship_property_index(
+        &self,
+    ) -> Option<&Arc<parking_lot::RwLock<RelationshipPropertyIndex>>> {
+        self.shared.relationship_property_index.as_ref()
+    }
+
+    /// Get reference to catalog (for internal use).
+    /// Catalog is thread-safe via LMDB transactions, so no lock needed.
+    pub(super) fn catalog(&self) -> &Catalog {
+        &self.shared.catalog
+    }
+
+    /// Read lock on store (guard derefs to `&RecordStore`).
+    pub(super) fn store(&self) -> parking_lot::RwLockReadGuard<'_, RecordStore> {
+        self.shared.store.read()
+    }
+
+    /// Write lock on store.
+    pub(super) fn store_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RecordStore> {
+        self.shared.store.write()
+    }
+
+    /// Read lock on label_index (guard derefs to `&LabelIndex`).
+    pub(super) fn label_index(&self) -> parking_lot::RwLockReadGuard<'_, LabelIndex> {
+        self.shared.label_index.read()
+    }
+
+    /// Crate-visible label-index read for outside-of-executor
+    /// callers that need authoritative node-to-label membership
+    /// without scanning the (potentially stale) engine-side
+    /// `IndexManager::label_index`. Used by the FTS refresh hook in
+    /// phase6_fulltext-wal-integration to reconcile the engine's
+    /// cloned index with the executor's post-CREATE truth.
+    pub(crate) fn label_index_read(&self) -> parking_lot::RwLockReadGuard<'_, LabelIndex> {
+        self.shared.label_index.read()
+    }
+
+    /// Write lock on label_index.
+    pub(super) fn label_index_mut(&self) -> parking_lot::RwLockWriteGuard<'_, LabelIndex> {
+        self.shared.label_index.write()
+    }
+
+    /// Read lock on knn_index (guard derefs to `&KnnIndex`).
+    pub(super) fn knn_index(&self) -> parking_lot::RwLockReadGuard<'_, KnnIndex> {
+        self.shared.knn_index.read()
+    }
+
+    /// Write lock on knn_index.
+    pub(super) fn knn_index_mut(&self) -> parking_lot::RwLockWriteGuard<'_, KnnIndex> {
+        self.shared.knn_index.write()
+    }
+
+    /// Row lock manager shared across operations.
+    pub(super) fn row_lock_manager(&self) -> &RowLockManager {
+        &self.shared.row_lock_manager
+    }
+
+    /// Shared transaction manager (reused across operations).
+    pub(super) fn transaction_manager(
+        &self,
+    ) -> &Arc<parking_lot::Mutex<crate::transaction::TransactionManager>> {
+        &self.shared.transaction_manager
+    }
+
+    /// Generate a transaction ID for row locking.
+    ///
+    /// Uses a thread-id hash so that concurrent readers/writers produce
+    /// distinct ids without needing a global counter.
+    pub(super) fn generate_tx_id(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let thread_id = std::thread::current().id();
+        let mut hasher = DefaultHasher::new();
+        thread_id.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Acquire row locks for the two endpoints of a relationship creation.
+    /// When `source_id == target_id` only a single guard is returned.
+    pub(super) fn acquire_relationship_locks(
+        &self,
+        source_id: u64,
+        target_id: u64,
+    ) -> Result<(RowLockGuard, Option<RowLockGuard>)> {
+        use crate::storage::row_lock::ResourceId;
+
+        let tx_id = self.generate_tx_id();
+        let lock_manager = self.row_lock_manager();
+
+        let source_lock = lock_manager.acquire_write(tx_id, ResourceId::node(source_id))?;
+
+        let target_lock = if source_id != target_id {
+            Some(lock_manager.acquire_write(tx_id, ResourceId::node(target_id))?)
+        } else {
+            None
+        };
+
+        Ok((source_lock, target_lock))
+    }
+
+    /// Acquire a row lock for a single node (UPDATE path).
+    pub(super) fn acquire_node_lock(&self, node_id: u64) -> Result<RowLockGuard> {
+        use crate::storage::row_lock::ResourceId;
+
+        let tx_id = self.generate_tx_id();
+        let lock_manager = self.row_lock_manager();
+
+        lock_manager.acquire_write(tx_id, ResourceId::node(node_id))
+    }
+
+    /// Acquire a row lock for a relationship (UPDATE/DELETE path).
+    pub(super) fn acquire_relationship_lock(&self, rel_id: u64) -> Result<RowLockGuard> {
+        use crate::storage::row_lock::ResourceId;
+
+        let tx_id = self.generate_tx_id();
+        let lock_manager = self.row_lock_manager();
+
+        lock_manager.acquire_write(tx_id, ResourceId::relationship(rel_id))
+    }
+}

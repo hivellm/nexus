@@ -58,6 +58,23 @@ Type ::= Identifier
 
 ### WHERE Clause
 
+> **Clause-ordering rule** (Neo4j 2025.09.0 parity, enforced since
+> `phase3_unwind-where-neo4j-parity`): `WHERE` is only valid
+> immediately after a `MATCH`, `OPTIONAL MATCH`, or `WITH`. It is
+> **not** a standalone top-level clause — `UNWIND … AS x WHERE …`,
+> `CREATE (…) WHERE …`, and any other non-MATCH/WITH producer
+> followed by `WHERE` reject with a syntax error listing the
+> allowed follow-up clauses. Migrate by inserting a `WITH <vars>`
+> pass-through projection:
+>
+> ```cypher
+> -- reject: bare WHERE after UNWIND
+> UNWIND [1, 2, 3, 4, 5] AS x WHERE x > 2 RETURN x
+>
+> -- accept: WITH x projects through, WHERE attaches to WITH
+> UNWIND [1, 2, 3, 4, 5] AS x WITH x WHERE x > 2 RETURN x
+> ```
+
 ```cypher
 -- Property equality
 WHERE n.name = 'Alice'
@@ -452,6 +469,15 @@ RETURN num * 2 AS doubled
 UNWIND $names AS name
 WHERE name STARTS WITH 'A'
 RETURN name
+
+-- Bulk ingest: one CREATE per unwound row. The planner resolves property
+-- expressions like `{id: id}` against the current row's UNWIND binding.
+UNWIND range(0, 9) AS id
+CREATE (n:Item {id: id})
+
+-- UNWIND a list literal into a CREATE iteration
+UNWIND ['alpha', 'beta', 'gamma'] AS name
+CREATE (n:Listed {name: name})
 ```
 
 ### UNION / UNION ALL
@@ -1368,6 +1394,39 @@ RETURN null.name
 -- Error: Cannot access property on null
 ```
 
+### Serialization-dependent Runtime Errors (`phase2_propagate-serde-errors`)
+
+Operators that build canonical row/group keys via JSON serialisation
+**now propagate the error** instead of silently coercing the failing
+row into an empty-string bucket. This matters in practice when a
+property holds a non-finite float (`NaN`, `+Infinity`, `-Infinity`) or
+any other value the JSON data model cannot represent.
+
+| Clause | Error message prefix | Failure mode before phase2 |
+|--------|----------------------|----------------------------|
+| `GROUP BY` | `GROUP BY key serialization failed (…)` | All failing rows collapsed into one bogus group with key `""`. |
+| `DISTINCT` | `DISTINCT key serialization failed (…)` | Unrelated failing rows silently deduplicated together. |
+| `UNION` (not `UNION ALL`) | `UNION dedup key serialization failed (…)` | Same as DISTINCT, across UNION branches. |
+
+Each failure bumps the Prometheus counter
+`nexus_executor_serde_fallback_total{site="<op>"}` (label values:
+`aggregate_group_key`, `distinct_key`, `union_dedup_key`). Operators
+wishing to sidestep the error can use `UNION ALL` instead of `UNION`,
+strip the offending property before grouping, or coerce non-finite
+floats to `null`.
+
+A secondary fallback path at `eval/helpers.rs::update_result_set_from_rows`
+keeps its previous dedup-best-effort behaviour but now logs a
+`tracing::warn!` and bumps
+`nexus_executor_serde_fallback_total{site="helper_row_dedup_key"}` so
+the degradation is observable. The key is degraded to the Rust `Debug`
+representation of the failing value (distinct values still produce
+distinct keys), never to the empty string.
+
+Cache-warming failures inside the executor hot path
+(`Executor::execute` lazy warmup) are similarly logged and counted
+under `site="warm_cache_lazy"` instead of being silently dropped.
+
 ## Performance Characteristics
 
 | Query Pattern | Complexity | Notes |
@@ -1467,6 +1526,71 @@ TPC-like graph query suite (future V1):
 - UNION / UNION ALL
 - Subqueries in WHERE (EXISTS, ANY, ALL)
 - Map and list operators
+
+## Advanced Types (v1.5 — phase6_opencypher-advanced-types)
+
+### BYTES scalar
+
+Nexus represents binary data as the JSON shape
+`{"_bytes": "<base64>"}`. The following scalar functions are
+available in every expression position:
+
+| Function                              | Result                                    |
+|---------------------------------------|-------------------------------------------|
+| `bytes(str)`                          | UTF-8 encode a STRING to BYTES            |
+| `bytesFromBase64(str)`                | Decode a base64 STRING to BYTES           |
+| `bytesToBase64(b)`                    | Encode BYTES as a base64 STRING           |
+| `bytesToHex(b)`                       | Lowercase hex of the bytes                |
+| `bytesLength(b)`                      | Length in bytes (INTEGER)                 |
+| `bytesSlice(b, start, len)`           | Sub-range, clamped like `substring`       |
+
+NULL in → NULL out across every entry point. The per-property cap
+is 64 MiB; exceeding it raises `ERR_BYTES_TOO_LARGE`.
+
+### Dynamic labels on writes
+
+`$param` is accepted wherever a label appears in a write clause:
+
+```cypher
+CREATE (n:$label)
+CREATE (n:Base:$role)
+SET n:$label
+REMOVE n:$label
+```
+
+The parameter may be a STRING (single label) or a LIST<STRING>
+(expands to multiple labels in order). Rejected with
+`ERR_INVALID_LABEL`: NULL, empty string, empty list, non-STRING
+list element, or a label string containing characters outside
+`[A-Za-z_][A-Za-z0-9_]*`.
+
+### Composite B-tree indexes
+
+```cypher
+CREATE INDEX person_tenant_id FOR (p:Person) ON (p.tenantId, p.id)
+```
+
+Seek modes: exact (every column bound), prefix (leading columns
+bound), range on the first unbound column. `UNIQUE` flag
+supported; a duplicate tuple raises `ERR_CONSTRAINT_VIOLATED`.
+
+### Transaction savepoints
+
+See [../guides/SAVEPOINTS.md](../guides/SAVEPOINTS.md). Statements:
+`SAVEPOINT name`, `ROLLBACK TO SAVEPOINT name`,
+`RELEASE SAVEPOINT name`.
+
+### Graph scoping
+
+`GRAPH[<name>]` as a leading clause scopes the query to a named
+database:
+
+```cypher
+GRAPH[analytics] MATCH (n:Person) RETURN count(n)
+```
+
+Exactly one such clause may appear, and only at the top. Missing
+or inaccessible graphs raise `ERR_GRAPH_NOT_FOUND`.
 
 ### V3: Graph Algorithms
 

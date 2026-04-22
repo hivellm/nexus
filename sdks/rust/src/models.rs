@@ -149,7 +149,7 @@ pub struct DatabaseStats {
 }
 
 /// Catalog statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CatalogStats {
     /// Number of labels
     #[serde(rename = "label_count")]
@@ -166,7 +166,7 @@ pub struct CatalogStats {
 }
 
 /// Label index statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LabelIndexStats {
     /// Number of indexed labels
     #[serde(rename = "indexed_labels")]
@@ -177,7 +177,7 @@ pub struct LabelIndexStats {
 }
 
 /// KNN index statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KnnIndexStats {
     /// Total number of vectors
     #[serde(rename = "total_vectors")]
@@ -192,8 +192,20 @@ pub struct KnnIndexStats {
 /// Client configuration
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    /// Base URL of the Nexus server
+    /// Endpoint URL. Accepts `nexus://host[:port]` (RPC default),
+    /// `http://host[:port]`, `https://host[:port]`, or bare
+    /// `host[:port]` (treated as `nexus://`).
     pub base_url: String,
+    /// Explicit transport override. `None` means "infer from URL
+    /// scheme or NEXUS_SDK_TRANSPORT env var". See
+    /// [`docs/specs/sdk-transport.md`] for the precedence rules.
+    pub transport: Option<crate::transport::TransportMode>,
+    /// Default RPC port when the URL does not carry one.
+    pub rpc_port: u16,
+    /// Default RESP3 port when the URL does not carry one. Reserved;
+    /// not yet used by the SDK but accepted so a config that targets
+    /// a non-default RESP3 port compiles cleanly.
+    pub resp3_port: u16,
     /// API key for authentication (optional)
     pub api_key: Option<String>,
     /// Username for authentication (optional)
@@ -207,9 +219,16 @@ pub struct ClientConfig {
 }
 
 impl Default for ClientConfig {
+    /// Default endpoint points at the native Nexus RPC listener on
+    /// the loopback. New SDK users get the fastest transport without
+    /// code changes; callers who need HTTP pass `http://host:15474`
+    /// or set `transport = Some(TransportMode::Http)`.
     fn default() -> Self {
         Self {
-            base_url: "http://localhost:15474".to_string(),
+            base_url: "nexus://127.0.0.1:15475".to_string(),
+            transport: None,
+            rpc_port: 15475,
+            resp3_port: 15476,
             api_key: None,
             username: None,
             password: None,

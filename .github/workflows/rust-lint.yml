@@ -4,10 +4,10 @@ on:
   push:
     branches: [master, main, develop]
     paths:
-      - "nexus-core/**"
-      - "nexus-server/**"
-      - "nexus-cli/**"
-      - "nexus-protocol/**"
+      - "crates/nexus-core/**"
+      - "crates/nexus-server/**"
+      - "crates/nexus-cli/**"
+      - "crates/nexus-protocol/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -16,10 +16,10 @@ on:
   pull_request:
     branches: ["**"]
     paths:
-      - "nexus-core/**"
-      - "nexus-server/**"
-      - "nexus-cli/**"
-      - "nexus-protocol/**"
+      - "crates/nexus-core/**"
+      - "crates/nexus-server/**"
+      - "crates/nexus-cli/**"
+      - "crates/nexus-protocol/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"

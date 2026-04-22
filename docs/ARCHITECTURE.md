@@ -1179,6 +1179,62 @@ CorrelationGraph
 6. **Export Flexibility**: Multiple export formats for different use cases
 7. **Pattern Extensibility**: Easy to add new pattern detectors via trait implementation
 
+## Server State Ownership (`NexusServer`)
+
+Every piece of shared server state — the engine, the shared executor,
+the multi-database manager, RBAC, the auth/JWT/audit chain, and the
+root-user config — lives on the `NexusServer` struct in
+[`nexus-server/src/lib.rs`](../nexus-server/src/lib.rs).
+`NexusServer::new` builds the struct once inside `main.rs::async_main`,
+wraps it in an `Arc`, and hands the same `Arc<NexusServer>` to Axum via
+`.with_state(...)`.
+
+HTTP handlers reach the state through Axum's `State` extractor:
+
+```rust
+pub async fn create_node(
+    State(server): State<Arc<NexusServer>>,
+    Json(request): Json<CreateNodeRequest>,
+) -> Json<CreateNodeResponse> {
+    let mut engine = server.engine.write().await;
+    // ...
+}
+```
+
+This replaces an older pattern that kept every subsystem in its own
+`OnceLock<Arc<_>>` per API file (`api::cypher::EXECUTOR`,
+`api::data::ENGINE`, …), which broke test isolation — two tests that
+each called `init_engine` silently collided on the same process-wide
+singleton. The migration was sliced into `phase2a`–`phase2e` and is
+now **complete**:
+
+- **phase2a** — cypher + data
+- **phase2b** — schema + stats + knn
+- **phase2c** — performance monitoring: query statistics, plan cache,
+  DBMS procedures, MCP tool statistics, MCP tool cache
+- **phase2d** — graph correlation + comparison + UMICP: the
+  `GraphCorrelationManager`, the two comparison `Graph` instances, and
+  the `GraphUmicpHandler` (JSON-RPC dispatcher for `graph.*` methods).
+  Default comparison graphs are built inside `NexusServer::new` via
+  the private `build_default_comparison_graphs` helper.
+- **phase2e** — observability: the per-server `start_time: Instant`
+  and the `Arc<PrometheusMetrics>` counter pack. `api::health::init` +
+  `api::prometheus::init` are gone; handlers read uptime off
+  `server.start_time` and counters off `server.metrics`. The cypher
+  execute path threads the same `&NexusServer` into
+  `record_prometheus_metrics`.
+
+**Rule for future subsystems**: add an `Arc<_>` field to `NexusServer`,
+build it inside `NexusServer::new` with whatever defaults apply, and
+read it from handlers via `server.<field>`. Do not reach for a
+`OnceLock`. The anti-regression guard at
+[`nexus-server/tests/no_oncelock_globals.rs`](../nexus-server/tests/no_oncelock_globals.rs)
+greps `nexus-server/src/api/` on every `cargo test` run and fails if a
+`static <NAME>: OnceLock<…>` declaration is reintroduced. Genuine
+process-wide singletons (e.g. RESP3 / RPC listener counters shared
+across accept threads) can opt into the allow-list at the top of that
+file with an explanatory comment.
+
 ## References
 
 - Neo4j Internals: https://neo4j.com/docs/operations-manual/current/

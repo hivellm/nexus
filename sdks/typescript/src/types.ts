@@ -11,18 +11,39 @@ export interface AuthConfig {
 }
 
 /**
- * Connection configuration for Nexus client
+ * Transport selector. Values match the URL-scheme tokens and the
+ * `NEXUS_SDK_TRANSPORT` env-var strings.
+ */
+export type TransportMode = 'nexus' | 'resp3' | 'http' | 'https';
+
+/**
+ * Connection configuration for Nexus client.
+ *
+ * Transport precedence (see `docs/specs/sdk-transport.md`):
+ *   URL scheme in `baseUrl` > `NEXUS_SDK_TRANSPORT` env > `transport` field > default (`nexus`).
  */
 export interface NexusConfig {
-  /** Base URL of the Nexus server */
-  baseUrl: string;
-  /** Authentication configuration */
-  auth: AuthConfig;
-  /** Request timeout in milliseconds (default: 30000) */
+  /**
+   * Endpoint URL. Accepts `nexus://` (binary RPC, default),
+   * `http://` / `https://`, `resp3://`, or the bare `host[:port]` form
+   * (treated as RPC).
+   *
+   * Defaults to `nexus://127.0.0.1:15475` when omitted.
+   */
+  baseUrl?: string;
+  /** Authentication configuration. */
+  auth?: AuthConfig;
+  /** Explicit transport hint. The URL scheme wins if set. */
+  transport?: TransportMode;
+  /** RPC port override when `transport === 'nexus'` (default 15475). */
+  rpcPort?: number;
+  /** RESP3 port override (default 15476, reserved for future use). */
+  resp3Port?: number;
+  /** Request timeout in milliseconds for the HTTP transport (default: 30000). */
   timeout?: number;
-  /** Number of retry attempts for failed requests (default: 3) */
+  /** Number of retry attempts for failed HTTP requests (default: 3). */
   retries?: number;
-  /** Enable debug logging (default: false) */
+  /** Enable debug logging (default: false). */
   debug?: boolean;
 }
 
