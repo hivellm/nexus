@@ -228,9 +228,22 @@ impl Catalog {
             static TEST_CATALOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
             let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
-                // Use a fixed shared directory for all tests
-                // This ensures label/type IDs are consistent across all tests
+                // Single shared directory across all tests in a
+                // `cargo test` invocation. `get_or_init` runs exactly
+                // once per process, so wiping the dir here resets
+                // every label / type / key id to zero at the start
+                // of each `cargo test` run — without the wipe, LMDB
+                // state persists across runs and tests that assert
+                // on `db.labels()` content see accumulated cruft
+                // that eventually causes `get_or_create_label` to
+                // allocate ids past the 64-bit `label_bits` cap
+                // (and silently drop newly-registered labels).
+                // Every test binary initialises its own OnceLock, so
+                // concurrent `cargo test -p nexus-core` and
+                // `cargo test -p nexus-server` don't race on the
+                // wipe — only one init body runs per process.
                 let dir = std::env::temp_dir().join("nexus_test_catalogs_shared");
+                let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).ok();
                 dir
             });
@@ -257,11 +270,23 @@ impl Catalog {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&actual_path)?;
 
-        // Open LMDB environment with specified map size, 15 databases
+        // Open LMDB environment with specified map size, 15 databases.
+        // `max_readers` is bumped from LMDB's 126 default because the
+        // test binary holds a single shared catalog env across ~2000
+        // parallel tests, each opening at least one read txn per
+        // query. Without the bump, the env exhausts TLS reader slots
+        // and subsequent `env.read_txn()` / `env.write_txn()` calls
+        // return `Database(Mdb(TlsFull))` — surfaced as flaky failures
+        // in `graph::core::tests::test_edge_is_empty` and any other
+        // test that happens to try to open a (read) txn while the
+        // slot table is full. 2048 slots covers the maximum parallel
+        // depth `cargo test` uses at the default (logical-core) thread
+        // count on a typical 16-core bench box.
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(actual_map_size)
                 .max_dbs(15) // Increased for constraints, UDFs, and procedures databases
+                .max_readers(2048)
                 .open(&actual_path)?
         };
         let env = Arc::new(env);

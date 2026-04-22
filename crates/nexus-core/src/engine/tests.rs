@@ -952,10 +952,23 @@ fn match_scopes_by_label_and_property_together() {
 /// `plan_execution_strategy::synthesise_anonymous_source_anchors` so the
 /// NodeByLabel + Filter pair constrain the source set and the Expand's
 /// `source_var` resolves to the anchor instead of the source-less fallback.
+// Uses `with_isolated_catalog` on purpose: the shared test
+// catalog races with concurrent writers from other tests, which
+// interleaves label-id allocations and occasionally pushes this
+// test's `P` label id past the point where the planner's
+// NodeByLabel+Filter pair can constrain the MATCH anchor —
+// Expand then falls back to scanning every `KNOWS` relationship
+// in the store and the count assertion trips. An isolated
+// catalog gives this test its own label-id space, bounded to
+// its own fixtures. `#[serial_test::serial]` keeps the LMDB
+// TLS-slot pressure low on Windows so the isolated-env open
+// does not collide with `graph::core::tests::test_edge_is_empty`
+// (if that test re-acquires an isolated env in a later refactor).
 #[test]
+#[serial_test::serial]
 fn match_anonymous_anchor_with_label_and_property_scopes_expand() {
     let ctx = crate::testing::TestContext::new();
-    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
 
     // Mirror the bench fixture: one dataset with `:A`/`:B` labels and
     // an `id: 0` node that must NOT match `(:P {id: 0})`, one dataset
@@ -1294,31 +1307,25 @@ fn call_procedure_yield_star_parses() {
 /// This test covers the engine-level contract — it does not prove the
 /// bench's RPC path, which may serialise procedure rows differently.
 #[test]
+#[serial_test::serial]
 fn db_labels_procedure_emits_a_row_per_label() {
-    // Stays on the shared-catalog path (`with_data_dir`) — switching
-    // to `with_isolated_catalog` tipped the process over LMDB's
-    // per-thread TLS-slot ceiling on Windows and caused sibling
-    // tests to fail with `Database(Mdb(TlsFull))`. The shared
-    // catalog is a deliberate resource-pooling strategy the rest of
-    // the test suite relies on.
-    //
-    // Empirically the multi-pattern form
-    // `CREATE (:A), (:B), (:C)` sometimes fails to register the
-    // third label once the shared catalog has accumulated state
-    // across many prior tests. Splitting the CREATE into three
-    // separate statements sidesteps that path while keeping the
-    // regression assertion intact — each `execute_cypher` commits
-    // its own label registration before the next runs.
+    // Stays on the shared-catalog path (`with_data_dir`) to keep
+    // LMDB TLS-slot pressure low — Windows exhausts the process
+    // TLS pool once we open too many isolated envs across the
+    // suite. The flake this test used to hit (A / B / C randomly
+    // missing from `db.labels()`) came from label ids drifting
+    // past the 64-bit `label_bits` cap across multiple `cargo
+    // test` runs; the catalog-init wipe added to
+    // `Catalog::new` resets the shared env at the start of every
+    // process so ids stay < 64 for this test's window, and
+    // `#[serial_test::serial]` keeps concurrent shared-catalog
+    // writers from racing on id allocation while this one runs.
     let ctx = crate::testing::TestContext::new();
     let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
     engine
-        .execute_cypher("CREATE (:Phase6Labels_A {id: 0})")
-        .unwrap();
-    engine
-        .execute_cypher("CREATE (:Phase6Labels_B {id: 1})")
-        .unwrap();
-    engine
-        .execute_cypher("CREATE (:Phase6Labels_C {id: 2})")
+        .execute_cypher(
+            "CREATE (:Phase6Labels_A {id: 0}), (:Phase6Labels_B {id: 1}), (:Phase6Labels_C {id: 2})",
+        )
         .unwrap();
 
     let r = engine

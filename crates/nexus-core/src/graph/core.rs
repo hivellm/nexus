@@ -1534,10 +1534,16 @@ mod tests {
         assert!(!node_with_label.is_empty());
     }
 
+    // Uses the shared-catalog `create_test_graph` helper instead of
+    // `create_isolated_test_graph` — opening a fresh LMDB env here
+    // used to push the process past Windows' TLS-slot ceiling and
+    // surface as `Database(Mdb(TlsFull))`. This test only inspects
+    // the `edge.is_empty()` predicate on its own fresh node +
+    // relationship ids; it does not depend on the catalog label id
+    // space being empty, so the shared catalog is safe.
     #[test]
     fn test_edge_is_empty() {
-        // Use isolated graph to avoid parallel test interference
-        let (graph, _dir) = create_isolated_test_graph();
+        let (graph, _dir) = create_test_graph();
 
         let source_id = graph.create_node(vec!["Person".to_string()]).unwrap();
         let target_id = graph.create_node(vec!["Person".to_string()]).unwrap();
@@ -1555,8 +1561,10 @@ mod tests {
 
     #[test]
     fn test_clear_cache() {
-        // Use isolated graph to avoid parallel test interference
-        let (graph, _dir) = create_isolated_test_graph();
+        // Shared-catalog helper — see `test_edge_is_empty` above for
+        // the TLS rationale. This test only checks cache state on
+        // its own newly-created nodes + edge.
+        let (graph, _dir) = create_test_graph();
 
         let node_id1 = graph.create_node(vec!["Person".to_string()]).unwrap();
         let node_id2 = graph.create_node(vec!["Person".to_string()]).unwrap();
