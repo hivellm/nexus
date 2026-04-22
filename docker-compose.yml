@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: nexus-graph-db
+    container_name: nexus
     ports:
       # HTTP API
       - "15474:15474"

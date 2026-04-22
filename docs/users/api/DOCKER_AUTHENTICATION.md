@@ -26,7 +26,7 @@ docker run -d \
   -e NEXUS_ROOT_USERNAME=admin \
   -e NEXUS_ROOT_PASSWORD=secure_password \
   -e NEXUS_AUTH_ENABLED=true \
-  nexus-graph-db:latest
+  nexus:latest
 ```
 
 ## Docker Secrets

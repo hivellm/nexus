@@ -44,7 +44,7 @@ This guide covers deploying Nexus Graph Database using Docker, including authent
 
 ```bash
 # Build image
-docker build -t nexus-graph-db:latest .
+docker build -t nexus:latest .
 
 # Run container
 docker run -d \
@@ -55,7 +55,7 @@ docker run -d \
   -e NEXUS_ROOT_PASSWORD=secure_password_here \
   -e NEXUS_AUTH_ENABLED=true \
   -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-  nexus-graph-db:latest
+  nexus:latest
 ```
 
 ## Dockerfile Overview
@@ -114,7 +114,7 @@ docker run -d \
   -e NEXUS_ROOT_PASSWORD=secure_password \
   -e NEXUS_ROOT_ENABLED=true \
   -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-  nexus-graph-db:latest
+  nexus:latest
 ```
 
 ### Method 2: Docker Secrets (Production - Recommended)
@@ -139,7 +139,7 @@ Mount `config/auth.toml`:
 ```bash
 docker run -d \
   -v $(pwd)/config:/app/config:ro \
-  nexus-graph-db:latest
+  nexus:latest
 ```
 
 **Priority Order:**
@@ -303,10 +303,10 @@ export RUST_LOG=warn
 
 ```bash
 # Build optimized image
-docker build -t nexus-graph-db:v1.13.0 .
+docker build -t nexus:v1.13.0 .
 
 # Tag as latest
-docker tag nexus-graph-db:v1.13.0 nexus-graph-db:latest
+docker tag nexus:v1.13.0 nexus:latest
 ```
 
 ### Step 2: Create Secrets
@@ -471,7 +471,7 @@ networks:
 
 ```bash
 # Pull latest image
-docker pull nexus-graph-db:latest
+docker pull nexus:latest
 
 # Update container
 docker-compose pull

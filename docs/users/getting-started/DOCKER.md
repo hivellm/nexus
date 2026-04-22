@@ -273,13 +273,13 @@ and `target/` directory warm across rebuilds. Requires:
 
 ```bash
 # Default, modern Docker (BuildKit implicit):
-docker build -t nexus-graph-db:test .
+docker build -t nexus:test .
 
 # Legacy CLI — opt-in:
-DOCKER_BUILDKIT=1 docker build -t nexus-graph-db:test .
+DOCKER_BUILDKIT=1 docker build -t nexus:test .
 
 # Or via buildx (always BuildKit):
-docker buildx build -t nexus-graph-db:test --load .
+docker buildx build -t nexus:test --load .
 ```
 
 **Measured impact** on the reference box (Docker Desktop 29.0.1 /

@@ -2,8 +2,8 @@
 # Multi-stage Dockerfile for Nexus Graph Database
 #
 # HOW TO BUILD:
-#   docker build -t nexus-graph-db:latest .
-#   docker build -t nexus-graph-db:v1.14.0 -t nexus-graph-db:latest .
+#   docker build -t nexus:latest .
+#   docker build -t nexus:v1.14.0 -t nexus:latest .
 #
 # The `# syntax=docker/dockerfile:1.6` header opts into the
 # `RUN --mount=type=cache` frontend so the cargo registry + target
@@ -25,7 +25,7 @@
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
 #     -e NEXUS_AUTH_ENABLED=true \
-#     nexus-graph-db:latest
+#     nexus:latest
 #
 #   # Using docker run with Docker secrets (recommended for production):
 #   echo "secure_password" > secrets/root_password.txt
@@ -40,7 +40,7 @@
 #     -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
 #     -e NEXUS_AUTH_ENABLED=true \
 #     -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-#     nexus-graph-db:latest
+#     nexus:latest
 #
 #   # Using docker-compose (recommended):
 #   docker-compose up -d
