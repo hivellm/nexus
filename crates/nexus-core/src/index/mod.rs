@@ -19,6 +19,7 @@ pub mod composite_btree;
 pub mod fulltext;
 pub mod fulltext_analyzer;
 pub mod fulltext_registry;
+pub mod fulltext_writer;
 pub mod pending_updates;
 
 /// Default dimensionality for `KnnIndex` when no per-call override is
