@@ -52,7 +52,7 @@ docker run -d \
   -p 15474:15474 \
   -v $(pwd)/nexus-data:/app/data \
   --restart unless-stopped \
-  ghcr.io/hivellm/nexus:latest
+  ghcr.io/hivehub/nexus:latest
 ```
 
 ### Quick Build from Source

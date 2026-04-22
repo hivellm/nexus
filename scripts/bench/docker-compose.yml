@@ -38,8 +38,11 @@ services:
       # 512 MiB page cache — the knob that actually moves the needle
       # on read-only bench workloads.
       NEO4J_server_memory_pagecache_size: "512m"
-      # Any Community-edition metric emitters stay off.
-      NEO4J_server_metrics_enabled: "false"
+      # `server.metrics.enabled` is an Enterprise-only setting in
+      # Neo4j 5.15; passing it on Community trips strict validation
+      # and the container exits before the bolt listener binds.
+      # Community has no metrics emitter to silence in the first
+      # place, so the knob is simply absent here.
       # Accept the Community licence non-interactively so the image
       # starts unattended on CI runners.
       NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"

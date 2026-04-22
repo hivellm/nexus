@@ -33,7 +33,7 @@ docker run -d \
   -e NEXUS_ROOT_USERNAME=admin \
   -e NEXUS_ROOT_PASSWORD=secure_password_here \
   -e NEXUS_AUTH_ENABLED=true \
-  ghcr.io/hivellm/nexus:latest
+  ghcr.io/hivehub/nexus:latest
 ```
 
 ### Using Docker Compose
@@ -45,7 +45,7 @@ version: '3.8'
 
 services:
   nexus:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     container_name: nexus
     ports:
       - "15474:15474"    # HTTP API
@@ -80,7 +80,7 @@ For production, use Docker secrets:
 ```yaml
 services:
   nexus:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     secrets:
       - root_password
     environment:
@@ -195,7 +195,7 @@ version: '3.8'
 
 services:
   nexus:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     container_name: nexus
     ports:
       - "127.0.0.1:15474:15474"  # HTTP API, localhost only

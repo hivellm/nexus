@@ -52,7 +52,7 @@ version: '3.8'
 
 services:
   master:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     environment:
       - NEXUS_REPLICATION_ROLE=master
       - NEXUS_REPLICATION_BIND_ADDR=0.0.0.0:15475
@@ -61,7 +61,7 @@ services:
       - "15475:15475"
 
   replica1:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     environment:
       - NEXUS_REPLICATION_ROLE=replica
       - NEXUS_REPLICATION_MASTER_ADDR=master:15475

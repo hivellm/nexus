@@ -38,7 +38,7 @@ version: '3.8'
 
 services:
   nexus:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     secrets:
       - root_password
     environment:
@@ -65,7 +65,7 @@ version: '3.8'
 
 services:
   nexus:
-    image: ghcr.io/hivellm/nexus:latest
+    image: ghcr.io/hivehub/nexus:latest
     secrets:
       - root_password
       - api_key

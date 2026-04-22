@@ -20,7 +20,7 @@ docker run -d \
   -p 15475:15475 \
   -v nexus-data:/app/data \
   -e NEXUS_AUTH_ENABLED=false \
-  hivellm/nexus:latest
+  hivehub/nexus:latest
 
 # Smoke-test
 curl http://localhost:15474/health
@@ -95,7 +95,7 @@ docker run -d \
   -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
   -e NEXUS_AUTH_ENABLED=true \
   -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-  hivellm/nexus:latest
+  hivehub/nexus:latest
 ```
 
 ## docker-compose
@@ -103,7 +103,7 @@ docker run -d \
 ```yaml
 services:
   nexus:
-    image: hivellm/nexus:latest
+    image: hivehub/nexus:latest
     container_name: nexus
     ports:
       - "15474:15474"
