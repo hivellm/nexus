@@ -98,22 +98,29 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Runtime stage
 #
-# `dhi.io/debian-base:trixie` is the Docker Hardened Image (DHI)
-# variant of Debian trixie. Same glibc 2.41 as the
-# `rustlang/rust:nightly` builder, so no `GLIBC_2.38 not found`
-# at startup (the failure mode with the previous `debian:bookworm-slim`).
-# DHI images are the org-approved runtime base; the Docker Hub
-# `debian:trixie-slim` was not on the approved list.
-FROM dhi.io/debian-base:trixie
+# `dhi.io/debian-base:trixie-dev` is the Docker Hardened Image (DHI)
+# variant of Debian trixie that still ships apt (the plain
+# `dhi.io/debian-base:trixie` tag is distroless and rejects
+# `apt-get install`). Same glibc 2.41 as the `rustlang/rust:nightly`
+# builder, so no `GLIBC_2.38 not found` at startup (the failure mode
+# of the previous `debian:bookworm-slim` runtime). DHI is the
+# org-approved base; the Docker Hub `debian:trixie-slim` was not
+# on the approved list.
+FROM dhi.io/debian-base:trixie-dev
 
 # Install runtime dependencies.
-# `curl` is required by the HEALTHCHECK instruction below — the
-# previous image omitted it and `docker inspect` reported every
-# container as `unhealthy` because the health probe exited 127.
-RUN apt-get update && apt-get install -y \
+#   - ca-certificates + libssl3: TLS stack for outbound connections.
+#   - curl: required by the HEALTHCHECK below. The previous image
+#     omitted it and `docker inspect` reported every container as
+#     `unhealthy` because the health probe exited 127.
+#   - passwd: provides `useradd`, which DHI base does not ship by
+#     default (image is locked down; package management is the only
+#     supported way to add accounts).
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     libssl3 \
+    passwd \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

@@ -47,7 +47,7 @@ transport (`:15475`) the first-party SDKs use by default.
 
 ## Image layout
 
-- **Base**: `dhi.io/debian-base:trixie` (Docker Hardened Image, glibc 2.41).
+- **Base**: `dhi.io/debian-base:trixie-dev` (Docker Hardened Image, glibc 2.41).
 - **Binary**: `/usr/local/bin/nexus-server` (single statically-linked
   release build of the workspace).
 - **User**: `nexus` (uid 1000), non-root.

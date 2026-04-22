@@ -53,11 +53,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Match the glibc of the builder image (rustlang/rust:nightly ≈ debian trixie);
 # using bookworm here produces `GLIBC_2.38 not found` at runtime. DHI
-# (`dhi.io/debian-base:trixie`) is the org-approved hardened variant —
-# the plain `debian:trixie-slim` tag is not on the approved base list.
-FROM dhi.io/debian-base:trixie
+# (`dhi.io/debian-base:trixie-dev`) is the org-approved hardened variant —
+# we use `-dev` because the memtest stage installs a heap of tooling via
+# apt (procps/jq/libjemalloc/graphviz), and the plain `:trixie` tag
+# ships without apt. The plain `debian:trixie-slim` Hub tag is not on
+# the approved base list.
+FROM dhi.io/debian-base:trixie-dev
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     curl \
@@ -66,6 +69,7 @@ RUN apt-get update && apt-get install -y \
     libjemalloc2 \
     libjemalloc-dev \
     graphviz \
+    passwd \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 nexus && \
