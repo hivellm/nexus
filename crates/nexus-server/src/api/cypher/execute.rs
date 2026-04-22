@@ -165,7 +165,27 @@ pub async fn execute_cypher(
 
     // Check if this is a CREATE, MERGE, SET, DELETE, REMOVE, or MATCH query
     let query_upper = request.query.trim().to_uppercase();
-    let is_create_query = query_upper.starts_with("CREATE");
+    // DDL statements (`CREATE INDEX`, `CREATE SPATIAL INDEX`,
+    // `CREATE FULLTEXT INDEX`, `CREATE CONSTRAINT`, `DROP INDEX`,
+    // `DROP CONSTRAINT`) MUST fall through to the executor path so
+    // the `execute_create_index` / `execute_drop_index` operators
+    // register the index on the shared `IndexManager` + the
+    // executor-shared `spatial_indexes` map. The node-CREATE branch
+    // below only understands `CREATE (node { ... })` patterns — it
+    // silently no-ops DDL, which manifested as
+    // `ERR_SPATIAL_INDEX_NOT_FOUND` on every subsequent
+    // `spatial.*` call in slice-A smoke tests.
+    let is_ddl_query = query_upper.starts_with("CREATE INDEX")
+        || query_upper.starts_with("CREATE OR REPLACE INDEX")
+        || query_upper.starts_with("CREATE SPATIAL INDEX")
+        || query_upper.starts_with("CREATE OR REPLACE SPATIAL INDEX")
+        || query_upper.starts_with("CREATE FULLTEXT INDEX")
+        || query_upper.starts_with("CREATE OR REPLACE FULLTEXT INDEX")
+        || query_upper.starts_with("CREATE CONSTRAINT")
+        || query_upper.starts_with("CREATE OR REPLACE CONSTRAINT")
+        || query_upper.starts_with("DROP INDEX")
+        || query_upper.starts_with("DROP CONSTRAINT");
+    let is_create_query = !is_ddl_query && query_upper.starts_with("CREATE");
     let is_merge_query = query_upper.starts_with("MERGE");
     let _is_set_query = query_upper.starts_with("SET");
     let _is_delete_query = query_upper.starts_with("DELETE");

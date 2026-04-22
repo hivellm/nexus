@@ -3,7 +3,7 @@
 #
 # HOW TO BUILD:
 #   docker build -t nexus-graph-db:latest .
-#   docker build -t nexus-graph-db:v1.13.0 -t nexus-graph-db:latest .
+#   docker build -t nexus-graph-db:v1.14.0 -t nexus-graph-db:latest .
 #
 # The `# syntax=docker/dockerfile:1.6` header opts into the
 # `RUN --mount=type=cache` frontend so the cargo registry + target
@@ -68,12 +68,13 @@ COPY Cargo.toml Cargo.lock ./
 
 # Copy source for every workspace member declared in the root Cargo.toml.
 # `cargo build --workspace` fails with "failed to load manifest for
-# workspace member" if any member directory is missing — notably nexus-cli,
-# which was absent from this Dockerfile previously.
-COPY nexus-core ./nexus-core
-COPY nexus-server ./nexus-server
-COPY nexus-protocol ./nexus-protocol
-COPY nexus-cli ./nexus-cli
+# workspace member" if any member directory is missing.
+# All crates live under `crates/` per the workspace manifest.
+COPY crates/nexus-core ./crates/nexus-core
+COPY crates/nexus-server ./crates/nexus-server
+COPY crates/nexus-protocol ./crates/nexus-protocol
+COPY crates/nexus-cli ./crates/nexus-cli
+COPY crates/nexus-bench ./crates/nexus-bench
 
 # Build in release mode.
 #
@@ -96,11 +97,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cp target/release/nexus-server /out/release/nexus-server
 
 # Runtime stage
-FROM debian:bookworm-slim
+#
+# `debian:trixie-slim` carries glibc 2.41, matching the
+# `rustlang/rust:nightly` builder (Debian trixie, glibc 2.41 as of
+# 2026-04). The previous `debian:bookworm-slim` runtime carried
+# glibc 2.36 and caused
+#   nexus-server: /lib/x86_64-linux-gnu/libc.so.6: version
+#   `GLIBC_2.38' not found (required by nexus-server)
+# at container startup.
+FROM debian:trixie-slim
 
-# Install runtime dependencies
+# Install runtime dependencies.
+# `curl` is required by the HEALTHCHECK instruction below — the
+# previous image omitted it and `docker inspect` reported every
+# container as `unhealthy` because the health probe exited 127.
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
