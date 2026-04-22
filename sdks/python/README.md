@@ -1,8 +1,8 @@
 # Nexus Python SDK
 
-[![PyPI](https://img.shields.io/pypi/v/nexus-sdk?style=flat-square)](https://pypi.org/project/nexus-sdk/)
-[![License](https://img.shields.io/pypi/l/nexus-sdk?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/pypi/pyversions/nexus-sdk?style=flat-square)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/hivehub-nexus-sdk?style=flat-square)](https://pypi.org/project/hivehub-nexus-sdk/)
+[![License](https://img.shields.io/pypi/l/hivehub-nexus-sdk?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/pypi/pyversions/hivehub-nexus-sdk?style=flat-square)](https://www.python.org/)
 [![CI](https://img.shields.io/github/actions/workflow/status/hivellm/nexus/ci.yml?style=flat-square)](https://github.com/hivellm/nexus/actions)
 
 Official Python SDK for Nexus graph database.
@@ -10,7 +10,7 @@ Official Python SDK for Nexus graph database.
 ## Installation
 
 ```bash
-pip install nexus-sdk
+pip install hivehub-nexus-sdk
 ```
 
 ## Quick Start (RPC — default)
@@ -412,7 +412,7 @@ async def check_replication_status(master_url: str):
 Install from PyPI:
 
 ```bash
-pip install nexus-sdk
+pip install hivehub-nexus-sdk
 ```
 
 Or install from source:

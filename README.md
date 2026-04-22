@@ -237,7 +237,7 @@ Six first-party SDKs, all tracking the same 1.13.0 line. Every SDK shares the UR
 | SDK            | Install                                    | Docs                                          | RPC status   |
 |----------------|--------------------------------------------|-----------------------------------------------|--------------|
 | 🦀 Rust        | `nexus-sdk = "1.13.0"`                     | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
-| 🐍 Python      | `pip install nexus-sdk`                    | [sdks/python/](sdks/python/README.md)         | ✅ shipped   |
+| 🐍 Python      | `pip install hivehub-nexus-sdk`            | [sdks/python/](sdks/python/README.md)         | ✅ shipped   |
 | 📘 TypeScript  | `npm install @hivehub/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | ✅ shipped   |
 | 🐹 Go          | `go get github.com/hivellm/nexus-go`       | [sdks/go/](sdks/go/README.md)                 | ✅ shipped   |
 | 💜 C#          | `dotnet add package Nexus.SDK`             | [sdks/csharp/](sdks/csharp/README.md)         | ✅ shipped   |

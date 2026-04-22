@@ -19,7 +19,7 @@ Every SDK shares the same wire contract documented in
 | SDK        | Path                              | Package                             | Status    | Tests folder |
 |------------|-----------------------------------|-------------------------------------|-----------|--------------|
 | Rust       | [`rust/`](rust/)                  | `nexus-sdk` on crates.io            | 1.0.0 — RPC default shipped | `rust/tests/` |
-| Python     | [`python/`](python/)              | `nexus-sdk` on PyPI                 | 1.0.0 — RPC default queued  | `python/tests/` |
+| Python     | [`python/`](python/)              | `hivehub-nexus-sdk` on PyPI         | 1.0.0 — RPC default queued  | `python/tests/` |
 | TypeScript | [`typescript/`](typescript/)      | `@hivehub/nexus-sdk` on npm         | 1.0.0 — RPC default queued  | `typescript/tests/` |
 | Go         | [`go/`](go/)                      | `github.com/hivellm/nexus-go`       | 1.0.0 — RPC default queued  | `go/*_test.go` |
 | C#         | [`csharp/`](csharp/)              | `Nexus.SDK` on nuget.org            | 1.0.0 — RPC default queued  | `csharp/Tests/` |

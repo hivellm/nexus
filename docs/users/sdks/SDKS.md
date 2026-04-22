@@ -26,7 +26,7 @@ Quick comparison and overview of all official Nexus SDKs.
 ### Python
 
 ```bash
-pip install nexus-sdk
+pip install hivehub-nexus-sdk
 ```
 
 ### TypeScript

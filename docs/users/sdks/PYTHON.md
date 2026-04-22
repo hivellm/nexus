@@ -14,7 +14,7 @@ Complete guide for the Nexus Python SDK.
 ## Installation
 
 ```bash
-pip install nexus-sdk
+pip install hivehub-nexus-sdk
 ```
 
 ## Quick Start
