@@ -52,8 +52,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cp target/release/nexus-server /out/release/nexus-server
 
 # Match the glibc of the builder image (rustlang/rust:nightly ≈ debian trixie);
-# using bookworm here produces `GLIBC_2.38 not found` at runtime.
-FROM debian:trixie-slim
+# using bookworm here produces `GLIBC_2.38 not found` at runtime. DHI
+# (`dhi.io/debian-base:trixie`) is the org-approved hardened variant —
+# the plain `debian:trixie-slim` tag is not on the approved base list.
+FROM dhi.io/debian-base:trixie
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \

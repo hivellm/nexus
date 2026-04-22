@@ -69,7 +69,7 @@ The Dockerfile uses a multi-stage build for optimal image size:
 - Produces optimized binary
 
 ### Runtime Stage
-- Uses `debian:bookworm-slim` for minimal size
+- Uses `dhi.io/debian-base:trixie` (Docker Hardened Image) for approved, minimal base
 - Installs only runtime dependencies (ca-certificates, libssl3)
 - Creates non-root user (`nexus`) for security
 - Sets up data and config directories

@@ -98,14 +98,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Runtime stage
 #
-# `debian:trixie-slim` carries glibc 2.41, matching the
-# `rustlang/rust:nightly` builder (Debian trixie, glibc 2.41 as of
-# 2026-04). The previous `debian:bookworm-slim` runtime carried
-# glibc 2.36 and caused
-#   nexus-server: /lib/x86_64-linux-gnu/libc.so.6: version
-#   `GLIBC_2.38' not found (required by nexus-server)
-# at container startup.
-FROM debian:trixie-slim
+# `dhi.io/debian-base:trixie` is the Docker Hardened Image (DHI)
+# variant of Debian trixie. Same glibc 2.41 as the
+# `rustlang/rust:nightly` builder, so no `GLIBC_2.38 not found`
+# at startup (the failure mode with the previous `debian:bookworm-slim`).
+# DHI images are the org-approved runtime base; the Docker Hub
+# `debian:trixie-slim` was not on the approved list.
+FROM dhi.io/debian-base:trixie
 
 # Install runtime dependencies.
 # `curl` is required by the HEALTHCHECK instruction below — the
