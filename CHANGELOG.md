@@ -5,6 +5,60 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] — 2026-04-22
+
+### Added — FTS async writer + per-index cadence commits
+
+`phase6_fulltext-async-writer` closes §3 of the
+`phase6_fulltext-wal-integration` original spec and ships the
+crash-recovery integration harness that was deferred under §5.3 of
+that task.
+
+- **Per-index background writer.** `NamedFullTextIndex` now owns an
+  optional `WriterHandle`
+  (`crates/nexus-core/src/index/fulltext_writer.rs`). Each spawned
+  writer runs on a dedicated `std::thread`, owns the single Tantivy
+  `IndexWriter` Tantivy permits per index, and drains a bounded
+  `crossbeam-channel` (default capacity 1024).
+- **Cadence + batch commits.** The writer commits + reloads the
+  reader whenever the buffer reaches `max_batch_size` (default
+  256) or `refresh_ms` (read from `FullTextIndexMeta.refresh_ms`,
+  default 1000 ms) elapses since the last flush — whichever fires
+  first.
+- **Hot-path integration.** `FullTextRegistry::{add_node_document,
+  add_node_documents_bulk, remove_entity}` now route through the
+  writer when one is spawned, and fall back to the original
+  synchronous Tantivy-commit path otherwise. Async writers are
+  opt-in per registry via
+  `FullTextRegistry::enable_async_writers()` — the default
+  remains the synchronous read-your-writes contract every test
+  predating this task relies on.
+- **Graceful shutdown.** Dropping the `WriterHandle` drains the
+  channel, applies the final batch, commits, and joins the thread
+  before `Drop::drop` returns. `FullTextRegistry::flush_all` +
+  `disable_async_writers` expose both best-effort flushes and
+  explicit teardown for shutdown paths and tests.
+- **Crash-recovery harness**
+  (`crates/nexus-core/tests/fulltext_crash_recovery.rs`). Replays a
+  WAL containing committed `FtsCreateIndex` + `FtsAdd` entries
+  against a freshly-opened registry after simulating a kill-9
+  between WAL sync and writer commit. Asserts that every
+  WAL-committed doc surfaces after replay, that docs that never
+  reached the WAL stay absent, and that the registry's cadence
+  tick makes enqueued docs visible without an explicit
+  `flush_blocking`.
+
+### Fixed
+
+- `WriterHandle::enqueue` / `apply_batch` no longer mis-track the
+  `pending` counter. The prior implementation held a write guard
+  while attempting another lock acquisition in the same expression
+  (a deadlock on recursive acquire under `parking_lot::RwLock`),
+  and the drained-buffer decrement used `buffer.capacity() -
+  buffer.len()` — the allocation size rather than the number of
+  commands drained — so `pending_count()` never returned to zero
+  once the buffer had grown past its initial cap.
+
 ## [1.12.0] — 2026-04-21
 
 ### Added — FTS auto-maintenance on CREATE / SET / REMOVE / DELETE

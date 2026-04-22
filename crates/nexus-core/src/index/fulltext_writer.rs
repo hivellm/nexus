@@ -133,13 +133,13 @@ impl WriterHandle {
     pub fn enqueue(&self, cmd: WriterCommand) -> Result<()> {
         let Some(tx) = self.tx.as_ref() else {
             return Err(crate::Error::storage(
-                "ERR_FTS_WRITER_CLOSED: async writer is no longer accepting commands"
-                    .to_string(),
+                "ERR_FTS_WRITER_CLOSED: async writer is no longer accepting commands".to_string(),
             ));
         };
         *self.pending.write() += 1;
         if let Err(e) = tx.send(cmd) {
-            *self.pending.write() = self.pending.read().saturating_sub(1);
+            let mut p = self.pending.write();
+            *p = p.saturating_sub(1);
             return Err(crate::Error::storage(format!(
                 "ERR_FTS_WRITER_CLOSED: channel send failed: {e}"
             )));
@@ -157,14 +157,10 @@ impl WriterHandle {
         };
         let (ack_tx, ack_rx) = bounded::<()>(1);
         tx.send(WriterCommand::Flush(ack_tx)).map_err(|e| {
-            crate::Error::storage(format!(
-                "ERR_FTS_WRITER_CLOSED: flush send failed: {e}"
-            ))
+            crate::Error::storage(format!("ERR_FTS_WRITER_CLOSED: flush send failed: {e}"))
         })?;
         ack_rx.recv().map_err(|e| {
-            crate::Error::storage(format!(
-                "ERR_FTS_WRITER_CLOSED: flush ack missing: {e}"
-            ))
+            crate::Error::storage(format!("ERR_FTS_WRITER_CLOSED: flush ack missing: {e}"))
         })?;
         Ok(())
     }
@@ -211,21 +207,20 @@ fn writer_loop(
         let wait = deadline.saturating_duration_since(now);
         match rx.recv_timeout(wait) {
             Ok(cmd) => {
-                match &cmd {
-                    WriterCommand::Flush(_) => {
+                match cmd {
+                    WriterCommand::Flush(ack) => {
                         // Flush sentinel — commit the buffer, ack,
-                        // and continue.
+                        // and continue. Flushes are sent directly by
+                        // `flush_blocking` without touching the
+                        // `pending` counter, so no decrement here.
                         if !buffer.is_empty() {
                             apply_batch(&index, &mut buffer, &pending);
                         }
                         commit_and_reload(&index);
                         last_commit = Instant::now();
-                        if let WriterCommand::Flush(ack) = cmd {
-                            let _ = ack.send(());
-                            *pending.write() = pending.read().saturating_sub(1);
-                        }
+                        let _ = ack.send(());
                     }
-                    _ => {
+                    cmd => {
                         buffer.push(cmd);
                         if buffer.len() >= cfg.max_batch_size {
                             apply_batch(&index, &mut buffer, &pending);
@@ -257,9 +252,14 @@ fn writer_loop(
     }
 }
 
-fn apply_batch(index: &FullTextIndex, buffer: &mut Vec<WriterCommand>, pending: &Arc<RwLock<usize>>) {
+fn apply_batch(
+    index: &FullTextIndex,
+    buffer: &mut Vec<WriterCommand>,
+    pending: &Arc<RwLock<usize>>,
+) {
     // Split add / del into a single writer pass for efficiency.
-    let mut adds: Vec<(u64, u32, u32, String)> = Vec::with_capacity(buffer.len());
+    let drained = buffer.len();
+    let mut adds: Vec<(u64, u32, u32, String)> = Vec::with_capacity(drained);
     let mut dels: Vec<u64> = Vec::new();
     for cmd in buffer.drain(..) {
         match cmd {
@@ -291,9 +291,13 @@ fn apply_batch(index: &FullTextIndex, buffer: &mut Vec<WriterCommand>, pending: 
             tracing::warn!("FTS async-writer: remove failed for {node_id}: {e}");
         }
     }
-    let processed = adds.len();
-    let total_processed = processed + buffer.capacity().saturating_sub(buffer.len());
-    *pending.write() = pending.read().saturating_sub(total_processed);
+    // Decrement pending by the exact count of drained commands so
+    // `pending_count()` reaches zero once the writer has processed
+    // every enqueue. The prior formula used `buffer.capacity() -
+    // buffer.len()` after draining, which reported the allocation
+    // size rather than the number of items actually handled.
+    let mut p = pending.write();
+    *p = p.saturating_sub(drained);
 }
 
 fn commit_and_reload(_index: &FullTextIndex) {
@@ -331,10 +335,7 @@ mod tests {
         handle.flush_blocking().unwrap();
         // Query synchronously through the shared index.
         let hits = idx
-            .search(
-                "hello",
-                crate::index::fulltext::SearchOptions::default(),
-            )
+            .search("hello", crate::index::fulltext::SearchOptions::default())
             .unwrap();
         assert!(hits.iter().any(|h| h.node_id == 1));
     }
@@ -358,12 +359,12 @@ mod tests {
             // must drain and commit before join completes.
         }
         let hits = idx
-            .search(
-                "graceful",
-                crate::index::fulltext::SearchOptions::default(),
-            )
+            .search("graceful", crate::index::fulltext::SearchOptions::default())
             .unwrap();
-        assert!(hits.len() >= 5, "expected drained docs after drop, got {hits:?}");
+        assert!(
+            hits.len() >= 5,
+            "expected drained docs after drop, got {hits:?}"
+        );
     }
 
     #[test]

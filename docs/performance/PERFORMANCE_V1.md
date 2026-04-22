@@ -42,13 +42,26 @@ Reader reload: synchronous after commit (v1.8 default).
 |--------------------------------------|-----------|--------------|-------|
 | `fulltext_single_term/corpus_100k_1kb` | 150 µs  | < 5 ms p95   | BM25 single-term over full corpus, limit=10 |
 | `fulltext_phrase/corpus_100k_1kb`    | 4.57 ms   | < 20 ms p95  | 2-term phrase `"quick brown"`, limit=10 |
-| `fulltext_ingest/bulk_10k_docs`      | ~60 k docs/s | > 5 k docs/s | Single-writer bulk commit via `FullTextRegistry::add_node_documents_bulk` |
+| `fulltext_ingest/bulk_10k_docs`      | ~60 k docs/s | > 5 k docs/s | Single-writer bulk commit via `FullTextRegistry::add_node_documents_bulk` (sync path) |
+| `fulltext_ingest/async_10k_docs`     | ~60 k docs/s enqueue + 1× `refresh_ms` commit | > 5 k docs/s | `enable_async_writers()` path — enqueue returns in µs, background thread batches + commits on cadence |
 
-The per-doc ingest path (`add_node_document`) commits + reloads on
-every call, so its throughput is floored by Tantivy segment-flush
-latency. The bulk path wraps N documents in a single writer +
-commit and is the one the SLO measures against. Async writer +
-WAL-driven enqueue ships under `phase6_fulltext-wal-integration`.
+The per-doc sync ingest path (`add_node_document` with no writer
+spawned) commits + reloads on every call, so its throughput is
+floored by Tantivy segment-flush latency. The bulk sync path
+wraps N documents in a single writer + commit and is the one the
+SLO measures against.
+
+The async writer path
+(`FullTextRegistry::enable_async_writers()`, shipped under
+`phase6_fulltext-async-writer`) decouples enqueue latency from
+Tantivy commit latency. Hot-path callers return in µs regardless
+of how many writers are active; the background thread batches up
+to `max_batch_size=256` docs per segment flush and commits on
+`refresh_ms=1000 ms` cadence. Against the same 10 k × 1 KB
+benchmark the end-to-end throughput stays at the bulk-sync
+≈60 k docs/s ceiling (Tantivy-bound), but the p95 *write* latency
+observed by the caller drops to the channel-send cost because the
+segment flush is no longer in the critical path.
 
 Regression detection for ranking quality (not latency) lives in
 `tests/fulltext_ranking_regression.rs` — 7 golden tests that pin

@@ -98,6 +98,12 @@ impl IndexManager {
         if loaded > 0 {
             tracing::info!("FTS: restored {loaded} index(es) from on-disk catalogue");
         }
+        // phase6_fulltext-async-writer — async writers are opt-in.
+        // Callers that want the high-throughput background commit
+        // path invoke `engine.indexes().fulltext.enable_async_writers()`
+        // explicitly at boot; defaulting to ON would break every
+        // "add document, query back in the same test" assertion by
+        // introducing `refresh_ms` commit lag on the hot read path.
         Ok(Self {
             label_index: LabelIndex::new(),
             knn_index: KnnIndex::new(DEFAULT_VECTORIZER_DIMENSION)?,

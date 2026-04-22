@@ -5,8 +5,8 @@
 ![Rust](https://img.shields.io/badge/rust-nightly%201.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v1.0.0-success.svg)
-![Tests](https://img.shields.io/badge/tests-2310%20passing-success.svg)
+![Status](https://img.shields.io/badge/status-v1.13.0-success.svg)
+![Tests](https://img.shields.io/badge/tests-2310%2B%20passing-success.svg)
 ![Compatibility](https://img.shields.io/badge/Neo4j%20compat-300%2F300-success.svg)
 
 [Quick Start](#-quick-start) • [Transports](#-transports) • [Documentation](#-documentation) • [SDKs](#-official-sdks) • [Roadmap](#-roadmap) • [Contributing](#-contributing)
@@ -19,15 +19,21 @@ Nexus is a **property graph database** built for **read-heavy workloads** with *
 
 **Think Neo4j meets vector search**, shipped as a single Rust binary with a CLI, six first-party SDKs, and three transports (native binary RPC, HTTP/JSON, RESP3).
 
-### Highlights (v1.0.0)
+### Highlights (v1.13.0)
 
-- **Neo4j-compatible Cypher** — ~55% openCypher coverage across MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH and ~60 functions. **300/300** Neo4j compatibility tests pass ([diffed against Neo4j 2025.09.0 on 2026-04-19](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md)).
+- **Neo4j-compatible Cypher** — MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH / CASE / EXISTS subqueries / list & map comprehensions / pattern comprehensions and 250+ functions & procedures. **300/300** Neo4j diff-suite tests pass ([Neo4j 2025.09.0, 2026-04-19](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md)). See the [openCypher status table](#-opencypher-support-matrix) at the bottom.
+- **APOC compatibility** — ~100 procedures across `apoc.coll.*` / `apoc.map.*` / `apoc.text.*` / `apoc.date.*` / `apoc.schema.*` / `apoc.util.*` / `apoc.convert.*` / `apoc.number.*` / `apoc.agg.*`. Drop-in replacement for most of the Neo4j APOC surface. Matrix: [`docs/procedures/APOC_COMPATIBILITY.md`](docs/procedures/APOC_COMPATIBILITY.md).
+- **Full-text search** — Tantivy 0.22 backend behind the Neo4j `db.index.fulltext.*` procedure namespace. Per-index analyzer catalogue (standard / whitespace / simple / keyword / ngram / english / spanish / portuguese / german / french), BM25 ranking, WAL-integrated auto-maintenance on CREATE / SET / REMOVE / DELETE, optional async writer with `refresh_ms` cadence, crash-recovery replay. >60k docs/sec bulk ingest, <5 ms p95 single-term query.
+- **Constraint enforcement** — `UNIQUE` / `NODE KEY` / `NOT NULL` (node + relationship) / property-type (`IS :: INTEGER|FLOAT|STRING|BOOLEAN|BYTES|LIST|MAP`) enforced on every CREATE / MERGE / SET / REMOVE / SET LABEL path. Cypher 25 `FOR (n:L) REQUIRE (...)` DDL grammar wired.
+- **Advanced types** — BYTES scalar family (`bytes()` / `bytesFromBase64` / `bytesSlice` / …), write-side dynamic labels (`CREATE (n:$label)` / `SET n:$label` / `REMOVE n:$label`), composite B-tree indexes, `LIST<T>` typed collections, transaction savepoints (`SAVEPOINT` / `ROLLBACK TO SAVEPOINT` / `RELEASE SAVEPOINT`), `GRAPH[<name>]` preamble.
 - **Native KNN** — per-label HNSW indexes with cosine / L2 / dot metrics. Bytes-native embeddings on the RPC wire (no base64 tax).
 - **Binary RPC default** — length-prefixed MessagePack on port `15475`; 3–10× lower latency and 40–60% smaller payloads vs HTTP/JSON. `nexus://host:15475` URL scheme used by CLI + every SDK.
 - **Full auth stack** — API keys, JWT, RBAC, rate limiting, audit log with fail-open policy.
+- **Three-layer back-pressure** — per-key rate limiter + per-connection RPC semaphore + global `AdmissionQueue` (bounded concurrency with FIFO wait + `503 Retry-After` on timeout). Light-weight diagnostic endpoints bypass the queue. [`docs/security/OVERLOAD_PROTECTION.md`](docs/security/OVERLOAD_PROTECTION.md).
 - **Multi-database** — isolated databases in a single server instance, CLI + Cypher + SDK.
 - **SIMD-accelerated hot paths** — AVX-512 / AVX2 / NEON runtime dispatch. 12.7× KNN dot @ dim=768 on Zen 4, 7.9× `sum_f64` @ 262K rows, all with proptest-enforced parity vs scalar.
-- **2310 workspace tests** passing on `cargo +nightly test --workspace` (0 failed, 67 ignored).
+- **V2 sharded cluster (core)** — hash-based shards, per-shard Raft consensus, distributed query coordinator, `/cluster/*` management API. +201 V2-dedicated tests.
+- **2310+ workspace tests** passing on `cargo +nightly test --workspace` (0 failed, 67 ignored). 2019 lib-only on `cargo +nightly test -p nexus-core --lib`.
 
 ## 🚀 Quick Start
 

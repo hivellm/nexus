@@ -107,20 +107,34 @@ Callers outside the Cypher pipeline (or wanting to back-fill an
 existing dataset after registering a new index) drive the
 registry directly.
 
-Interactive (one-doc-at-a-time) callers use `add_node_document` —
-commits and reloads the reader synchronously, so the next
-`queryNodes` sees the document without waiting for any refresh
-tick:
+Interactive (one-doc-at-a-time) callers use `add_node_document`.
+Default behaviour is **sync** — commits + reloads the reader
+inline, so the next `queryNodes` sees the document without waiting
+for any refresh tick. This is the read-your-writes contract every
+test predating v1.13 relies on:
 
 ```rust
 let reg = engine.indexes().fulltext.clone();
 reg.add_node_document("moviesFts", node_id, label_id, key_id, text)?;
 ```
 
+High-concurrency deployments opt into the async writer path
+explicitly:
+
+```rust
+engine.indexes().fulltext.enable_async_writers();
+```
+
+Once enabled, every registered index owns a background writer and
+`add_node_document` enqueues onto its bounded channel instead of
+committing inline. See *Async writer cadence* below.
+
 Bulk loaders (import scripts, catch-up rebuilds) use
-`add_node_documents_bulk` — one Tantivy writer, every doc, one
-commit. Delivers ≈60 k docs/sec on the reference hardware vs.
-Tantivy segment-flush latency floored by per-doc commits:
+`add_node_documents_bulk` — when the writer is on, every doc is
+enqueued individually so the batch-commit cost is amortised
+across `max_batch_size` docs per segment flush; when the writer
+is off the path reverts to the one-writer-one-commit fast path
+that delivers ≈60 k docs/sec on the reference hardware:
 
 ```rust
 let docs: Vec<(u64, u32, u32, &str)> = rows
@@ -128,7 +142,42 @@ let docs: Vec<(u64, u32, u32, &str)> = rows
     .map(|r| (r.node_id, r.label_id, r.key_id, r.text.as_str()))
     .collect();
 reg.add_node_documents_bulk("moviesFts", &docs)?;
+// Optional: block until every enqueued doc has committed.
+reg.flush_all()?;
 ```
+
+### Async writer cadence (v1.13)
+
+Once `enable_async_writers()` has been called on the registry,
+every registered index owns a dedicated background thread. The
+writer loop:
+
+1. Receives `WriterCommand::Add` / `WriterCommand::Del` over a
+   bounded `crossbeam-channel` (default capacity 1024 per index).
+2. Buffers them in-memory up to `max_batch_size` (default 256) or
+   until `refresh_ms` (read from the index's `FullTextIndexMeta`,
+   default 1000 ms) has elapsed since the last flush — whichever
+   fires first.
+3. Calls `IndexManager::add_documents_bulk` once per batch so the
+   Tantivy segment flush runs on the batch, not on every doc.
+4. Reloads the `IndexReader` so the next `queryNodes` sees the
+   committed docs.
+
+The contract is **eventual consistency for readers**: after a
+successful `add_node_document`, a subsequent `query` can miss the
+new doc for up to `refresh_ms`. Tests and tooling that need
+synchronous round-trips use `flush_all()` or
+`disable_async_writers()` to force the sync fallback.
+
+On a normal `Drop` of the registry (engine shutdown) every writer
+drains its channel, commits the final batch, and joins. On an
+abnormal crash (panic, kill-9) the writer thread disappears with
+the process — recovery uses the `FtsAdd` / `FtsDel` entries
+already fsynced to the WAL, feeding them through
+`FullTextRegistry::apply_wal_entry` to rebuild every doc that had
+been durably committed. See
+`crates/nexus-core/tests/fulltext_crash_recovery.rs` for the
+harness that proves this round-trip.
 
 ## Analyzer catalogue (v1.9)
 

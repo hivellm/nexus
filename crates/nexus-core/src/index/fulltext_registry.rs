@@ -17,12 +17,14 @@
 
 use super::fulltext::{DocumentParams, FullTextIndex, SearchOptions};
 use super::fulltext_analyzer::resolve as resolve_analyzer;
+use super::fulltext_writer::{WriterCommand, WriterConfig, WriterHandle};
 use crate::{Error, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// On-disk sidecar persisted alongside each FTS index directory.
 /// Written to `<index_dir>/_meta.json` on create and read back by
@@ -148,6 +150,69 @@ pub struct NamedFullTextIndex {
     /// across `refresh_executor` cycles, so FTS maintains its own
     /// authoritative view.
     pub members: Arc<RwLock<std::collections::HashSet<u64>>>,
+    /// Optional async writer (phase6_fulltext-async-writer). When
+    /// spawned, hot-path `add_node_document` / `add_node_documents_bulk`
+    /// / `remove_entity` enqueue onto the writer's channel; the
+    /// background thread batches + commits on `refresh_ms` cadence
+    /// or at `max_batch_size`. When `None`, writes fall through to
+    /// the synchronous Tantivy-commit path.
+    pub writer: RwLock<Option<Arc<WriterHandle>>>,
+}
+
+impl NamedFullTextIndex {
+    fn new(meta: FullTextIndexMeta, index: Arc<FullTextIndex>) -> Self {
+        Self {
+            meta,
+            index,
+            members: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            writer: RwLock::new(None),
+        }
+    }
+
+    /// Snapshot of the current writer handle, if spawned. Cheap
+    /// clone of the `Arc` — held only for the duration of the
+    /// enqueue so a concurrent `shutdown_writer` can still swap it
+    /// out.
+    pub fn writer_handle(&self) -> Option<Arc<WriterHandle>> {
+        self.writer.read().clone()
+    }
+
+    /// Spawn a background writer using `cfg`. Idempotent — a second
+    /// call shuts the previous writer down (flushing its outstanding
+    /// buffer) before replacing it.
+    pub fn spawn_writer(&self, cfg: WriterConfig) {
+        let mut slot = self.writer.write();
+        // Drop any prior writer first so its drain runs before we
+        // swap in the replacement. Dropping while holding the slot
+        // is safe because `WriterHandle::drop` only touches its own
+        // thread state.
+        slot.take();
+        let handle = WriterHandle::spawn(self.index.clone(), cfg);
+        *slot = Some(Arc::new(handle));
+    }
+
+    /// Flush the async writer (if any) and tear it down. The sync
+    /// fallback is re-enabled for every hot-path write made after
+    /// this returns. No-op when no writer is registered.
+    pub fn shutdown_writer(&self) -> Result<()> {
+        let Some(handle) = self.writer.write().take() else {
+            return Ok(());
+        };
+        // Attempt a best-effort flush before the drop signal fires.
+        // `flush_blocking` returns cleanly if the writer already
+        // drained, so the combined flush + drop sequence is safe to
+        // invoke even when the writer just shut itself down.
+        let _ = handle.flush_blocking();
+        // Dropping the Arc here would still leave it live if another
+        // clone is in flight. Extract the inner handle via
+        // `Arc::try_unwrap` so the drop side-effects (graceful
+        // shutdown) run deterministically.
+        match Arc::try_unwrap(handle) {
+            Ok(h) => drop(h),
+            Err(arc) => drop(arc),
+        }
+        Ok(())
+    }
 }
 
 /// Thread-safe registry of named full-text indexes.
@@ -155,6 +220,28 @@ pub struct NamedFullTextIndex {
 pub struct FullTextRegistry {
     inner: Arc<RwLock<HashMap<String, Arc<NamedFullTextIndex>>>>,
     base_dir: Arc<RwLock<Option<PathBuf>>>,
+    /// phase6_fulltext-async-writer: master switch read at
+    /// create / reload time. When `true`, every registered index
+    /// gets a background writer; when `false`, hot paths commit
+    /// inline against the synchronous `FullTextIndex` API.
+    async_writers_enabled: Arc<RwLock<bool>>,
+}
+
+/// Build a [`WriterConfig`] from a registered index's metadata.
+/// `refresh_ms` comes straight from the meta (so the sidecar is the
+/// authority); channel capacity and batch size fall back to the
+/// constants advertised by the writer module.
+fn default_writer_cfg(meta: &FullTextIndexMeta) -> WriterConfig {
+    let refresh_ms = if meta.refresh_ms == 0 {
+        super::fulltext_writer::DEFAULT_REFRESH_MS
+    } else {
+        meta.refresh_ms
+    };
+    WriterConfig {
+        channel_capacity: super::fulltext_writer::DEFAULT_CHANNEL_CAPACITY,
+        refresh: Duration::from_millis(refresh_ms),
+        max_batch_size: super::fulltext_writer::DEFAULT_MAX_BATCH,
+    }
 }
 
 impl FullTextRegistry {
@@ -289,14 +376,15 @@ impl FullTextRegistry {
         // insert so a crash between filesystem + process state leaves
         // the index discoverable on startup.
         Self::write_meta_sidecar(&dir, &meta)?;
-        self.inner.write().insert(
-            name.to_string(),
-            Arc::new(NamedFullTextIndex {
-                meta,
-                index,
-                members: Arc::new(RwLock::new(std::collections::HashSet::new())),
-            }),
-        );
+        let entry = Arc::new(NamedFullTextIndex::new(meta, index));
+        // Honour the registry-wide async-writer switch: once
+        // `enable_async_writers` has been invoked, every subsequent
+        // create also spins up a writer so the hot path never falls
+        // back to the sync commit cost.
+        if *self.async_writers_enabled.read() {
+            entry.spawn_writer(default_writer_cfg(&entry.meta));
+        }
+        self.inner.write().insert(name.to_string(), entry);
         Ok(())
     }
 
@@ -385,14 +473,11 @@ impl FullTextRegistry {
                 top_k: persisted.top_k,
                 path: dir,
             };
-            inner.insert(
-                persisted.name.clone(),
-                Arc::new(NamedFullTextIndex {
-                    meta,
-                    index,
-                    members: Arc::new(RwLock::new(std::collections::HashSet::new())),
-                }),
-            );
+            let entry = Arc::new(NamedFullTextIndex::new(meta, index));
+            if *self.async_writers_enabled.read() {
+                entry.spawn_writer(default_writer_cfg(&entry.meta));
+            }
+            inner.insert(persisted.name.clone(), entry);
             loaded += 1;
         }
         Ok(loaded)
@@ -442,6 +527,15 @@ impl FullTextRegistry {
     /// Add a node document to the named index. Property values are
     /// concatenated into the single `content` field that the
     /// underlying `FullTextIndex` already maintains.
+    ///
+    /// When the per-index async writer is spawned
+    /// (phase6_fulltext-async-writer), the document is enqueued onto
+    /// its bounded channel and the call returns after incrementing
+    /// the membership set. The commit + reader-reload happen in the
+    /// background on the configured `refresh_ms` cadence or once the
+    /// batch-size threshold is hit. Without the writer the call
+    /// takes the synchronous commit path — identical to the original
+    /// behaviour that every test predating this task asserts.
     pub fn add_node_document(
         &self,
         name: &str,
@@ -453,15 +547,24 @@ impl FullTextRegistry {
         let entry = self
             .get(name)
             .ok_or_else(|| Error::storage(format!("ERR_FTS_INDEX_NOT_FOUND: {name:?}")))?;
-        entry.index.add_document(DocumentParams {
-            node_id,
-            label_id,
-            key_id,
-            content: text.to_string(),
-            value: text.to_string(),
-            language: None,
-            boost: None,
-        })?;
+        if let Some(writer) = entry.writer_handle() {
+            writer.enqueue(WriterCommand::Add {
+                node_id,
+                label_id,
+                key_id,
+                content: text.to_string(),
+            })?;
+        } else {
+            entry.index.add_document(DocumentParams {
+                node_id,
+                label_id,
+                key_id,
+                content: text.to_string(),
+                value: text.to_string(),
+                language: None,
+                boost: None,
+            })?;
+        }
         entry.members.write().insert(node_id);
         Ok(())
     }
@@ -559,11 +662,21 @@ impl FullTextRegistry {
     /// backend + membership set. No-op when the index is unknown
     /// (mirrors `apply_wal_entry`'s forgiveness policy). Does not
     /// touch the WAL — callers enqueue the matching `FtsDel` entry.
+    ///
+    /// Routes through the async writer when present — the delete is
+    /// batched with any pending adds and committed together on the
+    /// next cadence tick. The membership set is updated
+    /// synchronously so `indexes_containing` stops reporting the
+    /// entity immediately.
     pub fn remove_entity(&self, name: &str, entity_id: u64) -> Result<()> {
         let Some(entry) = self.get(name) else {
             return Ok(());
         };
-        entry.index.remove_document(entity_id, 0, 0)?;
+        if let Some(writer) = entry.writer_handle() {
+            writer.enqueue(WriterCommand::Del { node_id: entity_id })?;
+        } else {
+            entry.index.remove_document(entity_id, 0, 0)?;
+        }
         entry.members.write().remove(&entity_id);
         Ok(())
     }
@@ -572,6 +685,13 @@ impl FullTextRegistry {
     /// Tantivy writer, pushes every tuple, commits once. Required
     /// for meaningful bench throughput and for bulk-load scripts;
     /// the per-doc path commits on every call.
+    ///
+    /// When the async writer is live, each tuple is enqueued
+    /// individually so mid-call crashes leave the WAL + Tantivy
+    /// states consistent at every batch boundary; the writer
+    /// already amortises the commit cost across up to
+    /// `max_batch_size` docs per segment flush. Without the writer,
+    /// the path takes the original single-writer sync commit.
     pub fn add_node_documents_bulk(
         &self,
         name: &str,
@@ -580,7 +700,18 @@ impl FullTextRegistry {
         let entry = self
             .get(name)
             .ok_or_else(|| Error::storage(format!("ERR_FTS_INDEX_NOT_FOUND: {name:?}")))?;
-        entry.index.add_documents_bulk(docs)?;
+        if let Some(writer) = entry.writer_handle() {
+            for (node_id, label_id, key_id, content) in docs {
+                writer.enqueue(WriterCommand::Add {
+                    node_id: *node_id,
+                    label_id: *label_id,
+                    key_id: *key_id,
+                    content: (*content).to_string(),
+                })?;
+            }
+        } else {
+            entry.index.add_documents_bulk(docs)?;
+        }
         {
             let mut members = entry.members.write();
             for (node_id, _, _, _) in docs {
@@ -594,6 +725,47 @@ impl FullTextRegistry {
     /// creation time and by the `db.indexes()` procedure.
     pub fn names(&self) -> Vec<String> {
         self.inner.read().keys().cloned().collect()
+    }
+
+    /// Enable async writers registry-wide. Spawns a background
+    /// writer for every currently registered index (using each
+    /// index's `refresh_ms`) and flips the "spawn on create" flag
+    /// so future `create_index_with_config` + `load_from_disk`
+    /// calls do the same.
+    ///
+    /// Idempotent — indexes that already own a writer keep it.
+    pub fn enable_async_writers(&self) {
+        *self.async_writers_enabled.write() = true;
+        for entry in self.inner.read().values() {
+            if entry.writer_handle().is_none() {
+                entry.spawn_writer(default_writer_cfg(&entry.meta));
+            }
+        }
+    }
+
+    /// Tear every async writer down — used by shutdown paths and
+    /// by tests that want to observe the sync-fallback semantics.
+    /// Each writer's drop path runs its drain + final commit before
+    /// this method returns.
+    pub fn disable_async_writers(&self) -> Result<()> {
+        *self.async_writers_enabled.write() = false;
+        for entry in self.inner.read().values() {
+            entry.shutdown_writer()?;
+        }
+        Ok(())
+    }
+
+    /// Block until every async writer has committed every enqueued
+    /// doc. No-op on indexes that never spawned a writer. Used by
+    /// tests + by shutdown paths that want "the catalogue is
+    /// durable" before moving on.
+    pub fn flush_all(&self) -> Result<()> {
+        for entry in self.inner.read().values() {
+            if let Some(writer) = entry.writer_handle() {
+                writer.flush_blocking()?;
+            }
+        }
+        Ok(())
     }
 }
 
