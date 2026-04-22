@@ -316,6 +316,68 @@ impl Executor {
 
                 // If not a UDF, check built-in functions
                 match lowered.as_str() {
+                    // phase6_opencypher-quickwins §8 — runtime evaluator
+                    // for the synthetic `__label_predicate__(var, 'Label')`
+                    // the parser emits for `var:Label` in WHERE /
+                    // RETURN position. The Filter operator's text-mode
+                    // fast path only handles a single `var:Label`
+                    // standalone predicate (len==2 after splitting on
+                    // ':'); compound forms like
+                    // `n:Employee OR n:Manager` fall through to the
+                    // generic expression evaluator, which needs this
+                    // arm to return BOOLEAN instead of NULL and drop
+                    // every row in the process.
+                    "__label_predicate__" => {
+                        if args.len() == 2 {
+                            let node_val =
+                                self.evaluate_projection_expression(row, context, &args[0])?;
+                            let label_val =
+                                self.evaluate_projection_expression(row, context, &args[1])?;
+                            // Resolve the label argument to a String.
+                            // The parser emits the label as a STRING
+                            // literal; dynamic `$param` references have
+                            // already been rewritten through a Parameter
+                            // node that the evaluator dereferences.
+                            let label_name = match label_val {
+                                Value::String(s) => s,
+                                Value::Null => return Ok(Value::Bool(false)),
+                                other => {
+                                    return Err(Error::TypeMismatch {
+                                        expected: "STRING label".to_string(),
+                                        actual: format!("{other:?}"),
+                                    });
+                                }
+                            };
+                            if label_name.is_empty() {
+                                return Ok(Value::Bool(false));
+                            }
+                            let node_id = match &node_val {
+                                Value::Object(obj) => obj.get("_nexus_id").and_then(|v| v.as_u64()),
+                                _ => None,
+                            };
+                            let Some(nid) = node_id else {
+                                return Ok(Value::Bool(false));
+                            };
+                            let Ok(label_id) = self.catalog().get_label_id(&label_name) else {
+                                return Ok(Value::Bool(false));
+                            };
+                            let Ok(node_record) = self.store().read_node(nid) else {
+                                return Ok(Value::Bool(false));
+                            };
+                            // Labels with id >= 64 do not fit the
+                            // per-node label bitmap; they are indexed
+                            // elsewhere and the current executor has no
+                            // path to check them here. Mirrors the
+                            // same limitation `filter.rs` documents.
+                            let present = if label_id < 64 {
+                                (node_record.label_bits & (1u64 << label_id)) != 0
+                            } else {
+                                false
+                            };
+                            return Ok(Value::Bool(present));
+                        }
+                        Ok(Value::Null)
+                    }
                     "labels" => {
                         if let Some(arg) = args.first() {
                             let value = self.evaluate_projection_expression(row, context, arg)?;
