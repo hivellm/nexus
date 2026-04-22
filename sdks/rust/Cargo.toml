@@ -1,6 +1,6 @@
 [package]
 name = "nexus-sdk"
-version = "1.13.0"
+version = "1.14.0"
 edition = "2024"
 authors = ["Nexus Contributors"]
 description = "Official Rust SDK for Nexus graph database"
@@ -8,6 +8,7 @@ license = "Apache-2.0"
 repository = "https://github.com/hivellm/nexus"
 homepage = "https://github.com/hivellm/nexus"
 documentation = "https://docs.rs/nexus-sdk"
+readme = "README.md"
 keywords = ["graph", "database", "cypher", "neo4j-compatible"]
 categories = ["database", "web-programming"]
 
@@ -16,8 +17,13 @@ categories = ["database", "web-programming"]
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tokio = { version = "1.40", features = ["full"] }
 
-# Native binary RPC transport (default on `nexus://` endpoints)
-nexus-protocol = { path = "../../nexus-protocol" }
+# Native binary RPC transport (default on `nexus://` endpoints).
+# Both `path` and `version` are required: `cargo publish` picks the
+# version from crates.io and rejects the crate unless every
+# path-dependency also carries a published version specifier. The
+# path is anchored at `../../crates/nexus-protocol` because the
+# workspace crates live under `crates/` since the 2026-04 reshuffle.
+nexus-protocol = { path = "../../crates/nexus-protocol", version = "1.14.0" }
 
 # Async trait for the Transport interface
 async-trait = "0.1"
