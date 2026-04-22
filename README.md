@@ -130,6 +130,30 @@ Every CLI and SDK reads a URL scheme, honours the `NEXUS_SDK_TRANSPORT` / `NEXUS
 - **Runtime-dispatched CRC32C** for WAL (hardware-accelerated).
 - **JIT query compilation** (Cranelift) for hot paths.
 
+### Benchmarks — Nexus vs Neo4j 5.15 Community
+
+Nexus native RPC vs Neo4j Bolt, both in Docker, shared tiny dataset (100 nodes / 50 edges), 2 warmup + 10 measured runs per scenario, release build. Harness: `crates/nexus-bench` (`--compare` mode).
+
+- **56 / 56 head-to-head wins for Nexus** (0 parity, 0 behind, 0 gap; 42 Nexus-only features skipped).
+- Nexus p50 is between **0.08× and 0.55× of Neo4j p50** — median **4.7× faster**, best case **12.5×**.
+
+| Category | Scenarios | Median speedup |
+|---|---|---|
+| `aggregation` | 5 | **9.1×** |
+| `constraint` | 3 | **6.7×** |
+| `hybrid` (vector + graph) | 1 | **5.6×** |
+| `filter` | 4 | **5.3×** |
+| `label_scan` | 2 | **5.3×** |
+| `subquery` | 6 | **4.7×** |
+| `scalar` | 14 | **4.3×** |
+| `write` | 5 | **4.2×** |
+| `point_read` | 2 | **4.1×** |
+| `order` | 2 | **3.3×** |
+| `procedure` | 4 | **3.0×** |
+| `traversal` | 7 | **2.6×** |
+
+Top wins: `aggregation.avg_score_a` 12.5× · `aggregation.count_all` 11.1× · `ecosystem.call_in_transactions` 10.0× · `aggregation.stdev_score` 9.1× · `aggregation.min_max_score` 8.3×. Closest margin still Nexus-ahead: `traversal.two_hop_chain` 1.8×. Full report at [`target/bench/report.md`](target/bench/report.md) after running [`crates/nexus-bench/README.md`](crates/nexus-bench/README.md).
+
 ### Security + Ops
 - **API keys + JWT + RBAC** with rate limiting (1k/min, 10k/hour default).
 - **Audit logging** — fail-open with `nexus_audit_log_failures_total` metric; never converts IO pressure into mass 500s. Rationale: [`docs/security/SECURITY_AUDIT.md §5`](docs/security/SECURITY_AUDIT.md).
