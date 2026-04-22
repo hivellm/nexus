@@ -1,10 +1,16 @@
-# Publishing `nexus-sdk` to crates.io
+# Publishing `nexus-graph-sdk` to crates.io
 
-`nexus-sdk` depends on `nexus-protocol` (the native RPC codec), so
-the two must be published in strict order — SDK uploads abort with
-`no matching package named 'nexus-protocol' found` when the
-protocol crate is missing from the registry at the SDK's declared
-version.
+`nexus-graph-sdk` depends on `nexus-protocol` (the native RPC
+codec), so the two must be published in strict order — SDK uploads
+abort with `no matching package named 'nexus-protocol' found` when
+the protocol crate is missing from the registry at the SDK's
+declared version.
+
+The SDK is published as **`nexus-graph-sdk`** on crates.io. The
+short name `nexus-sdk` is already owned by the unrelated Nexus
+Workflow project (placeholder 0.0.0). The module name remains
+`nexus_sdk` so every downstream `use nexus_sdk::...;` still
+compiles after upgrading the crate name.
 
 ## Order (do NOT re-order)
 
@@ -23,7 +29,7 @@ version.
    # nexus-protocol = "1.14.0"    # Integration protocols for Nexus - REST, MCP, UMICP
    ```
 
-3. **Publish `nexus-sdk`.**
+3. **Publish `nexus-graph-sdk`.**
 
    ```bash
    cd sdks/rust
@@ -53,7 +59,7 @@ nexus-protocol = { path = "../../crates/nexus-protocol", version = "1.14.0" }
   local source, so the SDK tracks protocol changes without
   round-tripping through crates.io.
 - `version` is what ends up in the published `Cargo.toml` —
-  consumers pulling `nexus-sdk` from crates.io get
+  consumers pulling `nexus-graph-sdk` from crates.io get
   `nexus-protocol@1.14.0` resolved from the registry.
 
 Either half alone breaks:

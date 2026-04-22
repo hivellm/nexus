@@ -1,12 +1,17 @@
 # Nexus Rust SDK
 
-[![Crates.io](https://img.shields.io/crates/v/nexus-sdk?style=flat-square)](https://crates.io/crates/nexus-sdk)
-[![docs.rs](https://img.shields.io/docsrs/nexus-sdk?style=flat-square)](https://docs.rs/nexus-sdk)
-[![License](https://img.shields.io/crates/l/nexus-sdk?style=flat-square)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/nexus-graph-sdk?style=flat-square)](https://crates.io/crates/nexus-graph-sdk)
+[![docs.rs](https://img.shields.io/docsrs/nexus-graph-sdk?style=flat-square)](https://docs.rs/nexus-graph-sdk)
+[![License](https://img.shields.io/crates/l/nexus-graph-sdk?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange?style=flat-square)](https://www.rust-lang.org/)
 [![CI](https://img.shields.io/github/actions/workflow/status/hivellm/nexus/ci.yml?style=flat-square)](https://github.com/hivellm/nexus/actions)
 
 Official Rust SDK for Nexus graph database.
+
+The crate is published as **`nexus-graph-sdk`** (the generic
+`nexus-sdk` name on crates.io is owned by the unrelated Nexus
+Workflow project). The module name stays `nexus_sdk`, so every
+`use nexus_sdk::...;` statement keeps working unchanged.
 
 ## Installation
 
@@ -14,7 +19,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-nexus-sdk = "1.13.0"
+nexus-graph-sdk = "1.14.0"
 ```
 
 ## Transports

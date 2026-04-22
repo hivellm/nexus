@@ -1,5 +1,11 @@
 [package]
-name = "nexus-sdk"
+# `nexus-sdk` on crates.io is owned by the unrelated "Nexus
+# Workflow" project (placeholder 0.0.0, first registered before
+# this repo existed). Renamed to `nexus-graph-sdk` so the
+# `cargo publish` chain actually accepts the upload. The in-crate
+# module still imports as `nexus_sdk` (see `[lib] name` below)
+# so existing code stays source-compatible.
+name = "nexus-graph-sdk"
 version = "1.14.0"
 edition = "2024"
 authors = ["Nexus Contributors"]
@@ -7,7 +13,7 @@ description = "Official Rust SDK for Nexus graph database"
 license = "Apache-2.0"
 repository = "https://github.com/hivellm/nexus"
 homepage = "https://github.com/hivellm/nexus"
-documentation = "https://docs.rs/nexus-sdk"
+documentation = "https://docs.rs/nexus-graph-sdk"
 readme = "README.md"
 keywords = ["graph", "database", "cypher", "neo4j-compatible"]
 categories = ["database", "web-programming"]
