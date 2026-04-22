@@ -797,7 +797,7 @@ impl CypherParser {
             })
         }
         // phase6_opencypher-quickwins §8 — label predicate `var:Label`
-        // or `var:$param` in WHERE/RETURN expression position. Re-uses
+        // or `var:$param` in WHERE/RETURN expression position. Reuses
         // the Filter operator's text-mode short-circuit by emitting a
         // synthetic `FunctionCall` whose `expression_to_string` render
         // reproduces the `variable:label` shape the short-circuit

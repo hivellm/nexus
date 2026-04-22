@@ -1,6 +1,6 @@
 """Transaction support for Nexus SDK."""
 
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 from enum import Enum
 
 from nexus_sdk.client import NexusClient

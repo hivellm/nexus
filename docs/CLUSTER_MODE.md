@@ -243,7 +243,7 @@ Defaults: `storage_mb = 1024`, `requests_per_minute = 6000`,
 `requests_per_hour = 300000`.
 
 The server-side wrapper (`nexus_server::config::Config.cluster`)
-re-uses the same struct; no server-specific shape.
+reuses the same struct; no server-specific shape.
 
 ---
 

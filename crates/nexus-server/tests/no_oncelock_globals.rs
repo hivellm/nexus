@@ -92,7 +92,7 @@ fn no_oncelock_statics_in_nexus_server_api() {
 
     assert!(
         offenders.is_empty(),
-        "phase2 anti-regression: OnceLock<_> statics reintroduced in \
+        "phase2 anti-regression: OnceLock<_> globals reintroduced in \
          nexus-server/src/api/:\n  {}\n\n\
          These modules were migrated onto NexusServer in phase2a–phase2e. \
          If you genuinely need a process-wide singleton (cross-listener \

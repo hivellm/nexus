@@ -17,8 +17,34 @@ name = "nexus-root-placeholder"
 version = "0.0.0"
 description = "Placeholder project for the Nexus workspace root (not published)."
 requires-python = ">=3.11"
+# Dependencies listed here are the ones needed by the Python tests that
+# pytest discovers under `sdks/python/**` during the root `python-test.yml`
+# workflow (which runs `pip install .` then `pytest --cov=.` from the
+# repo root). The real SDK distribution declares the same deps in
+# `sdks/python/pyproject.toml`; this mirror exists only so the CI test
+# collection step can import `nexus_sdk` without pulling the SDK as a
+# wheel.
+dependencies = [
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "msgpack>=1.0",
+    "pytest-asyncio>=0.23.0",
+]
 
 [tool.setuptools]
 packages = []
 py-modules = []
+
+[tool.pytest.ini_options]
+# Every Rust subtree has a `target/` directory from cargo; pytest would
+# spend seconds crawling it for tests that never exist. Scope collection
+# to the Python SDK tree where actual Python tests live.
+testpaths = ["sdks/python"]
+# Exclude integration tests that require a running Nexus server. These
+# are run by the dedicated SDK workflow against a live container; the
+# generic `python-test.yml` CI has no server and would see them fail.
+addopts = "--ignore=sdks/python/nexus_sdk/tests/test_multi_database.py"
+# `asyncio_mode = auto` lets the SDK's async test functions run without
+# requiring `@pytest.mark.asyncio` decorators (pytest-asyncio ≥ 0.23).
+asyncio_mode = "auto"
 

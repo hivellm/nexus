@@ -409,7 +409,7 @@ mod tests {
     fn french_analyzer_drops_le_and_stems_vocabulary() {
         let tokens = tokens_via(
             &AnalyzerKind::Language(Language::French),
-            "le chat mange les souris",
+            "le chat voit les souris",
         );
         // French stopwords drop le / les.
         assert!(!tokens.contains(&"le".to_string()), "tokens={tokens:?}");

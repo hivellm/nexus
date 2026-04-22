@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import struct
-from typing import Any
 
 import msgpack  # type: ignore[import-untyped]
 import pytest

@@ -2,7 +2,6 @@
 
 import pytest
 from nexus_sdk import NexusClient
-from nexus_sdk.error import ConfigurationError
 
 
 def test_client_creation():

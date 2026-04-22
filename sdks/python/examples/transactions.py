@@ -1,7 +1,7 @@
 """Transaction examples for Nexus Python SDK."""
 
 import asyncio
-from nexus_sdk import NexusClient, Transaction
+from nexus_sdk import NexusClient
 
 
 async def main():

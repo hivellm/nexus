@@ -416,7 +416,7 @@ impl FullTextRegistry {
     /// catalogued analyzer.
     ///
     /// Idempotent — already-loaded indexes are skipped. Malformed
-    /// sidecars (missing / unparseable / unknown analyzer) are
+    /// sidecars (missing / unparsable / unknown analyzer) are
     /// logged and skipped rather than aborting the whole rebuild so
     /// a single corrupt directory cannot break the boot path.
     pub fn load_from_disk(&self) -> Result<usize> {

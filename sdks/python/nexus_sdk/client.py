@@ -1,14 +1,25 @@
 """Nexus client implementation."""
 
+from __future__ import annotations
+
 import asyncio
 import base64
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import httpx
+
+if TYPE_CHECKING:
+    from nexus_sdk.models import (
+        BatchCreateNodesResponse,
+        BatchCreateRelationshipsResponse,
+        PlanCacheStatisticsResponse,
+        QueryStatisticsResponse,
+        SlowQueriesResponse,
+    )
+    from nexus_sdk.transaction import Transaction
 from urllib.parse import urljoin
 
 from nexus_sdk.error import (
     ApiError,
-    AuthenticationError,
     ConfigurationError,
     HttpError,
     NetworkError,
@@ -18,18 +29,15 @@ from nexus_sdk.models import (
     QueryResult,
     DatabaseStats,
     Node,
-    Relationship,
     CreateNodeRequest,
     CreateNodeResponse,
     UpdateNodeRequest,
     UpdateNodeResponse,
-    DeleteNodeRequest,
     DeleteNodeResponse,
     CreateRelationshipRequest,
     CreateRelationshipResponse,
     UpdateRelationshipRequest,
     UpdateRelationshipResponse,
-    DeleteRelationshipRequest,
     DeleteRelationshipResponse,
     LabelResponse,
     RelTypeResponse,
@@ -40,7 +48,6 @@ from nexus_sdk.models import (
     CreateDatabaseRequest,
     CreateDatabaseResponse,
     DropDatabaseResponse,
-    SessionDatabaseResponse,
     SwitchDatabaseRequest,
     SwitchDatabaseResponse,
 )
@@ -666,7 +673,7 @@ class NexusClient:
         Raises:
             ApiError: If the API returns an error
         """
-        result = await self.execute_cypher("BEGIN TRANSACTION", None)
+        await self.execute_cypher("BEGIN TRANSACTION", None)
         return TransactionResponse(
             transaction_id=f"tx_{asyncio.get_event_loop().time()}",
             success=True,
@@ -681,7 +688,7 @@ class NexusClient:
         Raises:
             ApiError: If the API returns an error
         """
-        result = await self.execute_cypher("COMMIT TRANSACTION", None)
+        await self.execute_cypher("COMMIT TRANSACTION", None)
         return TransactionResponse(success=True)
 
     async def rollback_transaction(self) -> TransactionResponse:
@@ -693,7 +700,7 @@ class NexusClient:
         Raises:
             ApiError: If the API returns an error
         """
-        result = await self.execute_cypher("ROLLBACK TRANSACTION", None)
+        await self.execute_cypher("ROLLBACK TRANSACTION", None)
         return TransactionResponse(success=True)
 
     async def batch_create_nodes(

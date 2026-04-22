@@ -87,7 +87,7 @@ pub async fn node_update(state: &SessionState, args: &[Resp3Value]) -> Resp3Valu
     let engine = state.server.engine.clone();
     let out = tokio::task::spawn_blocking(move || {
         let mut guard = engine.blocking_write();
-        // Re-use existing labels so UPDATE only changes props.
+        // Reuse existing labels so UPDATE only changes props.
         let labels = guard
             .get_node(id)
             .ok()
