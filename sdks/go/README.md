@@ -17,7 +17,7 @@ Official Go client library for [Nexus](https://github.com/hivellm/nexus), a high
 ## Installation
 
 ```bash
-go get github.com/hivellm/nexus-go@v1.0.0
+go get github.com/hivellm/nexus-go@v1.13.0
 ```
 
 ## Quick Start (RPC — default)

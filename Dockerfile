@@ -3,7 +3,7 @@
 #
 # HOW TO BUILD:
 #   docker build -t nexus-graph-db:latest .
-#   docker build -t nexus-graph-db:v0.11.0 -t nexus-graph-db:latest .
+#   docker build -t nexus-graph-db:v1.13.0 -t nexus-graph-db:latest .
 #
 # The `# syntax=docker/dockerfile:1.6` header opts into the
 # `RUN --mount=type=cache` frontend so the cargo registry + target
@@ -14,9 +14,13 @@
 #
 # HOW TO RUN:
 #   # Using docker run (basic):
+#   #   Publish 15474 (HTTP API) and 15475 (native RPC transport, default
+#   #   for first-party SDKs). Drop `-p 15475:15475` for HTTP-only
+#   #   deployments and also set `[rpc].enabled = false` in config.yml.
 #   docker run -d \
 #     --name nexus \
 #     -p 15474:15474 \
+#     -p 15475:15475 \
 #     -v nexus-data:/app/data \
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
@@ -29,6 +33,7 @@
 #   docker run -d \
 #     --name nexus \
 #     -p 15474:15474 \
+#     -p 15475:15475 \
 #     -v nexus-data:/app/data \
 #     -v $(pwd)/secrets/root_password.txt:/run/secrets/nexus_root_password:ro \
 #     -e NEXUS_ROOT_USERNAME=admin \

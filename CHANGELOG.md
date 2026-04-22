@@ -5,6 +5,71 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] — 2026-04-22
+
+### Added — openCypher geospatial predicates + `spatial.*` procedures (slice A)
+
+`phase6_opencypher-geospatial-predicates` slice A closes the
+user-facing Cypher surface around the existing `Point` type.
+Follow-up slices ship the packed R-tree index
+(`phase6_rtree-index-core`), the planner's `SpatialSeek` operator
+(`phase6_spatial-planner-seek`), and auto-populate on CREATE / SET
+(`phase6_spatial-index-autopopulate`).
+
+- **Namespaced function parsing.** The expression parser now
+  accepts `identifier.identifier(args)` as a function call
+  (`crates/nexus-core/src/executor/parser/expressions.rs`) — the
+  lookahead only fires when the `.identifier` is immediately
+  followed by `(`, so ordinary `n.prop` PropertyAccess keeps
+  precedence. Every test under `geospatial_integration_test.rs`
+  that exercises `n.prop` access stays green.
+- **Point predicate functions.** `point.withinBBox(p, bbox)`,
+  `point.withinDistance(a, b, distMeters)`, `point.azimuth(a, b)`,
+  and `point.distance(a, b)` (namespaced alias of the bare
+  `distance()` function) land in the projection evaluator
+  (`crates/nexus-core/src/executor/eval/projection.rs`). CRS or
+  dimensionality mismatches surface as `ERR_CRS_MISMATCH`;
+  malformed `bbox` maps surface as `ERR_BBOX_MALFORMED`; same
+  points to `point.azimuth` return `NULL` because the bearing is
+  undefined.
+- **`spatial.*` procedure dispatcher.** A new
+  `crates/nexus-core/src/spatial/mod.rs` mirrors the APOC
+  dispatch shape: pure-value procedures consume
+  `Vec<serde_json::Value>` and return `(columns, rows)`. Ships:
+  `spatial.bbox(points)`, `spatial.distance(a, b)`,
+  `spatial.interpolate(line, frac)`, `spatial.withinBBox(p, bbox)`,
+  `spatial.withinDistance(a, b, d)`, `spatial.azimuth(a, b)`. The
+  executor's `execute_call_procedure` routes `spatial.*` through
+  this dispatcher before the legacy `GraphProcedure` registry
+  (which can only represent single-arg procedures under the
+  current dispatch).
+- **Engine-aware spatial procedures.** `spatial.nearest(point,
+  label, k)` walks the `{label}.*` entry in the executor's
+  shared spatial-index registry and streams `(node, dist)` rows
+  ordered by distance ascending, ties broken by `node_id`
+  ascending. `spatial.addPoint(label, property, nodeId, point)`
+  is the Cypher-level bulk-loader that indexes a row into the
+  registered spatial index until the auto-populate task lands.
+- **Point helpers** (`crates/nexus-core/src/geospatial/mod.rs`):
+  `Point::same_crs`, `Point::crs_name`, `Point::azimuth_to`,
+  `Point::within_bbox`. Used by both the predicate functions and
+  the dispatcher so the semantics stay in one place.
+- **`dbms.procedures()` introspection** now lists every new
+  `spatial.*` procedure so BI tools that introspect the catalogue
+  see the full geo surface.
+- **RTreeIndex::entries().** Exposes an `(node_id, point)` snapshot
+  of the grid-backed spatial index so `spatial.nearest` can do a
+  bounded full-scan k-NN. The prior implementation walked an
+  `f64::MIN..=f64::MAX` bbox through the grid-cell math, which
+  iterated ≈4 × 10⁹ empty cells before returning. Direct
+  iteration keeps the walk bounded by `total_points`.
+- **Tests.** New integration suite
+  `crates/nexus-core/tests/geospatial_predicates_test.rs` (23
+  tests) covers every predicate + procedure end-to-end through
+  Cypher. Existing `geospatial_integration_test.rs` (55 tests)
+  and the spatial dispatcher unit tests (22 tests) all stay
+  green.
+
 ## [1.13.0] — 2026-04-22
 
 ### Added — FTS async writer + per-index cadence commits

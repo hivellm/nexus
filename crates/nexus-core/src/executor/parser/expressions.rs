@@ -595,7 +595,36 @@ impl CypherParser {
 
     /// Parse identifier expression
     pub(super) fn parse_identifier_expression(&mut self) -> Result<Expression> {
-        let identifier = self.parse_identifier()?;
+        let mut identifier = self.parse_identifier()?;
+
+        // phase6_opencypher-geospatial-predicates §4 — namespaced
+        // function call `ns.func(...)` (e.g. `point.withinBBox`,
+        // `spatial.distance`). Lookahead: if we see `.identifier(`,
+        // merge the two tokens into a single dotted identifier and
+        // fall into the function-call branch below. When no `(`
+        // follows, restore the cursor so the existing
+        // PropertyAccess branch re-parses the `.tail` suffix — the
+        // precedence of `n.prop` access must not change.
+        if self.peek_char() == Some('.') {
+            let saved_pos = self.pos;
+            let saved_line = self.line;
+            let saved_column = self.column;
+            self.consume_char();
+            if self.is_identifier_start() {
+                let tail = self.parse_identifier()?;
+                if self.peek_char() == Some('(') {
+                    identifier = format!("{identifier}.{tail}");
+                } else {
+                    self.pos = saved_pos;
+                    self.line = saved_line;
+                    self.column = saved_column;
+                }
+            } else {
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+            }
+        }
 
         // Check for function call
         if self.peek_char() == Some('(') {

@@ -303,10 +303,10 @@ export RUST_LOG=warn
 
 ```bash
 # Build optimized image
-docker build -t nexus-graph-db:v0.11.0 .
+docker build -t nexus-graph-db:v1.13.0 .
 
 # Tag as latest
-docker tag nexus-graph-db:v0.11.0 nexus-graph-db:latest
+docker tag nexus-graph-db:v1.13.0 nexus-graph-db:latest
 ```
 
 ### Step 2: Create Secrets

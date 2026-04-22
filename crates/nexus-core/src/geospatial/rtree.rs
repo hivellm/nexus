@@ -229,6 +229,20 @@ impl RTreeIndex {
         points.get(&node_id).cloned()
     }
 
+    /// Snapshot every indexed `(node_id, point)` pair.
+    ///
+    /// Used by callers that need to walk the full population
+    /// without committing to a specific bounding box — e.g. the
+    /// `spatial.nearest` procedure's k-NN scan, which sorts by
+    /// distance against every candidate before the future
+    /// packed R-tree ships in `phase6_rtree-index-core`. Clones
+    /// the stored `Point`s so the caller can release the read
+    /// lock before running its own math.
+    pub fn entries(&self) -> Vec<(u64, Point)> {
+        let points = self.points.read();
+        points.iter().map(|(id, p)| (*id, p.clone())).collect()
+    }
+
     /// Clear all data
     pub fn clear(&mut self) -> Result<()> {
         let mut points = self.points.write();

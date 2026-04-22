@@ -911,6 +911,167 @@ impl Executor {
                         }
                         Ok(Value::Null)
                     }
+                    // Geospatial predicate functions
+                    // (phase6_opencypher-geospatial-predicates §4).
+                    // Each predicate extracts up to two points via
+                    // `Point::from_json_value` and reuses the
+                    // existing distance / CRS helpers. CRS or
+                    // dimensionality mismatches surface as a
+                    // CypherSyntax error with the `ERR_CRS_MISMATCH`
+                    // prefix so SDK assertions can pattern-match on
+                    // the error code.
+                    "point.withinbbox" => {
+                        if args.len() < 2 {
+                            return Ok(Value::Null);
+                        }
+                        let p_val = self.evaluate_projection_expression(row, context, &args[0])?;
+                        let bbox_val =
+                            self.evaluate_projection_expression(row, context, &args[1])?;
+                        if p_val.is_null() || bbox_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        let Value::Object(_) = &p_val else {
+                            return Ok(Value::Null);
+                        };
+                        let p = crate::geospatial::Point::from_json_value(&p_val)
+                            .map_err(|e| Error::CypherSyntax(format!("Invalid point: {e}")))?;
+                        let bbox_obj = bbox_val.as_object().ok_or_else(|| {
+                            Error::CypherSyntax(
+                                "ERR_BBOX_MALFORMED: bbox must be a map".to_string(),
+                            )
+                        })?;
+                        let bl_v = bbox_obj.get("bottomLeft").ok_or_else(|| {
+                            Error::CypherSyntax(
+                                "ERR_BBOX_MALFORMED: missing 'bottomLeft'".to_string(),
+                            )
+                        })?;
+                        let tr_v = bbox_obj.get("topRight").ok_or_else(|| {
+                            Error::CypherSyntax(
+                                "ERR_BBOX_MALFORMED: missing 'topRight'".to_string(),
+                            )
+                        })?;
+                        let bl = crate::geospatial::Point::from_json_value(bl_v).map_err(|e| {
+                            Error::CypherSyntax(format!("ERR_BBOX_MALFORMED: bottomLeft: {e}"))
+                        })?;
+                        let tr = crate::geospatial::Point::from_json_value(tr_v).map_err(|e| {
+                            Error::CypherSyntax(format!("ERR_BBOX_MALFORMED: topRight: {e}"))
+                        })?;
+                        if !p.same_crs(&bl) || !p.same_crs(&tr) {
+                            return Err(Error::CypherSyntax(format!(
+                                "ERR_CRS_MISMATCH: point={}, bbox=({}, {})",
+                                p.crs_name(),
+                                bl.crs_name(),
+                                tr.crs_name()
+                            )));
+                        }
+                        Ok(Value::Bool(p.within_bbox(&bl, &tr)))
+                    }
+                    "point.withindistance" => {
+                        if args.len() < 3 {
+                            return Ok(Value::Null);
+                        }
+                        let a_val = self.evaluate_projection_expression(row, context, &args[0])?;
+                        let b_val = self.evaluate_projection_expression(row, context, &args[1])?;
+                        let d_val = self.evaluate_projection_expression(row, context, &args[2])?;
+                        if a_val.is_null() || b_val.is_null() || d_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        let Value::Object(_) = &a_val else {
+                            return Ok(Value::Null);
+                        };
+                        let Value::Object(_) = &b_val else {
+                            return Ok(Value::Null);
+                        };
+                        let a = crate::geospatial::Point::from_json_value(&a_val)
+                            .map_err(|e| Error::CypherSyntax(format!("Invalid point a: {e}")))?;
+                        let b = crate::geospatial::Point::from_json_value(&b_val)
+                            .map_err(|e| Error::CypherSyntax(format!("Invalid point b: {e}")))?;
+                        if !a.same_crs(&b) {
+                            return Err(Error::CypherSyntax(format!(
+                                "ERR_CRS_MISMATCH: a={}, b={}",
+                                a.crs_name(),
+                                b.crs_name()
+                            )));
+                        }
+                        let dist = self.value_to_number(&d_val)?;
+                        Ok(Value::Bool(a.distance_to(&b) <= dist))
+                    }
+                    "point.azimuth" => {
+                        if args.len() < 2 {
+                            return Ok(Value::Null);
+                        }
+                        let a_val = self.evaluate_projection_expression(row, context, &args[0])?;
+                        let b_val = self.evaluate_projection_expression(row, context, &args[1])?;
+                        if a_val.is_null() || b_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        let Value::Object(_) = &a_val else {
+                            return Ok(Value::Null);
+                        };
+                        let Value::Object(_) = &b_val else {
+                            return Ok(Value::Null);
+                        };
+                        let a = crate::geospatial::Point::from_json_value(&a_val)
+                            .map_err(|e| Error::CypherSyntax(format!("Invalid point a: {e}")))?;
+                        let b = crate::geospatial::Point::from_json_value(&b_val)
+                            .map_err(|e| Error::CypherSyntax(format!("Invalid point b: {e}")))?;
+                        if !a.same_crs(&b) {
+                            return Err(Error::CypherSyntax(format!(
+                                "ERR_CRS_MISMATCH: a={}, b={}",
+                                a.crs_name(),
+                                b.crs_name()
+                            )));
+                        }
+                        match a.azimuth_to(&b) {
+                            Some(deg) => serde_json::Number::from_f64(deg)
+                                .map(Value::Number)
+                                .ok_or_else(|| Error::TypeMismatch {
+                                    expected: "number".to_string(),
+                                    actual: "non-finite".to_string(),
+                                }),
+                            None => Ok(Value::Null),
+                        }
+                    }
+                    "point.distance" => {
+                        // point.distance as a namespaced alias for
+                        // the bare `distance()` function. Keeps
+                        // parity with Neo4j's newer surface where
+                        // the `point.*` namespace is the idiomatic
+                        // one.
+                        if args.len() < 2 {
+                            return Ok(Value::Null);
+                        }
+                        let a_val = self.evaluate_projection_expression(row, context, &args[0])?;
+                        let b_val = self.evaluate_projection_expression(row, context, &args[1])?;
+                        if a_val.is_null() || b_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        let a = if let Value::Object(_) = &a_val {
+                            crate::geospatial::Point::from_json_value(&a_val)
+                                .map_err(|e| Error::CypherSyntax(format!("Invalid point a: {e}")))?
+                        } else {
+                            return Ok(Value::Null);
+                        };
+                        let b = if let Value::Object(_) = &b_val {
+                            crate::geospatial::Point::from_json_value(&b_val)
+                                .map_err(|e| Error::CypherSyntax(format!("Invalid point b: {e}")))?
+                        } else {
+                            return Ok(Value::Null);
+                        };
+                        if !a.same_crs(&b) {
+                            return Err(Error::CypherSyntax(format!(
+                                "ERR_CRS_MISMATCH: a={}, b={}",
+                                a.crs_name(),
+                                b.crs_name()
+                            )));
+                        }
+                        serde_json::Number::from_f64(a.distance_to(&b))
+                            .map(Value::Number)
+                            .ok_or_else(|| Error::TypeMismatch {
+                                expected: "number".to_string(),
+                                actual: "non-finite".to_string(),
+                            })
+                    }
                     // Geospatial functions
                     "distance" => {
                         // distance(point1, point2) - calculate distance between two points

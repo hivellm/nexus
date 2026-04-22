@@ -71,6 +71,7 @@ pub mod security;
 pub mod session;
 pub mod sharding;
 pub mod simd;
+pub mod spatial;
 pub mod storage;
 pub mod transaction;
 pub mod udf;

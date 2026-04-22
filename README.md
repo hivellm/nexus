@@ -208,11 +208,11 @@ Every SDK ships equivalent methods (`list_databases` / `listDatabases` / etc.). 
 
 ## 📦 Official SDKs
 
-Six first-party SDKs, all tracking the same 1.0.0 line. Every SDK shares the URL grammar, command-map table, and error semantics defined in [`docs/specs/sdk-transport.md`](docs/specs/sdk-transport.md).
+Six first-party SDKs, all tracking the same 1.13.0 line. Every SDK shares the URL grammar, command-map table, and error semantics defined in [`docs/specs/sdk-transport.md`](docs/specs/sdk-transport.md).
 
 | SDK            | Install                                    | Docs                                          | RPC status   |
 |----------------|--------------------------------------------|-----------------------------------------------|--------------|
-| 🦀 Rust        | `nexus-sdk = "1.0.0"`                      | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
+| 🦀 Rust        | `nexus-sdk = "1.13.0"`                     | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
 | 🐍 Python      | `pip install nexus-sdk`                    | [sdks/python/](sdks/python/README.md)         | ✅ shipped   |
 | 📘 TypeScript  | `npm install @hivehub/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | ✅ shipped   |
 | 🐹 Go          | `go get github.com/hivellm/nexus-go`       | [sdks/go/](sdks/go/README.md)                 | ✅ shipped   |
@@ -448,38 +448,40 @@ ORDER BY confidence DESC
 
 ## 🗺️ Roadmap
 
-### 1.0.0 — current
-- ✅ Property graph engine + ~55% openCypher + 19 GDS procedures.
+### 1.13.0 — current (2026-04-22)
+- ✅ Property graph engine + broad openCypher surface + 19 GDS procedures + ~100 APOC procedures.
+- ✅ **300/300** Neo4j diff suite (2025.09.0).
 - ✅ Native HNSW KNN per label.
 - ✅ Binary RPC default, HTTP/JSON legacy, RESP3 debug.
-- ✅ CLI + Rust SDK at RPC-first 1.0.0.
-- ✅ Authentication (API keys, JWT, RBAC, rate limiting, audit).
-- ✅ Multi-database.
+- ✅ CLI + six SDKs on the RPC-first 1.x line.
+- ✅ Authentication (API keys, JWT, RBAC, rate limiting, audit log with fail-open policy).
+- ✅ Three-layer back-pressure (per-key rate limit + per-connection RPC semaphore + global admission queue).
+- ✅ Multi-database with `SHOW DATABASES` / `CREATE DATABASE` / `DROP DATABASE` / `:USE`.
 - ✅ Master-replica replication (async / sync).
 - ✅ SIMD kernels (AVX-512 / AVX2 / NEON) with runtime dispatch.
-- ✅ 2310 workspace tests passing on `cargo +nightly test --workspace` (0 failed, 67 ignored); **300/300** Neo4j diff suite.
-- ✅ **V2 sharding core** (2026-04-20) — hash-based shards, per-shard Raft consensus, distributed query coordinator, `/cluster/*` API. +201 V2 tests, 2169 total passing on the restructured `crates/` workspace.
+- ✅ **Full-text search** (Tantivy 0.22) with per-index analyzer catalogue, WAL auto-maintenance, optional async writer.
+- ✅ **Constraint enforcement** for UNIQUE / NODE KEY / NOT NULL / property-type + Cypher 25 `FOR (n:L) REQUIRE (...)` DDL.
+- ✅ **Advanced types**: BYTES family, dynamic labels on writes, composite B-tree indexes, `LIST<T>` typed collections, savepoints, `GRAPH[<name>]` scoping.
+- ✅ **APOC ecosystem** — `apoc.coll.*` / `apoc.map.*` / `apoc.text.*` / `apoc.date.*` / `apoc.schema.*` / `apoc.util.*` / `apoc.convert.*` / `apoc.number.*` / `apoc.agg.*`.
+- ✅ **System procedures** — `db.indexes`, `db.constraints`, `db.labels`, `db.schema.*`, `dbms.*`.
+- ✅ openCypher quickwins — type-check predicates, `isEmpty` polymorphism, list converters, string extractors, dynamic property access, `SET +=`.
+- ✅ **V2 sharding core** (2026-04-20) — hash-based shards, per-shard Raft consensus, distributed query coordinator, `/cluster/*` API. +201 V2 tests.
+- ✅ **V2 multi-host TCP transport bridge** (2026-04-20) — Raft replicas over TCP, single-host in-process transport retained for tests.
+- ✅ **Nexus vs Neo4j benchmark suite** — Docker-based harness, 14/14 Lead on the live compare run (2026-04-21).
 
 ### Queued on 1.x
 
 Every item below is an active rulebook task under [`.rulebook/tasks/`](.rulebook/tasks/). Pick one up via `rulebook_task_show <taskId>`.
 
 **openCypher coverage** (broadening Neo4j 5.x parity):
-- 🧭 [`phase6_opencypher-constraint-enforcement`](.rulebook/tasks/phase6_opencypher-constraint-enforcement/) — `UNIQUE` / `NODE KEY` / `EXISTS` constraints with pre-commit hook.
-- 🧭 [`phase6_opencypher-fulltext-search`](.rulebook/tasks/phase6_opencypher-fulltext-search/) — Tantivy-backed FTS, `db.index.fulltext.queryNodes`.
-- 🧭 [`phase6_opencypher-quantified-path-patterns`](.rulebook/tasks/phase6_opencypher-quantified-path-patterns/) — Neo4j 5.9 QPP syntax (`()-[]->{1,5}()`).
-- 🧭 [`phase6_opencypher-subquery-transactions`](.rulebook/tasks/phase6_opencypher-subquery-transactions/) — `CALL {} IN TRANSACTIONS OF N ROWS`.
-- 🧭 [`phase6_opencypher-advanced-types`](.rulebook/tasks/phase6_opencypher-advanced-types/) — byte arrays, dynamic labels on writes, composite B-tree indexes.
-- 🧭 [`phase6_opencypher-system-procedures`](.rulebook/tasks/phase6_opencypher-system-procedures/) — `db.schema.*`, `db.labels`, `db.indexes`, `db.indexDetails`.
+- 🧭 [`phase6_opencypher-quantified-path-patterns`](.rulebook/tasks/phase6_opencypher-quantified-path-patterns/) — Neo4j 5.9 QPP syntax (`()-[]->{1,5}()`). Grammar + AST variant shipped 2026-04-21; execution engine pending.
+- 🧭 [`phase6_opencypher-subquery-transactions`](.rulebook/tasks/phase6_opencypher-subquery-transactions/) — `CALL {} IN TRANSACTIONS OF N ROWS [ON ERROR …] [REPORT STATUS …]`. Grammar slice landed 2026-04-22.
 - 🧭 [`phase6_opencypher-geospatial-predicates`](.rulebook/tasks/phase6_opencypher-geospatial-predicates/) — R-tree index + point / polygon predicates.
-- 🧭 [`phase6_opencypher-quickwins`](.rulebook/tasks/phase6_opencypher-quickwins/) — type-checking predicates, `isEmpty` polymorphism, list converters, string extractors.
-- 🧭 [`phase6_opencypher-apoc-ecosystem`](.rulebook/tasks/phase6_opencypher-apoc-ecosystem/) — APOC-compatible `apoc.coll.*` / `apoc.map.*` / `apoc.date.*` procedures.
 
 **Infrastructure & ops**:
-- 🧭 [`phase5_v2-tcp-transport-bridge`](.rulebook/tasks/phase5_v2-tcp-transport-bridge/) — multi-host TCP transport for V2 Raft replicas (current in-process transport covers single-host + integration tests).
-- 🧭 [`phase5_implement-v1-gui`](.rulebook/tasks/phase5_implement-v1-gui/) — Electron + Vue 3 desktop app (`gui/` directory scaffolded; 0% implementation).
+- 🧭 [`phase5_implement-cluster-mode`](.rulebook/tasks/phase5_implement-cluster-mode/) — cluster-mode implementation (active, 90/417 items).
+- 🧭 [`phase5_implement-v1-gui`](.rulebook/tasks/phase5_implement-v1-gui/) — Electron + Vue 3 desktop app (`gui/` scaffolded).
 - 🧭 [`phase5_hub-integration`](.rulebook/tasks/phase5_hub-integration/) — HiveHub SaaS multi-tenant control plane (billing, per-user databases).
-- 🧭 [`phase6_nexus-vs-neo4j-benchmark-suite`](.rulebook/tasks/phase6_nexus-vs-neo4j-benchmark-suite/) — Docker-based harness for apples-to-apples vs-Neo4j benchmarks.
 
 **Protocol polish**:
 - 🧭 **RESP3 in non-Rust SDKs** — every SDK accepts `resp3://` URLs and throws a clear error; parser/writer queued for a subsequent 1.x release.
@@ -490,7 +492,7 @@ Every item below is an active rulebook task under [`.rulebook/tasks/`](.rulebook
 - ✅ **Raft consensus** — purpose-built per-shard Raft with leader election, log replication, snapshot install, 5-node tolerates 2 failures ([`crates/nexus-core/src/sharding/raft/`](crates/nexus-core/src/sharding/raft/)).
 - ✅ **Distributed queries** — scatter/gather coordinator with atomic failure, leader-hint retry, COUNT/SUM/AVG decomposition, top-k merge ([`crates/nexus-core/src/coordinator/`](crates/nexus-core/src/coordinator/)).
 - ✅ **Cluster operations** — `/cluster/*` management API, admin-gated, 307 redirect on followers, drain semantics ([`crates/nexus-server/src/api/cluster.rs`](crates/nexus-server/src/api/cluster.rs)).
-- 🧭 **Multi-host TCP transport** — `phase5_v2-tcp-transport-bridge` follow-up (current in-process transport covers single-host + all integration tests).
+- ✅ **Multi-host TCP transport** — Raft replica bridge over TCP (2026-04-20).
 - 🧭 **Online re-sharding / cross-shard 2PC / geo-distribution** — V2.1 / V3.
 
 Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -499,11 +501,11 @@ Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 | Property         | Neo4j                | Redis / Redis Stack   | **Nexus**                                |
 |------------------|----------------------|-----------------------|------------------------------------------|
-| Query language   | Cypher (full)        | RedisGraph Cypher     | Cypher subset (20% = 80% coverage)       |
+| Query language   | Cypher (full)        | RedisGraph Cypher     | Cypher 25 + ~100 APOC procedures         |
 | Storage model    | Record stores        | In-memory / flash     | Record stores (Neo4j-inspired)           |
 | Vector search    | GDS plugin           | Redis Search module   | **Native HNSW per label**                |
 | Default transport| Bolt binary          | RESP3                 | **Binary RPC (MessagePack)**, HTTP, RESP3 |
-| SDKs             | Official 7 languages | Extensive community   | 6 first-party, same 1.0.0 cadence        |
+| SDKs             | Official 7 languages | Extensive community   | 6 first-party, same 1.13.0 cadence       |
 | Target workload  | General graph OLTP   | In-memory KV + graph  | **Read-heavy + RAG + vector hybrid**     |
 
 ### Sweet spot
@@ -516,6 +518,119 @@ Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - Write-heavy OLTP — use a traditional RDBMS.
 - Pure key-value — use Redis or Synap.
 - Document-only search — use Elasticsearch or the Vectorizer standalone.
+
+## 🧮 openCypher Support Matrix
+
+Canonical list of openCypher / Cypher 25 surfaces in Nexus v1.13.0. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
+
+### Reading clauses
+
+| Clause / feature | Status | Notes |
+|------------------|--------|-------|
+| `MATCH` (nodes, relationships, multiple labels, directed / undirected) | ✅ | Label intersection via RoaringBitmap. |
+| Variable-length paths `*`, `*n`, `*m..n`, `+`, `?` | ✅ | Planner routes to optimized BFS for bounded lengths. |
+| `OPTIONAL MATCH` | ✅ | Left-outer semantics, null propagation. |
+| Quantified path patterns `()-[]->{m,n}()` | 🟡 | Grammar + AST shipped (2026-04-21); execution engine in [`phase6_opencypher-quantified-path-patterns`](.rulebook/tasks/phase6_opencypher-quantified-path-patterns/). |
+| `WHERE` (after `MATCH` / `OPTIONAL MATCH` / `WITH`) | ✅ | Clause-ordering rule enforced since `phase3_unwind-where-neo4j-parity`. |
+| `WITH` (projection, aggregation, chaining) | ✅ | Supports `DISTINCT`, `ORDER BY`, `LIMIT`, `SKIP`, `WHERE`. |
+| `UNWIND` | ✅ | Into `CREATE`, aggregation, filter. |
+| `RETURN` — projection, `DISTINCT`, `AS` alias, `n.*` | ✅ | Including complex expressions + CASE in projections. |
+| `ORDER BY` / `SKIP` / `LIMIT` | ✅ | Top-k merge for distributed queries. |
+| `UNION` / `UNION ALL` | ✅ | |
+| `CALL` subquery (`CALL { … }`) | ✅ | Scalar + row-level. |
+| `CALL { … } IN TRANSACTIONS OF N ROWS` | 🟡 | Grammar + suffix clauses landed 2026-04-22 ([`phase6_opencypher-subquery-transactions`](.rulebook/tasks/phase6_opencypher-subquery-transactions/)); executor integration pending. |
+| Named paths (`p = (a)-[*]-(b)`) + `nodes(p)` / `relationships(p)` / `length(p)` | ✅ | |
+| `shortestPath()` / `allShortestPaths()` | ✅ | |
+| Pattern comprehensions `[(n)-[]->(m) \| m.name]` | ✅ | |
+| List comprehensions `[x IN list WHERE … \| …]` | ✅ | |
+| Map projection `n {.prop, alias: expr}` | ✅ | |
+| `CASE` (simple + generic) | ✅ | |
+| `EXISTS { … }` subqueries | ✅ | |
+
+### Writing clauses
+
+| Clause / feature | Status | Notes |
+|------------------|--------|-------|
+| `CREATE` nodes / relationships (with properties, multi-label) | ✅ | |
+| `MERGE` (+ `ON CREATE SET` / `ON MATCH SET`) | ✅ | |
+| `SET` property / `SET n += map` / multi-property | ✅ | |
+| `SET n:Label` (add label) / `REMOVE n:Label` | ✅ | |
+| `SET n:$label` / `REMOVE n:$label` / `CREATE (n:$label)` (write-side dynamic labels) | ✅ | STRING or `LIST<STRING>` parameter. |
+| `DELETE` / `DETACH DELETE` | ✅ | RPC parity fixed in v1.0.0 release. |
+| `REMOVE` property | ✅ | |
+| `FOREACH (x IN list \| …)` | ✅ | |
+| `LOAD CSV` (+ `WITH HEADERS`) | ✅ | |
+| `SAVEPOINT` / `ROLLBACK TO SAVEPOINT` / `RELEASE SAVEPOINT` | ✅ | Nested LIFO unwind. |
+
+### Schema & constraints
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `CREATE INDEX [IF NOT EXISTS]` / `DROP INDEX [IF EXISTS]` on single property | ✅ | |
+| Composite B-tree indexes `ON (n.p1, n.p2, …)` | ✅ | Exact / prefix / range seeks + optional uniqueness flag. |
+| Full-text indexes via `db.index.fulltext.createNodeIndex` / `createRelationshipIndex` | ✅ | Tantivy 0.22, per-index analyzer catalogue. |
+| FTS query procedures (`queryNodes` / `queryRelationships`) | ✅ | BM25 ranking, top-k, tie-break on node id. |
+| FTS `drop` / `listAvailableAnalyzers` / `awaitEventuallyConsistentIndexRefresh` | ✅ | |
+| FTS WAL integration (auto-populate on CREATE / SET / REMOVE / DELETE, crash replay) | ✅ | v1.11 + v1.12. |
+| FTS per-index async writer with `refresh_ms` cadence | ✅ | v1.13; default remains sync (read-your-writes). |
+| Spatial indexes | 🟡 | `CREATE SPATIAL INDEX` grammar parses; R-tree backend in [`phase6_opencypher-geospatial-predicates`](.rulebook/tasks/phase6_opencypher-geospatial-predicates/). |
+| `UNIQUE` constraint | ✅ | Enforced on CREATE / MERGE / SET. |
+| `NODE KEY` (composite uniqueness + implicit NOT NULL) | ✅ | Backed by composite B-tree with `unique` flag. |
+| `NOT NULL` / `EXISTS(n.p)` (nodes + relationships) | ✅ | |
+| Property-type constraint `IS :: INTEGER \| FLOAT \| STRING \| BOOLEAN \| BYTES \| LIST \| MAP` | ✅ | Strict semantics (INTEGER ≠ FLOAT). |
+| Backfill validator for constraints on existing data | ✅ | First 100 offending rows surfaced; atomic abort. |
+| Cypher 25 `FOR (n:L) REQUIRE (…) IS NODE KEY` DDL | ✅ | Parser + planner wired. |
+| Database DDL (`SHOW / CREATE / DROP DATABASE [IF EXISTS]`, `USE`) | ✅ | Multi-database isolation. |
+| `GRAPH[<name>]` preamble | ✅ | Cross-database routing via DatabaseManager. |
+
+### Procedures
+
+| Namespace | Status | Notes |
+|-----------|--------|-------|
+| `db.indexes` / `db.constraints` / `db.labels` / `db.schema.*` | ✅ | System-procedure surface landed v1.x. |
+| `dbms.procedures()` / `dbms.functions()` / `dbms.*` | ✅ | Every registered proc surfaces here, incl. APOC + GDS. |
+| `db.index.fulltext.*` | ✅ | See FTS row above. |
+| `vector.knn(label, vector, k)` + KNN-seeded traversal | ✅ | Bytes-native embeddings on RPC. |
+| `graph.generate` / `graph.analyze` (correlation & pattern detection) | ✅ | Code-analysis use case. |
+| GDS — PageRank (standard / weighted / parallel), betweenness, eigenvector, Dijkstra, A\*, Yen's k-paths, Louvain, label propagation, triangle count, clustering coefficients | ✅ | 19 procedures. |
+| `apoc.coll.*` (30 procs: union, intersection, sort, partition, flatten, …) | ✅ | |
+| `apoc.map.*` (20 procs: merge, fromPairs, groupBy, submap, …) | ✅ | |
+| `apoc.text.*` (20 procs: levenshtein, jaroWinkler, regex.*, phonetic, base64, …) | ✅ | |
+| `apoc.date.*` (25 procs: format, parse, convertFormat, diff, toYears, …) | ✅ | |
+| `apoc.schema.*` (10 procs: assert, nodes, relationships, indexExists, …) | ✅ | |
+| `apoc.util.*` / `apoc.convert.*` / `apoc.number.*` / `apoc.agg.*` | ✅ | Delta namespaces landed 2026-04-21. |
+
+### Expressions & functions
+
+| Group | Status | Notes |
+|-------|--------|-------|
+| Comparison / boolean / unary operators | ✅ | `=`, `!=`, `<`, `<=`, `>`, `>=`, `AND`, `OR`, `NOT`, unary `-`. |
+| `IN` / `IS NULL` / `IS NOT NULL` | ✅ | |
+| String predicates `STARTS WITH` / `ENDS WITH` / `CONTAINS` / regex `=~` | ✅ | |
+| String functions — `toLower`, `toUpper`, `substring`, `trim`, `ltrim`, `rtrim`, `replace`, `split`, `length`, `left`, `right`, `reverse` | ✅ | |
+| Regex helper functions — `regexMatch`, `regexReplace`, `regexReplaceAll`, `regexExtract`, `regexExtractAll`, `regexExtractGroups`, `regexSplit` | ✅ | |
+| Math — `abs`, `ceil`, `floor`, `round`, `sqrt`, `pow`, `sign`, `rand`, trig (`sin`/`cos`/`tan`, `asin`/`acos`/`atan`/`atan2`), `exp`, `log`, `log10`, `radians`, `degrees`, `pi()`, `e()` | ✅ | |
+| Type conversion — `toInteger`, `toFloat`, `toString`, `toBoolean`, `toDate` | ✅ | |
+| Type-check predicates — `isEmpty`, `isString`, `isNumber`, `isInteger`, `isFloat`, `isBoolean`, `isList`, `isMap`, `isNull` | ✅ | Landed in openCypher quickwins. |
+| List functions — `size`, `head`, `tail`, `last`, `range`, `reverse`, `keys`, `nodes`, `relationships`, `length` | ✅ | |
+| Aggregation — `COUNT(*)`, `COUNT(DISTINCT x)`, `SUM`, `AVG`, `MIN`, `MAX`, `COLLECT`, `COLLECT(DISTINCT …)` | ✅ | |
+| Temporal — `date()`, `datetime()`, `time()`, `duration()`, `localdatetime()` | ✅ | |
+| BYTES family — `bytes`, `bytesFromBase64`, `bytesToBase64`, `bytesToHex`, `bytesLength`, `bytesSlice` | ✅ | Wire format `{"_bytes": "<base64>"}`; 64 MiB per-property cap. |
+| Typed collections `LIST<INTEGER\|FLOAT\|STRING\|BOOLEAN\|BYTES\|ANY>` | ✅ | Parser + constraint-engine validator. |
+| Spatial / geospatial predicates (`distance`, `point()`, polygon containment) | 🧭 | Queued in [`phase6_opencypher-geospatial-predicates`](.rulebook/tasks/phase6_opencypher-geospatial-predicates/). |
+
+### Transactions, admin & observability
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `BEGIN` / `COMMIT` / `ROLLBACK` | ✅ | |
+| Transaction savepoints | ✅ | v1.5. |
+| `EXPLAIN` / `PROFILE` | ✅ | |
+| Query hints — `USING INDEX` / `USING SCAN` / `USING JOIN` | ✅ | |
+| `SHOW QUERIES` / `TERMINATE QUERY '<id>'` | ✅ | |
+| `CREATE USER` / `DROP USER` / RBAC DDL | ✅ | Via auth subsystem + Cypher admin surface. |
+| Replication DDL (`/replication/promote`, `/pause`, `/resume`) | ✅ | HTTP only. |
+| Cluster DDL (`/cluster/add_node`, `/remove_node`, `/rebalance`) | ✅ | Admin-gated. |
 
 ## 🛠️ Development
 

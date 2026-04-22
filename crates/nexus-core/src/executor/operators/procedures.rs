@@ -123,6 +123,50 @@ impl Executor {
             _ => {}
         }
 
+        // phase6_opencypher-geospatial-predicates §7 — spatial.*
+        // procedures. `spatial.nearest` needs access to the shared
+        // R-tree index registry and goes through a dedicated
+        // executor method; the pure-value family
+        // (`bbox` / `distance` / `withinBBox` / `withinDistance`
+        // / `azimuth` / `interpolate`) routes through the
+        // value-only dispatcher the same way apoc.* does.
+        if procedure_name == "spatial.nearest" {
+            return self.execute_spatial_nearest(context, arguments, yield_columns);
+        }
+        if procedure_name == "spatial.addPoint" {
+            return self.execute_spatial_add_point(context, arguments, yield_columns);
+        }
+        if procedure_name.starts_with("spatial.") {
+            let mut arg_values: Vec<serde_json::Value> = Vec::with_capacity(arguments.len());
+            for arg_expr in arguments {
+                arg_values.push(self.evaluate_expression_in_context(context, arg_expr)?);
+            }
+            if let Some(spatial_result) =
+                crate::spatial::dispatch(procedure_name, arg_values.clone())?
+            {
+                let rows: Vec<Row> = spatial_result
+                    .rows
+                    .into_iter()
+                    .map(|values| Row { values })
+                    .collect();
+                let columns = if let Some(yield_cols) = yield_columns {
+                    yield_cols.clone()
+                } else {
+                    spatial_result.columns
+                };
+                context.set_columns_and_rows(columns, rows);
+                return Ok(());
+            }
+            // Unknown spatial.* name — surface it explicitly so
+            // the caller doesn't fall back into the legacy
+            // registry path with its broken arg-packing.
+            return Err(Error::CypherExecution(format!(
+                "ERR_PROC_NOT_FOUND: `{procedure_name}` is not a known spatial.* procedure. \
+                 Known: {:?}",
+                crate::spatial::list_procedures(),
+            )));
+        }
+
         // phase6_opencypher-apoc-ecosystem — route apoc.* procedures
         // through the in-tree registry. The registry evaluates every
         // argument expression in the current context, passes the
@@ -956,6 +1000,35 @@ impl Executor {
             });
         }
 
+        // phase6_opencypher-geospatial-predicates §7 — append the
+        // pure-value spatial.* surface plus the engine-aware
+        // `spatial.nearest` so BI tools that introspect
+        // `dbms.procedures()` see the full geo namespace.
+        for name in crate::spatial::list_procedures() {
+            rows.push(Row {
+                values: vec![
+                    Value::String(name.to_string()),
+                    Value::String(format!("{name}(...) :: ANY")),
+                    Value::String("Geospatial procedure.".to_string()),
+                    Value::String("READ".to_string()),
+                    Value::Bool(false),
+                ],
+            });
+        }
+        rows.push(Row {
+            values: vec![
+                Value::String("spatial.nearest".to_string()),
+                Value::String(
+                    "spatial.nearest(point :: POINT, label :: STRING, k :: INTEGER) :: \
+                     (node :: NODE, dist :: FLOAT)"
+                        .to_string(),
+                ),
+                Value::String("k nearest neighbours via the R-tree index for `label`.".to_string()),
+                Value::String("READ".to_string()),
+                Value::Bool(false),
+            ],
+        });
+
         let columns = if let Some(y) = yield_columns {
             y.clone()
         } else {
@@ -1591,6 +1664,257 @@ impl Executor {
                     Value::String(d.name.to_string()),
                     Value::String(d.description.to_string()),
                 ],
+            })
+            .collect();
+        context.set_columns_and_rows(columns, rows);
+        Ok(())
+    }
+
+    /// `CALL spatial.addPoint(label, property, nodeId, point)` —
+    /// insert a point into the spatial index registered for
+    /// `{label}.{property}`. Returns `{added: BOOLEAN}`.
+    ///
+    /// Provided as the Cypher-level bulk-loader until auto-populate
+    /// on CREATE / SET lands (follow-up task
+    /// `phase6_spatial-index-autopopulate`). Scripts that build a
+    /// dataset up-front can drive this procedure once per row to
+    /// initialise the index, then rely on `spatial.nearest` /
+    /// `point.*` predicates for reads.
+    pub(in crate::executor) fn execute_spatial_add_point(
+        &self,
+        context: &mut ExecutionContext,
+        arguments: &[parser::Expression],
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        let label = match arguments.first() {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::String(s) => s,
+                other => {
+                    return Err(Error::CypherExecution(format!(
+                        "ERR_INVALID_ARG_TYPE: spatial.addPoint `label` must be STRING (got \
+                         {other})"
+                    )));
+                }
+            },
+            None => {
+                return Err(Error::CypherExecution(
+                    "ERR_MISSING_ARG: spatial.addPoint requires `label` at position 0".to_string(),
+                ));
+            }
+        };
+        let property = match arguments.get(1) {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::String(s) => s,
+                other => {
+                    return Err(Error::CypherExecution(format!(
+                        "ERR_INVALID_ARG_TYPE: spatial.addPoint `property` must be STRING (got \
+                         {other})"
+                    )));
+                }
+            },
+            None => {
+                return Err(Error::CypherExecution(
+                    "ERR_MISSING_ARG: spatial.addPoint requires `property` at position 1"
+                        .to_string(),
+                ));
+            }
+        };
+        let node_id = match arguments.get(2) {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::Number(n) => n.as_u64().ok_or_else(|| {
+                    Error::CypherExecution(
+                        "ERR_INVALID_ARG_VALUE: spatial.addPoint `nodeId` must be a \
+                         non-negative INTEGER"
+                            .to_string(),
+                    )
+                })?,
+                other => {
+                    return Err(Error::CypherExecution(format!(
+                        "ERR_INVALID_ARG_TYPE: spatial.addPoint `nodeId` must be INTEGER (got \
+                         {other})"
+                    )));
+                }
+            },
+            None => {
+                return Err(Error::CypherExecution(
+                    "ERR_MISSING_ARG: spatial.addPoint requires `nodeId` at position 2".to_string(),
+                ));
+            }
+        };
+        let point_val = match arguments.get(3) {
+            Some(expr) => self.evaluate_expression_in_context(context, expr)?,
+            None => {
+                return Err(Error::CypherExecution(
+                    "ERR_MISSING_ARG: spatial.addPoint requires `point` at position 3".to_string(),
+                ));
+            }
+        };
+        if !matches!(point_val, Value::Object(_)) {
+            return Err(Error::CypherExecution(format!(
+                "ERR_INVALID_ARG_TYPE: spatial.addPoint `point` must be a POINT (got \
+                 {point_val})"
+            )));
+        }
+        let point = crate::geospatial::Point::from_json_value(&point_val).map_err(|e| {
+            Error::CypherExecution(format!(
+                "ERR_INVALID_ARG_TYPE: spatial.addPoint `point` is not a valid POINT: {e}"
+            ))
+        })?;
+        let key = format!("{label}.{property}");
+        let indexes = self.shared.spatial_indexes.read();
+        let index = indexes.get(&key).cloned();
+        drop(indexes);
+        let index = index.ok_or_else(|| {
+            Error::CypherExecution(format!(
+                "ERR_SPATIAL_INDEX_NOT_FOUND: no spatial index for `{key}` — run `CREATE \
+                 SPATIAL INDEX ON :{label}({property})` first"
+            ))
+        })?;
+        index.insert(node_id, &point)?;
+        let columns = yield_columns
+            .cloned()
+            .unwrap_or_else(|| vec!["added".to_string()]);
+        context.set_columns_and_rows(
+            columns,
+            vec![Row {
+                values: vec![Value::Bool(true)],
+            }],
+        );
+        Ok(())
+    }
+
+    /// `CALL spatial.nearest(point, label, k)` — engine-aware
+    /// k-NN procedure (phase6_opencypher-geospatial-predicates §7.3).
+    ///
+    /// Finds the indexed point closest to the query point, scanning
+    /// the per-`label.property` spatial index registered via
+    /// `CREATE SPATIAL INDEX`. Streams rows `(node, dist)` ordered
+    /// by distance ascending. Ties break on `node_id` ascending
+    /// for deterministic output.
+    ///
+    /// When multiple spatial indexes exist for the same label
+    /// (e.g. `Place.loc` + `Place.other`) the first one sorted
+    /// alphabetically by key is used. An explicit future task will
+    /// extend the signature with an optional `property` argument
+    /// once the planner integrates spatial seeks end-to-end.
+    pub(in crate::executor) fn execute_spatial_nearest(
+        &self,
+        context: &mut ExecutionContext,
+        arguments: &[parser::Expression],
+        yield_columns: Option<&Vec<String>>,
+    ) -> Result<()> {
+        let point_val = match arguments.first() {
+            Some(expr) => self.evaluate_expression_in_context(context, expr)?,
+            None => {
+                return Err(Error::CypherExecution(
+                    "ERR_MISSING_ARG: spatial.nearest requires `point` at position 0".to_string(),
+                ));
+            }
+        };
+        let label = match arguments.get(1) {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::String(s) => s,
+                other => {
+                    return Err(Error::CypherExecution(format!(
+                        "ERR_INVALID_ARG_TYPE: spatial.nearest `label` must be STRING (got {other})"
+                    )));
+                }
+            },
+            None => {
+                return Err(Error::CypherExecution(
+                    "ERR_MISSING_ARG: spatial.nearest requires `label` at position 1".to_string(),
+                ));
+            }
+        };
+        let k = match arguments.get(2) {
+            Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
+                Value::Number(n) => n
+                    .as_i64()
+                    .and_then(|v| usize::try_from(v).ok())
+                    .ok_or_else(|| {
+                        Error::CypherExecution(
+                            "ERR_INVALID_ARG_VALUE: spatial.nearest `k` must be a positive \
+                             INTEGER"
+                                .to_string(),
+                        )
+                    })?,
+                other => {
+                    return Err(Error::CypherExecution(format!(
+                        "ERR_INVALID_ARG_TYPE: spatial.nearest `k` must be INTEGER (got {other})"
+                    )));
+                }
+            },
+            None => {
+                return Err(Error::CypherExecution(
+                    "ERR_MISSING_ARG: spatial.nearest requires `k` at position 2".to_string(),
+                ));
+            }
+        };
+        if !matches!(point_val, Value::Object(_)) {
+            return Err(Error::CypherExecution(format!(
+                "ERR_INVALID_ARG_TYPE: spatial.nearest `point` must be a POINT (got {point_val})"
+            )));
+        }
+        let point = crate::geospatial::Point::from_json_value(&point_val).map_err(|e| {
+            Error::CypherExecution(format!(
+                "ERR_INVALID_ARG_TYPE: spatial.nearest `point` is not a valid POINT: {e}"
+            ))
+        })?;
+
+        // Locate the `{label}.<prop>` index. Sort keys so the pick
+        // is stable across runs when more than one property is
+        // indexed for the same label.
+        let indexes = self.shared.spatial_indexes.read();
+        let prefix = format!("{label}.");
+        let mut matching: Vec<&String> =
+            indexes.keys().filter(|k| k.starts_with(&prefix)).collect();
+        matching.sort();
+        let Some(index_key) = matching.first().map(|s| (*s).clone()) else {
+            return Err(Error::CypherExecution(format!(
+                "ERR_SPATIAL_INDEX_NOT_FOUND: no spatial index exists for label `{label}` — \
+                 run `CREATE SPATIAL INDEX ON :{label}(<property>)` first",
+            )));
+        };
+        let index = indexes.get(&index_key).cloned();
+        drop(indexes);
+        let index = index.ok_or_else(|| {
+            Error::CypherExecution(format!(
+                "ERR_SPATIAL_INDEX_NOT_FOUND: {index_key:?} vanished during read"
+            ))
+        })?;
+
+        // Naive k-NN over the grid index — iterate every indexed
+        // point, compute distance, sort. For the grid-backed
+        // SpatialIndex this is equivalent to the index's internal
+        // capability today; swapping in a packed R-tree in a
+        // follow-up task will plug the priority-queue walk in
+        // without touching this procedure's shape.
+        let mut pairs: Vec<(u64, f64)> = index
+            .entries()
+            .into_iter()
+            .filter(|(_, p)| p.same_crs(&point))
+            .map(|(id, p)| (id, point.distance_to(&p)))
+            .collect();
+        pairs.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        pairs.truncate(k);
+
+        let columns = yield_columns
+            .cloned()
+            .unwrap_or_else(|| vec!["node".to_string(), "dist".to_string()]);
+        let rows: Vec<Row> = pairs
+            .into_iter()
+            .map(|(node_id, dist)| {
+                let node = serde_json::json!({ "_nexus_id": node_id });
+                let d = serde_json::Number::from_f64(dist)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null);
+                Row {
+                    values: vec![node, d],
+                }
             })
             .collect();
         context.set_columns_and_rows(columns, rows);

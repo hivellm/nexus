@@ -135,6 +135,87 @@ impl Point {
         }
     }
 
+    /// Canonical CRS name as used in the `crs` field of the JSON
+    /// serialisation (`"cartesian"`, `"cartesian-3d"`, `"wgs-84"`,
+    /// `"wgs-84-3d"`). Used by `ERR_CRS_MISMATCH` messages so the
+    /// operator the caller actually typed round-trips into the
+    /// error text.
+    pub fn crs_name(&self) -> &'static str {
+        match (self.coordinate_system, self.z.is_some()) {
+            (CoordinateSystem::Cartesian, false) => "cartesian",
+            (CoordinateSystem::Cartesian, true) => "cartesian-3d",
+            (CoordinateSystem::WGS84, false) => "wgs-84",
+            (CoordinateSystem::WGS84, true) => "wgs-84-3d",
+        }
+    }
+
+    /// True when `self` and `other` share both the coordinate
+    /// system and the 2D/3D dimensionality. Spatial predicates
+    /// require a fully matching CRS — a `cartesian-2d` and a
+    /// `cartesian-3d` point are not interchangeable even though
+    /// both are Cartesian.
+    pub fn same_crs(&self, other: &Point) -> bool {
+        self.coordinate_system == other.coordinate_system && self.is_3d() == other.is_3d()
+    }
+
+    /// Bearing from `self` to `other` in degrees.
+    ///
+    /// - WGS84: true compass bearing (0 = north, 90 = east), computed
+    ///   with the standard spherical trig. Result is normalised to
+    ///   `[0, 360)`.
+    /// - Cartesian: planar angle `atan2(Δy, Δx)` converted to
+    ///   degrees, normalised to `[0, 360)`. The `z` component is
+    ///   ignored — bearing is a planar quantity.
+    ///
+    /// Returns `None` when the two points coincide (bearing is
+    /// undefined) or the CRS does not match.
+    pub fn azimuth_to(&self, other: &Point) -> Option<f64> {
+        if !self.same_crs(other) {
+            return None;
+        }
+        if (self.x - other.x).abs() < f64::EPSILON && (self.y - other.y).abs() < f64::EPSILON {
+            return None;
+        }
+        let bearing = match self.coordinate_system {
+            CoordinateSystem::WGS84 => {
+                let lat1 = self.y.to_radians();
+                let lat2 = other.y.to_radians();
+                let dlon = (other.x - self.x).to_radians();
+                let y = dlon.sin() * lat2.cos();
+                let x = lat1.cos() * lat2.sin() - lat1.sin() * lat2.cos() * dlon.cos();
+                y.atan2(x).to_degrees()
+            }
+            CoordinateSystem::Cartesian => {
+                // 0° = +x axis (east) in Cartesian; keep this
+                // convention so Cartesian azimuth lines up with
+                // openCypher's documented behaviour and the
+                // Cartesian-equivalent Neo4j docs.
+                (other.y - self.y).atan2(other.x - self.x).to_degrees()
+            }
+        };
+        Some((bearing % 360.0 + 360.0) % 360.0)
+    }
+
+    /// True when `self` lies inside the axis-aligned bounding box
+    /// with corners `bottom_left` + `top_right` (inclusive on both
+    /// corners). The three points MUST share the same CRS; caller
+    /// is responsible for the `same_crs` check so the mismatch can
+    /// surface as a proper Cypher error rather than a silent
+    /// `false`. For 3D inputs the `z` axis is also tested.
+    pub fn within_bbox(&self, bottom_left: &Point, top_right: &Point) -> bool {
+        let mut ok = self.x >= bottom_left.x
+            && self.x <= top_right.x
+            && self.y >= bottom_left.y
+            && self.y <= top_right.y;
+        if ok && self.is_3d() && bottom_left.is_3d() && top_right.is_3d() {
+            let z = self.z();
+            let zmin = bottom_left.z();
+            let zmax = top_right.z();
+            ok = z >= zmin && z <= zmax;
+        }
+        ok
+    }
+
     /// Convert to serde_json::Value for use in Cypher queries
     pub fn to_json_value(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();

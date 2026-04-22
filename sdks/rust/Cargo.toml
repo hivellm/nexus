@@ -1,6 +1,6 @@
 [package]
 name = "nexus-sdk"
-version = "1.0.0"
+version = "1.13.0"
 edition = "2024"
 authors = ["Nexus Contributors"]
 description = "Official Rust SDK for Nexus graph database"

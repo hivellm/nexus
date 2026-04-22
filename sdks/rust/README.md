@@ -14,7 +14,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-nexus-sdk = "1.0.0"
+nexus-sdk = "1.13.0"
 ```
 
 ## Transports

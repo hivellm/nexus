@@ -20,13 +20,13 @@ Official .NET client library for [Nexus](https://github.com/hivellm/nexus), a hi
 ### NuGet Package Manager
 
 ```bash
-dotnet add package Nexus.SDK --version 1.0.0
+dotnet add package Nexus.SDK --version 1.13.0
 ```
 
 ### .csproj Reference
 
 ```xml
-<PackageReference Include="Nexus.SDK" Version="1.0.0" />
+<PackageReference Include="Nexus.SDK" Version="1.13.0" />
 ```
 
 ## Quick Start (RPC — default)
