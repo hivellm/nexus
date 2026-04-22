@@ -72,7 +72,9 @@ def from_wire_value(raw: Any) -> NexusValue:
         return nx.Array([from_wire_value(x) for x in raw])
 
     if not isinstance(raw, dict):
-        raise ValueError(f"decode: unexpected NexusValue wire type {type(raw).__name__}")
+        raise ValueError(
+            f"decode: unexpected NexusValue wire type {type(raw).__name__}"
+        )
 
     if len(raw) != 1:
         raise ValueError(

@@ -127,4 +127,3 @@ class Transaction:
             Transaction ID or None
         """
         return self._transaction_id
-

@@ -64,4 +64,3 @@ class ValidationError(NexusError):
     """Validation error."""
 
     pass
-

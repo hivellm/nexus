@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-
 RPC_DEFAULT_PORT = 15475
 HTTP_DEFAULT_PORT = 15474
 HTTPS_DEFAULT_PORT = 443
@@ -79,10 +78,14 @@ def parse_endpoint(raw: str) -> Endpoint:
                 f"'https://', or 'resp3://')"
             )
         host, port = _split_host_port(rest)
-        return Endpoint(scheme=scheme, host=host, port=port if port is not None else default_port)
+        return Endpoint(
+            scheme=scheme, host=host, port=port if port is not None else default_port
+        )
 
     host, port = _split_host_port(trimmed)
-    return Endpoint(scheme="nexus", host=host, port=port if port is not None else RPC_DEFAULT_PORT)
+    return Endpoint(
+        scheme="nexus", host=host, port=port if port is not None else RPC_DEFAULT_PORT
+    )
 
 
 def _split_host_port(s: str) -> Tuple[str, Optional[int]]:

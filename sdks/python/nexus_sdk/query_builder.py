@@ -235,4 +235,3 @@ class BuiltQuery:
     def __repr__(self) -> str:
         """Representation."""
         return f"BuiltQuery(query={self._query!r}, params={self._params!r})"
-

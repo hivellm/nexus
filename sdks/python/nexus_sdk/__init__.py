@@ -104,4 +104,3 @@ __all__ = [
     "default_local_endpoint",
     "parse_endpoint",
 ]
-

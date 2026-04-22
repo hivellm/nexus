@@ -260,6 +260,7 @@ class PlanCacheStatisticsResponse(BaseModel):
 
 # Database management models
 
+
 class DatabaseInfo(BaseModel):
     """Database information."""
 
@@ -316,4 +317,3 @@ class SwitchDatabaseResponse(BaseModel):
 
     success: bool = True
     message: str = ""
-

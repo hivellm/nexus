@@ -230,7 +230,9 @@ class NexusClient:
                 raise HttpError(f"HTTP error: {e}", status_code=None) from e
 
         if last_error:
-            raise HttpError(f"Request failed after retries: {last_error}") from last_error
+            raise HttpError(
+                f"Request failed after retries: {last_error}"
+            ) from last_error
         raise NetworkError("Request failed after retries")
 
     async def execute_cypher(
@@ -252,12 +254,16 @@ class NexusClient:
         if parameters:
             args.append(json_to_nexus(parameters))
         try:
-            resp = await self._transport.execute(TransportRequest(command="CYPHER", args=args))
+            resp = await self._transport.execute(
+                TransportRequest(command="CYPHER", args=args)
+            )
         except RuntimeError as e:
             raise ApiError(str(e), 0) from e
         data = nexus_to_json(resp.value)
         if not isinstance(data, dict):
-            raise ApiError(f"CYPHER: expected object response, got {type(data).__name__}", 0)
+            raise ApiError(
+                f"CYPHER: expected object response, got {type(data).__name__}", 0
+            )
         return QueryResult(**data)
 
     async def get_stats(self) -> DatabaseStats:
@@ -268,7 +274,9 @@ class NexusClient:
             raise ApiError(str(e), 0) from e
         data = nexus_to_json(resp.value)
         if not isinstance(data, dict):
-            raise ApiError(f"STATS: expected object response, got {type(data).__name__}", 0)
+            raise ApiError(
+                f"STATS: expected object response, got {type(data).__name__}", 0
+            )
         # The RPC STATS reply surfaces flat counters; the REST path
         # nests them under ``catalog``. Fold the RPC shape onto the
         # DatabaseStats model so both transports return the same type.
@@ -564,7 +572,10 @@ class NexusClient:
             data = response.json()
             # Convert list of tuples to list of strings
             if "labels" in data and isinstance(data["labels"], list):
-                labels = [label[0] if isinstance(label, (list, tuple)) else label for label in data["labels"]]
+                labels = [
+                    label[0] if isinstance(label, (list, tuple)) else label
+                    for label in data["labels"]
+                ]
                 data["labels"] = labels
             return LabelResponse(**data)
         else:
@@ -619,7 +630,9 @@ class NexusClient:
             data = response.json()
             # Convert list of tuples to list of strings
             if "types" in data and isinstance(data["types"], list):
-                types = [t[0] if isinstance(t, (list, tuple)) else t for t in data["types"]]
+                types = [
+                    t[0] if isinstance(t, (list, tuple)) else t for t in data["types"]
+                ]
                 data["types"] = types
             return RelTypeResponse(**data)
         else:
@@ -717,6 +730,7 @@ class NexusClient:
 
         if errors:
             from nexus_sdk.error import ValidationError
+
             raise ValidationError(f"Some nodes failed to create: {', '.join(errors)}")
 
         return BatchCreateNodesResponse(
@@ -763,6 +777,7 @@ class NexusClient:
 
         if errors:
             from nexus_sdk.error import ValidationError
+
             raise ValidationError(
                 f"Some relationships failed to create: {', '.join(errors)}"
             )

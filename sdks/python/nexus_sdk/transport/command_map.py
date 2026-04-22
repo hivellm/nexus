@@ -62,7 +62,9 @@ def map_command(dotted: str, payload: Mapping[str, Any]) -> Optional[CommandMapp
         name = payload.get("name")
         if not isinstance(name, str):
             return None
-        cmd = {"db.create": "DB_CREATE", "db.drop": "DB_DROP", "db.use": "DB_USE"}[dotted]
+        cmd = {"db.create": "DB_CREATE", "db.drop": "DB_DROP", "db.use": "DB_USE"}[
+            dotted
+        ]
         return CommandMapping(cmd, [nx.Str(name)])
 
     if dotted == "schema.labels":

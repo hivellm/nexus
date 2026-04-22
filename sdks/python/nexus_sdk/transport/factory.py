@@ -57,7 +57,11 @@ def build_transport(
 
     # 2. Env var overrides a bare URL (no scheme).
     explicit_scheme = base_url is not None and "://" in base_url
-    env_raw = env_transport if env_transport is not None else os.environ.get("NEXUS_SDK_TRANSPORT")
+    env_raw = (
+        env_transport
+        if env_transport is not None
+        else os.environ.get("NEXUS_SDK_TRANSPORT")
+    )
     env_mode = TransportMode.parse(env_raw) if env_raw else None
     if env_mode and not explicit_scheme:
         mode = env_mode
@@ -110,7 +114,9 @@ def _realign_endpoint(
     if mode is TransportMode.NEXUS:
         return Endpoint(scheme="nexus", host=ep.host, port=rpc_port or RPC_DEFAULT_PORT)
     if mode is TransportMode.RESP3:
-        return Endpoint(scheme="resp3", host=ep.host, port=resp3_port or RESP3_DEFAULT_PORT)
+        return Endpoint(
+            scheme="resp3", host=ep.host, port=resp3_port or RESP3_DEFAULT_PORT
+        )
     if mode is TransportMode.HTTPS:
         return Endpoint(scheme="https", host=ep.host, port=HTTPS_DEFAULT_PORT)
     return Endpoint(scheme="http", host=ep.host, port=HTTP_DEFAULT_PORT)

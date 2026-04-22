@@ -22,9 +22,7 @@ def test_client_with_api_key():
 
 def test_client_with_credentials():
     """Test creating a client with username/password."""
-    client = NexusClient(
-        "http://localhost:15474", username="user", password="pass"
-    )
+    client = NexusClient("http://localhost:15474", username="user", password="pass")
     assert client.username == "user"
     assert client.password == "pass"
 
@@ -40,4 +38,3 @@ async def test_client_context_manager():
     """Test client as context manager."""
     async with NexusClient("http://localhost:15474") as client:
         assert client.base_url == "http://localhost:15474"
-

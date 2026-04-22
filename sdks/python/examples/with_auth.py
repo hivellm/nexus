@@ -8,9 +8,7 @@ async def main():
     """Run authentication examples."""
     # Using API key
     print("=== Using API Key ===")
-    async with NexusClient(
-        "http://localhost:15474", api_key="your-api-key"
-    ) as client:
+    async with NexusClient("http://localhost:15474", api_key="your-api-key") as client:
         healthy = await client.health_check()
         print(f"Server is healthy: {healthy}")
 
@@ -31,4 +29,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

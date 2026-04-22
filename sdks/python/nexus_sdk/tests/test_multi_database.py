@@ -106,51 +106,45 @@ async def test_data_isolation():
             # Switch to db1 and create a node
             await client.switch_database(db1_name)
             result = await client.execute_cypher(
-                "CREATE (n:TestNode {name: 'DB1 Node'}) RETURN n",
-                None
+                "CREATE (n:TestNode {name: 'DB1 Node'}) RETURN n", None
             )
             assert len(result.rows) == 1
 
             # Verify node exists in db1
             result = await client.execute_cypher(
-                "MATCH (n:TestNode) RETURN count(n) AS count",
-                None
+                "MATCH (n:TestNode) RETURN count(n) AS count", None
             )
-            assert result.rows[0]['count'] == 1
+            assert result.rows[0]["count"] == 1
 
             # Switch to db2
             await client.switch_database(db2_name)
 
             # Verify node does NOT exist in db2 (isolation)
             result = await client.execute_cypher(
-                "MATCH (n:TestNode) RETURN count(n) AS count",
-                None
+                "MATCH (n:TestNode) RETURN count(n) AS count", None
             )
-            assert result.rows[0]['count'] == 0
+            assert result.rows[0]["count"] == 0
 
             # Create a different node in db2
             result = await client.execute_cypher(
-                "CREATE (n:TestNode {name: 'DB2 Node'}) RETURN n",
-                None
+                "CREATE (n:TestNode {name: 'DB2 Node'}) RETURN n", None
             )
             assert len(result.rows) == 1
 
             # Verify only one node in db2
             result = await client.execute_cypher(
-                "MATCH (n:TestNode) RETURN count(n) AS count",
-                None
+                "MATCH (n:TestNode) RETURN count(n) AS count", None
             )
-            assert result.rows[0]['count'] == 1
+            assert result.rows[0]["count"] == 1
 
             # Switch back to db1
             await client.switch_database(db1_name)
 
             # Verify still only one node in db1
             result = await client.execute_cypher(
-                "MATCH (n:TestNode) RETURN count(n) AS count",
-                None
+                "MATCH (n:TestNode) RETURN count(n) AS count", None
             )
-            assert result.rows[0]['count'] == 1
+            assert result.rows[0]["count"] == 1
         finally:
             # Clean up
             await client.drop_database(db1_name)
@@ -167,7 +161,9 @@ async def test_client_with_database_parameter():
 
         try:
             # Create a client connected to the specific database
-            async with NexusClient("http://localhost:15474", database=db_name) as client:
+            async with NexusClient(
+                "http://localhost:15474", database=db_name
+            ) as client:
                 # Verify we're connected to the right database
                 current_db = await client.get_current_database()
                 assert current_db == db_name

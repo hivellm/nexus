@@ -28,7 +28,6 @@ from nexus_sdk.transport.types import (
     nx,
 )
 
-
 # Reserved id used by the server for PUSH frames — clients must skip it.
 PUSH_ID = 0xFFFFFFFF
 
@@ -94,7 +93,9 @@ class RpcTransport(Transport):
     async def call(self, command: str, args: List[NexusValue]) -> RpcResponse:
         """Low-level single request. Lazy-connects on first use."""
         await self._ensure_connected()
-        return await self._send(RpcRequest(id=self._alloc_id(), command=command, args=args))
+        return await self._send(
+            RpcRequest(id=self._alloc_id(), command=command, args=args)
+        )
 
     # ── Internals ──────────────────────────────────────────────────────
 
@@ -141,9 +142,7 @@ class RpcTransport(Transport):
         self._reader_task = asyncio.create_task(self._read_loop(reader))
 
         # HELLO + AUTH handshake.
-        hello = await self._send(
-            RpcRequest(id=0, command="HELLO", args=[nx.Int(1)])
-        )
+        hello = await self._send(RpcRequest(id=0, command="HELLO", args=[nx.Int(1)]))
         if not hello.ok:
             raise ConnectionError(f"HELLO rejected by server: {hello.value}")
 

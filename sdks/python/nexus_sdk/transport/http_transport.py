@@ -62,7 +62,9 @@ class HttpTransport(Transport):
             return {"X-API-Key": self._credentials.api_key}
         if self._credentials.username and self._credentials.password:
             token = base64.b64encode(
-                f"{self._credentials.username}:{self._credentials.password}".encode("utf-8")
+                f"{self._credentials.username}:{self._credentials.password}".encode(
+                    "utf-8"
+                )
             ).decode("ascii")
             return {"Authorization": f"Basic {token}"}
         return {}
@@ -74,7 +76,9 @@ class HttpTransport(Transport):
             query = _as_str(args, 0, "CYPHER")
             params = _nexus_to_plain(args[1]) if len(args) > 1 else None
             body = {"query": query, "parameters": params}
-            resp = await self._client.post(f"{url_base}/cypher", json=body, headers=headers)
+            resp = await self._client.post(
+                f"{url_base}/cypher", json=body, headers=headers
+            )
             return _http_json(resp)
         if cmd in ("PING", "HEALTH"):
             resp = await self._client.get(f"{url_base}/health", headers=headers)
@@ -93,7 +97,9 @@ class HttpTransport(Transport):
             return _http_json(resp)
         if cmd == "DB_DROP":
             name = _as_str(args, 0, "DB_DROP")
-            resp = await self._client.delete(f"{url_base}/databases/{name}", headers=headers)
+            resp = await self._client.delete(
+                f"{url_base}/databases/{name}", headers=headers
+            )
             return _http_json(resp)
         if cmd == "DB_USE":
             name = _as_str(args, 0, "DB_USE")
@@ -102,7 +108,9 @@ class HttpTransport(Transport):
             )
             return _http_json(resp)
         if cmd == "DB_CURRENT":
-            resp = await self._client.get(f"{url_base}/session/database", headers=headers)
+            resp = await self._client.get(
+                f"{url_base}/session/database", headers=headers
+            )
             return _http_json(resp)
         if cmd == "LABELS":
             resp = await self._client.get(f"{url_base}/schema/labels", headers=headers)
@@ -114,7 +122,9 @@ class HttpTransport(Transport):
             return _http_json(resp)
         if cmd == "EXPORT":
             fmt = _as_str(args, 0, "EXPORT")
-            resp = await self._client.get(f"{url_base}/export?format={fmt}", headers=headers)
+            resp = await self._client.get(
+                f"{url_base}/export?format={fmt}", headers=headers
+            )
             return json_to_nexus({"format": fmt, "data": resp.text})
         if cmd == "IMPORT":
             fmt = _as_str(args, 0, "IMPORT")

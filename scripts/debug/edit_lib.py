@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import sys
 
-with open('nexus-core/src/lib.rs', 'r', encoding='utf-8') as f:
+with open("nexus-core/src/lib.rs", "r", encoding="utf-8") as f:
     content = f.read()
 
-old_str = '''        }
+old_str = """        }
     }
 
     /// Refresh the executor to ensure it sees the latest storage state
@@ -12,9 +12,9 @@ old_str = '''        }
     /// which has its own PropertyStore instance
     pub fn refresh_executor(&mut self) -> Result<()> {
         // Recreate executor with current storage state
-        self.executor = executor::Executor::new('''
+        self.executor = executor::Executor::new("""
 
-new_functions = '''        }
+new_functions = """        }
     }
 
     /// Evaluate expression for SET clause with node context
@@ -183,13 +183,13 @@ new_functions = '''        }
     /// which has its own PropertyStore instance
     pub fn refresh_executor(&mut self) -> Result<()> {
         // Recreate executor with current storage state
-        self.executor = executor::Executor::new('''
+        self.executor = executor::Executor::new("""
 
 if old_str in content:
     content = content.replace(old_str, new_functions, 1)
-    with open('nexus-core/src/lib.rs', 'w', encoding='utf-8') as f:
+    with open("nexus-core/src/lib.rs", "w", encoding="utf-8") as f:
         f.write(content)
-    print('File updated successfully')
+    print("File updated successfully")
 else:
-    print('Pattern not found')
+    print("Pattern not found")
     sys.exit(1)

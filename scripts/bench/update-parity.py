@@ -49,7 +49,9 @@ def render_section(report: dict[str, Any]) -> str:
     scenario_count = report.get("scenario_count", len(rows))
 
     out: list[str] = []
-    out.append(f"{BEGIN} (managed by scripts/bench/update-parity.sh — DO NOT EDIT BY HAND) -->")
+    out.append(
+        f"{BEGIN} (managed by scripts/bench/update-parity.sh — DO NOT EDIT BY HAND) -->"
+    )
     out.append(
         f"<!-- generated from report.json @ {timestamp} "
         f"(nexus-bench v{nexus_version}, schema {schema_version}, "
@@ -67,9 +69,7 @@ def render_section(report: dict[str, Any]) -> str:
         "| Scenario | Category | Nexus p50 (µs) | Nexus p95 (µs) | "
         "Neo4j p50 (µs) | Neo4j p95 (µs) | Ratio (n/N) | Classification |"
     )
-    out.append(
-        "|---|---|---:|---:|---:|---:|---:|---|"
-    )
+    out.append("|---|---|---:|---:|---:|---:|---:|---|")
 
     lead = parity = behind = gap = 0
 
@@ -135,7 +135,9 @@ def main(argv: list[str]) -> int:
         return 1
     report_path = Path(argv[1])
     doc_path = Path(
-        argv[2] if len(argv) >= 3 else "docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md"
+        argv[2]
+        if len(argv) >= 3
+        else "docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md"
     )
 
     try:

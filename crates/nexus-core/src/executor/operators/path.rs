@@ -1,5 +1,5 @@
 //! Path traversal and relationship lookup. Holds the `Path` value used by
-//! shortest-path results, the `VariableLengthPathVisitor` (implementor of
+//! shortest-path results, the `VariableLengthPathVisitor` (which implements
 //! `TraversalVisitor`), and the `execute_variable_length_path` /
 //! `find_shortest_path` / `find_all_shortest_paths` / `find_paths_dfs`
 //! routines. Also hosts `find_relationships` (with its rel-property-index

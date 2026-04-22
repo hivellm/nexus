@@ -13,4 +13,3 @@ setup(
     packages=[],  # Explicitly empty - this is not a Python package
     install_requires=[],  # Dependencies are managed elsewhere
 )
-

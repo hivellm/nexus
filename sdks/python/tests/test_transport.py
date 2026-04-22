@@ -33,7 +33,6 @@ from nexus_sdk.transport.factory import build_transport
 from nexus_sdk.transport.rpc import RpcTransport
 from nexus_sdk.transport.types import TransportCredentials, TransportMode, nx
 
-
 # ── Endpoint parser ────────────────────────────────────────────────────
 
 
@@ -190,7 +189,9 @@ class TestCommandMap:
             assert m.args == []
 
     def test_auth_api_key_wins_over_user_pass(self) -> None:
-        m = map_command("auth.login", {"api_key": "nx_1", "username": "u", "password": "p"})
+        m = map_command(
+            "auth.login", {"api_key": "nx_1", "username": "u", "password": "p"}
+        )
         assert m is not None
         assert m.args == [nx.Str("nx_1")]
 
@@ -209,7 +210,9 @@ class TestCommandMap:
         m1 = map_command("data.export", {"format": "json"})
         assert m1 is not None
         assert len(m1.args) == 1
-        m2 = map_command("data.export", {"format": "csv", "query": "MATCH (n) RETURN n"})
+        m2 = map_command(
+            "data.export", {"format": "csv", "query": "MATCH (n) RETURN n"}
+        )
         assert m2 is not None
         assert len(m2.args) == 2
 
@@ -224,7 +227,9 @@ class TestCommandMap:
         assert map_command("graph.nonsense", {}) is None
 
     def test_json_to_nexus_nested(self) -> None:
-        v = json_to_nexus({"labels": ["Person"], "properties": {"name": "Alice", "age": 30}})
+        v = json_to_nexus(
+            {"labels": ["Person"], "properties": {"name": "Alice", "age": 30}}
+        )
         assert v.kind == "Map"
 
     def test_nexus_to_json_roundtrips_map(self) -> None:

@@ -35,15 +35,14 @@ async def main():
         print("5. Creating data in 'testdb'...")
         result = await client.execute_cypher(
             "CREATE (n:Product {name: $name, price: $price}) RETURN n",
-            {"name": "Laptop", "price": 999.99}
+            {"name": "Laptop", "price": 999.99},
         )
         print(f"   Created {len(result.rows)} node(s)\n")
 
         # 6. Query data from testdb
         print("6. Querying data from 'testdb'...")
         result = await client.execute_cypher(
-            "MATCH (n:Product) RETURN n.name AS name, n.price AS price",
-            None
+            "MATCH (n:Product) RETURN n.name AS name, n.price AS price", None
         )
         for row in result.rows:
             print(f"   Product: {row['name']}, Price: ${row['price']}\n")
@@ -55,8 +54,10 @@ async def main():
 
         # 8. Verify data isolation - the Product node should not exist in default db
         print("8. Verifying data isolation...")
-        result = await client.execute_cypher("MATCH (n:Product) RETURN count(n) AS count", None)
-        product_count = result.rows[0]['count'] if result.rows else 0
+        result = await client.execute_cypher(
+            "MATCH (n:Product) RETURN count(n) AS count", None
+        )
+        product_count = result.rows[0]["count"] if result.rows else 0
         print(f"   Product nodes in default database: {product_count}")
         print(f"   Data isolation verified: {product_count == 0}\n")
 
