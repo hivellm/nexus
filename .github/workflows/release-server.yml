@@ -7,9 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g., server-v0.11.0)"
+        description: "Tag to release (e.g., server-v1.14.0)"
         required: true
         type: string
+
+# Resolve the release tag once so every job sees the same value:
+#   - `release:published` → github.ref_name holds the tag
+#   - `workflow_dispatch`  → the free-form `tag` input above
+#
+# Downstream steps consume `${{ env.RELEASE_TAG }}` for checkout, and
+# `refs/tags/${{ env.RELEASE_TAG }}` when an action demands a full ref.
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   # Linux GNU builds
@@ -17,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -29,6 +40,7 @@ jobs:
           bin: nexus-server
           manifest_path: crates/nexus-server/Cargo.toml
           target: x86_64-unknown-linux-gnu
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # Linux MUSL builds (static binaries)
@@ -36,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -56,7 +70,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dist/*
-          tag: ${{ github.ref }}
+          tag: ${{ env.RELEASE_TAG }}
           overwrite: true
           file_glob: true
       - name: Build Debian Package
@@ -70,7 +84,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/x86_64-unknown-linux-musl/debian/*.deb
-          tag: ${{ github.ref }}
+          tag: ${{ env.RELEASE_TAG }}
           overwrite: true
           file_glob: true
 
@@ -79,6 +93,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -99,7 +115,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dist/*
-          tag: ${{ github.ref }}
+          tag: ${{ env.RELEASE_TAG }}
           overwrite: true
           file_glob: true
 
@@ -123,12 +139,15 @@ jobs:
           rustup show
           cargo -Vv
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Build and publish nexus-server
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: nexus-server
           manifest_path: crates/nexus-server/Cargo.toml
           target: ${{ matrix.target }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # Windows builds
@@ -138,6 +157,8 @@ jobs:
       - name: Install minimal stable
         uses: dtolnay/rust-toolchain@stable
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cd crates/nexus-server && cargo build --release
@@ -146,4 +167,5 @@ jobs:
         with:
           bin: nexus-server
           manifest_path: crates/nexus-server/Cargo.toml
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           token: ${{ secrets.GITHUB_TOKEN }}
