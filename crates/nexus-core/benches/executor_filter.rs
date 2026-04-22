@@ -15,9 +15,10 @@
 //! `create_test_executor` touches to warm a temp dir once. See
 //! `docs/specs/executor-columnar.md` for interpretation guidance.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::testing::create_test_executor;
 use serde_json::{Map, Number, Value};
+use std::hint::black_box;
 
 const FIXTURE_SIZE: usize = 100_000;
 

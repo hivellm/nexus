@@ -13,8 +13,9 @@
 //! SSE4.2 → NEON → Scalar at runtime). The acceptance target per
 //! ADR-003 and phase1 task 15.5 is ≥4× AVX2 vs scalar at dim=768.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::simd::{distance, scalar};
+use std::hint::black_box;
 
 const DIMS: &[usize] = &[32, 128, 256, 512, 768, 1024, 1536];
 

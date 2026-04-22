@@ -11,8 +11,9 @@
 //! cargo +nightly bench -p nexus-core --bench simd_crc
 //! ```
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::simd::crc32c as simd_crc32c;
+use std::hint::black_box;
 
 const SIZES: &[usize] = &[256, 4_096, 65_536, 1_048_576];
 

@@ -8,8 +8,9 @@
 //! cargo +nightly bench -p nexus-core --bench simd_reduce
 //! ```
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::simd::{reduce, scalar};
+use std::hint::black_box;
 
 const SIZES: &[usize] = &[64, 1024, 16_384, 262_144];
 

@@ -1,6 +1,6 @@
 use rustyline::Context;
 use rustyline::completion::{Completer, Pair};
-use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
+use rustyline::highlight::{CmdKind, Highlighter, MatchingBracketHighlighter};
 use rustyline::hint::HistoryHinter;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter, Validator};
@@ -193,8 +193,8 @@ impl Highlighter for CypherHelper {
         self.highlighter.highlight(line, pos)
     }
 
-    fn highlight_char(&self, line: &str, pos: usize, forced: bool) -> bool {
-        self.highlighter.highlight_char(line, pos, forced)
+    fn highlight_char(&self, line: &str, pos: usize, kind: CmdKind) -> bool {
+        self.highlighter.highlight_char(line, pos, kind)
     }
 }
 

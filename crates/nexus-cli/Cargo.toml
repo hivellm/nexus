@@ -38,22 +38,22 @@ tokio = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-toml = "0.8"
+toml = "1.1"
 
 # Error handling
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 
 # Terminal UI
-colored = "2.1"
-comfy-table = "7.1"
-dialoguer = "0.11"
-indicatif = "0.17"
-rustyline = "14.0"
-rustyline-derive = "0.10"
+colored = "3.1"
+comfy-table = "7.2"
+dialoguer = "0.12"
+indicatif = "0.18"
+rustyline = "18.0"
+rustyline-derive = "0.12"
 
 # Utilities
-dirs = "5.0"
+dirs = "6.0"
 chrono = { workspace = true }
 flate2 = "1.0"
 
@@ -61,7 +61,7 @@ flate2 = "1.0"
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 anyhow = { workspace = true }
-toml = "0.8"
+toml = "1.1"
 
 [package.metadata.deb]
 maintainer = "HiveLLM Contributors <info@hivellm.org>"

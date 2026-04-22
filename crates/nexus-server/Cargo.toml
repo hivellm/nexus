@@ -52,7 +52,7 @@ futures = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 rmp-serde.workspace = true
 chrono.workspace = true
 uuid = { version = "1.10", features = ["v4"] }
@@ -74,7 +74,7 @@ tracing-subscriber.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 
 # System monitoring
-sysinfo = "0.32"
+sysinfo = "0.38"
 
 # Memory profiling (opt-in). Enables jemalloc as the global allocator with
 # heap profiling hooks so ops can dump pprof-compatible profiles on demand.

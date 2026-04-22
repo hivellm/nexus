@@ -9,8 +9,9 @@
 //! cargo +nightly bench -p nexus-core --bench simd_popcount
 //! ```
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::simd::{bitmap, scalar};
+use std::hint::black_box;
 
 const WORDS: &[usize] = &[4, 16, 64, 256, 1024, 4096];
 

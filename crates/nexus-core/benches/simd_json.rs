@@ -11,9 +11,10 @@
 //! cargo +nightly bench -p nexus-core --bench simd_json
 //! ```
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::simd::json as simd_json_dispatch;
 use serde::{Deserialize, Serialize};
+use std::hint::black_box;
 
 #[derive(Serialize, Deserialize)]
 struct Node {

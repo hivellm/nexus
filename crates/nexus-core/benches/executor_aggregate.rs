@@ -16,10 +16,11 @@
 //! guidance and the `PREFER_COLUMNAR` / `DISABLE_COLUMNAR` hint
 //! escape hatches.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::executor::Aggregation;
 use nexus_core::testing::create_test_executor;
 use serde_json::{Map, Number, Value};
+use std::hint::black_box;
 
 const SIZES: &[usize] = &[10_000, 100_000, 1_000_000];
 

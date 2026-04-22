@@ -61,14 +61,14 @@ chrono.workspace = true
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 crc32fast = "1.4"
 crc32c = "0.6"  # hardware-accelerated CRC32C (Castagnoli) via SSE4.2 / ARMv8 CRC
-simd-json = "0.13"  # SIMD JSON parser (SSE4.2 / AVX2) — used above a size threshold
+simd-json = "0.17"  # SIMD JSON parser (SSE4.2 / AVX2) — used above a size threshold
 tempfile = "3.15"
 crossbeam-channel = "0.5"
 rand.workspace = true
 regex = "1.11"
 strsim = "0.11"  # phase6 apoc.text.* similarity metrics (Levenshtein, Jaro, Sorensen-Dice)
 tracing = "0.1"
-dashmap = "5.5"
+dashmap = "6.1"
 # Temporarily disabled - focus on core optimizations first
 rayon = "1.8"
 # cranelift = "0.101"
@@ -76,10 +76,10 @@ rayon = "1.8"
 
 # Authentication & Security
 argon2 = "0.5"  # Still used for API keys
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 base64 = "0.22"
-jsonwebtoken = "9.3"
+jsonwebtoken = "10.3"
 flate2 = "1.0"
 tar = "0.4"
 zstd = "0.13"
@@ -90,7 +90,7 @@ axum = { version = "0.8", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }
 tempfile = "3.15"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 nexus-protocol = { path = "../nexus-protocol" }
 reqwest = { version = "0.12", features = ["json"] }
 serial_test = "3.0"

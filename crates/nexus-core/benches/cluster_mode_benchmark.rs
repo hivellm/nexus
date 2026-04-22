@@ -34,7 +34,8 @@
 //! Interpretation guidance: see `docs/specs/cluster-mode.md` §5.5
 //! (known limitations — label-less MATCH, rel-count tracking).
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::sync::Arc;
 
 use nexus_core::cluster::{

@@ -19,8 +19,9 @@
 //! cargo +nightly bench -p nexus-core --bench parser_tokenize
 //! ```
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus_core::executor::parser::CypherParser;
+use std::hint::black_box;
 
 fn small_query() -> String {
     "MATCH (n:Person {name: 'Alice'})-[r:KNOWS]->(m) WHERE m.age > 30 RETURN n, m LIMIT 10".into()

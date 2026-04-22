@@ -6,8 +6,9 @@
 //! - Different graph types (Call, Dependency, DataFlow, Component)
 //! - Large-scale graph handling
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus_core::graph::correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
+use std::hint::black_box;
 
 fn benchmark_call_graph_generation(c: &mut Criterion) {
     let manager = GraphCorrelationManager::new();

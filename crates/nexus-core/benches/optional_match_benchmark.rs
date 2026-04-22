@@ -6,8 +6,9 @@
 //! - Different dataset sizes
 //! - Pattern complexity impact
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus_core::{Engine, testing::setup_isolated_test_engine};
+use std::hint::black_box;
 
 fn setup_test_data(engine: &mut Engine, node_count: usize) {
     // Create nodes with and without relationships
