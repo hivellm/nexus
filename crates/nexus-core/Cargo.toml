@@ -79,7 +79,15 @@ argon2 = "0.5"  # Still used for API keys
 sha2 = "0.11"
 hex = "0.4"
 base64 = "0.22"
-jsonwebtoken = "10.3"
+# jsonwebtoken 10 dropped the bundled crypto backend and requires an
+# explicit `rust_crypto` or `aws_lc_rs` feature — absent one, every
+# `encode` / `decode` call panics with
+#   Could not automatically determine the process-level CryptoProvider
+#   from jsonwebtoken crate features.
+# `rust_crypto` keeps the pre-10 behaviour (pure-Rust backend, no
+# system library dep) and is the right pick for the Nexus build matrix
+# because the Windows/Linux/macOS CI boxes do not all ship aws-lc.
+jsonwebtoken = { version = "10.3", default-features = false, features = ["rust_crypto"] }
 flate2 = "1.0"
 tar = "0.4"
 zstd = "0.13"
