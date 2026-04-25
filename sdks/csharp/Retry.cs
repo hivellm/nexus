@@ -256,7 +256,7 @@ public class RetryableNexusClient : IDisposable
     /// <summary>
     /// Retrieves all node labels with automatic retry.
     /// </summary>
-    public async Task<List<string>> ListLabelsAsync(
+    public async Task<List<LabelInfo>> ListLabelsAsync(
         CancellationToken cancellationToken = default)
     {
         return await ExecuteWithRetryAsync(
@@ -267,7 +267,7 @@ public class RetryableNexusClient : IDisposable
     /// <summary>
     /// Retrieves all relationship types with automatic retry.
     /// </summary>
-    public async Task<List<string>> ListRelationshipTypesAsync(
+    public async Task<List<RelTypeInfo>> ListRelationshipTypesAsync(
         CancellationToken cancellationToken = default)
     {
         return await ExecuteWithRetryAsync(

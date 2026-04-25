@@ -5,6 +5,20 @@ All notable changes to the C# SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] — 2026-04-25
+
+### Changed (BREAKING)
+
+- **`ListLabelsAsync()`** now returns `List<LabelInfo>` instead of
+  `List<string>`. `LabelInfo` is `{ Name, Id }`, mirroring the
+  Rust and Python SDKs. Wire format change tracked in
+  [hivellm/nexus#2](https://github.com/hivellm/nexus/issues/2).
+- **`ListRelationshipTypesAsync()`** now returns
+  `List<RelTypeInfo>`.
+- **Route fix**: `ListRelationshipTypesAsync` previously called the
+  non-existent `/schema/relationship-types`; it now hits the real
+  server route `/schema/rel_types`. Same change in `RetryableNexusClient`.
+
 ## [1.0.0] — 2026-04-19
 
 ### Added

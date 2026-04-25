@@ -234,7 +234,7 @@ class RetryableClient
     /**
      * List all labels with automatic retry.
      *
-     * @return string[]
+     * @return array<int, array{name: string, id: int}>
      * @throws NexusApiException
      */
     public function listLabels(): array
@@ -245,7 +245,7 @@ class RetryableClient
     /**
      * List all relationship types with automatic retry.
      *
-     * @return string[]
+     * @return array<int, array{name: string, id: int}>
      * @throws NexusApiException
      */
     public function listRelationshipTypes(): array

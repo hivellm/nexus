@@ -106,7 +106,7 @@ final class HttpTransport implements Transport
                 case 'LABELS':
                     return $this->readJson($this->client->get('/schema/labels'));
                 case 'REL_TYPES':
-                    return $this->readJson($this->client->get('/schema/relationship-types'));
+                    return $this->readJson($this->client->get('/schema/rel_types'));
             }
             throw new \InvalidArgumentException(sprintf(
                 "HTTP fallback does not know how to route '%s' — add an entry to sdks/php/src/Transport/HttpTransport.php",

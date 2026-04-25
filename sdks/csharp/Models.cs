@@ -296,3 +296,39 @@ public class RelationshipInput
     [JsonPropertyName("properties")]
     public Dictionary<string, object?> Properties { get; set; } = new();
 }
+
+/// <summary>
+/// One entry in the response of <c>GET /schema/labels</c>.
+/// </summary>
+/// <remarks>
+/// Wire shape: <c>{"name": "Person", "id": 0}</c>. The <c>Id</c>
+/// field is the catalog id allocated by the engine, not a count.
+/// Renamed from a JSON tuple <c>["Person", 0]</c> in nexus-server
+/// 1.15+ - see issue
+/// <a href="https://github.com/hivellm/nexus/issues/2">hivellm/nexus#2</a>.
+/// </remarks>
+public class LabelInfo
+{
+    /// <summary>Label name as registered in the engine catalog.</summary>
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Catalog id allocated to this label.</summary>
+    [JsonPropertyName("id")]
+    public uint Id { get; set; }
+}
+
+/// <summary>
+/// One entry in the response of <c>GET /schema/rel_types</c>. Mirrors
+/// <see cref="LabelInfo"/>.
+/// </summary>
+public class RelTypeInfo
+{
+    /// <summary>Relationship type name as registered in the catalog.</summary>
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Catalog id allocated to this relationship type.</summary>
+    [JsonPropertyName("id")]
+    public uint Id { get; set; }
+}

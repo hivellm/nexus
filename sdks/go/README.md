@@ -265,19 +265,26 @@ fmt.Println("Transaction committed successfully")
 ### Schema Management
 
 ```go
-// List all labels
+// List all labels. Each entry is a LabelInfo{Name, ID} — the ID
+// is the catalog id allocated by the engine, not a count.
+// (Renamed from a JSON tuple ["Person", 0] in nexus-server 1.15+,
+// see https://github.com/hivellm/nexus/issues/2.)
 labels, err := client.ListLabels(ctx)
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Labels: %v\n", labels)
+for _, label := range labels {
+    fmt.Printf("  %s (id=%d)\n", label.Name, label.ID)
+}
 
-// List all relationship types
+// List all relationship types. Each entry is a RelTypeInfo.
 types, err := client.ListRelationshipTypes(ctx)
 if err != nil {
     log.Fatal(err)
 }
-fmt.Printf("Relationship types: %v\n", types)
+for _, relType := range types {
+    fmt.Printf("  %s (id=%d)\n", relType.Name, relType.ID)
+}
 
 // Create index
 err = client.CreateIndex(ctx, "person_name_idx", "Person", []string{"name"})

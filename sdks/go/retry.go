@@ -225,7 +225,11 @@ func (rc *RetryableClient) GetNode(ctx context.Context, id string) (*Node, error
 }
 
 // ListLabels retrieves all node labels with automatic retry.
-func (rc *RetryableClient) ListLabels(ctx context.Context) ([]string, error) {
+//
+// Each entry carries the catalog id alongside the name (see
+// LabelInfo). Wire shape changed in nexus-server 1.15+ — see
+// hivellm/nexus#2.
+func (rc *RetryableClient) ListLabels(ctx context.Context) ([]LabelInfo, error) {
 	resp, err := rc.doRequestWithRetry(ctx, http.MethodGet, "/schema/labels", nil)
 	if err != nil {
 		return nil, err
@@ -233,7 +237,7 @@ func (rc *RetryableClient) ListLabels(ctx context.Context) ([]string, error) {
 	defer resp.Body.Close()
 
 	var result struct {
-		Labels []string `json:"labels"`
+		Labels []LabelInfo `json:"labels"`
 	}
 	if err := decodeResponse(resp, &result); err != nil {
 		return nil, err
@@ -243,15 +247,18 @@ func (rc *RetryableClient) ListLabels(ctx context.Context) ([]string, error) {
 }
 
 // ListRelationshipTypes retrieves all relationship types with automatic retry.
-func (rc *RetryableClient) ListRelationshipTypes(ctx context.Context) ([]string, error) {
-	resp, err := rc.doRequestWithRetry(ctx, http.MethodGet, "/schema/relationship-types", nil)
+//
+// Each entry carries the catalog id alongside the name (see
+// RelTypeInfo).
+func (rc *RetryableClient) ListRelationshipTypes(ctx context.Context) ([]RelTypeInfo, error) {
+	resp, err := rc.doRequestWithRetry(ctx, http.MethodGet, "/schema/rel_types", nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var result struct {
-		Types []string `json:"types"`
+		Types []RelTypeInfo `json:"types"`
 	}
 	if err := decodeResponse(resp, &result); err != nil {
 		return nil, err

@@ -235,13 +235,18 @@ catch (Exception ex)
 ### Schema Management
 
 ```csharp
-// List all labels
+// List all labels. Each entry is a `LabelInfo { Name, Id }` —
+// the `Id` is the catalog id allocated by the engine, not a count.
+// (Renamed from a JSON tuple ["Person", 0] in nexus-server 1.15+,
+// see https://github.com/hivellm/nexus/issues/2.)
 var labels = await client.ListLabelsAsync();
-Console.WriteLine($"Labels: {string.Join(", ", labels)}");
+foreach (var label in labels)
+    Console.WriteLine($"  {label.Name} (id={label.Id})");
 
-// List all relationship types
+// List all relationship types. Each entry is a `RelTypeInfo`.
 var types = await client.ListRelationshipTypesAsync();
-Console.WriteLine($"Relationship types: {string.Join(", ", types)}");
+foreach (var relType in types)
+    Console.WriteLine($"  {relType.Name} (id={relType.Id})");
 
 // Create index
 await client.CreateIndexAsync("person_name_idx", "Person", new List<string> { "name" });

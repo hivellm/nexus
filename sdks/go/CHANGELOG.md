@@ -6,6 +6,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
 (Go modules read `v1.0.0` and up from the repo tag).
 
+## [1.15.0] — 2026-04-25
+
+### Changed (BREAKING)
+
+- **`Client.ListLabels(ctx)`** now returns `[]LabelInfo` instead of
+  `[]string`. `LabelInfo` is `{Name, ID}` — `ID` is the catalog id
+  allocated by the engine, not a count. Mirrors the Rust and
+  Python SDKs and the new server wire shape (`{"name":..., "id":...}`).
+- **`Client.ListRelationshipTypes(ctx)`** now returns
+  `[]RelTypeInfo`.
+- **Route fix**: `ListRelationshipTypes` was previously calling the
+  non-existent `/schema/relationship-types`; it now hits the real
+  server route `/schema/rel_types`. Same change applied in
+  `RetryableClient`.
+
+Migration: replace `for _, name := range labels { … }` with
+`for _, label := range labels { … label.Name … label.ID … }`.
+
+Tracks [hivellm/nexus#2](https://github.com/hivellm/nexus/issues/2).
+
 ## [1.0.0] — 2026-04-19
 
 ### Added

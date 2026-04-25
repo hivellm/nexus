@@ -262,7 +262,13 @@ class NexusClient
     /**
      * List all labels.
      *
-     * @return string[]
+     * Each entry is the JSON object `{"name": "Person", "id": 0}`
+     * returned by the server. The `id` field is the catalog id
+     * allocated by the engine, not a count. Renamed from a JSON
+     * tuple `["Person", 0]` in nexus-server 1.15+ — see
+     * https://github.com/hivellm/nexus/issues/2.
+     *
+     * @return array<int, array{name: string, id: int}>
      * @throws NexusApiException
      */
     public function listLabels(): array
@@ -274,12 +280,16 @@ class NexusClient
     /**
      * List all relationship types.
      *
-     * @return string[]
+     * Each entry is the JSON object `{"name": "...", "id": ...}`.
+     * Server route is `/schema/rel_types` (this SDK previously used
+     * the non-existent `/schema/relationship-types`).
+     *
+     * @return array<int, array{name: string, id: int}>
      * @throws NexusApiException
      */
     public function listRelationshipTypes(): array
     {
-        $response = $this->doRequest('GET', '/schema/relationship-types');
+        $response = $this->doRequest('GET', '/schema/rel_types');
         return $response['types'] ?? [];
     }
 

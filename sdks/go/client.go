@@ -537,8 +537,30 @@ func (c *Client) BatchCreateRelationships(ctx context.Context, relationships []s
 	return result, nil
 }
 
+// LabelInfo is one entry in the response of GET /schema/labels.
+//
+// The wire shape is {"name": "Person", "id": 0}. The ID field is the
+// catalog id allocated by the engine, not a count. Renamed from a
+// JSON tuple ["Person", 0] in nexus-server 1.15+ — see issue
+// hivellm/nexus#2.
+type LabelInfo struct {
+	Name string `json:"name"`
+	ID   uint32 `json:"id"`
+}
+
+// RelTypeInfo is one entry in the response of GET /schema/rel_types.
+// Mirrors LabelInfo.
+type RelTypeInfo struct {
+	Name string `json:"name"`
+	ID   uint32 `json:"id"`
+}
+
 // ListLabels retrieves all node labels in the database.
-func (c *Client) ListLabels(ctx context.Context) ([]string, error) {
+//
+// Each entry carries the catalog id alongside the name (see
+// LabelInfo). Use LabelInfo.Name when only the label string is
+// needed.
+func (c *Client) ListLabels(ctx context.Context) ([]LabelInfo, error) {
 	resp, err := c.doRequest(ctx, http.MethodGet, "/schema/labels", nil)
 	if err != nil {
 		return nil, err
@@ -546,7 +568,7 @@ func (c *Client) ListLabels(ctx context.Context) ([]string, error) {
 	defer resp.Body.Close()
 
 	var result struct {
-		Labels []string `json:"labels"`
+		Labels []LabelInfo `json:"labels"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
@@ -556,15 +578,18 @@ func (c *Client) ListLabels(ctx context.Context) ([]string, error) {
 }
 
 // ListRelationshipTypes retrieves all relationship types in the database.
-func (c *Client) ListRelationshipTypes(ctx context.Context) ([]string, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, "/schema/relationship-types", nil)
+//
+// Each entry carries the catalog id alongside the name (see
+// RelTypeInfo).
+func (c *Client) ListRelationshipTypes(ctx context.Context) ([]RelTypeInfo, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/schema/rel_types", nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var result struct {
-		Types []string `json:"types"`
+		Types []RelTypeInfo `json:"types"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)

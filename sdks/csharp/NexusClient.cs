@@ -358,34 +358,41 @@ public class NexusClient : IDisposable, IAsyncDisposable
     /// Retrieves all node labels in the database.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>List of labels.</returns>
-    public async Task<List<string>> ListLabelsAsync(
+    /// <returns>
+    /// List of <see cref="LabelInfo"/> entries (name + catalog id).
+    /// Wire shape changed in nexus-server 1.15+ — see issue #2.
+    /// </returns>
+    public async Task<List<LabelInfo>> ListLabelsAsync(
         CancellationToken cancellationToken = default)
     {
         var response = await DoRequestAsync(
             HttpMethod.Get, "/schema/labels", null, cancellationToken);
 
-        var result = await response.Content.ReadFromJsonAsync<Dictionary<string, List<string>>>(
+        var result = await response.Content.ReadFromJsonAsync<Dictionary<string, List<LabelInfo>>>(
             cancellationToken: cancellationToken);
 
-        return result?["labels"] ?? new List<string>();
+        return result?["labels"] ?? new List<LabelInfo>();
     }
 
     /// <summary>
     /// Retrieves all relationship types in the database.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>List of relationship types.</returns>
-    public async Task<List<string>> ListRelationshipTypesAsync(
+    /// <returns>
+    /// List of <see cref="RelTypeInfo"/> entries. Server route is
+    /// <c>/schema/rel_types</c> (this SDK previously used the
+    /// non-existent <c>/schema/relationship-types</c>).
+    /// </returns>
+    public async Task<List<RelTypeInfo>> ListRelationshipTypesAsync(
         CancellationToken cancellationToken = default)
     {
         var response = await DoRequestAsync(
-            HttpMethod.Get, "/schema/relationship-types", null, cancellationToken);
+            HttpMethod.Get, "/schema/rel_types", null, cancellationToken);
 
-        var result = await response.Content.ReadFromJsonAsync<Dictionary<string, List<string>>>(
+        var result = await response.Content.ReadFromJsonAsync<Dictionary<string, List<RelTypeInfo>>>(
             cancellationToken: cancellationToken);
 
-        return result?["types"] ?? new List<string>();
+        return result?["types"] ?? new List<RelTypeInfo>();
     }
 
     /// <summary>

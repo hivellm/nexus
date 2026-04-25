@@ -57,13 +57,25 @@
 - [x] 3.3 Update `sdks/rust/examples/basic_usage.rs` to iterate
       `for label in &labels.labels { … label.name … label.id … }`
 - [x] 3.4 Update `sdks/rust/README.md` schema-management snippet
-- [x] 3.5 Server JSON now carries `{"name":..., "id":...}` so future
-      SDKs in other languages can deserialise the same shape;
-      Python SDK (`sdks/python/nexus_sdk/models.py`) updated to match
-      with `LabelInfo` / `RelTypeInfo` Pydantic models. Go / C# / PHP
-      SDKs are knowingly drifted (they were already drifted against
-      the previous tuple wire format) — follow-up tracked under "5.4
-      Coordinate" with the issue reporter and a separate task.
+- [x] 3.5 Server JSON now carries `{"name":..., "id":...}` so all
+      SDKs deserialise the same shape:
+        - Python (`sdks/python/nexus_sdk/models.py`) — Pydantic
+          `LabelInfo` / `RelTypeInfo`, re-exported from package root,
+          version bumped to 1.15.0
+        - Go (`sdks/go/client.go` + `sdks/go/retry.go`) — typed
+          structs `LabelInfo` / `RelTypeInfo`. Also fixed a latent
+          bug: SDK was hitting the non-existent
+          `/schema/relationship-types`; corrected to `/schema/rel_types`
+        - C# (`sdks/csharp/Models.cs` + `NexusClient.cs` + `Retry.cs`)
+          — `LabelInfo` / `RelTypeInfo` POCOs with `JsonPropertyName`
+          attributes, version bumped to 1.15.0, same
+          `/schema/relationship-types` → `/schema/rel_types` fix
+        - PHP (`sdks/php/src/NexusClient.php` + `Retry.php` +
+          `Transport/HttpTransport.php`) — array-shape phpdoc
+          `array{name: string, id: int}`, same route fix
+      All SDK READMEs (Python / Rust / C# / Go / PHP) updated with
+      the new iteration pattern. CHANGELOG `[1.15.0]` entries added
+      to every SDK that ships a CHANGELOG.
 - [x] 3.6 N/A: did not pick Option B, so no count to migrate.
 
 ## 4. Fix `/health` version self-report

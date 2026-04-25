@@ -5,6 +5,22 @@ All notable changes to the Python SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] — 2026-04-25
+
+### Changed (BREAKING)
+
+- **`LabelResponse.labels`** is now `List[LabelInfo]` instead of
+  `List[str]`. `LabelInfo` is `{name: str, id: int}`, mirroring
+  the Rust SDK and matching the new server wire format
+  (`{"name": "Person", "id": 0}`). Migrate any
+  `for name in resp.labels` loop to `for label in resp.labels:
+  label.name`.
+- **`RelTypeResponse.types`** mirrors the same change with the new
+  `RelTypeInfo` model.
+- Re-exported `LabelInfo` / `RelTypeInfo` from the package root.
+
+Tracks [hivellm/nexus#2](https://github.com/hivellm/nexus/issues/2).
+
 ## [1.0.0] — 2026-04-19
 
 ### Added

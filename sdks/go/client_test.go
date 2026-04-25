@@ -426,8 +426,13 @@ func TestListLabels(t *testing.T) {
 		assert.Equal(t, "/schema/labels", r.URL.Path)
 		assert.Equal(t, "GET", r.Method)
 
+		// Wire shape: {"labels": [{"name": "...", "id": ...}]} as of
+		// nexus-server 1.15+ (issue #2).
 		response := map[string]interface{}{
-			"labels": []string{"Person", "Company"},
+			"labels": []map[string]interface{}{
+				{"name": "Person", "id": 0},
+				{"name": "Company", "id": 1},
+			},
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -441,17 +446,26 @@ func TestListLabels(t *testing.T) {
 	labels, err := client.ListLabels(ctx)
 
 	require.NoError(t, err)
-	assert.Contains(t, labels, "Person")
-	assert.Contains(t, labels, "Company")
+	require.Len(t, labels, 2)
+	assert.Equal(t, "Person", labels[0].Name)
+	assert.Equal(t, uint32(0), labels[0].ID)
+	assert.Equal(t, "Company", labels[1].Name)
+	assert.Equal(t, uint32(1), labels[1].ID)
 }
 
 func TestListRelationshipTypes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/schema/relationship-types", r.URL.Path)
+		// Server route is `/schema/rel_types` (was previously misnamed
+		// in the SDK as `/schema/relationship-types`, which never
+		// matched the actual handler — see issue #2 cleanup).
+		assert.Equal(t, "/schema/rel_types", r.URL.Path)
 		assert.Equal(t, "GET", r.Method)
 
 		response := map[string]interface{}{
-			"types": []string{"KNOWS", "WORKS_AT"},
+			"types": []map[string]interface{}{
+				{"name": "KNOWS", "id": 0},
+				{"name": "WORKS_AT", "id": 1},
+			},
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -465,8 +479,11 @@ func TestListRelationshipTypes(t *testing.T) {
 	types, err := client.ListRelationshipTypes(ctx)
 
 	require.NoError(t, err)
-	assert.Contains(t, types, "KNOWS")
-	assert.Contains(t, types, "WORKS_AT")
+	require.Len(t, types, 2)
+	assert.Equal(t, "KNOWS", types[0].Name)
+	assert.Equal(t, uint32(0), types[0].ID)
+	assert.Equal(t, "WORKS_AT", types[1].Name)
+	assert.Equal(t, uint32(1), types[1].ID)
 }
 
 func TestCreateIndex(t *testing.T) {

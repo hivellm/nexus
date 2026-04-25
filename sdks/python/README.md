@@ -98,16 +98,21 @@ client = NexusClient(
 # Create a label
 response = await client.create_label("Person")
 
-# List all labels
+# List all labels. Each entry is a `LabelInfo(name, id)` — the
+# `id` is the catalog id allocated by the engine, not a count.
+# (Renamed from a JSON tuple `["Person", 0]` in nexus-server 1.15+,
+# see https://github.com/hivellm/nexus/issues/2.)
 labels = await client.list_labels()
-print(f"Labels: {labels.labels}")
+for label in labels.labels:
+    print(f"  {label.name} (id={label.id})")
 
 # Create a relationship type
 response = await client.create_rel_type("KNOWS")
 
-# List all relationship types
+# List all relationship types. Each entry is a `RelTypeInfo`.
 types = await client.list_rel_types()
-print(f"Types: {types.types}")
+for rel_type in types.types:
+    print(f"  {rel_type.name} (id={rel_type.id})")
 ```
 
 ### Query Builder

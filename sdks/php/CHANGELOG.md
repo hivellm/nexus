@@ -6,6 +6,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
 (Composer resolves `^1.0` from the `v1.0.0` repo tag).
 
+## [1.15.0] — 2026-04-25
+
+### Changed (BREAKING)
+
+- **`NexusClient::listLabels()`** now returns
+  `array<int, array{name: string, id: int}>` instead of
+  `string[]`. Mirrors the Rust / Python / C# / Go SDKs and matches
+  the new server wire shape (`{"name":..., "id":...}`). Migrate
+  any `foreach ($labels as $name)` loop to
+  `foreach ($labels as $label) { $label['name']; $label['id']; }`.
+- **`NexusClient::listRelationshipTypes()`** mirrors the same
+  change.
+- **Route fix**: both `NexusClient::listRelationshipTypes()` and
+  the `REL_TYPES` HTTP fallback in
+  `Transport\HttpTransport::execute()` were previously calling the
+  non-existent `/schema/relationship-types`; they now hit the real
+  server route `/schema/rel_types`.
+
+Tracks [hivellm/nexus#2](https://github.com/hivellm/nexus/issues/2).
+
 ## [1.0.0] — 2026-04-19
 
 ### Added

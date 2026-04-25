@@ -50,7 +50,7 @@ func main() {
 
 	fmt.Printf("Found %d labels:\n", len(labels))
 	for _, label := range labels {
-		fmt.Printf("  - %s\n", label)
+		fmt.Printf("  - %s (id=%d)\n", label.Name, label.ID)
 	}
 
 	// Example 2: List all relationship types
@@ -62,7 +62,7 @@ func main() {
 
 	fmt.Printf("Found %d relationship types:\n", len(types))
 	for _, relType := range types {
-		fmt.Printf("  - %s\n", relType)
+		fmt.Printf("  - %s (id=%d)\n", relType.Name, relType.ID)
 	}
 
 	// Example 3: Create indexes

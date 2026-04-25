@@ -176,13 +176,20 @@ try {
 ### Schema Management
 
 ```php
-// List all labels
+// List all labels. Each entry is ['name' => '...', 'id' => N] —
+// `id` is the catalog id allocated by the engine, not a count.
+// (Renamed from a JSON tuple ['Person', 0] in nexus-server 1.15+,
+// see https://github.com/hivellm/nexus/issues/2.)
 $labels = $client->listLabels();
-echo "Labels: " . implode(', ', $labels) . "\n";
+foreach ($labels as $label) {
+    echo "  {$label['name']} (id={$label['id']})\n";
+}
 
-// List all relationship types
+// List all relationship types — same shape as labels.
 $types = $client->listRelationshipTypes();
-echo "Relationship types: " . implode(', ', $types) . "\n";
+foreach ($types as $relType) {
+    echo "  {$relType['name']} (id={$relType['id']})\n";
+}
 
 // Create index
 $client->createIndex('person_name_idx', 'Person', ['name']);
