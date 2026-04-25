@@ -787,11 +787,11 @@ mod tests {
         .await;
         // Either the engine rejects (error set) or it accepts and
         // creates an in-memory shape — the only thing this test
-        // guarantees is that the validator no longer pre-empts.
+        // guarantees is that the validator no longer preempts.
         if let Some(err) = response.error.as_ref() {
             assert!(
                 !err.contains("Node ID cannot be 0"),
-                "validator pre-empted the engine: {err}"
+                "validator preempted the engine: {err}"
             );
         }
     }
@@ -803,7 +803,7 @@ mod tests {
         if let Some(err) = response.error.as_ref() {
             assert!(
                 !err.contains("Node ID cannot be 0"),
-                "validator pre-empted the engine: {err}"
+                "validator preempted the engine: {err}"
             );
         }
     }
