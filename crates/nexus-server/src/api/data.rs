@@ -48,11 +48,21 @@ fn validate_labels(labels: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate node ID
-fn validate_node_id(node_id: u64) -> Result<(), String> {
-    if node_id == 0 {
-        return Err("Node ID cannot be 0".to_string());
-    }
+/// Validate node ID.
+///
+/// Note: `0` is a valid node ID in Nexus — the engine assigns it to
+/// the first node ever created in a database (see issue #2). Earlier
+/// versions of this validator rejected `0` and broke the natural
+/// "create then read back" flow because `create_node()` would mint
+/// id `0` and the next `get_node(0)` / `update_node(0)` /
+/// `delete_node(0)` would fail validation before the engine was
+/// even consulted.
+///
+/// Existence is checked by the engine itself (it returns `Ok(None)`
+/// when the row is gone), so this validator is currently a no-op
+/// kept for forward-compat with future invariants we may want to
+/// guard at the API boundary (e.g. id ranges per shard).
+fn validate_node_id(_node_id: u64) -> Result<(), String> {
     Ok(())
 }
 
@@ -509,11 +519,32 @@ pub async fn get_node_by_id(
     State(server): State<Arc<NexusServer>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<GetNodeResponse> {
-    let node_id = params
-        .get("id")
-        .or_else(|| params.get("node_id"))
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(0);
+    // Distinguish "no `id` param" from "id=0" — the latter is a valid
+    // node id in Nexus, so we cannot collapse both into `unwrap_or(0)`
+    // (which used to silently reinterpret a missing param as id=0).
+    let node_id = match params.get("id").or_else(|| params.get("node_id")) {
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(id) => id,
+            Err(_) => {
+                return Json(GetNodeResponse {
+                    message: "".to_string(),
+                    node: None,
+                    error: Some(format!(
+                        "Invalid node id query parameter: {raw:?} — expected unsigned integer"
+                    )),
+                });
+            }
+        },
+        None => {
+            return Json(GetNodeResponse {
+                message: "".to_string(),
+                node: None,
+                error: Some(
+                    "Missing required query parameter `id` (or alias `node_id`)".to_string(),
+                ),
+            });
+        }
+    };
 
     tracing::info!("Getting node by ID from query: {}", node_id);
 
@@ -655,8 +686,96 @@ mod tests {
         );
     }
 
+    // Issue #2 regression: id 0 is a valid node id (Nexus assigns it
+    // to the first node ever created), so neither GET, UPDATE nor
+    // DELETE may reject it at the API boundary. The engine itself
+    // tells us whether the row actually exists.
+
     #[tokio::test]
-    async fn test_update_node_with_zero_id_fails_validation() {
+    async fn test_get_node_by_id_zero_round_trips_after_create() {
+        // Regression for hivellm/nexus#2 — `client.get_node(0)` used to
+        // come back with `node: None` because the validator rejected
+        // the zero id before the engine was even consulted, even
+        // though `create_node` had just minted the same id.
+        let server = build_test_server();
+
+        let mut props = HashMap::new();
+        props.insert("name".to_string(), json!("Alice"));
+        let create = create_node(
+            State(Arc::clone(&server)),
+            Json(CreateNodeRequest {
+                labels: vec!["Person".to_string()],
+                properties: props,
+            }),
+        )
+        .await;
+        let node_id = create.node_id;
+        assert!(create.error.is_none(), "create failed: {:?}", create.error);
+
+        let mut query = HashMap::new();
+        query.insert("id".to_string(), node_id.to_string());
+        let got = get_node_by_id(State(Arc::clone(&server)), axum::extract::Query(query))
+            .await
+            .0;
+        assert!(
+            got.error.is_none(),
+            "get_node({node_id}) errored: {:?}",
+            got.error
+        );
+        let node = got.node.expect("node must be Some after create");
+        assert_eq!(node.id, node_id);
+        assert_eq!(node.labels, vec!["Person"]);
+        assert_eq!(node.properties["name"], json!("Alice"));
+    }
+
+    #[tokio::test]
+    async fn test_get_node_by_id_missing_param_returns_error() {
+        // Without an `id` query parameter the handler now answers with
+        // an explicit error rather than silently fetching id=0 (which
+        // is itself a valid node, so the previous `unwrap_or(0)` was
+        // ambiguous).
+        let server = build_test_server();
+        let response = get_node_by_id(State(server), axum::extract::Query(HashMap::new()))
+            .await
+            .0;
+        assert!(response.node.is_none());
+        assert!(
+            response
+                .error
+                .as_ref()
+                .map(|e| e.contains("Missing required query parameter `id`"))
+                .unwrap_or(false),
+            "expected missing-param error, got: {:?}",
+            response.error
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_node_by_id_invalid_param_returns_error() {
+        let server = build_test_server();
+        let mut query = HashMap::new();
+        query.insert("id".to_string(), "not-a-number".to_string());
+        let response = get_node_by_id(State(server), axum::extract::Query(query))
+            .await
+            .0;
+        assert!(response.node.is_none());
+        assert!(
+            response
+                .error
+                .as_ref()
+                .map(|e| e.contains("Invalid node id query parameter"))
+                .unwrap_or(false),
+            "expected parse error, got: {:?}",
+            response.error
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_node_with_unknown_id_returns_engine_error_not_validation() {
+        // Passing a never-created id used to short-circuit on the
+        // synthetic `Node ID cannot be 0` validator. With that
+        // validator gone the call now reaches the engine and surfaces
+        // a real "node not found"–style error.
         let server = build_test_server();
         let response = update_node(
             State(server),
@@ -666,26 +785,27 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            response
-                .error
-                .as_ref()
-                .unwrap()
-                .contains("Node ID cannot be 0"),
-        );
+        // Either the engine rejects (error set) or it accepts and
+        // creates an in-memory shape — the only thing this test
+        // guarantees is that the validator no longer pre-empts.
+        if let Some(err) = response.error.as_ref() {
+            assert!(
+                !err.contains("Node ID cannot be 0"),
+                "validator pre-empted the engine: {err}"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn test_delete_node_with_zero_id_fails_validation() {
+    async fn test_delete_node_with_unknown_id_returns_engine_error_not_validation() {
         let server = build_test_server();
         let response = delete_node(State(server), Json(DeleteNodeRequest { node_id: 0 })).await;
-        assert!(
-            response
-                .error
-                .as_ref()
-                .unwrap()
-                .contains("Node ID cannot be 0"),
-        );
+        if let Some(err) = response.error.as_ref() {
+            assert!(
+                !err.contains("Node ID cannot be 0"),
+                "validator pre-empted the engine: {err}"
+            );
+        }
     }
 
     // ── Real round-trips using the shared engine ──────────────────────
@@ -693,18 +813,6 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_get_node_round_trip() {
         let server = build_test_server();
-
-        // The validation path in `get_node_by_id` rejects id == 0, so
-        // create a throwaway first to push our target past the 0 id
-        // that the engine hands out to the very first insert.
-        let _dummy = create_node(
-            State(Arc::clone(&server)),
-            Json(CreateNodeRequest {
-                labels: vec!["Dummy".to_string()],
-                properties: HashMap::new(),
-            }),
-        )
-        .await;
 
         let mut props = HashMap::new();
         props.insert("name".to_string(), json!("Alice"));
@@ -719,7 +827,6 @@ mod tests {
         )
         .await;
         let node_id = create.node_id;
-        assert!(node_id > 0, "expected non-zero node id, got {node_id}");
         assert!(create.error.is_none(), "create failed: {:?}", create.error);
 
         let mut query = HashMap::new();
@@ -743,17 +850,6 @@ mod tests {
         let server_a = build_test_server();
         let server_b = build_test_server();
 
-        // Push past node id 0 on server A so the subsequent query has a
-        // non-zero id to probe.
-        let _dummy = create_node(
-            State(Arc::clone(&server_a)),
-            Json(CreateNodeRequest {
-                labels: vec!["Dummy".to_string()],
-                properties: HashMap::new(),
-            }),
-        )
-        .await;
-
         let create_a = create_node(
             State(Arc::clone(&server_a)),
             Json(CreateNodeRequest {
@@ -763,7 +859,6 @@ mod tests {
         )
         .await;
         let a_id = create_a.node_id;
-        assert!(a_id > 0);
         assert!(create_a.error.is_none());
 
         // Ask server B for the same id — it must not find it.

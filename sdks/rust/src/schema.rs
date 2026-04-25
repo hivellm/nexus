@@ -24,11 +24,27 @@ pub struct CreateLabelResponse {
     pub error: Option<String>,
 }
 
+/// One entry returned by `GET /schema/labels`.
+///
+/// The wire shape is `{"name": "Person", "id": 0}`. Earlier versions
+/// of the SDK exposed this as `Vec<(String, u32)>` and external
+/// callers split the tuple as `(name, count)` because the second
+/// member was unnamed (issue #2). The struct form keeps the meaning
+/// explicit and lets us add fields (e.g. `count`) without another
+/// breaking rename.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LabelInfo {
+    /// Label name as registered in the engine catalog.
+    pub name: String,
+    /// Catalog id allocated to this label.
+    pub id: u32,
+}
+
 /// List labels response
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListLabelsResponse {
-    /// List of labels (as tuples of name and ID)
-    pub labels: Vec<(String, u32)>,
+    /// Labels registered in the catalog with their allocated ids.
+    pub labels: Vec<LabelInfo>,
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -54,11 +70,22 @@ pub struct CreateRelTypeResponse {
     pub error: Option<String>,
 }
 
+/// One entry returned by `GET /schema/rel_types`.
+///
+/// Mirrors `LabelInfo` — same rationale, see issue #2.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelTypeInfo {
+    /// Relationship type name as registered in the catalog.
+    pub name: String,
+    /// Catalog id allocated to this relationship type.
+    pub id: u32,
+}
+
 /// List relationship types response
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListRelTypesResponse {
-    /// List of relationship types (as tuples of name and ID)
-    pub types: Vec<(String, u32)>,
+    /// Relationship types registered in the catalog with their ids.
+    pub types: Vec<RelTypeInfo>,
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

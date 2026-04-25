@@ -98,16 +98,23 @@ let legacy = NexusClient::new("http://127.0.0.1:15474")?;
 // Create a label
 let response = client.create_label("Person".to_string()).await?;
 
-// List all labels
+// List all labels. Each entry is a `LabelInfo { name, id }` —
+// the second field is the catalog id allocated by the engine,
+// not a count. (Renamed from `Vec<(String, u32)>` in 1.15.0.)
 let labels = client.list_labels().await?;
-println!("Labels: {:?}", labels.labels);
+for label in &labels.labels {
+    println!("  {} (id={})", label.name, label.id);
+}
 
 // Create a relationship type
 let response = client.create_rel_type("KNOWS".to_string()).await?;
 
-// List all relationship types
+// List all relationship types. Each entry is a
+// `RelTypeInfo { name, id }`.
 let types = client.list_rel_types().await?;
-println!("Types: {:?}", types.types);
+for rel_type in &types.types {
+    println!("  {} (id={})", rel_type.name, rel_type.id);
+}
 ```
 
 ### Multi-Database Support

@@ -25,11 +25,29 @@ pub struct CreateLabelResponse {
     pub error: Option<String>,
 }
 
+/// One entry in the response of `GET /schema/labels`.
+///
+/// Wire shape (issue #2): `{"name": "Person", "id": 0}`. The previous
+/// shape was a JSON tuple `["Person", 0]` which the Rust SDK read as
+/// `Vec<(String, u32)>`. Callers in the wild were splitting that
+/// tuple as `(name, count)` because the second member is unnamed,
+/// when it is actually the catalog id allocated by the engine.
+/// Naming the fields makes the contract explicit and leaves room
+/// for additive fields (e.g. `count`) without another breaking
+/// rename.
+#[derive(Debug, Clone, Serialize)]
+pub struct LabelInfo {
+    /// Label name as registered in the engine catalog.
+    pub name: String,
+    /// Catalog id allocated to this label.
+    pub id: u32,
+}
+
 /// List labels response
 #[derive(Debug, Serialize)]
 pub struct ListLabelsResponse {
-    /// Labels with their IDs
-    pub labels: Vec<(String, u32)>,
+    /// Labels registered in the catalog with their allocated ids.
+    pub labels: Vec<LabelInfo>,
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -54,11 +72,22 @@ pub struct CreateRelTypeResponse {
     pub error: Option<String>,
 }
 
+/// One entry in the response of `GET /schema/rel_types`.
+///
+/// Mirrors `LabelInfo` — same rationale, see issue #2.
+#[derive(Debug, Clone, Serialize)]
+pub struct RelTypeInfo {
+    /// Relationship type name as registered in the catalog.
+    pub name: String,
+    /// Catalog id allocated to this relationship type.
+    pub id: u32,
+}
+
 /// List relationship types response
 #[derive(Debug, Serialize)]
 pub struct ListRelTypesResponse {
-    /// Relationship types with their IDs
-    pub types: Vec<(String, u32)>,
+    /// Relationship types registered in the catalog with their ids.
+    pub types: Vec<RelTypeInfo>,
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -98,11 +127,11 @@ pub async fn list_labels(State(server): State<Arc<NexusServer>>) -> Json<ListLab
     tracing::info!("Listing all labels");
 
     let engine = server.engine.read().await;
-    let labels: Vec<(String, u32)> = engine
+    let labels: Vec<LabelInfo> = engine
         .catalog
         .list_all_labels()
         .into_iter()
-        .map(|(id, name)| (name, id))
+        .map(|(id, name)| LabelInfo { name, id })
         .collect();
 
     tracing::info!("Listed {} labels", labels.len());
@@ -153,11 +182,11 @@ pub async fn list_rel_types(State(server): State<Arc<NexusServer>>) -> Json<List
     tracing::info!("Listing all relationship types");
 
     let engine = server.engine.read().await;
-    let types: Vec<(String, u32)> = engine
+    let types: Vec<RelTypeInfo> = engine
         .catalog
         .list_all_types()
         .into_iter()
-        .map(|(id, name)| (name, id))
+        .map(|(id, name)| RelTypeInfo { name, id })
         .collect();
 
     tracing::info!("Listed {} relationship types", types.len());
@@ -228,7 +257,7 @@ mod tests {
         let listed = list_labels(State(server)).await.0;
         assert!(listed.error.is_none());
         assert!(
-            listed.labels.iter().any(|(n, _)| n == "Person"),
+            listed.labels.iter().any(|l| l.name == "Person"),
             "expected 'Person' in listed labels: {:?}",
             listed.labels
         );
@@ -251,7 +280,7 @@ mod tests {
         let listed = list_rel_types(State(server)).await.0;
         assert!(listed.error.is_none());
         assert!(
-            listed.types.iter().any(|(n, _)| n == "KNOWS"),
+            listed.types.iter().any(|t| t.name == "KNOWS"),
             "expected 'KNOWS' in listed types: {:?}",
             listed.types
         );
@@ -272,7 +301,7 @@ mod tests {
 
         let listed_b = list_labels(State(server_b)).await.0;
         assert!(
-            !listed_b.labels.iter().any(|(n, _)| n == "OnlyOnA"),
+            !listed_b.labels.iter().any(|l| l.name == "OnlyOnA"),
             "server B must not see 'OnlyOnA' registered on server A: {:?}",
             listed_b.labels
         );

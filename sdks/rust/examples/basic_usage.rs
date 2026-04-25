@@ -33,10 +33,14 @@ async fn main() -> Result<()> {
     let label_response = client.create_label("Person".to_string()).await?;
     tracing::info!("Label creation: {}", label_response.message);
 
-    // List all labels
+    // List all labels. Each entry is a `LabelInfo { name, id }` —
+    // the second field is the catalog id allocated by the engine,
+    // not a count. (See issue #2 for the rename history.)
     tracing::info!("\nListing labels...");
     let labels = client.list_labels().await?;
-    tracing::info!("Labels: {:?}", labels.labels);
+    for label in &labels.labels {
+        tracing::info!("  label name={} id={}", label.name, label.id);
+    }
 
     // Create a node
     tracing::info!("\nCreating node...");
@@ -73,10 +77,12 @@ async fn main() -> Result<()> {
     let rel_type_response = client.create_rel_type("KNOWS".to_string()).await?;
     tracing::info!("Relationship type creation: {}", rel_type_response.message);
 
-    // List relationship types
+    // List relationship types. Each entry is a `RelTypeInfo { name, id }`.
     tracing::info!("\nListing relationship types...");
     let types = client.list_rel_types().await?;
-    tracing::info!("Relationship types: {:?}", types.types);
+    for rel_type in &types.types {
+        tracing::info!("  rel_type name={} id={}", rel_type.name, rel_type.id);
+    }
 
     tracing::info!("\nExample completed successfully!");
     Ok(())

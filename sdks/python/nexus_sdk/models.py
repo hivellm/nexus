@@ -128,17 +128,39 @@ class DeleteRelationshipResponse(BaseModel):
     error: Optional[str] = None
 
 
+class LabelInfo(BaseModel):
+    """One entry in `GET /schema/labels`.
+
+    Wire shape: ``{"name": "Person", "id": 0}``. The ``id`` field is
+    the catalog id allocated by the engine, not a count. Renamed
+    from a JSON tuple ``["Person", 0]`` in 1.15.0 (issue
+    `hivellm/nexus#2`_).
+
+    .. _hivellm/nexus#2: https://github.com/hivellm/nexus/issues/2
+    """
+
+    name: str
+    id: int
+
+
+class RelTypeInfo(BaseModel):
+    """One entry in `GET /schema/rel_types`. Mirrors ``LabelInfo``."""
+
+    name: str
+    id: int
+
+
 class LabelResponse(BaseModel):
     """Response for label operations."""
 
-    labels: List[str] = Field(default_factory=list)
+    labels: List[LabelInfo] = Field(default_factory=list)
     error: Optional[str] = None
 
 
 class RelTypeResponse(BaseModel):
     """Response for relationship type operations."""
 
-    types: List[str] = Field(default_factory=list)
+    types: List[RelTypeInfo] = Field(default_factory=list)
     error: Optional[str] = None
 
 

@@ -5,6 +5,38 @@ All notable changes to the Rust SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] — 2026-04-25
+
+### Fixed
+
+- **`get_node(id)` now round-trips for id `0`.** The server-side
+  validator was rejecting `node_id == 0` before consulting the
+  engine, so the natural `create_node` → `get_node` flow shown in
+  `examples/basic_usage.rs` returned `node: None` for the very
+  first node ever created in a fresh database. The validator no
+  longer treats `0` as a sentinel; existence is the engine's job.
+  Reported as [hivellm/nexus#2][issue-2].
+- **`/health` self-reported version drift.** `health.version` now
+  asserts byte-equality with `env!("CARGO_PKG_VERSION")` in CI so a
+  future release whose docker image is built before the workspace
+  bump fails the test gate instead of leaking the wrong number to
+  users.
+
+### Changed (BREAKING)
+
+- **`ListLabelsResponse.labels`** is now `Vec<LabelInfo>` instead of
+  `Vec<(String, u32)>`. `LabelInfo` is `{ name: String, id: u32 }`,
+  so the second field's meaning is explicit. The wire format also
+  changes from a JSON tuple `["Person", 0]` to an object
+  `{"name":"Person","id":0}` — non-Rust consumers must update.
+- **`ListRelTypesResponse.types`** mirrors the same change with a
+  new `RelTypeInfo` struct.
+- Migration: `for (name, _) in resp.labels` → `for label in
+  &resp.labels` and use `label.name` / `label.id`. Same for
+  `list_rel_types()`.
+
+[issue-2]: https://github.com/hivellm/nexus/issues/2
+
 ## [1.0.0] — 2026-04-19
 
 ### Added

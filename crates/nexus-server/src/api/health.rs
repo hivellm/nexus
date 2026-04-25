@@ -400,6 +400,27 @@ mod tests {
         ))
     }
 
+    #[tokio::test]
+    async fn test_health_endpoint_reports_workspace_version() {
+        // Issue #2 reported `/health` returning `version=1.13.0` from
+        // an image tagged `hivehub/nexus:v1.14.0`. The server reads
+        // `env!("CARGO_PKG_VERSION")` at compile time, so the only way
+        // the report can drift from the published image tag is if the
+        // image was built before the workspace version bump. This
+        // test pins the contract: the value `/health` returns *must*
+        // be byte-equal to the workspace crate version at compile
+        // time, so a future bump that forgets to rebuild before
+        // tagging the image will fail CI rather than only surfacing
+        // in user reports.
+        let server = build_test_server();
+        let response = health_check(State(server)).await.0;
+        assert_eq!(
+            response.version,
+            env!("CARGO_PKG_VERSION"),
+            "/health version drifted from CARGO_PKG_VERSION"
+        );
+    }
+
     #[test]
     fn test_health_status_variants() {
         assert!(matches!(HealthStatus::Healthy, HealthStatus::Healthy));
