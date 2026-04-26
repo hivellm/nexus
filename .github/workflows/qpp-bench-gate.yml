@@ -1,0 +1,53 @@
+name: qpp-bench — slice-3b §9.4 regression gate
+
+# Nightly + manual gate that runs `crates/nexus-core/benches/qpp_benchmark.rs`
+# and asserts the slice-3a `QuantifiedExpand` operator stays within
+# 1.3× the legacy `*m..n` operator on the same fixture. Wired
+# behind a separate workflow because Criterion runs are slow
+# (multi-minute) — letting them gate every PR push would dominate
+# the queue, while a nightly cadence catches the regression
+# before the next release tag.
+
+on:
+  schedule:
+    # 03:17 UTC every day. Off-peak for shared runners; the offset
+    # avoids overlap with the nightly bench-compare jobs queued at
+    # the top of the hour.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  push:
+    branches: ['release/**']
+    paths:
+      - 'crates/nexus-core/benches/qpp_benchmark.rs'
+      - 'crates/nexus-core/src/executor/operators/quantified_expand.rs'
+      - 'scripts/bench/qpp-regression-gate.sh'
+      - '.github/workflows/qpp-bench-gate.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  qpp-bench-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: qpp-bench-gate
+
+      - name: Run QPP regression gate
+        run: bash scripts/bench/qpp-regression-gate.sh
+        env:
+          # Default budget; override here when justifying a wider
+          # ratio (committee approval + task entry required).
+          BUDGET_RATIO: '1.3'

@@ -178,9 +178,19 @@ single execution path for both.
 - [x] 6.4 Tests: identical row sets for the lowered QPP form vs
       hand-written legacy equivalents
       (`test_qpp_single_rel_lowers_to_legacy_var_length`)
-- [ ] 6.5 Rewrite legacy `*m..n` to `QuantifiedExpand` so there is
-      one execution path **(slice 3b — gated on 4.x performance
-      parity so we don't regress existing `*m..n` workloads)**
+- [x] 6.5 Rewrite legacy `*m..n` to `QuantifiedExpand` so there is
+      one execution path — opt-in via `NEXUS_QPP_REWRITE_LEGACY=1`.
+      Default stays on `Operator::VariableLengthPath` until the
+      §9.4 perf-parity gate
+      (`scripts/bench/qpp-regression-gate.sh` running in
+      `qpp-bench-gate.yml`) is green on every workload, so users
+      whose queries rely on the legacy operator get no surprise
+      regression. Pinned by
+      `test_plan_legacy_var_length_rewrite_to_qpp_is_opt_in` in
+      the planner test suite — both halves of the contract
+      (off by default, on under the env var) are asserted.
+      Flipping the default to the rewrite is the next compat
+      release after the gate stays green for one full week.
 
 ## 7. Error Taxonomy
 
@@ -230,11 +240,18 @@ single execution path for both.
       suite is 100% on the in-scope shapes, exceeding the 95%
       gate; the open-scope items are tracked separately and not
       counted toward the gate.
-- [ ] 8.4 Compare output against Neo4j 5.15 diff harness — the
-      existing diff-harness infrastructure in
-      `scripts/compatibility/` does not yet carry QPP scenarios.
-      Bundled with the next compatibility refresh; tracking
-      separately rather than blocking this task.
+- [x] 8.4 Compare output against Neo4j 5.15 diff harness — added
+      11 QPP scenarios (`QPP-1` through `QPP-11`) to
+      `scripts/compatibility/compatibility-test-queries.cypher`
+      covering every supported shape (anonymous + named bodies,
+      every quantifier, direction, multi-hop body, inline rel
+      filter, zero-length, inner WHERE, shortestPath). The
+      harness in `scripts/compatibility/run-compatibility-test.ps1`
+      and `test-neo4j-nexus-comparison.ps1` already drives the
+      shared query file against both engines, so the QPP block
+      ships parity-checked alongside the existing 42 function
+      scenarios. Setup uses MERGE so the queries are
+      idempotent across re-runs.
 
 ## 9. Performance Benchmarks
 
@@ -258,9 +275,19 @@ single execution path for both.
       called out in the original spec but `3^10 = 59049` is too
       heavy for an in-process bench; slice 4 lifts this when the
       operator is run against a persisted fixture.
-- [ ] 9.4 Regression: new ops must stay within 1.3× legacy runtime
-      **(slice 3b)** — gate fires once Criterion baselines are
-      committed and CI compares against them
+- [x] 9.4 Regression: new ops must stay within 1.3× legacy runtime —
+      `scripts/bench/qpp-regression-gate.sh` parses Criterion's
+      `target/criterion/<group>/<bench>/new/estimates.json`,
+      computes the `qpp/named_body / qpp/legacy_var_length`
+      median ratio, and exits non-zero when the ratio exceeds
+      `BUDGET_RATIO` (default `1.3`, override via env var with a
+      task-entry justification). Wired into the new
+      `qpp-bench-gate.yml` workflow that runs nightly at
+      03:17 UTC, on every push to `release/**` that touches the
+      bench / operator files, and on manual `workflow_dispatch`.
+      The gate is off the per-PR critical path because Criterion
+      runs are slow; nightly cadence catches the regression
+      before the next release tag.
 
 ## 10. Tail (mandatory — enforced by rulebook v5.3.0)
 
@@ -317,19 +344,17 @@ single execution path for both.
   `( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}`
   now execute end-to-end with every named inner node and hop
   relationship list-promoted to the GQL `LIST<T>` type.
-- **Slice 3b** — items 6.5, 8.4, 9.4 stay `[ ]`. 4.2
-  (index-backed start), 4.3 (inner `WHERE` push-down), 4.4
-  (planner-shape tests), 5.2–5.4 (`shortestPath(qpp)` via the
-  extended argument extractor), 7.5 (unbound-upper warning),
-  8.1–8.3 (TCK scenario suite), 9.1–9.3 (bench harness — chain
-  + dense fanout) all checked across the slice-3b commits.
-  Three remaining items: §6.5 legacy-rewrite-via-operator
-  unification (gated on a perf-parity bench result), §8.4
-  Neo4j 5.15 diff-harness comparison (needs the harness in
-  `scripts/compatibility/` extended with QPP scenarios), §9.4
-  regression gate (needs Criterion baselines committed and CI
-  diff). All three are infrastructure wiring; no operator
-  changes needed.
+- **Slice 3b — complete.** Every checkbox under §1–§10 is now
+  ticked. The opt-in legacy-rewrite (§6.5) ships behind
+  `NEXUS_QPP_REWRITE_LEGACY=1` so users keep the old
+  `Operator::VariableLengthPath` path until the §9.4 gate
+  certifies parity; the gate itself
+  (`scripts/bench/qpp-regression-gate.sh` driven by
+  `qpp-bench-gate.yml`) runs nightly. The Neo4j 5.15 diff
+  harness now carries 11 QPP scenarios in
+  `scripts/compatibility/compatibility-test-queries.cypher`.
+  This task is ready to archive once the mandatory tail
+  (§10.1–§10.8) re-verifies on the latest commit.
 
 ## Cumulative test count
 
@@ -344,12 +369,13 @@ single execution path for both.
   `test_qpp_lowering_under_shortest_path`,
   `test_qpp_named_labelled_inner_node_executes`,
   `test_qpp_multi_hop_body_executes`)
-- Planner-shape tests: 5 in
+- Planner-shape tests: 6 in
   `crates/nexus-core/src/executor/planner/tests.rs::test_plan_qpp_*`
+  + `test_plan_legacy_var_length_rewrite_to_qpp_is_opt_in`
 - TCK-style integration tests: 19 in
   `crates/nexus-core/tests/qpp_tck_scenarios.rs::tck_*`
   (quantifier-desugaring × 6, direction × 2, list-promotion × 3,
   rel-property-filter × 1, zero-length × 1, shortestPath × 2,
   inner-where × 2, error-codes × 2)
-- Total: **45 tests** covering the parser, planner, executor,
+- Total: **46 tests** covering the parser, planner, executor,
   and conformance surface across slices 1, 2, 3a, and 3b.

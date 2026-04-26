@@ -244,9 +244,90 @@ RETURN year(date('1900-01-01')) AS ano_1900,
        year(date('2099-12-31')) AS ano_2099;
 
 // ============================================================================
+// QUANTIFIED PATH PATTERNS (Cypher 25 / GQL) — phase6_opencypher-quantified-path-patterns
+// ============================================================================
+// These scenarios are also covered by the in-process suite at
+// `crates/nexus-core/tests/qpp_tck_scenarios.rs`. They live here too so
+// the Neo4j 5.15 diff harness (run-compatibility-test.ps1 +
+// test-neo4j-nexus-comparison.ps1) can exercise them against a live
+// Neo4j instance and pin parity. Slice 3b §8.4.
+//
+// Fixture for the QPP block: a 4-node :Person :KNOWS chain
+//   Alice -> Bob -> Charlie -> Dave
+// reused across every scenario via MERGE so the queries are idempotent.
+
+// Setup — idempotent under MERGE so repeated runs produce the same graph.
+MERGE (a:Person {name: 'Alice', age: 30})
+MERGE (b:Person {name: 'Bob', age: 25})
+MERGE (c:Person {name: 'Charlie', age: 35})
+MERGE (d:Person {name: 'Dave', age: 40})
+MERGE (a)-[:KNOWS {since: 2020}]->(b)
+MERGE (b)-[:KNOWS {since: 2021}]->(c)
+MERGE (c)-[:KNOWS {since: 2022}]->(d);
+
+// QPP-1 anonymous body, exact count — slice-1 lowering
+MATCH (a:Person {name: 'Alice'})( ()-[:KNOWS]->() ){2}(b:Person)
+RETURN b.name AS name ORDER BY name;
+// Expected: Charlie
+
+// QPP-2 anonymous body, bounded range — slice-1 lowering
+MATCH (a:Person {name: 'Alice'})( ()-[:KNOWS]->() ){1,3}(b:Person)
+RETURN b.name AS name ORDER BY name;
+// Expected: Bob, Charlie, Dave
+
+// QPP-3 anonymous body, plus desugars to {1,}
+MATCH (a:Person {name: 'Alice'})( ()-[:KNOWS]->() )+(b:Person)
+RETURN b.name AS name ORDER BY name;
+// Expected: Bob, Charlie, Dave
+
+// QPP-4 anonymous body, optional ? desugars to {0,1}
+MATCH (a:Person {name: 'Alice'})( ()-[:KNOWS]->() )?(b:Person)
+RETURN b.name AS name ORDER BY name;
+// Expected: Alice, Bob
+
+// QPP-5 incoming direction
+MATCH (a:Person {name: 'Dave'})( ()<-[:KNOWS]-() ){1,3}(b:Person)
+RETURN b.name AS name ORDER BY name;
+// Expected: Alice, Bob, Charlie
+
+// QPP-6 named inner node — slice-2 operator with LIST<NODE> promotion
+MATCH (a:Person {name: 'Alice'})( (x:Person)-[:KNOWS]->() ){2}(b:Person)
+RETURN size(x) AS list_len;
+// Expected: 2 (LIST<NODE>.len() == iteration count)
+
+// QPP-7 multi-hop body — slice-3a operator
+MATCH (a:Person {name: 'Alice'})
+  ( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}
+  (b:Person)
+RETURN x[0].name AS x0, y[0].name AS y0, z[0].name AS z0;
+// Expected: Alice, Bob, Charlie
+
+// QPP-8 inline relationship-property filter
+MATCH (a:Person {name: 'Bob'})( ()-[:KNOWS {since: 2021}]->() ){1}(b:Person)
+RETURN b.name AS name;
+// Expected: Charlie
+
+// QPP-9 zero-length includes self
+MATCH (a:Person {name: 'Alice'})( ()-[:KNOWS]->() ){0,2}(b:Person)
+RETURN b.name AS name ORDER BY name;
+// Expected: Alice, Bob, Charlie
+
+// QPP-10 inner WHERE — slice-3b §4.3
+MATCH (a:Person {name: 'Bob'})
+  ( (x:Person)-[r:KNOWS]->(y:Person) WHERE r.since >= 2021 ){1,3}
+  (b:Person)
+RETURN b.name AS name ORDER BY name;
+// Expected: Charlie, Dave
+
+// QPP-11 shortestPath over named-body — slice-3b §5.2
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Charlie'})
+RETURN shortestPath((a)( (x:Person)-[:KNOWS]->() ){1,3}(b)) IS NOT NULL AS reachable;
+// Expected: true
+
+// ============================================================================
 // FIM DOS TESTES
 // ============================================================================
 
 RETURN '✓ Testes de compatibilidade completos!' AS status,
-       '42 novas funções implementadas' AS total_funcoes,
+       '42 novas funções implementadas + 11 cenários QPP' AS total_funcoes,
        '100% compatibilidade Neo4j' AS compatibilidade;

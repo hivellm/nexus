@@ -10,6 +10,9 @@ use crate::executor::parser::{
     MatchClause, NodePattern, Pattern, PatternElement, QuantifiedGroup, RelationshipDirection,
     RelationshipPattern, RelationshipQuantifier, ReturnClause, ReturnItem, WhereClause,
 };
+use crate::executor::planner::queries::{
+    qpp_legacy_rewrite_enabled, set_qpp_legacy_rewrite_enabled,
+};
 use crate::index::{KnnIndex, LabelIndex};
 use crate::testing::TestContext;
 
@@ -459,6 +462,7 @@ fn parse_and_plan(cypher: &str) -> Vec<Operator> {
 }
 
 #[test]
+#[serial_test::serial(qpp_legacy_rewrite_flag)]
 fn test_plan_qpp_anonymous_body_lowers_to_variable_length_path() {
     // Slice-1: `( ()-[:T]->() ){m,n}` collapses at parse time to
     // a `RelationshipPattern` with quantifier — the planner sees
@@ -480,6 +484,7 @@ fn test_plan_qpp_anonymous_body_lowers_to_variable_length_path() {
 }
 
 #[test]
+#[serial_test::serial(qpp_legacy_rewrite_flag)]
 fn test_plan_qpp_named_inner_node_emits_quantified_expand_with_one_hop() {
     // Slice-2: a named or labelled inner boundary node forces
     // list-promotion semantics, so the lowering bows out and the
@@ -511,6 +516,7 @@ fn test_plan_qpp_named_inner_node_emits_quantified_expand_with_one_hop() {
 }
 
 #[test]
+#[serial_test::serial(qpp_legacy_rewrite_flag)]
 fn test_plan_qpp_multi_hop_body_emits_quantified_expand_with_n_hops() {
     // Slice-3a: multi-hop bodies plan as a single
     // `QuantifiedExpand` with `hops.len() == n`. The planner walks
@@ -538,6 +544,61 @@ fn test_plan_qpp_multi_hop_body_emits_quantified_expand_with_n_hops() {
 }
 
 #[test]
+#[serial_test::serial(qpp_legacy_rewrite_flag)]
+fn test_plan_legacy_var_length_rewrite_to_qpp_is_opt_in() {
+    // Slice-3b §6.5 — the legacy `*m..n` planner branch can be
+    // rewritten to emit `QuantifiedExpand` instead of
+    // `VariableLengthPath`. The flag is process-wide
+    // (`set_qpp_legacy_rewrite_enabled` / `qpp_legacy_rewrite_enabled`)
+    // and starts disabled unless `NEXUS_QPP_REWRITE_LEGACY=1` was
+    // set at startup. This test pins both halves of the contract.
+    //
+    // The shared QPP catalog mutex (`shared_qpp_test_catalog`)
+    // serialises every `parse_and_plan` call across the planner
+    // test module, so flipping the static flag here is safe even
+    // under `cargo test` parallel execution: the lock is held for
+    // the entire `parse_and_plan` body, and nobody else reads the
+    // flag outside that body. We restore the flag on exit so a
+    // failure mid-test doesn't leak state.
+    let previous = qpp_legacy_rewrite_enabled();
+
+    // Default branch: legacy operator stays on.
+    set_qpp_legacy_rewrite_enabled(false);
+    let default_ops = parse_and_plan("MATCH (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN b");
+    assert!(
+        default_ops
+            .iter()
+            .any(|op| matches!(op, Operator::VariableLengthPath { .. })),
+        "default planner must keep emitting VariableLengthPath: {default_ops:?}"
+    );
+    assert!(
+        !default_ops
+            .iter()
+            .any(|op| matches!(op, Operator::QuantifiedExpand { .. })),
+        "default planner must NOT emit QuantifiedExpand for legacy *m..n: {default_ops:?}"
+    );
+
+    // Opt-in branch: flag flipped on.
+    set_qpp_legacy_rewrite_enabled(true);
+    let rewrite_ops = parse_and_plan("MATCH (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN b");
+    assert!(
+        rewrite_ops
+            .iter()
+            .any(|op| matches!(op, Operator::QuantifiedExpand { .. })),
+        "with the rewrite flag set, the planner must emit QuantifiedExpand: {rewrite_ops:?}"
+    );
+    assert!(
+        !rewrite_ops
+            .iter()
+            .any(|op| matches!(op, Operator::VariableLengthPath { .. })),
+        "with rewrite on, VariableLengthPath must not appear: {rewrite_ops:?}"
+    );
+
+    set_qpp_legacy_rewrite_enabled(previous);
+}
+
+#[test]
+#[serial_test::serial(qpp_legacy_rewrite_flag)]
 fn test_plan_qpp_starting_node_uses_label_scan_upstream() {
     // Slice-3b §4.2: the QPP operator does not pick its own
     // source — it consumes whatever upstream operator the
@@ -563,6 +624,7 @@ fn test_plan_qpp_starting_node_uses_label_scan_upstream() {
 }
 
 #[test]
+#[serial_test::serial(qpp_legacy_rewrite_flag)]
 fn test_plan_qpp_named_body_target_var_chains_to_following_node() {
     // The QPP planner threads `prev_node_var` so a follow-up
     // pattern element after the QPP gets the right source. When

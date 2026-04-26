@@ -2426,20 +2426,73 @@ impl<'a> QueryPlanner<'a> {
 
                         // Check if this is a variable-length path (has quantifier)
                         if let Some(quantifier) = &rel.quantifier {
-                            // Use VariableLengthPath operator for variable-length paths
-                            // Check if pattern has a path variable assigned
-                            let path_var = pattern.path_variable.clone().unwrap_or_default();
-                            // For variable-length paths, only use first type for now
-                            let type_id = type_ids.first().copied();
-                            operators.push(Operator::VariableLengthPath {
-                                type_id,
-                                direction,
-                                source_var,
-                                target_var,
-                                rel_var: rel.variable.clone().unwrap_or_default(),
-                                path_var,
-                                quantifier: quantifier.clone(),
-                            });
+                            // Slice-3b §6.5 — opt-in rewrite of legacy
+                            // `*m..n` to `QuantifiedExpand` so both
+                            // operators share a single execution
+                            // path. Off by default because the §9.4
+                            // regression gate
+                            // (`scripts/bench/qpp-regression-gate.sh`)
+                            // has not yet certified perf parity on
+                            // every workload — flipping the default
+                            // before that bench passes would risk a
+                            // regression on the legacy `*m..n`
+                            // surface that has shipped since 1.0.
+                            // Operators can opt in for testing by
+                            // setting `NEXUS_QPP_REWRITE_LEGACY=1`.
+                            //
+                            // Once the gate is green, the env-var
+                            // check flips to a config knob with the
+                            // same name, and the legacy
+                            // `Operator::VariableLengthPath` arm
+                            // above gets retired.
+                            let rewrite_to_qpp = qpp_legacy_rewrite_enabled();
+
+                            if rewrite_to_qpp {
+                                let (min_length, max_length) = match quantifier {
+                                    RelationshipQuantifier::ZeroOrMore => (0, usize::MAX),
+                                    RelationshipQuantifier::OneOrMore => (1, usize::MAX),
+                                    RelationshipQuantifier::ZeroOrOne => (0, 1),
+                                    RelationshipQuantifier::Exact(n) => (*n, *n),
+                                    RelationshipQuantifier::Range(min, max) => (*min, *max),
+                                };
+                                let hop = crate::executor::types::QppHopSpec {
+                                    type_ids: type_ids.clone(),
+                                    direction,
+                                    var: rel.variable.clone(),
+                                    properties: rel.properties.clone(),
+                                };
+                                let glue_node = crate::executor::types::QppNodeSpec {
+                                    var: None,
+                                    labels: Vec::new(),
+                                    properties: None,
+                                };
+                                operators.push(Operator::QuantifiedExpand {
+                                    source_var: final_source_var,
+                                    target_var: final_target_var,
+                                    hops: vec![hop],
+                                    inner_nodes: vec![glue_node.clone(), glue_node],
+                                    inner_where: None,
+                                    min_length,
+                                    max_length,
+                                    optional: is_optional,
+                                });
+                            } else {
+                                // Use VariableLengthPath operator for
+                                // variable-length paths. Default path
+                                // until §9.4 certifies parity.
+                                let path_var = pattern.path_variable.clone().unwrap_or_default();
+                                // For variable-length paths, only use first type for now
+                                let type_id = type_ids.first().copied();
+                                operators.push(Operator::VariableLengthPath {
+                                    type_id,
+                                    direction,
+                                    source_var,
+                                    target_var,
+                                    rel_var: rel.variable.clone().unwrap_or_default(),
+                                    path_var,
+                                    quantifier: quantifier.clone(),
+                                });
+                            }
                         } else {
                             // Use regular Expand operator for single-hop relationships
                             operators.push(Operator::Expand {
@@ -3592,3 +3645,45 @@ fn quantifier_to_bounds(q: &RelationshipQuantifier) -> (usize, usize) {
 
 #[allow(dead_code)]
 fn _qpp_ensure_propertymap_unused(_: &PropertyMap, _: &RelationshipPattern) {}
+
+/// Process-wide flag controlling whether the planner rewrites
+/// legacy `*m..n` quantifiers to `Operator::QuantifiedExpand`
+/// (slice-3b §6.5). The flag is read once per planner invocation
+/// from a `OnceLock<AtomicBool>` whose initial value comes from
+/// `NEXUS_QPP_REWRITE_LEGACY` (set / non-empty / not "0" → on).
+///
+/// Why a static instead of `std::env::var` per call: tests run in
+/// parallel and each one needs to flip the flag without leaking
+/// state across threads. An `AtomicBool` makes the flag observable
+/// per process but unset between tests via
+/// `set_legacy_var_length_rewrite_enabled(false)` in `Drop` /
+/// teardown — which `std::env` can't deliver because env reads /
+/// writes are not synchronised across threads on Windows.
+fn qpp_legacy_rewrite_flag() -> &'static std::sync::atomic::AtomicBool {
+    use std::sync::OnceLock;
+    use std::sync::atomic::AtomicBool;
+    static FLAG: OnceLock<AtomicBool> = OnceLock::new();
+    FLAG.get_or_init(|| {
+        let initial = std::env::var("NEXUS_QPP_REWRITE_LEGACY")
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+            .unwrap_or(false);
+        AtomicBool::new(initial)
+    })
+}
+
+/// Read the slice-3b §6.5 rewrite flag. See
+/// `qpp_legacy_rewrite_flag` for the rationale.
+pub(crate) fn qpp_legacy_rewrite_enabled() -> bool {
+    qpp_legacy_rewrite_flag().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Flip the slice-3b §6.5 rewrite flag for the current process.
+/// Tests use this to exercise both the default-off and rewrite-on
+/// branches without touching the env. The flag is `pub(crate)`
+/// because external callers should configure the rewrite via the
+/// `NEXUS_QPP_REWRITE_LEGACY` env var at startup, not by poking
+/// process state at runtime.
+pub(crate) fn set_qpp_legacy_rewrite_enabled(enabled: bool) {
+    qpp_legacy_rewrite_flag().store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
