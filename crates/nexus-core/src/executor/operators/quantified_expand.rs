@@ -69,6 +69,15 @@ impl Executor {
         );
 
         let effective_max = max_length.min(MAX_QPP_DEPTH);
+        // True when the user wrote an unbounded quantifier (`*` /
+        // `+` / `{m,}`) or a `{m,n}` whose `n` exceeds
+        // `MAX_QPP_DEPTH`. Tracked so we can surface
+        // `ERR_QPP_UNBOUND_UPPER` once we've actually reached the
+        // cap with more candidates pending — silently truncating
+        // those candidates is the failure mode the error code
+        // exists to make visible.
+        let user_unbounded = max_length > MAX_QPP_DEPTH;
+        let mut cap_was_hit = false;
 
         let rows = if !context.result_set.rows.is_empty() {
             self.result_set_as_rows(context)
@@ -191,6 +200,18 @@ impl Executor {
                     &mut walks,
                 )?;
 
+                // The cap is reached when the next iteration would
+                // be `MAX_QPP_DEPTH + 1` AND there are still walks
+                // pending — i.e. we're about to silently drop
+                // candidates the user told us to walk. Tracking
+                // this here (rather than after the loop) keeps the
+                // signal precise: we only flag truncation that
+                // actually discarded data, not queries that simply
+                // ran out of graph before the cap.
+                if iteration + 1 == effective_max && !walks.is_empty() && user_unbounded {
+                    cap_was_hit = true;
+                }
+
                 for (end_node, hop_nodes_intermediate, hop_rels) in walks {
                     let next_iteration = iteration + 1;
                     let mut new_nodes_per_pos = nodes_per_pos.clone();
@@ -219,6 +240,28 @@ impl Executor {
                     }
                 }
             }
+        }
+
+        if cap_was_hit {
+            // ERR_QPP_UNBOUND_UPPER — the user wrote an unbounded
+            // quantifier and BFS hit the per-query safety cap with
+            // candidates pending, so the result set is truncated.
+            // Surface the situation via tracing instead of failing
+            // the query: silently dropping candidates is worse for
+            // observability, but failing a query that previously
+            // succeeded is worse for users on the upgrade path.
+            // Operators reading the warning know to either narrow
+            // the quantifier or split the query.
+            tracing::warn!(
+                target: "nexus_core::executor::quantified_expand",
+                code = "ERR_QPP_UNBOUND_UPPER",
+                max_qpp_depth = MAX_QPP_DEPTH,
+                "QPP traversal hit the {} iteration cap with candidates \
+                 still pending; result set may be truncated. Bound the \
+                 quantifier (`{{m,n}}` instead of `*` / `+` / `{{m,}}`) \
+                 to silence this warning.",
+                MAX_QPP_DEPTH,
+            );
         }
 
         self.update_variables_from_rows(context, &expanded_rows);

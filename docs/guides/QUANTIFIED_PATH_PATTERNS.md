@@ -113,15 +113,24 @@ this list.
 
 ## Error codes
 
-| Code                          | When                                          |
-|-------------------------------|-----------------------------------------------|
-| `ERR_QPP_INVALID_QUANTIFIER`  | `{n,m}` with `n > m`                          |
-| `ERR_QPP_NESTING_TOO_DEEP`    | More than one level of nested QPP groups      |
-| `ERR_QPP_NOT_IN_CREATE`       | QPP appears inside a `CREATE` clause          |
-| `ERR_QPP_NOT_IMPLEMENTED`     | Body needs the slice-2 `QuantifiedExpand`     |
+| Code                          | Severity | When                                          |
+|-------------------------------|----------|-----------------------------------------------|
+| `ERR_QPP_INVALID_QUANTIFIER`  | Error    | `{n,m}` with `n > m`                          |
+| `ERR_QPP_NESTING_TOO_DEEP`    | Error    | More than one level of nested QPP groups      |
+| `ERR_QPP_NOT_IN_CREATE`       | Error    | QPP appears inside a `CREATE` clause          |
+| `ERR_QPP_NOT_IMPLEMENTED`     | Error    | Body shape the operator can't drive yet       |
+| `ERR_QPP_UNBOUND_UPPER`       | Warn     | Unbounded quantifier hit `MAX_QPP_DEPTH = 64` |
 
-All four are surfaced as HTTP 400 with positional spans so
-clients can render them inline.
+The four errors surface as HTTP 400 with positional spans so
+clients can render them inline. The
+`ERR_QPP_UNBOUND_UPPER` warning emits to the server's `tracing`
+log (target `nexus_core::executor::quantified_expand`,
+field `code = "ERR_QPP_UNBOUND_UPPER"`) when an unbounded
+quantifier (`*` / `+` / `{m,}`) hits the per-query safety cap of
+`MAX_QPP_DEPTH = 64` iterations with candidates still pending.
+The query keeps returning rows up to the cap, but the result set
+is truncated — bound the quantifier (`{m,n}` with an explicit
+`n`) to silence the warning.
 
 ## Migration tips
 

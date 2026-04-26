@@ -160,12 +160,17 @@ single execution path for both.
       retained as the catch-all for the few remaining slice-3b
       gaps
 - [x] 7.5 Unbounded upper bound capped at `MAX_QPP_DEPTH = 64` in
-      `execute_quantified_expand` — same pattern the legacy
-      `VariableLengthPath` uses, so `*` / `+` / `{m,}` cannot fan
-      out indefinitely. A dedicated `ERR_QPP_UNBOUND_UPPER` error
-      that fires when the cap is hit (instead of silently
-      truncating) lands in slice 3b alongside the cost-model
-      refinements
+      `execute_quantified_expand`. Slice-3b now also surfaces
+      `ERR_QPP_UNBOUND_UPPER` via `tracing::warn` whenever the cap
+      fires with candidates still pending AND the user wrote an
+      unbounded quantifier — silent truncation was the worst-case
+      observability failure. Warning carries `code =
+      "ERR_QPP_UNBOUND_UPPER"`, `max_qpp_depth = 64`, and a
+      narrowing recommendation. Hard-erroring would break upgrade
+      paths for queries that succeeded with `*` quantifiers
+      against pre-cap data, so the warning ships first; promoting
+      to a hard error stays in slice 4 alongside the configurable
+      cap
 
 ## 8. openCypher TCK Coverage **(slice 3b)**
 
@@ -249,12 +254,11 @@ single execution path for both.
   `( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}`
   now execute end-to-end with every named inner node and hop
   relationship list-promoted to the GQL `LIST<T>` type.
-- **Slice 3b** — open. Items 4.2–4.3, 5.2–5.4, 6.5, 7.5
-  (dedicated `ERR_QPP_UNBOUND_UPPER`), 8.x, 9.3–9.4 stay `[ ]`.
-  4.4 (planner-shape tests) and 9.1–9.2 (bench harness) flipped
-  to checked this turn. The cost-model refinement and
-  `shortestPath(qpp)` over named-body shapes are the most
-  impactful remaining work.
+- **Slice 3b** — open. Items 4.2–4.3, 5.2–5.4, 6.5, 8.x, 9.3–9.4
+  stay `[ ]`. 4.4 (planner-shape tests), 7.5 (unbound-upper
+  warning), and 9.1–9.2 (bench harness) flipped to checked this
+  turn. The cost-model refinement and `shortestPath(qpp)` over
+  named-body shapes are the most impactful remaining work.
 
 ## Cumulative test count
 
