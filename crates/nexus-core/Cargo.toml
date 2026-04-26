@@ -182,6 +182,10 @@ harness = false
 name = "fulltext_bench"
 harness = false
 
+[[bench]]
+name = "qpp_benchmark"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../../examples/hierarchical_call_graph_example.rs"

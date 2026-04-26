@@ -6,9 +6,9 @@ use super::*;
 use crate::catalog::Catalog;
 use crate::executor::JoinType;
 use crate::executor::parser::{
-    BinaryOperator, Clause, CypherQuery, Expression, LimitClause, Literal, MatchClause,
-    NodePattern, Pattern, PatternElement, RelationshipDirection, RelationshipPattern,
-    RelationshipQuantifier, ReturnClause, ReturnItem, WhereClause,
+    BinaryOperator, Clause, CypherParser, CypherQuery, Expression, LimitClause, Literal,
+    MatchClause, NodePattern, Pattern, PatternElement, QuantifiedGroup, RelationshipDirection,
+    RelationshipPattern, RelationshipQuantifier, ReturnClause, ReturnItem, WhereClause,
 };
 use crate::index::{KnnIndex, LabelIndex};
 use crate::testing::TestContext;
@@ -411,6 +411,152 @@ fn test_plan_query_with_range_quantifier() {
     assert!(
         has_variable_length_path,
         "Expected VariableLengthPath operator with Range quantifier"
+    );
+}
+
+// ---------------------------------------------------------------
+// QPP planner-shape tests — phase6_opencypher-quantified-path-patterns §4.4
+// ---------------------------------------------------------------
+
+/// Shared catalog for the QPP planner-shape tests. Spinning up a
+/// fresh LMDB env per QPP test was tripping `MDB_TLS_FULL` when the
+/// full lib suite ran in parallel — too many envs across too many
+/// threads exhausted the LMDB TLS slot pool. Sharing one read-only
+/// catalog across all `parse_and_plan` callers stays safe because
+/// the planner only reads label/type ids; nothing under test
+/// mutates catalog state.
+fn shared_qpp_test_catalog() -> std::sync::MutexGuard<'static, Catalog> {
+    use std::sync::{Mutex, OnceLock};
+    static SHARED: OnceLock<Mutex<Catalog>> = OnceLock::new();
+    let mutex = SHARED.get_or_init(|| {
+        let ctx = TestContext::new();
+        let path = ctx.path().join("qpp_planner_catalog.mdb");
+        // Leak the temp-dir guard for the process lifetime so the
+        // backing files survive every test run.
+        let _leaked = Box::leak(Box::new(ctx));
+        let catalog = Catalog::with_isolated_path(path, crate::catalog::CATALOG_MMAP_INITIAL_SIZE)
+            .expect("Failed to create shared QPP catalog");
+        Mutex::new(catalog)
+    });
+    mutex.lock().expect("shared QPP catalog poisoned")
+}
+
+/// Helper: parse the cypher source through the public parser so the
+/// planner sees the same AST a real query would. The hand-built
+/// `CypherQuery` literals above are too verbose for QPP shapes.
+fn parse_and_plan(cypher: &str) -> Vec<Operator> {
+    let catalog = shared_qpp_test_catalog();
+    let label_index = LabelIndex::new();
+    let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+    let mut planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+    let mut parser = CypherParser::new(cypher.to_string());
+    let query = parser
+        .parse()
+        .unwrap_or_else(|e| panic!("parse `{cypher}`: {e}"));
+    planner
+        .plan_query(&query)
+        .unwrap_or_else(|e| panic!("plan `{cypher}`: {e}"))
+}
+
+#[test]
+fn test_plan_qpp_anonymous_body_lowers_to_variable_length_path() {
+    // Slice-1: `( ()-[:T]->() ){m,n}` collapses at parse time to
+    // a `RelationshipPattern` with quantifier — the planner sees
+    // the legacy shape and emits `VariableLengthPath`, never
+    // `QuantifiedExpand`.
+    let operators = parse_and_plan("MATCH (a)( ()-[:KNOWS]->() ){1,5}(b) RETURN a, b");
+    assert!(
+        operators
+            .iter()
+            .any(|op| matches!(op, Operator::VariableLengthPath { .. })),
+        "anonymous-body QPP must lower to VariableLengthPath: {operators:?}",
+    );
+    assert!(
+        !operators
+            .iter()
+            .any(|op| matches!(op, Operator::QuantifiedExpand { .. })),
+        "anonymous-body QPP must NOT reach the slice-2 operator: {operators:?}",
+    );
+}
+
+#[test]
+fn test_plan_qpp_named_inner_node_emits_quantified_expand_with_one_hop() {
+    // Slice-2: a named or labelled inner boundary node forces
+    // list-promotion semantics, so the lowering bows out and the
+    // planner emits `QuantifiedExpand` instead. `hops.len() == 1`
+    // because the body is single-relationship.
+    let operators =
+        parse_and_plan("MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN x");
+    let qpp = operators
+        .iter()
+        .find_map(|op| match op {
+            Operator::QuantifiedExpand {
+                hops, inner_nodes, ..
+            } => Some((hops, inner_nodes)),
+            _ => None,
+        })
+        .expect("named-inner QPP must emit QuantifiedExpand");
+    assert_eq!(qpp.0.len(), 1, "single-rel body has hops.len() == 1");
+    assert_eq!(
+        qpp.1.len(),
+        2,
+        "single-rel body has inner_nodes.len() == hops.len() + 1"
+    );
+    assert!(
+        !operators
+            .iter()
+            .any(|op| matches!(op, Operator::VariableLengthPath { .. })),
+        "named-inner QPP must NOT lower to VariableLengthPath: {operators:?}",
+    );
+}
+
+#[test]
+fn test_plan_qpp_multi_hop_body_emits_quantified_expand_with_n_hops() {
+    // Slice-3a: multi-hop bodies plan as a single
+    // `QuantifiedExpand` with `hops.len() == n`. The planner walks
+    // every Node-Relationship-Node alternation and bundles them
+    // into the operator's `hops` / `inner_nodes` vectors.
+    let operators = parse_and_plan(
+        "MATCH (a)( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1,3}(b) \
+         RETURN x, y, z",
+    );
+    let qpp = operators
+        .iter()
+        .find_map(|op| match op {
+            Operator::QuantifiedExpand {
+                hops, inner_nodes, ..
+            } => Some((hops, inner_nodes)),
+            _ => None,
+        })
+        .expect("multi-hop QPP must emit QuantifiedExpand");
+    assert_eq!(qpp.0.len(), 2, "two-rel body has hops.len() == 2");
+    assert_eq!(
+        qpp.1.len(),
+        3,
+        "two-rel body has inner_nodes.len() == hops.len() + 1"
+    );
+}
+
+#[test]
+fn test_plan_qpp_named_body_target_var_chains_to_following_node() {
+    // The QPP planner threads `prev_node_var` so a follow-up
+    // pattern element after the QPP gets the right source. When
+    // `(b)` follows the QPP without the operator binding the
+    // target to `b`, downstream Expands break. Pin the contract:
+    // a named trailing boundary node must end up as the operator's
+    // `target_var`.
+    let operators =
+        parse_and_plan("MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN b");
+    let target_var = operators
+        .iter()
+        .find_map(|op| match op {
+            Operator::QuantifiedExpand { target_var, .. } => Some(target_var),
+            _ => None,
+        })
+        .expect("named-inner QPP must emit QuantifiedExpand");
+    assert_eq!(
+        target_var, "b",
+        "trailing named boundary node must wire to the operator's target_var"
     );
 }
 

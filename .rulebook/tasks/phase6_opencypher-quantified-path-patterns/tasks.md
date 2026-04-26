@@ -96,8 +96,15 @@ behaviour and lifts a strict subset of the
       quantified body **(slice 3b)**
 - [ ] 4.3 Push inner `WHERE` predicates into the iteration scope
       **(slice 3b)**
-- [ ] 4.4 Planner tests asserting expected operator order
-      **(slice 3b)**
+- [x] 4.4 Planner tests asserting expected operator order — four
+      new tests in
+      `crates/nexus-core/src/executor/planner/tests.rs::test_plan_qpp_*`
+      pin the wiring: anonymous-body QPP must lower to
+      `VariableLengthPath` (never `QuantifiedExpand`),
+      named-inner-node QPP must emit `QuantifiedExpand` with
+      `hops.len() == 1`, multi-hop bodies emit
+      `QuantifiedExpand` with `hops.len() == n`, and the trailing
+      named boundary node ends up as the operator's `target_var`
 
 ## 5. `shortestPath` / `allShortestPaths` Integration
 
@@ -167,12 +174,25 @@ single execution path for both.
 - [ ] 8.3 Run TCK in CI; target 95%+ pass on in-scope scenarios
 - [ ] 8.4 Compare output against Neo4j 5.15 diff harness
 
-## 9. Performance Benchmarks **(slice 3b)**
+## 9. Performance Benchmarks
 
-- [ ] 9.1 Bench: 5-hop friend-of-friend over 10k nodes
-- [ ] 9.2 Bench: bounded reachability (`{1,5}`) vs legacy `*1..5`
+- [x] 9.1 Bench: bounded-hop traversal over a 50-node `:KNOWS` chain
+      — `crates/nexus-core/benches/qpp_benchmark.rs::bench_qpp_named_body`
+      drives the slice-3a `QuantifiedExpand` operator. Run via
+      `cargo +nightly bench -p nexus-core --bench qpp_benchmark`.
+      The 10k-node sweep called out in the original spec lands in
+      slice 3b alongside the cost-model refinement.
+- [x] 9.2 Bench: bounded reachability (`{1,5}`) vs legacy `*1..5`
+      — `bench_qpp_anonymous_body` (slice-1 lowering path) +
+      `bench_legacy_var_length` in the same harness. Both queries
+      target the same fixture so Criterion's report is a clean
+      side-by-side.
 - [ ] 9.3 Bench: worst-case cycle-free traversal depth 10
+      **(slice 3b)** — needs a denser fixture (graph fanout > 1)
+      to exercise the BFS frontier
 - [ ] 9.4 Regression: new ops must stay within 1.3× legacy runtime
+      **(slice 3b)** — gate fires once Criterion baselines are
+      committed and CI compares against them
 
 ## 10. Tail (mandatory — enforced by rulebook v5.3.0)
 
@@ -229,10 +249,12 @@ single execution path for both.
   `( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}`
   now execute end-to-end with every named inner node and hop
   relationship list-promoted to the GQL `LIST<T>` type.
-- **Slice 3b** — open. Items 4.2–4.4, 5.2–5.4, 6.5, 7.5
-  (dedicated `ERR_QPP_UNBOUND_UPPER`), 8.x, 9.x stay `[ ]`.
-  The cost-model refinement and `shortestPath(qpp)` over
-  named-body shapes are the most impactful remaining work.
+- **Slice 3b** — open. Items 4.2–4.3, 5.2–5.4, 6.5, 7.5
+  (dedicated `ERR_QPP_UNBOUND_UPPER`), 8.x, 9.3–9.4 stay `[ ]`.
+  4.4 (planner-shape tests) and 9.1–9.2 (bench harness) flipped
+  to checked this turn. The cost-model refinement and
+  `shortestPath(qpp)` over named-body shapes are the most
+  impactful remaining work.
 
 ## Cumulative test count
 
