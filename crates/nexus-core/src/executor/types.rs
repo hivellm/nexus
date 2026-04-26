@@ -332,6 +332,41 @@ pub enum Operator {
         /// YIELD columns (optional) - columns to return from procedure
         yield_columns: Option<Vec<String>>,
     },
+    /// phase6_opencypher-subquery-transactions — execute a `CALL { … }`
+    /// subquery against each outer row.
+    ///
+    /// The inner query is preserved as a `CypherQuery` AST so each
+    /// invocation re-plans against the current outer scope (this
+    /// matches Neo4j's "the inner query sees variables from the
+    /// outer's last preceding `WITH`" semantic without forcing the
+    /// planner to bake outer-row values into the inner plan).
+    ///
+    /// When `in_transactions` is true the operator wraps every
+    /// `batch_size` outer rows in a savepoint-bracketed batch and
+    /// applies the `on_error` recovery policy on inner failure. When
+    /// `status_var` is `Some(name)` the operator emits one extra
+    /// status row per batch with `(started, committed, rowsProcessed,
+    /// err)` bound to that variable, replacing the outer rows
+    /// themselves (Neo4j 5.x behaviour).
+    CallSubquery {
+        /// Inner subquery AST, re-planned per invocation against the
+        /// outer scope to keep variable resolution lexical.
+        inner_query: parser::CypherQuery,
+        /// `true` when the source clause is `CALL { … } IN [CONCURRENT] TRANSACTIONS`.
+        in_transactions: bool,
+        /// Rows per batch; `None` falls back to the engine default
+        /// (1000) when `in_transactions` is true.
+        batch_size: Option<usize>,
+        /// `Some(n)` for `IN CONCURRENT TRANSACTIONS`, capped at the
+        /// engine-wide `nexus.cypher.concurrency` budget. `None` for
+        /// the serial variant.
+        concurrency: Option<usize>,
+        /// `ON ERROR …` policy. `Fail` is the implicit default per the
+        /// Neo4j spec.
+        on_error: parser::OnErrorPolicy,
+        /// `REPORT STATUS AS <var>` target, when present.
+        status_var: Option<String>,
+    },
     /// Load CSV file
     LoadCsv {
         /// CSV file URL/path

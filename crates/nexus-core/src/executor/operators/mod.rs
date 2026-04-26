@@ -6,6 +6,7 @@
 
 pub mod admin;
 pub mod aggregate;
+pub mod call_subquery;
 pub mod create;
 pub mod dispatch;
 pub mod expand;

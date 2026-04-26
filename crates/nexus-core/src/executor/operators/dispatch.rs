@@ -158,13 +158,14 @@ impl Executor {
             } => {
                 self.execute_union(context, left, right, *distinct)?;
             }
-            Operator::Create { pattern: _ } => {
-                // Note: execute_create_with_context requires &mut self
-                // This method is only used internally, so we'll handle it differently
-                // For now, this path shouldn't be reached as CREATE is handled in execute()
-                return Err(Error::CypherExecution(
-                    "CREATE operator should be handled in execute() method".to_string(),
-                ));
+            Operator::Create { pattern } => {
+                // Slice-1 of phase6_opencypher-subquery-transactions
+                // routes CREATE through dispatch so nested subqueries
+                // (e.g. `CALL { … CREATE … }`) execute the same code
+                // path as the top-level `execute()` loop. Outer-level
+                // CREATE still runs through `execute()` directly; this
+                // arm services the nested-subquery path.
+                self.execute_create_with_context(context, pattern)?;
             }
             Operator::Delete { variables } => {
                 self.execute_delete(context, variables, false)?;
@@ -315,6 +316,24 @@ impl Executor {
                 return Err(Error::Internal(
                     "HashJoin operator not implemented".to_string(),
                 ));
+            }
+            Operator::CallSubquery {
+                inner_query,
+                in_transactions,
+                batch_size,
+                concurrency,
+                on_error,
+                status_var,
+            } => {
+                self.execute_call_subquery(
+                    context,
+                    inner_query,
+                    *in_transactions,
+                    *batch_size,
+                    *concurrency,
+                    on_error,
+                    status_var.as_deref(),
+                )?;
             }
         }
         Ok(())

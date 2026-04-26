@@ -845,6 +845,24 @@ impl Executor {
                 } => {
                     self.execute_composite_btree_seek(&mut context, label, variable, prefix)?;
                 }
+                Operator::CallSubquery {
+                    inner_query,
+                    in_transactions,
+                    batch_size,
+                    concurrency,
+                    on_error,
+                    status_var,
+                } => {
+                    self.execute_call_subquery(
+                        &mut context,
+                        inner_query,
+                        *in_transactions,
+                        *batch_size,
+                        *concurrency,
+                        on_error,
+                        status_var.as_deref(),
+                    )?;
+                }
             }
         }
 

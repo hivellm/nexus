@@ -1,20 +1,31 @@
 # Implementation Tasks — Subquery Transactions + Collect + Nesting
 
+## Status — slice-1 (read-only inner)
+
+- Operator `Operator::CallSubquery` wired through planner + dispatch.
+- Inner subquery executes per outer row; outer × inner join produced.
+- IN TRANSACTIONS / ON ERROR / REPORT STATUS / write-bearing inner all
+  surface typed errors (`ERR_CALL_IN_TX_PENDING_SLICE2`,
+  `ERR_CALL_SUBQUERY_WRITE_INNER_UNSUPPORTED`) until the re-entrant
+  executor lands in slice-2.
+- 7 executor integration tests (`crates/nexus-core/tests/call_subquery_test.rs`).
+- Parser §1 / §2 already complete (16 unit tests pass).
+
 ## 1. Grammar — `CALL {} IN TRANSACTIONS`
 
-- [ ] 1.1 Tokenise `IN TRANSACTIONS`, `OF N ROWS`, `CONCURRENT TRANSACTIONS`
-- [ ] 1.2 Tokenise `REPORT STATUS AS ident`
-- [ ] 1.3 Tokenise `ON ERROR CONTINUE|BREAK|FAIL|RETRY`
-- [ ] 1.4 Parser rule for the full clause
-- [ ] 1.5 Unit tests for every syntactic variant
+- [x] 1.1 Tokenise `IN TRANSACTIONS`, `OF N ROWS`, `CONCURRENT TRANSACTIONS`
+- [x] 1.2 Tokenise `REPORT STATUS AS ident`
+- [x] 1.3 Tokenise `ON ERROR CONTINUE|BREAK|FAIL|RETRY`
+- [x] 1.4 Parser rule for the full clause
+- [x] 1.5 Unit tests for every syntactic variant
 
 ## 2. AST & Clause Validation
 
-- [ ] 2.1 Add `CallInTransactions` AST node with all fields
-- [ ] 2.2 Validate that the inner subquery is non-empty
-- [ ] 2.3 Reject `RETURN` in the inner when REPORT STATUS is set (conflicts)
-- [ ] 2.4 Reject `OF 0 ROWS`, negative values, non-integer literals
-- [ ] 2.5 Tests for each validation rule
+- [x] 2.1 Add `CallInTransactions` AST node with all fields
+- [x] 2.2 Validate that the inner subquery is non-empty
+- [x] 2.3 Reject `RETURN` in the inner when REPORT STATUS is set (conflicts)
+- [x] 2.4 Reject `OF 0 ROWS`, negative values, non-integer literals
+- [x] 2.5 Tests for each validation rule
 
 ## 3. Batched Transaction Manager
 

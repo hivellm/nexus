@@ -519,6 +519,20 @@ impl<'a> QueryPlanner<'a> {
                         name: use_db_clause.name.clone(),
                     });
                 }
+                Clause::CallSubquery(call_sub) => {
+                    // phase6_opencypher-subquery-transactions §4 —
+                    // emit a `CallSubquery` operator that runs the
+                    // inner AST once per outer driver row, with
+                    // optional batched/transactional semantics.
+                    operators.push(Operator::CallSubquery {
+                        inner_query: call_sub.query.clone(),
+                        in_transactions: call_sub.in_transactions,
+                        batch_size: call_sub.batch_size,
+                        concurrency: call_sub.concurrency,
+                        on_error: call_sub.on_error.clone(),
+                        status_var: call_sub.status_var.clone(),
+                    });
+                }
                 _ => {
                     // Other clauses not implemented in MVP
                 }
@@ -3028,6 +3042,16 @@ impl<'a> QueryPlanner<'a> {
                 Operator::With { items, .. } => {
                     // WITH clause is cheap (projection)
                     total_cost += items.len() as f64;
+                }
+                Operator::CallSubquery { inner_query, .. } => {
+                    // Cost = clauses inside the inner subquery × a flat
+                    // per-clause budget. The recursive descent is
+                    // intentionally rough — we cannot re-plan the inner
+                    // here without a full QueryPlanner, and the
+                    // subquery operator never participates in
+                    // join-ordering decisions, so a rough additive
+                    // estimate suffices.
+                    total_cost += 50.0 * (inner_query.clauses.len() as f64).max(1.0);
                 }
             }
         }
