@@ -753,16 +753,47 @@ CREATE (n:Person {name: row.name, age: toInteger(row.age)})
 ### Subqueries
 
 ```cypher
--- CALL subquery
+-- CALL subquery (legacy form — every outer variable is visible)
 CALL {
   MATCH (n:Person) RETURN n
 }
 
--- CALL subquery in transactions
-CALL {
-  MATCH (n:Person) DELETE n
-} IN TRANSACTIONS OF 1000 ROWS
+-- CALL { } IN TRANSACTIONS OF N ROWS [REPORT STATUS AS var]
+--                                    [ON ERROR CONTINUE|BREAK|FAIL|RETRY n]
+-- Bulk-write recipe — drives N outer rows per batch through the inner
+-- subquery. With REPORT STATUS, the operator emits one MAP-typed row
+-- per batch under the named variable: { started, committed,
+-- rowsProcessed, err }. ON ERROR controls failure recovery:
+--   * FAIL (default): first error aborts the outer query.
+--   * CONTINUE: rolls forward; failed batches surface as committed=false.
+--   * BREAK: stops processing further batches.
+--   * RETRY n: re-runs the failing batch up to n times before escalating.
+UNWIND range(1, 100000) AS i
+CALL { WITH i CREATE (:Audit {i: i}) }
+IN TRANSACTIONS OF 1000 ROWS REPORT STATUS AS s ON ERROR CONTINUE
+RETURN s.committed, s.rowsProcessed, s.err
+
+-- CALL (vars) { … } — Cypher 25 scoped subquery. Only the listed outer
+-- variables are visible inside the inner. `CALL () { … }` declares
+-- a fully isolated inner scope.
+MATCH (p:Person), (count_var)
+CALL (p) { MATCH (q:Person) RETURN count(q) AS c }
+RETURN p.name, c
+
+-- COLLECT { … } subquery — folds every inner row into a LIST value.
+--   * single-column inner → LIST<T>
+--   * multi-column inner → LIST<MAP> keyed by RETURN column names
+--   * aggregating inner → single-element list
+--   * empty inner row stream → empty list (NOT NULL)
+RETURN COLLECT { MATCH (p:Person) RETURN p.name } AS names
 ```
+
+#### Concurrency cap
+
+`CALL { … } IN CONCURRENT TRANSACTIONS` parses today, but the executor
+refuses worker counts > 1 with `ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED`
+— the sharded-storage / per-worker MVCC isolation needed for multi-
+worker subquery execution lands with the V2 distributed branch.
 
 ### Named Paths
 

@@ -5,6 +5,40 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — `phase6_opencypher-subquery-transactions`
+
+- **`CALL { … }` subquery executor** wired through planner +
+  dispatch. The inner subquery executes once per outer row; outer ×
+  inner rows are joined into the outer result set
+  (Neo4j-compatible CALL semantics). Standalone `CALL { MATCH …
+  RETURN … }` runs against a single empty driver row. Nested CALLs
+  flow through the same path.
+- **Write-bearing inner subqueries** (`CALL { CREATE … }` /
+  `MERGE` / `DELETE` / `SET`). The dispatch path picks
+  `execute_create_pattern_with_variables` for empty-scope and
+  `execute_create_with_context` for row-scoped CREATE, the latter
+  newly handling anonymous nodes and resolving property
+  expressions against the row scope.
+- **`CALL { … } IN TRANSACTIONS [OF N ROWS] [REPORT STATUS AS s]
+  [ON ERROR CONTINUE|BREAK|FAIL|RETRY n]`** end-to-end: per-batch
+  ON ERROR policy, per-batch status rows under the declared name,
+  retry-then-escalate. Multi-worker `IN CONCURRENT TRANSACTIONS`
+  is rejected with `ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED`
+  pending the V2 sharded MVCC branch.
+- **Cypher 25 scoped subqueries** — `CALL (var1, var2) { … }` and
+  the empty form `CALL () { … }`. The inner sees only the listed
+  outer variables; everything else is shadowed.
+- **`COLLECT { … }` subquery expression**. Folds the inner row
+  stream into a LIST: single-column → `LIST<T>`, multi-column →
+  `LIST<MAP>` keyed by column names, aggregating-inner →
+  single-element list, empty inner → empty list (NOT NULL).
+- 8 new compatibility scenarios in
+  `scripts/compatibility/compatibility-test-queries.cypher`
+  (SUB-1 through SUB-8). `docs/guides/BULK_INGEST.md` documents
+  the recommended ingest patterns.
+
 ## [1.15.0] — 2026-04-26
 
 Closes [hivellm/nexus#2][issue-2]. Server-side bug fix + JSON wire

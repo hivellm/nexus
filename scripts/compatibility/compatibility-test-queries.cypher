@@ -325,9 +325,64 @@ RETURN shortestPath((a)( (x:Person)-[:KNOWS]->() ){1,3}(b)) IS NOT NULL AS reach
 // Expected: true
 
 // ============================================================================
+// CALL { } SUBQUERIES + COLLECT { } SUBQUERIES — phase6 §10
+// (phase6_opencypher-subquery-transactions diff scenarios)
+// ============================================================================
+
+// SUB-1 read-only CALL { … } with aggregating inner
+MATCH (p:Person)
+CALL { MATCH (q:Person) RETURN count(q) AS total }
+RETURN p.name AS name, total ORDER BY name LIMIT 1;
+// Expected: one row, name = first Person alphabetically, total = Person count
+
+// SUB-2 standalone CALL { … } (empty driver)
+CALL { MATCH (p:Person) RETURN count(p) AS c }
+RETURN c;
+// Expected: a single row holding the Person count
+
+// SUB-3 nested CALL — read-only inner inside outer
+MATCH (p:Person)
+CALL {
+  CALL { MATCH (q:Person) RETURN count(q) AS inner_c }
+  RETURN inner_c AS c
+}
+RETURN p.name AS name, c ORDER BY name LIMIT 1;
+// Expected: one row, name = first Person alphabetically, c = Person count
+
+// SUB-4 IN TRANSACTIONS bulk-create with REPORT STATUS
+UNWIND range(1, 25) AS i
+CALL { WITH i CREATE (:SubTmp {i: i}) }
+IN TRANSACTIONS OF 10 ROWS REPORT STATUS AS s
+RETURN s.committed AS committed, s.rowsProcessed AS processed
+ORDER BY processed DESC;
+// Expected: 3 status rows: (true, 10), (true, 10), (true, 5)
+
+// SUB-5 ON ERROR CONTINUE — failure batches captured under REPORT STATUS
+UNWIND range(1, 6) AS i
+CALL { CALL nonexistent.proc() YIELD x }
+IN TRANSACTIONS OF 2 ROWS REPORT STATUS AS s
+ON ERROR CONTINUE
+RETURN s.committed AS committed;
+// Expected: 3 rows, every committed=false
+
+// SUB-6 COLLECT { … } single-column inner returns LIST<T>
+RETURN COLLECT { MATCH (p:Person) RETURN p.name } AS names;
+// Expected: a list of every Person.name
+
+// SUB-7 COLLECT { … } aggregating inner returns single-element list
+RETURN COLLECT { MATCH (p:Person) RETURN count(p) AS c } AS counts;
+// Expected: a single-element list containing the Person count
+
+// SUB-8 Cypher 25 `CALL (var) { … }` import-list form
+MATCH (p:Person)
+CALL (p) { MATCH (q:Person) RETURN count(q) AS c }
+RETURN p.name AS name, c ORDER BY name LIMIT 1;
+// Expected: one row, name = first Person alphabetically, c = Person count
+
+// ============================================================================
 // FIM DOS TESTES
 // ============================================================================
 
 RETURN '✓ Testes de compatibilidade completos!' AS status,
-       '42 novas funções implementadas + 11 cenários QPP' AS total_funcoes,
+       '42 novas funções implementadas + 11 cenários QPP + 8 cenários CALL/COLLECT subquery' AS total_funcoes,
        '100% compatibilidade Neo4j' AS compatibilidade;

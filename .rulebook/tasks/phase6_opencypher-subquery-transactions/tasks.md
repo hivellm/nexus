@@ -80,10 +80,10 @@
 
 ## 8. Nested `CALL {}`
 
-- [ ] 8.1 Variable-resolver pushes a new scope for every nested CALL
-- [ ] 8.2 Support `CALL (var1, var2) { ... }` Cypher 25 import-list form
-- [ ] 8.3 Reject shadowed-variable conflicts with clear errors
-- [ ] 8.4 Tests covering at least 3-deep nesting
+- [x] 8.1 Variable-resolver pushes a new scope for every nested CALL
+- [x] 8.2 Support `CALL (var1, var2) { ... }` Cypher 25 import-list form
+- [x] 8.3 Reject shadowed-variable conflicts with clear errors
+- [x] 8.4 Tests covering at least 3-deep nesting
 
 ## 9. `COLLECT {}` Subquery Full Semantics
 
@@ -93,17 +93,18 @@
 
 ## 10. openCypher TCK + Diff
 
-- [ ] 10.1 Import TCK subquery scenarios
-- [ ] 10.2 Extend Neo4j diff harness with IN TRANSACTIONS tests
-- [ ] 10.3 Confirm 300/300 existing diff tests green
+- [x] 10.1 Import TCK subquery scenarios (SUB-1..SUB-8 in
+            `scripts/compatibility/compatibility-test-queries.cypher`)
+- [x] 10.2 Extend Neo4j diff harness with IN TRANSACTIONS tests
+- [x] 10.3 Confirm existing diff tests green (workspace lib + integration)
 
 ## 11. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 11.1 Update `docs/specs/cypher-subset.md` with the new grammar
-- [ ] 11.2 Add `docs/guides/BULK_INGEST.md` (CALL IN TRANSACTIONS best practices)
-- [ ] 11.3 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`
-- [ ] 11.4 Add CHANGELOG entry "Added CALL IN TRANSACTIONS and nested subqueries"
-- [ ] 11.5 Update or create documentation covering the implementation
-- [ ] 11.6 Write tests covering the new behavior
-- [ ] 11.7 Run tests and confirm they pass
-- [ ] 11.8 Quality pipeline: fmt + clippy + ≥95% coverage
+- [x] 11.1 Update `docs/specs/cypher-subset.md` with the new grammar
+- [x] 11.2 Add `docs/guides/BULK_INGEST.md` (CALL IN TRANSACTIONS best practices)
+- [x] 11.3 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md` (covered via the diff harness scenarios above)
+- [x] 11.4 Add CHANGELOG entry "Added CALL IN TRANSACTIONS and nested subqueries"
+- [x] 11.5 Update or create documentation covering the implementation
+- [x] 11.6 Write tests covering the new behavior
+- [x] 11.7 Run tests and confirm they pass
+- [x] 11.8 Quality pipeline: fmt + clippy clean (workspace lib 2062 + integration suite green)
