@@ -188,14 +188,17 @@ regression because `QuantifiedExpand` is not yet implemented.
 - **Slice 2** (single-relationship body via dedicated
   `QuantifiedExpand` operator, named/labelled inner nodes,
   inline relationship-property filters, list-promoted bindings,
-  zero-length case, depth cap) — shipped this turn. Items
-  2.3–2.6, 3.1–3.6, 4.1, 7.5 all flip to checked. The textbook
-  list-promoted query
-  `MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN x`
-  now executes and `x` is a `LIST<NODE>` in the outer scope.
-- **Slice 3** (multi-hop bodies, inner `WHERE` push-down, cost-model
-  refinement, `shortestPath(qpp)` integration, TCK, perf bench)
-  remains open. Items 4.2–4.4, 5.1–5.4, 8.x, 9.x stay
-  `[ ]` and the planner still surfaces a clean
-  `ERR_QPP_NOT_IMPLEMENTED` for multi-hop bodies until the
-  follow-up slice extends `build_quantified_expand_operator`.
+  zero-length case, depth cap) — shipped in 209b109a. Items
+  2.3–2.6, 3.1–3.6, 4.1, 7.5 all flip to checked.
+- **Slice 3a** (multi-hop bodies) — shipped this turn. The
+  `Operator::QuantifiedExpand` variant carries
+  `hops: Vec<QppHopSpec>` + `inner_nodes: Vec<QppNodeSpec>`
+  instead of the slice-2 single-relationship fields, and
+  `qpp_walk_body` recursively walks every hop per iteration.
+  `MATCH (a)( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}(b) RETURN x, y, z`
+  now executes and every named inner node (regardless of body
+  position) list-promotes correctly.
+- **Slice 3b** (inner `WHERE` push-down, cost-model refinement
+  beyond the flat 600.0, `shortestPath(qpp)` over named-body
+  shapes, TCK, perf bench) remains open. Items 4.2–4.4, 5.1–5.4,
+  8.x, 9.x stay `[ ]`.

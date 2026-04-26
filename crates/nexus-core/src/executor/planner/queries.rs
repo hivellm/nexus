@@ -3434,46 +3434,57 @@ fn build_quantified_expand_operator(
     tmp_var_counter: &mut usize,
     catalog: &Catalog,
 ) -> Result<Operator> {
-    // Body shape: exactly Node, Relationship, Node. Slice-2 widens
-    // to multi-hop in a follow-up; until then anything else surfaces
-    // an explicit error pointing at the task.
-    if group.inner.len() != 3 {
-        return Err(Error::CypherExecution(
-            "ERR_QPP_NOT_IMPLEMENTED: multi-hop QPP bodies are not \
-             yet executable — slice 2 of \
-             phase6_opencypher-quantified-path-patterns lands a \
-             single-relationship operator first; a follow-up slice \
-             extends it to multi-hop bodies"
-                .to_string(),
-        ));
-    }
-    let (start_node, rel, end_node) = match (&group.inner[0], &group.inner[1], &group.inner[2]) {
-        (PatternElement::Node(n0), PatternElement::Relationship(r), PatternElement::Node(n2)) => {
-            (n0, r, n2)
-        }
-        _ => {
-            return Err(Error::CypherExecution(
-                "ERR_QPP_NOT_IMPLEMENTED: QPP body must be Node, \
-                 Relationship, Node — slice 2 does not yet handle \
-                 alternative inner shapes"
-                    .to_string(),
-            ));
-        }
-    };
-
-    if rel.quantifier.is_some() {
-        return Err(Error::CypherExecution(
-            "ERR_QPP_NOT_IMPLEMENTED: stacking a relationship \
-             quantifier inside a QPP body is not yet supported"
-                .to_string(),
-        ));
+    // Body shape: alternating Node, Relationship, Node, Relationship,
+    // …, Node. Length must be odd and ≥ 3. The outer `MATCH (a)( body
+    // ){m,n}(b)` always wraps `body` in the parentheses; the inner
+    // node patterns are the boundary nodes between hops.
+    if group.inner.len() < 3 || group.inner.len() % 2 == 0 {
+        return Err(Error::CypherExecution(format!(
+            "ERR_QPP_NOT_IMPLEMENTED: QPP body must be Node, \
+             Relationship, Node, … (alternating, odd length ≥ 3); \
+             got {} elements",
+            group.inner.len(),
+        )));
     }
 
-    let direction = match rel.direction {
-        RelationshipDirection::Outgoing => Direction::Outgoing,
-        RelationshipDirection::Incoming => Direction::Incoming,
-        RelationshipDirection::Both => Direction::Both,
-    };
+    // Walk the body splitting node specs and hop specs apart.
+    let mut node_specs: Vec<NodePattern> = Vec::new();
+    let mut hop_patterns: Vec<&RelationshipPattern> = Vec::new();
+    for (i, element) in group.inner.iter().enumerate() {
+        if i % 2 == 0 {
+            match element {
+                PatternElement::Node(n) => node_specs.push(n.clone()),
+                _ => {
+                    return Err(Error::CypherExecution(
+                        "ERR_QPP_NOT_IMPLEMENTED: QPP body even-index \
+                         elements must be node patterns"
+                            .to_string(),
+                    ));
+                }
+            }
+        } else {
+            match element {
+                PatternElement::Relationship(r) => {
+                    if r.quantifier.is_some() {
+                        return Err(Error::CypherExecution(
+                            "ERR_QPP_NOT_IMPLEMENTED: stacking a \
+                             relationship quantifier inside a QPP body \
+                             is not yet supported"
+                                .to_string(),
+                        ));
+                    }
+                    hop_patterns.push(r);
+                }
+                _ => {
+                    return Err(Error::CypherExecution(
+                        "ERR_QPP_NOT_IMPLEMENTED: QPP body odd-index \
+                         elements must be relationship patterns"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+    }
 
     // Resolve the source variable from the pattern context. The
     // surrounding loop fills `prev_node_var` from the previous
@@ -3510,19 +3521,40 @@ fn build_quantified_expand_operator(
         v
     };
 
-    // Resolve relationship type ids via the catalog. Match the
-    // legacy expand path: try `get_type_id` first, fall back to
-    // `get_or_create_type` so types referenced before any data
-    // creates them still resolve.
-    let inner_rel_type_ids: Vec<u32> = rel
-        .types
+    let hops: Vec<crate::executor::types::QppHopSpec> = hop_patterns
         .iter()
-        .filter_map(|name| {
-            catalog
-                .get_type_id(name)
-                .ok()
-                .flatten()
-                .or_else(|| catalog.get_or_create_type(name).ok())
+        .map(|rel| {
+            let direction = match rel.direction {
+                RelationshipDirection::Outgoing => Direction::Outgoing,
+                RelationshipDirection::Incoming => Direction::Incoming,
+                RelationshipDirection::Both => Direction::Both,
+            };
+            let type_ids: Vec<u32> = rel
+                .types
+                .iter()
+                .filter_map(|name| {
+                    catalog
+                        .get_type_id(name)
+                        .ok()
+                        .flatten()
+                        .or_else(|| catalog.get_or_create_type(name).ok())
+                })
+                .collect();
+            crate::executor::types::QppHopSpec {
+                type_ids,
+                direction,
+                var: rel.variable.clone(),
+                properties: rel.properties.clone(),
+            }
+        })
+        .collect();
+
+    let inner_nodes: Vec<crate::executor::types::QppNodeSpec> = node_specs
+        .iter()
+        .map(|n| crate::executor::types::QppNodeSpec {
+            var: n.variable.clone(),
+            labels: n.labels.clone(),
+            properties: n.properties.clone(),
         })
         .collect();
 
@@ -3535,16 +3567,8 @@ fn build_quantified_expand_operator(
     Ok(Operator::QuantifiedExpand {
         source_var,
         target_var,
-        inner_rel_type_ids,
-        inner_rel_direction: direction,
-        inner_rel_var: rel.variable.clone(),
-        inner_rel_properties: rel.properties.clone(),
-        inner_start_node_var: node_var_or_none(start_node),
-        inner_start_node_labels: start_node.labels.clone(),
-        inner_start_node_properties: start_node.properties.clone(),
-        inner_end_node_var: node_var_or_none(end_node),
-        inner_end_node_labels: end_node.labels.clone(),
-        inner_end_node_properties: end_node.properties.clone(),
+        hops,
+        inner_nodes,
         min_length,
         max_length,
         optional: is_optional,
@@ -3563,13 +3587,6 @@ fn quantifier_to_bounds(q: &RelationshipQuantifier) -> (usize, usize) {
         RelationshipQuantifier::Exact(n) => (*n, *n),
         RelationshipQuantifier::Range(min, max) => (*min, *max),
     }
-}
-
-/// Pull the user-facing variable off a node pattern, returning
-/// `None` when the node is anonymous. Inner-boundary anonymous
-/// nodes don't list-promote anything; named nodes do.
-fn node_var_or_none(node: &NodePattern) -> Option<String> {
-    node.variable.clone()
 }
 
 #[allow(dead_code)]

@@ -800,27 +800,64 @@ fn test_qpp_named_labelled_inner_node_executes() {
     }
 }
 
-/// QPP slice-2 still defers multi-hop bodies. When the body has
-/// more than one relationship (`(x)-[:A]->()-[:B]->()`) the
-/// planner surfaces a clean `ERR_QPP_NOT_IMPLEMENTED` rather than
-/// silently producing wrong rows.
+/// QPP slice-3: multi-hop bodies execute via the dedicated
+/// operator. `( (x)-[:KNOWS]->(y)-[:KNOWS]->(z) ){1,3}` walks two
+/// relationships per iteration and list-promotes every named
+/// inner node + relationship across iterations.
 #[test]
-fn test_qpp_multi_hop_body_returns_clean_error() {
+fn test_qpp_multi_hop_body_executes() {
     let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
-    let query = Query {
-        cypher: "MATCH (a:Person)( ()-[:KNOWS]->()-[:KNOWS]->() ){1,3}(b:Person) RETURN a.name"
+    // Build a 3-node chain so a 2-hop body has at least one match:
+    //   Alice -> Bob (from setup), Bob -> Charlie (created here).
+    let create_chain = Query {
+        cypher: "MATCH (b:Person {name: 'Bob'}) \
+                 CREATE (c:Person {name: 'Charlie'}), (b)-[:KNOWS]->(c)"
             .to_string(),
         params: HashMap::new(),
     };
-    let err = executor
+    executor.execute(&create_chain).unwrap();
+
+    let query = Query {
+        cypher: "MATCH (a:Person {name: 'Alice'})\
+                 ( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}\
+                 (b:Person) \
+                 RETURN a.name, x, y, z, b.name"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    let result = executor
         .execute(&query)
-        .expect_err("multi-hop QPP body must surface an error in slice 2");
-    assert!(
-        err.to_string().contains("ERR_QPP_NOT_IMPLEMENTED"),
-        "expected ERR_QPP_NOT_IMPLEMENTED for multi-hop body, got: {err}"
+        .expect("multi-hop QPP body must execute via the slice-3 operator");
+
+    assert_eq!(
+        result.columns,
+        vec![
+            "a.name".to_string(),
+            "x".to_string(),
+            "y".to_string(),
+            "z".to_string(),
+            "b.name".to_string(),
+        ],
+        "slice-3 must return every list-promoted inner var",
     );
+
+    // Alice -> Bob -> Charlie satisfies one full body iteration with
+    // x = [Alice], y = [Bob], z = [Charlie].
+    assert!(
+        !result.rows.is_empty(),
+        "expected at least Alice -> Bob -> Charlie path"
+    );
+    for row in &result.rows {
+        for slot in 1..=3 {
+            let v = row.values.get(slot).expect("missing list-promoted column");
+            assert!(
+                v.is_array(),
+                "list-promoted variable at column {slot} must be a JSON array, got {v:?}"
+            );
+        }
+    }
 }
 
 /// QPP slice-1 parity: every direction the legacy `*m..n` shorthand

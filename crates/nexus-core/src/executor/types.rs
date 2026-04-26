@@ -274,55 +274,42 @@ pub enum Operator {
         /// Quantifier specifying path length constraints
         quantifier: parser::RelationshipQuantifier,
     },
-    /// Cypher 25 / GQL Quantified Path Pattern with a single-relationship
-    /// body. Drives BFS over a parenthesised fragment
-    /// `(node)-[rel]->(node)` between `source_var` and `target_var`,
-    /// emitting one row per accepted iteration count `k` in
-    /// `[min_length, max_length]`. Inner boundary nodes and the inner
-    /// relationship are list-promoted to `LIST<NODE>` /
-    /// `LIST<RELATIONSHIP>` in the outer scope per the GQL type
-    /// rules.
+    /// Cypher 25 / GQL Quantified Path Pattern with an arbitrary-arity
+    /// body. Drives BFS over the parenthesised fragment between
+    /// `source_var` and `target_var`, emitting one row per accepted
+    /// iteration count `k` in `[min_length, max_length]`. Each
+    /// iteration walks every hop in `hops` left-to-right, in order,
+    /// applying the per-hop relationship filter and the per-position
+    /// node filter from `inner_nodes`. Inner boundary nodes and
+    /// inner relationships are list-promoted to `LIST<NODE>` /
+    /// `LIST<RELATIONSHIP>` per the GQL type rules — each list
+    /// holds one entry per **iteration** (not per hop), keeping the
+    /// `x[k]` indexing semantics regardless of body arity.
     ///
-    /// This is the slice-2 entry point for QPP shapes that the
-    /// slice-1 lowering rejects (named or labelled inner nodes,
-    /// relationship-property filters that cannot live on the legacy
-    /// `*m..n` form). Bodies with more than one inner relationship
-    /// or with a `WHERE` clause are still planned-side rejected with
-    /// `ERR_QPP_NOT_IMPLEMENTED` until the slice-2 fanout is widened.
+    /// Slice 1 lowers single-relationship anonymous-body shapes to
+    /// the legacy `VariableLengthPath`; this operator picks up
+    /// everything else (named/labelled inner nodes, multi-hop
+    /// bodies, relationship-property filters, …).
     QuantifiedExpand {
         /// Outer variable holding the source node before the QPP body.
         source_var: String,
         /// Outer variable holding the target node after the QPP body.
         target_var: String,
-        /// Allowed relationship type IDs (empty = all types).
-        inner_rel_type_ids: Vec<u32>,
-        /// Direction of the inner relationship.
-        inner_rel_direction: Direction,
-        /// Optional relationship variable, list-promoted to
-        /// `LIST<RELATIONSHIP>` on emission.
-        inner_rel_var: Option<String>,
-        /// Optional property-equality filter on the inner relationship.
-        inner_rel_properties: Option<parser::PropertyMap>,
-        /// Optional inner-start-node variable, list-promoted to
-        /// `LIST<NODE>` (one node per iteration). The start node of
-        /// iteration `k` is the node we step *from* on hop `k`.
-        inner_start_node_var: Option<String>,
-        /// Label AND-filter applied to every inner-start node.
-        inner_start_node_labels: Vec<String>,
-        /// Property-equality filter applied to every inner-start node.
-        inner_start_node_properties: Option<parser::PropertyMap>,
-        /// Optional inner-end-node variable, list-promoted to
-        /// `LIST<NODE>`. The end node of iteration `k` is the node
-        /// we land on after hop `k`.
-        inner_end_node_var: Option<String>,
-        /// Label AND-filter applied to every inner-end node.
-        inner_end_node_labels: Vec<String>,
-        /// Property-equality filter applied to every inner-end node.
-        inner_end_node_properties: Option<parser::PropertyMap>,
+        /// Sequence of inner relationship hops. `hops.len()` is the
+        /// number of relationships per **iteration**; one full
+        /// iteration walks every hop in order. Slice-2 single-rel
+        /// bodies have `hops.len() == 1`.
+        hops: Vec<QppHopSpec>,
+        /// Inner boundary node specifications. Invariant:
+        /// `inner_nodes.len() == hops.len() + 1`. `inner_nodes[i]`
+        /// constrains the node *between* `hops[i-1]` and `hops[i]`
+        /// (for `i == 0` it is the start of every iteration; for
+        /// `i == hops.len()` it is the end).
+        inner_nodes: Vec<QppNodeSpec>,
         /// Lower bound on iteration count (inclusive).
         min_length: usize,
-        /// Upper bound on iteration count (inclusive). `usize::MAX` for
-        /// unbounded — the operator caps internally at
+        /// Upper bound on iteration count (inclusive). `usize::MAX`
+        /// for unbounded — the operator caps internally at
         /// `MAX_QPP_DEPTH` to keep BFS frames tractable.
         max_length: usize,
         /// Optional flag carried through from the surrounding
@@ -401,6 +388,41 @@ pub struct ProjectionItem {
     pub expression: parser::Expression,
     /// Alias to use in the result set
     pub alias: String,
+}
+
+/// One relationship hop inside a Quantified Path Pattern body.
+///
+/// A QPP body of arity `n` carries `n` of these spliced together
+/// with `n + 1` `QppNodeSpec` entries describing the boundary
+/// nodes between them. See `Operator::QuantifiedExpand` for the
+/// invariants on the surrounding `hops` / `inner_nodes` slices.
+#[derive(Debug, Clone)]
+pub struct QppHopSpec {
+    /// Allowed relationship type IDs (empty = all types).
+    pub type_ids: Vec<u32>,
+    /// Direction of this hop (independent of other hops in the body).
+    pub direction: Direction,
+    /// Optional relationship variable. List-promoted to
+    /// `LIST<RELATIONSHIP>` on emission, ordered by iteration.
+    pub var: Option<String>,
+    /// Optional property-equality filter applied to this hop's
+    /// relationship at runtime.
+    pub properties: Option<parser::PropertyMap>,
+}
+
+/// One inner boundary-node specification inside a Quantified Path
+/// Pattern body. The slice-2/3 operator applies the label and
+/// property filters per accepted iteration; declared variables are
+/// list-promoted to `LIST<NODE>` in the outer scope.
+#[derive(Debug, Clone)]
+pub struct QppNodeSpec {
+    /// Optional inner-node variable. List-promoted to `LIST<NODE>`
+    /// on emission.
+    pub var: Option<String>,
+    /// Label AND-filter applied per accepted iteration.
+    pub labels: Vec<String>,
+    /// Property-equality filter applied per accepted iteration.
+    pub properties: Option<parser::PropertyMap>,
 }
 
 /// Relationship direction
