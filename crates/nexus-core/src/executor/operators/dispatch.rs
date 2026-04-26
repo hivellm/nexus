@@ -159,13 +159,62 @@ impl Executor {
                 self.execute_union(context, left, right, *distinct)?;
             }
             Operator::Create { pattern } => {
-                // Slice-1 of phase6_opencypher-subquery-transactions
-                // routes CREATE through dispatch so nested subqueries
-                // (e.g. `CALL { … CREATE … }`) execute the same code
-                // path as the top-level `execute()` loop. Outer-level
-                // CREATE still runs through `execute()` directly; this
-                // arm services the nested-subquery path.
-                self.execute_create_with_context(context, pattern)?;
+                // phase6_opencypher-subquery-transactions — CREATE
+                // reachable through the dispatch path comes from
+                // nested subqueries (e.g. `CALL { … CREATE … }`).
+                // Pick the right backend:
+                //
+                // * a context that already carries node references
+                //   (`_nexus_id` on any variable, or any data row) →
+                //   `execute_create_with_context` so the CREATE
+                //   joins those existing nodes (MATCH+CREATE shape);
+                // * an empty context (standalone CREATE inside a
+                //   subquery driven by a single empty driving row) →
+                //   `execute_create_pattern_with_variables`, which
+                //   handles anonymous nodes and writes them out
+                //   directly. The empty-context path is what the
+                //   top-level `execute()` loop uses for standalone
+                //   `CREATE …` queries (mod.rs:232) — we just
+                //   re-use it from inside the operator dispatcher.
+                // Use the row-aware `execute_create_with_context`
+                // whenever the outer context carries ANY scope state
+                // — variable bindings, populated rows, or both — so
+                // CREATE expressions like `{x: i}` resolve `i`
+                // against the current row. The standalone
+                // `execute_create_pattern_with_variables` path is
+                // only safe for the empty-driver case (e.g. a
+                // standalone `CALL { CREATE (:T) }` with no preceding
+                // clause), where there is no row scope to resolve.
+                let context_has_scope = !context.variables.is_empty()
+                    || context.result_set.rows.iter().any(|r| !r.values.is_empty());
+                if context_has_scope {
+                    self.execute_create_with_context(context, pattern)?;
+                } else {
+                    let (created_nodes, created_rels) =
+                        self.execute_create_pattern_with_variables(pattern)?;
+                    // Surface created entities into the inner ctx so a
+                    // following RETURN clause can reference them.
+                    let mut columns: Vec<String> = Vec::new();
+                    let mut row_values: Vec<Value> = Vec::new();
+                    for (var, node_id) in &created_nodes {
+                        if let Ok(v) = self.read_node_as_value(*node_id) {
+                            context.set_variable(var, v.clone());
+                            columns.push(var.clone());
+                            row_values.push(v);
+                        }
+                    }
+                    for (var, rel_info) in &created_rels {
+                        if let Ok(v) = self.read_relationship_as_value(rel_info) {
+                            context.set_variable(var, v.clone());
+                            columns.push(var.clone());
+                            row_values.push(v);
+                        }
+                    }
+                    if !columns.is_empty() {
+                        context.result_set.columns = columns;
+                        context.result_set.rows = vec![Row { values: row_values }];
+                    }
+                }
             }
             Operator::Delete { variables } => {
                 self.execute_delete(context, variables, false)?;

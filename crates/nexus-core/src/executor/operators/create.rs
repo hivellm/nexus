@@ -480,6 +480,33 @@ impl Executor {
         Ok(())
     }
 
+    /// Resolve a `CREATE` property expression against the current
+    /// row (`row`) using the row-aware projection evaluator when the
+    /// expression references a variable, and falling back to the
+    /// static literal-only [`Self::expression_to_json_value`] for
+    /// pure-literal expressions.
+    ///
+    /// Returns the resolved value, or the underlying evaluation error
+    /// if neither path can produce one. Callers that want the legacy
+    /// "skip failing keys silently" behaviour can `.ok()` the result.
+    pub(in crate::executor) fn resolve_property_expr_for_create(
+        &self,
+        expr: &parser::Expression,
+        row: &std::collections::HashMap<String, Value>,
+    ) -> Result<Value> {
+        // Static-literal fast path. Keeps the hot CREATE-with-literal
+        // case as cheap as before this lift.
+        if let Ok(v) = self.expression_to_json_value(expr) {
+            return Ok(v);
+        }
+        // Row-aware path — resolves Variable / PropertyAccess / etc.
+        // against the row scope. Build a temporary inner ctx because
+        // the projection evaluator wants `&ExecutionContext`.
+        let inner_ctx =
+            super::super::context::ExecutionContext::new(std::collections::HashMap::new(), None);
+        self.evaluate_projection_expression(row, &inner_ctx, expr)
+    }
+
     /// Convert expression to JSON value
     pub(in crate::executor) fn expression_to_json_value(
         &self,
@@ -813,53 +840,79 @@ impl Executor {
                         ));
                     }
                     parser::PatternElement::Node(node) => {
-                        if let Some(var) = &node.variable {
-                            if !node_ids.contains_key(var) {
-                                // Create new node (not from MATCH)
-                                let label_ids: Vec<u32> = node
-                                    .labels
-                                    .iter()
-                                    .filter_map(|l| self.catalog().get_or_create_label(l).ok())
-                                    .collect();
+                        // Skip the create when the variable is already
+                        // bound by an upstream MATCH (existing-node
+                        // reference). Otherwise create a fresh node —
+                        // for both named and anonymous fresh shapes.
+                        // The anonymous arm is exercised by CREATE
+                        // patterns inside `CALL { … }` subqueries
+                        // (phase6_opencypher-subquery-transactions);
+                        // before that lift the dispatch path silently
+                        // dropped them on the floor.
+                        let already_bound = node
+                            .variable
+                            .as_ref()
+                            .is_some_and(|v| node_ids.contains_key(v));
+                        if !already_bound {
+                            // Resolve labels through the catalog,
+                            // converting any failure into a soft skip
+                            // (matches the legacy filter_map that this
+                            // arm used to do per node).
+                            let label_ids: Vec<u32> = node
+                                .labels
+                                .iter()
+                                .filter_map(|l| self.catalog().get_or_create_label(l).ok())
+                                .collect();
 
-                                let mut label_bits = 0u64;
-                                for label_id in &label_ids {
-                                    if *label_id < 64 {
-                                        label_bits |= 1u64 << label_id;
-                                    }
+                            let mut label_bits = 0u64;
+                            for label_id in &label_ids {
+                                if *label_id < 64 {
+                                    label_bits |= 1u64 << label_id;
                                 }
-
-                                // Extract properties
-                                let properties = if let Some(props_map) = &node.properties {
-                                    JsonValue::Object(
-                                        props_map
-                                            .properties
-                                            .iter()
-                                            .filter_map(|(k, v)| {
-                                                self.expression_to_json_value(v)
-                                                    .ok()
-                                                    .map(|val| (k.clone(), val))
-                                            })
-                                            .collect(),
-                                    )
-                                } else {
-                                    JsonValue::Object(serde_json::Map::new())
-                                };
-
-                                // Create the node
-                                let node_id = self.store_mut().create_node_with_label_bits(
-                                    &mut tx,
-                                    label_bits,
-                                    properties.clone(),
-                                )?;
-                                self.fts_autopopulate_node(node_id, &label_ids, &properties);
-                                if !label_ids.is_empty() {
-                                    created_nodes_with_labels.push((node_id, label_ids.clone()));
-                                }
-                                node_ids.insert(var.clone(), node_id);
                             }
 
-                            // Track this node as the last one for relationship creation
+                            // Resolve property expressions against the
+                            // current row scope (via the row-aware
+                            // `expression_to_json_value_with_row` if
+                            // it's available, otherwise the static
+                            // `expression_to_json_value`). For inputs
+                            // like `CREATE (:T {x: i})` driven by an
+                            // `UNWIND … AS i` outer, the row-aware
+                            // resolver is what binds `i` to the
+                            // current row's value.
+                            let properties = if let Some(props_map) = &node.properties {
+                                let mut resolved =
+                                    serde_json::Map::with_capacity(props_map.properties.len());
+                                for (k, v) in &props_map.properties {
+                                    let val = self.resolve_property_expr_for_create(v, row)?;
+                                    resolved.insert(k.clone(), val);
+                                }
+                                JsonValue::Object(resolved)
+                            } else {
+                                JsonValue::Object(serde_json::Map::new())
+                            };
+
+                            let node_id = self.store_mut().create_node_with_label_bits(
+                                &mut tx,
+                                label_bits,
+                                properties.clone(),
+                            )?;
+                            self.fts_autopopulate_node(node_id, &label_ids, &properties);
+                            if !label_ids.is_empty() {
+                                created_nodes_with_labels.push((node_id, label_ids.clone()));
+                            }
+                            if let Some(var) = &node.variable {
+                                node_ids.insert(var.clone(), node_id);
+                            }
+                        }
+
+                        // Track this node as the last one for
+                        // relationship creation. Anonymous nodes can
+                        // still anchor a relationship — the rel arm
+                        // looks up the source via `last_node_var`
+                        // first and falls back to the most recently
+                        // created node id when no variable is bound.
+                        if let Some(var) = &node.variable {
                             last_node_var = Some(var.clone());
                         }
                     }

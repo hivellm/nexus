@@ -250,6 +250,23 @@ impl Executor {
             })
         });
 
+        // Check if any rows carry a non-node, non-relationship MAP
+        // (e.g. the `s` status map emitted by `CALL { … } IN
+        // TRANSACTIONS REPORT STATUS AS s`, or general user-built
+        // maps). The legacy dedup keys those rows by `_nexus_id` —
+        // which the status maps don't carry — so without this guard
+        // multiple status rows collapse to one. See
+        // phase6_opencypher-subquery-transactions §7 for the spec.
+        let has_synthetic_maps = rows.iter().any(|row_map| {
+            row_map.values().any(|val| {
+                if let Value::Object(obj) = val {
+                    !obj.contains_key("_nexus_id") && !obj.contains_key("type")
+                } else {
+                    false
+                }
+            })
+        });
+
         // Check if rows have primitive values (non-object, non-array) that differ
         // This happens after UNWIND creates multiple rows with different values
         let has_varying_primitives = if rows.len() > 1 {
@@ -280,7 +297,7 @@ impl Executor {
             false
         };
 
-        let unique_rows = if has_relationships || has_varying_primitives {
+        let unique_rows = if has_relationships || has_varying_primitives || has_synthetic_maps {
             // CRITICAL: Don't deduplicate when:
             // 1. Rows contain relationships (same node with different relationships)
             // 2. Rows have different primitive values (e.g., from UNWIND)

@@ -109,58 +109,163 @@ fn call_subquery_multi_column_inner_returns_list_of_pairs() {
 }
 
 #[test]
-fn call_subquery_in_transactions_errors_until_slice_two() {
-    // Slice-1 contract: parser accepts `IN TRANSACTIONS` and the
-    // executor refuses it with a typed error so users do not silently
-    // get non-transactional semantics.
+fn call_subquery_in_transactions_runs_unwind_create_to_completion() {
     let (mut executor, _ctx) = create_isolated_test_executor();
-    let outcome = try_run(
+    run(
         &mut executor,
-        "CALL { MATCH (p:Person) RETURN p.name AS n } \
+        "UNWIND range(1, 100) AS i \
+         CALL { WITH i CREATE (:Tmp {i: i}) } \
          IN TRANSACTIONS OF 10 ROWS \
-         RETURN n",
+         RETURN count(*) AS c",
     );
-    let err = outcome.expect_err("IN TRANSACTIONS must error in slice-1");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("ERR_CALL_IN_TX_PENDING_SLICE2"),
-        "expected slice-2 sentinel in error: {msg}"
-    );
+    let counts = run(&mut executor, "MATCH (t:Tmp) RETURN count(t) AS c");
+    assert_eq!(counts.rows[0].values[0], serde_json::json!(100));
 }
 
 #[test]
-fn call_subquery_write_inner_errors_until_slice_two() {
-    // Slice-1 contract: write-bearing inner subqueries (CREATE /
-    // MERGE / DELETE / SET) require the re-entrant executor refactor;
-    // until then they must surface a typed error rather than corrupt
-    // catalog state.
+fn call_subquery_in_transactions_report_status_emits_one_row_per_batch() {
     let (mut executor, _ctx) = create_isolated_test_executor();
-    let outcome = try_run(&mut executor, "CALL { CREATE (:Audit {ts: 'now'}) }");
-    let err = outcome.expect_err("CREATE inside CALL{} must error in slice-1");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("ERR_CALL_SUBQUERY_WRITE_INNER_UNSUPPORTED"),
-        "expected write-inner sentinel in error: {msg}"
+    let rs = run(
+        &mut executor,
+        "UNWIND range(1, 25) AS i \
+         CALL { WITH i CREATE (:Tmp {i: i}) } \
+         IN TRANSACTIONS OF 10 ROWS REPORT STATUS AS s \
+         RETURN s.committed AS committed, s.rowsProcessed AS rows",
     );
+    assert_eq!(rs.rows.len(), 3, "three batches → three status rows");
+    let row_counts: Vec<_> = rs.rows.iter().map(|r| r.values[1].clone()).collect();
+    assert_eq!(row_counts[0], serde_json::json!(10));
+    assert_eq!(row_counts[1], serde_json::json!(10));
+    assert_eq!(row_counts[2], serde_json::json!(5));
+    for r in &rs.rows {
+        assert_eq!(r.values[0], serde_json::json!(true));
+    }
 }
 
 #[test]
-fn call_subquery_on_error_clause_errors_without_in_transactions() {
-    // The §2.3-style validation rejects ON ERROR / REPORT STATUS
-    // outside `IN TRANSACTIONS`. Slice-1's executor surfaces the
-    // PENDING_SLICE2 sentinel for any of those non-default settings.
+fn call_subquery_in_transactions_default_fail_propagates_inner_error() {
+    // Inner CALL invokes a procedure that doesn't exist — the
+    // executor surfaces "Procedure 'nonexistent.proc' not found",
+    // which bubbles through the default ON ERROR FAIL policy.
     let (mut executor, _ctx) = create_isolated_test_executor();
     let outcome = try_run(
         &mut executor,
-        "CALL { MATCH (p:Person) RETURN p.name AS n } \
-         IN TRANSACTIONS OF 5 ROWS ON ERROR CONTINUE \
-         RETURN n",
+        "UNWIND range(1, 5) AS i \
+         CALL { CALL nonexistent.proc() YIELD x RETURN x } \
+         IN TRANSACTIONS OF 2 ROWS \
+         RETURN count(*) AS c",
     );
-    let err = outcome.expect_err("ON ERROR with IN TRANSACTIONS must error in slice-1");
     assert!(
-        err.to_string().contains("ERR_CALL_IN_TX_PENDING_SLICE2"),
-        "got: {err}"
+        outcome.is_err(),
+        "default ON ERROR FAIL must surface inner failures"
     );
+}
+
+#[test]
+fn call_subquery_in_transactions_continue_records_failed_batches() {
+    // ON ERROR CONTINUE: each batch fails identically (procedure
+    // not found). Three batches of 2 rows → three status rows
+    // marked `committed = false`.
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    let rs = run(
+        &mut executor,
+        "UNWIND range(1, 6) AS i \
+         CALL { CALL nonexistent.proc() YIELD x } \
+         IN TRANSACTIONS OF 2 ROWS REPORT STATUS AS s \
+         ON ERROR CONTINUE \
+         RETURN s.committed AS committed, s.err AS err",
+    );
+    assert_eq!(rs.rows.len(), 3);
+    for r in &rs.rows {
+        assert_eq!(r.values[0], serde_json::json!(false));
+        assert!(matches!(r.values[1], serde_json::Value::String(_)));
+    }
+}
+
+#[test]
+fn call_subquery_in_transactions_break_stops_on_first_failure() {
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    let rs = run(
+        &mut executor,
+        "UNWIND range(1, 6) AS i \
+         CALL { CALL nonexistent.proc() YIELD x } \
+         IN TRANSACTIONS OF 2 ROWS REPORT STATUS AS s \
+         ON ERROR BREAK \
+         RETURN s.committed AS committed",
+    );
+    assert_eq!(rs.rows.len(), 1, "BREAK halts after the first failed batch");
+    assert_eq!(rs.rows[0].values[0], serde_json::json!(false));
+}
+
+#[test]
+fn call_subquery_in_transactions_retry_escalates_to_fail_when_exhausted() {
+    // Deterministic failure (procedure not found) → retries cannot
+    // succeed.
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    let outcome = try_run(
+        &mut executor,
+        "UNWIND range(1, 4) AS i \
+         CALL { CALL nonexistent.proc() YIELD x RETURN x } \
+         IN TRANSACTIONS OF 2 ROWS \
+         ON ERROR RETRY 2 \
+         RETURN count(*) AS c",
+    );
+    assert!(
+        outcome.is_err(),
+        "RETRY n with deterministic failure must escalate to FAIL after n attempts"
+    );
+}
+
+#[test]
+fn call_subquery_write_inner_persists_anonymous_create() {
+    // CALL { CREATE (:Audit) } with no preceding outer clause runs the
+    // dispatch path against an empty driver row; the dispatch arm
+    // detects the empty-scope case and routes to
+    // `execute_create_pattern_with_variables`, which handles
+    // anonymous nodes correctly (named-variable CREATE goes the same
+    // path).
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    run(&mut executor, "CALL { CREATE (:Audit {ts: 'now'}) }");
+    let counts = run(&mut executor, "MATCH (a:Audit) RETURN count(a) AS c");
+    assert_eq!(counts.rows[0].values[0], serde_json::json!(1));
+}
+
+#[test]
+fn call_subquery_write_inner_persists_unwind_driven_create() {
+    // UNWIND-driven inner CREATE — the dispatch arm sees a populated
+    // row scope (the outer's `i` projection) and routes to
+    // `execute_create_with_context`, which now handles anonymous
+    // nodes AND resolves property expressions like `{x: i}` against
+    // the current row via the row-aware projection evaluator.
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    run(
+        &mut executor,
+        "UNWIND range(1, 5) AS i \
+         CALL { WITH i CREATE (:T {x: i}) } \
+         RETURN count(*) AS c",
+    );
+    let counts = run(&mut executor, "MATCH (t:T) RETURN count(t) AS c");
+    assert_eq!(counts.rows[0].values[0], serde_json::json!(5));
+}
+
+#[test]
+fn call_subquery_in_transactions_on_error_combinations_are_accepted() {
+    // ON ERROR + IN TRANSACTIONS combinations now run for real.
+    // Read-only inner has no failure → CONTINUE leaves the run
+    // identical to a vanilla in-transactions path.
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    seed_three_people(&mut executor);
+    let rs = run(
+        &mut executor,
+        "MATCH (p:Person) \
+         CALL { WITH p CREATE (a:Audit {name: p.name}) } \
+         IN TRANSACTIONS OF 5 ROWS REPORT STATUS AS s ON ERROR CONTINUE \
+         RETURN s.committed AS committed",
+    );
+    assert_eq!(rs.rows.len(), 1, "single batch covers all 3 people");
+    assert_eq!(rs.rows[0].values[0], serde_json::json!(true));
+    let counts = run(&mut executor, "MATCH (a:Audit) RETURN count(a) AS c");
+    assert_eq!(counts.rows[0].values[0], serde_json::json!(3));
 }
 
 #[test]

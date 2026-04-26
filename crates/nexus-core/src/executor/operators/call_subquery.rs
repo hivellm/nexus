@@ -1,25 +1,34 @@
-//! `CALL { … }` subquery operator (phase6_opencypher-subquery-transactions
-//! slice-1).
+//! `CALL { … }` subquery operator
+//! (phase6_opencypher-subquery-transactions slice-1 + slice-2).
 //!
-//! Executes the inner subquery once per outer row, then concatenates
-//! the inner rows into the outer result set (Neo4j-compatible CALL
-//! semantics: each outer row joins to the rows produced by its inner
-//! invocation).
+//! Executes the inner subquery once per outer row, joining each outer
+//! row against the inner rows it produced (Neo4j 5.x CALL semantics).
 //!
-//! ## Slice-1 scope
+//! ## Coverage
 //!
-//! Slice-1 covers the **read-only inner** path — the inner subquery
-//! may issue MATCH/RETURN/UNWIND/WITH/WHERE clauses, including nested
-//! aggregations, and the operator joins each outer row against the
-//! inner rows it produced. Standalone `CALL { MATCH … RETURN … }` (no
-//! preceding outer driver) is also covered via an empty driver-row
-//! seed.
+//! - **Read-only inner** (slice-1): MATCH / RETURN / UNWIND / WITH /
+//!   WHERE clauses, including nested aggregations. Standalone `CALL {
+//!   MATCH … RETURN … }` runs against a single empty driver row.
+//! - **Write-bearing inner** (slice-1 lift + slice-2): `CALL {
+//!   CREATE … }` flows through the dispatch path; the
+//!   `Operator::Create` arm picks `execute_create_pattern_with_variables`
+//!   for the empty-scope case and `execute_create_with_context` when
+//!   the outer scope carries row-level bindings (e.g. `UNWIND … AS i
+//!   CALL { WITH i CREATE (n {x: i}) }`).
+//! - **`IN TRANSACTIONS`** (slice-2): batches `batch_size` outer rows
+//!   per "commit boundary" and applies the `on_error` recovery policy
+//!   — Fail / Continue / Break / Retry n. With `REPORT STATUS AS s`
+//!   the operator emits one MAP-typed row per batch under the
+//!   declared name, with keys `started`, `committed`, `rowsProcessed`,
+//!   `err`.
 //!
-//! Write-bearing inner subqueries (`CALL { CREATE … }`, `MERGE`,
-//! `DELETE`, `SET`) and `IN TRANSACTIONS` semantics rely on the
-//! re-entrant executor refactor tracked under slice-2; the operator
-//! returns `ERR_CALL_SUBQUERY_WRITE_INNER_UNSUPPORTED` rather than
-//! silently producing inconsistent state.
+//! Multi-worker `IN CONCURRENT TRANSACTIONS` (slice-3) requires
+//! per-worker MVCC isolation that the single-writer storage layer
+//! does not yet provide; the operator refuses worker counts > 1 with
+//! `ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED`. The savepoint-bracketed
+//! atomic-rollback behaviour from §3 of the design doc is the next
+//! follow-up — slice-2 ships the ON ERROR + REPORT STATUS surface
+//! that gates the operator's user-visible contract.
 //!
 //! See `phase6_opencypher-subquery-transactions/design.md` for the
 //! full target execution model.
@@ -29,6 +38,12 @@ use super::super::engine::Executor;
 use super::super::parser;
 use super::super::types::{Operator, ResultSet, Row};
 use crate::{Error, Result};
+use chrono::Utc;
+use serde_json::Value;
+
+/// Default per-batch row count when the user writes `IN TRANSACTIONS`
+/// without an explicit `OF N ROWS` clause. Mirrors Neo4j 5.x.
+const DEFAULT_BATCH_SIZE: usize = 1000;
 
 impl Executor {
     /// Driver for `Operator::CallSubquery` (slice-1).
@@ -42,42 +57,41 @@ impl Executor {
         context: &mut ExecutionContext,
         inner_query: &parser::CypherQuery,
         in_transactions: bool,
-        _batch_size: Option<usize>,
+        batch_size: Option<usize>,
         concurrency: Option<usize>,
         on_error: &parser::OnErrorPolicy,
         status_var: Option<&str>,
     ) -> Result<()> {
-        // Slice-2 ships the IN TRANSACTIONS / ON ERROR / REPORT
-        // STATUS variants once the executor's re-entrant write path
-        // exists. Refusing them here is the documented contract — we
-        // would otherwise emit silently-inconsistent results.
-        if in_transactions
-            || concurrency.is_some()
-            || status_var.is_some()
-            || !matches!(on_error, parser::OnErrorPolicy::Fail)
-        {
+        // Multi-worker `IN CONCURRENT TRANSACTIONS` requires per-worker
+        // MVCC isolation that today's single-writer storage layer does
+        // not provide. The grammar emits `Some(1)` for the single-
+        // worker variant (parser path), which is permitted; anything
+        // larger is refused here — slice-3 of the task tracks the
+        // sharded / per-worker isolation lift.
+        if matches!(concurrency, Some(n) if n > 1) {
             return Err(Error::executor(
-                "ERR_CALL_IN_TX_PENDING_SLICE2: CALL { … } IN TRANSACTIONS / \
-                 REPORT STATUS / ON ERROR are tracked under slice-2 of \
-                 phase6_opencypher-subquery-transactions; the executor's \
-                 re-entrant write path needs to land before this \
-                 operator can wrap an inner CREATE / DELETE / MERGE / \
-                 SET in a per-batch boundary"
+                "ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED: multi-worker \
+                 IN CONCURRENT TRANSACTIONS requires per-worker MVCC \
+                 isolation; only single-worker is currently supported"
                     .to_string(),
             ));
         }
-
-        // Reject write-bearing inner clauses up-front. The dispatcher
-        // does not yet route CREATE/MERGE/DELETE/SET through the
-        // sub-execution context cleanly (write paths bypass dispatch
-        // and live inside the top-level `execute()` loop). Slice-2
-        // unifies these.
-        if inner_subquery_has_writes(inner_query) {
+        // Defensive consistency checks — the §2 parser validation
+        // already rejects `REPORT STATUS` / non-default `ON ERROR`
+        // outside `IN TRANSACTIONS`, but a hand-built operator could
+        // bypass that. Refuse the impossible combinations so the
+        // executor stays self-validating.
+        if status_var.is_some() && !in_transactions {
             return Err(Error::executor(
-                "ERR_CALL_SUBQUERY_WRITE_INNER_UNSUPPORTED: CALL { … } with \
-                 a write-bearing inner subquery (CREATE / MERGE / DELETE / \
-                 SET) requires the re-entrant executor refactor tracked \
-                 under slice-2 of phase6_opencypher-subquery-transactions"
+                "ERR_CALL_IN_TX_INVALID_STATE: REPORT STATUS AS <var> requires \
+                 IN TRANSACTIONS"
+                    .to_string(),
+            ));
+        }
+        if !matches!(on_error, parser::OnErrorPolicy::Fail) && !in_transactions {
+            return Err(Error::executor(
+                "ERR_CALL_IN_TX_INVALID_STATE: ON ERROR clause requires \
+                 IN TRANSACTIONS"
                     .to_string(),
             ));
         }
@@ -107,13 +121,228 @@ impl Executor {
             outer_rows
         };
 
-        self.run_call_subquery_serial(
+        if !in_transactions {
+            return self.run_call_subquery_serial(
+                context,
+                &inner_operators,
+                inner_has_return,
+                &outer_columns,
+                &driver_rows,
+            );
+        }
+
+        let batch_n = batch_size.unwrap_or(DEFAULT_BATCH_SIZE).max(1);
+        self.run_call_subquery_in_transactions(
             context,
+            inner_query,
             &inner_operators,
             inner_has_return,
             &outer_columns,
             &driver_rows,
+            batch_n,
+            on_error,
+            status_var,
         )
+    }
+
+    /// Transactional execution: groups of `batch_size` outer rows are
+    /// processed under the `on_error` recovery policy, with an
+    /// optional `status_var` driving per-batch reporting rows.
+    ///
+    /// Slice-2 surface (this method):
+    ///
+    /// - `Fail` (default): first error aborts the outer query.
+    /// - `Continue`: log + skip the failing batch, keep going. With
+    ///   `REPORT STATUS` the failure produces a `(committed=false,
+    ///   err=…)` status row.
+    /// - `Break`: stop processing further batches; emit collected
+    ///   status rows so far (when `REPORT STATUS` is set).
+    /// - `Retry n`: retry the failing batch up to `n` extra times
+    ///   before escalating to `Fail`.
+    ///
+    /// The "transaction commit boundary" today is a per-batch
+    /// row-by-row execution — the storage layer auto-commits each
+    /// CREATE/DELETE/SET, so partial-batch durability matches the
+    /// non-transactional path. The savepoint-bracketed atomic-rollback
+    /// behaviour described in §3 of the task design is the next
+    /// follow-up; this slice ships the ON ERROR + REPORT STATUS
+    /// surface that gates the operator's user-visible contract.
+    #[allow(clippy::too_many_arguments)]
+    fn run_call_subquery_in_transactions(
+        &self,
+        context: &mut ExecutionContext,
+        inner_query: &parser::CypherQuery,
+        inner_operators: &[Operator],
+        inner_has_return: bool,
+        outer_columns: &[String],
+        driver_rows: &[Row],
+        batch_size: usize,
+        on_error: &parser::OnErrorPolicy,
+        status_var: Option<&str>,
+    ) -> Result<()> {
+        // §2.3 already rejects RETURN inside the inner when REPORT
+        // STATUS is set; guard defensively.
+        if status_var.is_some()
+            && inner_query
+                .clauses
+                .iter()
+                .any(|c| matches!(c, parser::Clause::Return(_)))
+        {
+            return Err(Error::executor(
+                "ERR_CALL_IN_TX_RETURN_WITH_STATUS: the inner subquery cannot \
+                 declare RETURN when REPORT STATUS AS <var> is set"
+                    .to_string(),
+            ));
+        }
+
+        // Output buffers. Two distinct shapes share the same operator:
+        //   * status_var set → output rows are single-column status
+        //     reports under the user's bound name; the column value
+        //     is a MAP `{started, committed, rowsProcessed, err}` so
+        //     downstream `s.committed` PropertyAccess resolves.
+        //   * status_var none → output rows are the inner-join view.
+        let mut joined_columns: Vec<String> = if let Some(name) = status_var {
+            vec![name.to_string()]
+        } else {
+            outer_columns.to_vec()
+        };
+        let mut joined_rows: Vec<Row> = Vec::new();
+        let mut inner_columns_seen: Vec<String> = Vec::new();
+
+        let max_attempts = match on_error {
+            parser::OnErrorPolicy::Retry { max_attempts } => *max_attempts,
+            _ => 0,
+        };
+
+        for batch in driver_rows.chunks(batch_size) {
+            let started = Utc::now().to_rfc3339();
+            let mut last_err: Option<Error> = None;
+            let mut committed_rows: Vec<Row> = Vec::new();
+            let mut succeeded = false;
+
+            // Try-loop: 1 baseline attempt + up to `max_attempts`
+            // retries. Buffers are rebuilt on each attempt so a
+            // partially populated buffer from a previous attempt does
+            // not leak into a successful retry.
+            for attempt in 0..=max_attempts {
+                let mut batch_rows: Vec<Row> = Vec::new();
+                let mut batch_inner_columns_seen: Vec<String> = inner_columns_seen.clone();
+                let mut batch_err: Option<Error> = None;
+
+                for outer_row in batch {
+                    let mut inner_ctx =
+                        match self.build_inner_ctx(context, outer_columns, outer_row) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                batch_err = Some(e);
+                                break;
+                            }
+                        };
+                    let mut row_err: Option<Error> = None;
+                    for op in inner_operators {
+                        if let Err(e) = self.execute_operator(&mut inner_ctx, op) {
+                            row_err = Some(e);
+                            break;
+                        }
+                    }
+                    if let Some(e) = row_err {
+                        batch_err = Some(e);
+                        break;
+                    }
+                    if status_var.is_none() {
+                        if let Err(e) = self.merge_inner_into_joined(
+                            outer_row,
+                            &mut inner_ctx,
+                            &mut joined_columns,
+                            &mut batch_rows,
+                            &mut batch_inner_columns_seen,
+                            inner_has_return,
+                        ) {
+                            batch_err = Some(e);
+                            break;
+                        }
+                    }
+                }
+
+                if batch_err.is_none() {
+                    succeeded = true;
+                    if status_var.is_none() {
+                        committed_rows = batch_rows;
+                        inner_columns_seen = batch_inner_columns_seen;
+                    }
+                    break;
+                }
+
+                last_err = batch_err;
+                if attempt < max_attempts {
+                    tracing::warn!(
+                        target: "nexus_core::executor::call_in_tx",
+                        attempt = attempt + 1,
+                        max = max_attempts,
+                        err = %last_err.as_ref().map(|e| e.to_string()).unwrap_or_default(),
+                        "CALL {{ ... }} IN TRANSACTIONS retrying batch"
+                    );
+                }
+            }
+
+            if !succeeded {
+                let err_text = last_err
+                    .as_ref()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "unknown error".to_string());
+                match on_error {
+                    parser::OnErrorPolicy::Fail | parser::OnErrorPolicy::Retry { .. } => {
+                        return Err(last_err.unwrap_or_else(|| {
+                            Error::executor(
+                                "ERR_CALL_IN_TX_BATCH_FAILED: batch failed without an \
+                                 error payload"
+                                    .to_string(),
+                            )
+                        }));
+                    }
+                    parser::OnErrorPolicy::Continue => {
+                        if status_var.is_some() {
+                            joined_rows.push(Row {
+                                values: build_status_row(
+                                    &started,
+                                    false,
+                                    batch.len(),
+                                    Some(&err_text),
+                                ),
+                            });
+                        }
+                        continue;
+                    }
+                    parser::OnErrorPolicy::Break => {
+                        if status_var.is_some() {
+                            joined_rows.push(Row {
+                                values: build_status_row(
+                                    &started,
+                                    false,
+                                    batch.len(),
+                                    Some(&err_text),
+                                ),
+                            });
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if status_var.is_some() {
+                joined_rows.push(Row {
+                    values: build_status_row(&started, true, batch.len(), None),
+                });
+            } else {
+                joined_rows.extend(committed_rows);
+            }
+        }
+
+        context.result_set = ResultSet {
+            columns: joined_columns,
+            rows: joined_rows,
+        };
+        Ok(())
     }
 
     /// Read-only inner: every outer row drives one inner invocation;
@@ -240,21 +469,31 @@ impl Executor {
     }
 }
 
-/// Walk the inner AST looking for a write-bearing clause. Slice-1
-/// refuses these because the executor's write paths short-circuit
-/// the dispatch loop and assume top-level `execute()` is driving
-/// them — calling them from a sub-execution context can leave the
-/// catalog and label index out of sync. Slice-2 unifies the write
-/// paths through dispatch.
-fn inner_subquery_has_writes(query: &parser::CypherQuery) -> bool {
-    fn clause_has_writes(clause: &parser::Clause) -> bool {
-        match clause {
-            parser::Clause::Create(_) | parser::Clause::Merge(_) | parser::Clause::Delete(_) => {
-                true
-            }
-            parser::Clause::CallSubquery(c) => c.query.clauses.iter().any(clause_has_writes),
-            _ => false,
-        }
-    }
-    query.clauses.iter().any(clause_has_writes)
+/// Build the per-batch status row emitted under `REPORT STATUS AS <var>`.
+/// The row carries a single value — a MAP keyed by `started` (STRING,
+/// RFC-3339), `committed` (BOOLEAN), `rowsProcessed` (INTEGER) and
+/// `err` (STRING?) — bound under the user-declared variable name. A
+/// downstream `RETURN s.committed AS … ` then resolves `committed`
+/// via property access on the map.
+fn build_status_row(
+    started: &str,
+    committed: bool,
+    rows_processed: usize,
+    err: Option<&str>,
+) -> Vec<Value> {
+    let mut map = serde_json::Map::with_capacity(4);
+    map.insert("started".to_string(), Value::String(started.to_string()));
+    map.insert("committed".to_string(), Value::Bool(committed));
+    map.insert(
+        "rowsProcessed".to_string(),
+        Value::Number(serde_json::Number::from(rows_processed as u64)),
+    );
+    map.insert(
+        "err".to_string(),
+        match err {
+            Some(s) => Value::String(s.to_string()),
+            None => Value::Null,
+        },
+    );
+    vec![Value::Object(map)]
 }

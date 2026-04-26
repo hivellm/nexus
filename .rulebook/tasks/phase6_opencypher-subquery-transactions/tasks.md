@@ -1,17 +1,26 @@
 # Implementation Tasks — Subquery Transactions + Collect + Nesting
 
-## Status — slice-1 (read-only inner) + slice-5 (COLLECT { } subquery)
+## Status — slices 1 / 2 / 5
 
-- Operator `Operator::CallSubquery` wired through planner + dispatch.
-- Inner subquery executes per outer row; outer × inner join produced.
-- IN TRANSACTIONS / ON ERROR / REPORT STATUS / write-bearing inner all
-  surface typed errors (`ERR_CALL_IN_TX_PENDING_SLICE2`,
-  `ERR_CALL_SUBQUERY_WRITE_INNER_UNSUPPORTED`) until the re-entrant
-  executor lands in the IN TRANSACTIONS slice.
+- Operator `Operator::CallSubquery` wired through planner + dispatch
+  with full read-only-inner + write-bearing-inner support.
+- `Operator::Create` arm in dispatch routes to
+  `execute_create_pattern_with_variables` when the outer scope is
+  empty and to `execute_create_with_context` (now anonymous-node-aware
+  + row-aware property resolution) otherwise.
+- `IN TRANSACTIONS [OF N ROWS] [REPORT STATUS AS s] [ON ERROR
+  CONTINUE/BREAK/FAIL/RETRY n]` runs end-to-end: per-batch ON ERROR
+  policy, REPORT STATUS rows as a single MAP under the declared name,
+  Retry-then-escalate.
+- Project-operator dedup loop now preserves rows carrying synthetic
+  MAPs (status rows, list-of-maps).
 - `Expression::CollectSubquery` AST + parser disambiguation against
-  `collect(expr)` aggregation + projection-evaluator emit `LIST<T>` /
+  `collect(expr)` aggregation + projection-evaluator emits `LIST<T>` /
   `LIST<MAP>` / aggregating-inner / empty-list semantics.
-- 7 CALL executor tests + 7 COLLECT evaluator tests.
+- 13 CALL executor tests + 7 COLLECT evaluator tests.
+- Multi-worker `IN CONCURRENT TRANSACTIONS` returns
+  `ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED`; savepoint-bracketed atomic
+  rollback (§3) is the next follow-up.
 - Parser §1 / §2 already complete (16 unit tests pass).
 
 ## 1. Grammar — `CALL {} IN TRANSACTIONS`
@@ -40,19 +49,19 @@
 
 ## 4. Executor Operator: CallInTransactions
 
-- [ ] 4.1 Create `operators/call_in_transactions.rs`
-- [ ] 4.2 Stream input rows into batch buffer
-- [ ] 4.3 Flush-on-batch-full, flush-on-stream-end
-- [ ] 4.4 Record per-row status for REPORT STATUS
-- [ ] 4.5 Tests: small batch, large batch, exact-multiple, remainder
+- [x] 4.1 Create `operators/call_subquery.rs` (subsumes call_in_transactions)
+- [x] 4.2 Stream input rows into batch buffer
+- [x] 4.3 Flush-on-batch-full, flush-on-stream-end
+- [x] 4.4 Record per-row status for REPORT STATUS
+- [x] 4.5 Tests: small batch, large batch, exact-multiple, remainder
 
 ## 5. `ON ERROR` Semantics
 
-- [ ] 5.1 `ON ERROR FAIL` (default): abort immediately
-- [ ] 5.2 `ON ERROR CONTINUE`: log, mark row failed, keep going
-- [ ] 5.3 `ON ERROR BREAK`: commit current batch, stop cleanly
-- [ ] 5.4 `ON ERROR RETRY n`: retry the failing batch up to n times
-- [ ] 5.5 Tests for each path
+- [x] 5.1 `ON ERROR FAIL` (default): abort immediately
+- [x] 5.2 `ON ERROR CONTINUE`: log, mark row failed, keep going
+- [x] 5.3 `ON ERROR BREAK`: commit current batch, stop cleanly
+- [x] 5.4 `ON ERROR RETRY n`: retry the failing batch up to n times
+- [x] 5.5 Tests for each path
 
 ## 6. Concurrent Transactions
 
@@ -64,10 +73,10 @@
 
 ## 7. REPORT STATUS
 
-- [ ] 7.1 When REPORT STATUS is set, emit one row per batch
-- [ ] 7.2 Columns: `started:DATETIME, committed:BOOLEAN, rowsProcessed:INT, err:STRING?`
-- [ ] 7.3 Allow caller to consume the stream for monitoring
-- [ ] 7.4 Tests asserting report-row shape
+- [x] 7.1 When REPORT STATUS is set, emit one row per batch
+- [x] 7.2 Columns: `started:DATETIME, committed:BOOLEAN, rowsProcessed:INT, err:STRING?`
+- [x] 7.3 Allow caller to consume the stream for monitoring
+- [x] 7.4 Tests asserting report-row shape
 
 ## 8. Nested `CALL {}`
 
