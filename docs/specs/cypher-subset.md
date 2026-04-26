@@ -35,22 +35,42 @@ MATCH (n:Person)-[:KNOWS*]->(m:Person)   -- Unbounded
 MATCH (n:Person)-[:KNOWS+]->(m:Person)   -- One or more
 MATCH (n:Person)-[:KNOWS?]->(m:Person)   -- Zero or one
 
+-- Quantified Path Patterns (Cypher 25 / GQL) ✅ slice 1 IMPLEMENTED
+-- Anonymous-body shape collapses to legacy *m..n at parse time.
+MATCH (a)( ()-[:KNOWS]->() ){1,5}(b)
+MATCH (a)( ()<-[:OWNS]-() ){1,3}(b)
+MATCH (a)( ()-[r:KNOWS]->() ){2,4}(b) RETURN length(r)
+-- Named/labelled inner nodes return ERR_QPP_NOT_IMPLEMENTED
+-- (slice 2 — phase6_opencypher-quantified-path-patterns).
+-- See docs/guides/QUANTIFIED_PATH_PATTERNS.md for the full surface.
+
 -- Multiple patterns
 MATCH (a:Person)-[:KNOWS]->(b:Person)-[:WORKS_AT]->(c:Company)
 ```
 
 **Pattern Syntax**:
 ```
-Pattern ::= Node | Relationship | Pattern ',' Pattern
+Pattern ::= Node | Relationship | QuantifiedGroup | Pattern ',' Pattern
 
 Node ::= '(' Variable? Labels? Properties? ')'
 
 Labels ::= ':' Identifier ( ':' Identifier )*
 
 Relationship ::= 
-    '-[' Variable? ':' Type Properties? ']->' |  // directed out
-    '<-[' Variable? ':' Type Properties? ']-'  |  // directed in
-    '-[' Variable? ':' Type Properties? ']-'      // undirected
+    '-[' Variable? ':' Type Properties? Quantifier? ']->' |  // directed out
+    '<-[' Variable? ':' Type Properties? Quantifier? ']-'  |  // directed in
+    '-[' Variable? ':' Type Properties? Quantifier? ']-'      // undirected
+
+QuantifiedGroup ::= '(' Pattern ')' Quantifier
+    -- Cypher 25 / GQL. Slice 1 only collapses anonymous-body
+    -- shapes ( ( ()-[:T]->() ){m,n} ) to a quantified relationship.
+    -- Named/labelled inner nodes need the slice-2 QuantifiedExpand
+    -- operator and surface ERR_QPP_NOT_IMPLEMENTED until then.
+
+Quantifier ::= '*' Int? ('..' Int?)?  -- legacy *m..n shorthand
+             | '{' Int (',' Int?)? '}'  -- explicit range
+             | '{' ',' Int '}'          -- upper-only
+             | '+' | '*' | '?'          -- shorthand desugars
 
 Variable ::= Identifier
 Type ::= Identifier

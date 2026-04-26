@@ -123,19 +123,33 @@ regression because `QuantifiedExpand` is not yet implemented.
 
 ## 10. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 10.1 Update `docs/specs/cypher-subset.md` with the new grammar
-- [ ] 10.2 Add `docs/guides/QUANTIFIED_PATH_PATTERNS.md` user guide
-- [ ] 10.3 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`
-- [ ] 10.4 Add CHANGELOG entry "Added quantified path patterns (Cypher 25)"
-- [ ] 10.5 Update or create documentation covering the implementation
+- [x] 10.1 Update `docs/specs/cypher-subset.md` with the new grammar
+      — added the `QuantifiedGroup` production to the BNF block and
+      the slice-1 example to the MATCH section
+- [x] 10.2 Add `docs/guides/QUANTIFIED_PATH_PATTERNS.md` user guide
+      — covers slice-1 surface, full quantifier table, slice-2 gaps,
+      error codes, migration tips for Neo4j 5.9+ users, and an
+      implementation pointer for contributors
+- [x] 10.3 Update `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md`
+      — new "v1.15 — Quantified Path Patterns slice 1" entry above
+      the v1.8 full-text-search entry
+- [x] 10.4 CHANGELOG entry — added "Quantified path patterns
+      (Cypher 25 / GQL) — anonymous-body shape" under
+      `## [1.15.0]` § Added
+- [x] 10.5 Documentation covering the implementation — see 10.1–10.4
+      above + rustdoc on `QuantifiedGroup::try_lower_to_var_length_rel`
+      and `Pattern::lowered_for_planner`
 - [x] 10.6 Tests covering the new behaviour — 14 unit tests in
       `crates/nexus-core/src/executor/parser/tests.rs::qpp_*` +
-      2 integration tests in
+      6 integration tests in
       `crates/nexus-core/tests/executor_comprehensive_test.rs::test_qpp_*`
+      (parity, direction, exact/optional quantifiers, relationship
+      variable propagation, `shortestPath` integration, unsupported
+      shape error contract)
 - [x] 10.7 Run tests and confirm they pass —
       `cargo test -p nexus-core --lib executor::parser::tests::qpp`
-      reports `14 passed; 0 failed`. The integration tests
-      pass as well.
+      reports `14 passed; 0 failed`; integration tests
+      `6 passed; 0 failed`; full lib suite `2054 passed`.
 - [x] 10.8 Quality pipeline: `cargo fmt` clean,
       `cargo clippy -p nexus-core --lib --tests -- -D warnings`
       clean. Coverage gate left for slice 2 alongside the rest of

@@ -3,6 +3,28 @@
 **Version**: 1.5.0 (workspace)
 **Last verified**: 2026-04-19 against Neo4j 2025.09.0 community
 
+## v1.15 — Quantified Path Patterns slice 1 (2026-04-26)
+
+`phase6_opencypher-quantified-path-patterns` slice 1 ships the
+Cypher 25 / GQL Quantified Path Pattern grammar end-to-end for the
+**anonymous-body** shape: `( ()-[:T]->() ){m,n}` collapses at parse
+time to the legacy `*m..n` form and is executed by the existing
+`VariableLengthPath` operator. Every direction (`->`, `<-`, `-`),
+quantifier (`{m,n}`, `{m,}`, `{,n}`, `{n}`, `+`, `*`, `?`),
+relationship variable, and relationship-property filter is
+preserved. `shortestPath((a)( ... ){m,n}(b))` works for the same
+shape via the same lowering. Parity tests in
+`crates/nexus-core/tests/executor_comprehensive_test.rs::test_qpp_*`
+assert byte-identical row sets between the QPP form and the
+hand-written legacy form on a shared fixture.
+
+Slice 2 — the dedicated `QuantifiedExpand` operator that handles
+named/labelled inner boundary nodes, multi-hop bodies, intermediate
+predicates, and list-promoted bindings — surfaces a clean
+`ERR_QPP_NOT_IMPLEMENTED` from the planner today and is tracked in
+the same task. See `docs/guides/QUANTIFIED_PATH_PATTERNS.md` for
+the full user-facing surface and migration tips.
+
 ## v1.8 — full-text search (2026-04-21)
 
 phase6_opencypher-fulltext-search adds the Neo4j

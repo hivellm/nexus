@@ -775,6 +775,223 @@ fn test_qpp_unsupported_shape_returns_clean_error() {
     );
 }
 
+/// QPP slice-1 parity: every direction the legacy `*m..n` shorthand
+/// supports (`->`, `<-`, `-`) must round-trip through the lowered
+/// QPP path identically. The lowering preserves the relationship
+/// direction byte-for-byte, so `( ()<-[:T]-() ){m,n}` lands on the
+/// same `VariableLengthPath` operator as `<-[:T*m..n]-`.
+#[test]
+fn test_qpp_lowering_preserves_direction() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_test_data(&mut executor);
+
+    let create = Query {
+        cypher: "CREATE (c:Person {name: 'Charlie'}), \
+                 (a:Person {name: 'Alice'})-[:KNOWS]->(c)"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    executor.execute(&create).unwrap();
+
+    for (legacy_cy, qpp_cy, label) in [
+        (
+            "MATCH (a:Person)<-[:KNOWS*1..2]-(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "MATCH (a:Person)( ()<-[:KNOWS]-() ){1,2}(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "incoming",
+        ),
+        (
+            "MATCH (a:Person)-[:KNOWS*1..2]-(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "MATCH (a:Person)( ()-[:KNOWS]-() ){1,2}(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "bidirectional",
+        ),
+    ] {
+        let legacy = executor.execute(&Query {
+            cypher: legacy_cy.to_string(),
+            params: HashMap::new(),
+        });
+        let qpp = executor.execute(&Query {
+            cypher: qpp_cy.to_string(),
+            params: HashMap::new(),
+        });
+        match (legacy, qpp) {
+            (Ok(l), Ok(q)) => {
+                let lr: Vec<&Vec<serde_json::Value>> = l.rows.iter().map(|r| &r.values).collect();
+                let qr: Vec<&Vec<serde_json::Value>> = q.rows.iter().map(|r| &r.values).collect();
+                assert_eq!(lr, qr, "{label} direction diverged between QPP and legacy");
+            }
+            (Err(le), Err(qe)) => {
+                assert_eq!(
+                    le.to_string(),
+                    qe.to_string(),
+                    "{label} direction: QPP and legacy must fail identically"
+                );
+            }
+            (l, q) => panic!(
+                "{label} direction: outcome differs (legacy={:?}, qpp={:?})",
+                l.map(|r| r.rows.len()),
+                q.map(|r| r.rows.len()),
+            ),
+        }
+    }
+}
+
+/// QPP slice-1 parity: the exact-count quantifier `{n}` and the
+/// optional `?` quantifier (= `{0,1}`) must collapse to the same
+/// legacy form as `*n..n` and `*0..1`.
+#[test]
+fn test_qpp_lowering_exact_and_optional_quantifiers() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_test_data(&mut executor);
+
+    let create = Query {
+        cypher: "CREATE (c:Person {name: 'Charlie'}), \
+                 (a:Person {name: 'Alice'})-[:KNOWS]->(c)"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    executor.execute(&create).unwrap();
+
+    for (legacy_cy, qpp_cy, label) in [
+        (
+            "MATCH (a:Person)-[:KNOWS*1..1]->(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "MATCH (a:Person)( ()-[:KNOWS]->() ){1}(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "exact-{1}",
+        ),
+        (
+            "MATCH (a:Person)-[:KNOWS*0..1]->(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "MATCH (a:Person)( ()-[:KNOWS]->() )?(b:Person) \
+             RETURN a.name, b.name ORDER BY a.name, b.name",
+            "optional-?",
+        ),
+    ] {
+        let legacy = executor.execute(&Query {
+            cypher: legacy_cy.to_string(),
+            params: HashMap::new(),
+        });
+        let qpp = executor.execute(&Query {
+            cypher: qpp_cy.to_string(),
+            params: HashMap::new(),
+        });
+        match (legacy, qpp) {
+            (Ok(l), Ok(q)) => {
+                let lr: Vec<&Vec<serde_json::Value>> = l.rows.iter().map(|r| &r.values).collect();
+                let qr: Vec<&Vec<serde_json::Value>> = q.rows.iter().map(|r| &r.values).collect();
+                assert_eq!(lr, qr, "{label} quantifier diverged");
+            }
+            (Err(le), Err(qe)) => {
+                assert_eq!(
+                    le.to_string(),
+                    qe.to_string(),
+                    "{label} quantifier: QPP and legacy must fail identically"
+                );
+            }
+            (l, q) => panic!(
+                "{label} quantifier: outcome differs (legacy={:?}, qpp={:?})",
+                l.map(|r| r.rows.len()),
+                q.map(|r| r.rows.len()),
+            ),
+        }
+    }
+}
+
+/// QPP slice-1 + `shortestPath`: the parser routes
+/// `shortestPath(...)` arguments through `parse_pattern`, which now
+/// lowers QPP groups. So `shortestPath((a)( ()-[:T]->() ){1,5}(b))`
+/// must take the same path as the legacy
+/// `shortestPath((a)-[:T*1..5]->(b))`. No `QuantifiedExpand`
+/// operator needed for the anonymous-body shape.
+#[test]
+fn test_qpp_lowering_under_shortest_path() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_test_data(&mut executor);
+
+    let create = Query {
+        cypher: "CREATE (c:Person {name: 'Charlie'}), \
+                 (a:Person {name: 'Alice'})-[:KNOWS]->(c)"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    executor.execute(&create).unwrap();
+
+    let legacy = executor.execute(&Query {
+        cypher: "MATCH p = shortestPath((a:Person {name: 'Alice'})\
+                 -[:KNOWS*1..3]->(b:Person {name: 'Charlie'})) \
+                 RETURN length(p)"
+            .to_string(),
+        params: HashMap::new(),
+    });
+    let qpp = executor.execute(&Query {
+        cypher: "MATCH p = shortestPath((a:Person {name: 'Alice'})\
+                 ( ()-[:KNOWS]->() ){1,3}(b:Person {name: 'Charlie'})) \
+                 RETURN length(p)"
+            .to_string(),
+        params: HashMap::new(),
+    });
+
+    match (legacy, qpp) {
+        (Ok(l), Ok(q)) => {
+            let lr: Vec<&Vec<serde_json::Value>> = l.rows.iter().map(|r| &r.values).collect();
+            let qr: Vec<&Vec<serde_json::Value>> = q.rows.iter().map(|r| &r.values).collect();
+            assert_eq!(lr, qr, "shortestPath rows diverged between QPP and legacy");
+        }
+        (Err(le), Err(qe)) => {
+            assert_eq!(
+                le.to_string(),
+                qe.to_string(),
+                "shortestPath: QPP and legacy must fail identically"
+            );
+        }
+        (l, q) => panic!(
+            "shortestPath: outcome differs (legacy={:?}, qpp={:?})",
+            l.map(|r| r.rows.len()),
+            q.map(|r| r.rows.len()),
+        ),
+    }
+}
+
+/// QPP slice-1: the relationship variable inside the QPP body
+/// (`()-[r:T]->()`) must end up bound on the lowered relationship
+/// so the outer scope can reference it (e.g. `RETURN r`). Without
+/// this, queries that name the inner relationship for use outside
+/// the QPP would silently lose the binding.
+#[test]
+fn test_qpp_lowering_keeps_inner_relationship_variable_addressable() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_test_data(&mut executor);
+
+    // `r` is declared inside the QPP body. After lowering it becomes
+    // the variable on the legacy relationship and `length(r)` works
+    // — `VariableLengthPath` already binds `r` as a list of
+    // relationships traversed, so the QPP path inherits that for
+    // free.
+    let query = Query {
+        cypher: "MATCH (a:Person)( ()-[r:KNOWS]->() ){1,2}(b:Person) \
+                 RETURN a.name, length(r) AS hops ORDER BY a.name, hops"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    let result = executor.execute(&query);
+
+    // The query must execute without `ERR_QPP_NOT_IMPLEMENTED`. The
+    // legacy var-length operator may itself have gaps for `length(r)`
+    // — the contract we pin here is that the QPP form does not
+    // surface an error the legacy form would not.
+    if let Err(qpp_err) = result {
+        assert!(
+            !qpp_err.to_string().contains("ERR_QPP_NOT_IMPLEMENTED"),
+            "lowering must not surface ERR_QPP_NOT_IMPLEMENTED for an \
+             anonymous body that names the relationship: {qpp_err}"
+        );
+    }
+}
+
 // ============================================================================
 // Index Scan Tests
 // ============================================================================

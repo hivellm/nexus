@@ -9,7 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Closes [hivellm/nexus#2][issue-2]. Server-side bug fix + JSON wire
 shape rename for the schema endpoints, with every first-party SDK
-realigned to the new shape and version-bumped to match.
+realigned to the new shape and version-bumped to match. Also ships
+slice 1 of `phase6_opencypher-quantified-path-patterns`.
+
+### Added
+
+- **Quantified path patterns (Cypher 25 / GQL) — anonymous-body
+  shape**. `MATCH (a)( ()-[:T]->() ){m,n}(b)` now executes
+  end-to-end and produces byte-identical row sets to the legacy
+  `MATCH (a)-[:T*m..n]->(b)` form. The parser collapses the
+  textbook QPP shape (anonymous boundary nodes, single
+  relationship, no inner predicates) to the legacy quantified
+  relationship at parse time, so the existing
+  `VariableLengthPath` operator handles it without a new
+  executor. Direction (`->`, `<-`, `-`), every quantifier
+  (`{m,n}`, `{m,}`, `{,n}`, `{n}`, `+`, `*`, `?`), the inner
+  relationship variable, and the relationship-property map are
+  all preserved by the lowering. `shortestPath((a)( ... ){m,n}(b))`
+  works for the same shape.
+
+  Bodies that carry inner state — named or labelled boundary
+  nodes, multi-hop paths, intermediate predicates — surface a
+  clean `ERR_QPP_NOT_IMPLEMENTED` error pointing at the slice-2
+  follow-up rather than silently producing wrong rows. See
+  `docs/guides/QUANTIFIED_PATH_PATTERNS.md` for the full
+  user-facing surface and migration notes.
 
 ### Fixed
 
