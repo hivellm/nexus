@@ -434,6 +434,41 @@ fn tck_shortest_path_over_anonymous_body() {
 }
 
 // ---------------------------------------------------------------
+// shortestPath/named-body — slice 3b §5.2 — the type / direction
+// extractor now reaches inside `QuantifiedGroup.inner`, so
+// `shortestPath` works for the named-body shape (with the
+// documented limitation that label / property / inner-WHERE
+// filters are not enforced by the BFS path-finder yet).
+// ---------------------------------------------------------------
+
+#[test]
+fn tck_shortest_path_over_named_body_returns_a_path() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_chain_4(&mut executor);
+
+    // shortestPath((Alice)( (x:Person)-[:KNOWS]->() ){1,3}(Charlie))
+    // — the body has a named inner node, so the slice-1 lowering
+    // declines and the pattern carries a `QuantifiedGroup`. The
+    // shortestPath extractor must pick up `:KNOWS` from inside
+    // the group and run the same BFS that anonymous-body QPP
+    // already gets.
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Charlie'}) \
+         RETURN shortestPath(\
+             (a)( (x:Person)-[:KNOWS]->() ){1,3}(b)\
+         ) AS path",
+    );
+    assert!(!result.rows.is_empty(), "expected one row from MATCH");
+    let path = &result.rows[0].values[0];
+    // Path must not be NULL — the BFS reached Charlie via Bob.
+    assert!(
+        !path.is_null(),
+        "shortestPath over named-body QPP returned NULL: {path:?}"
+    );
+}
+
+// ---------------------------------------------------------------
 // inner-where/* — slice 3b §4.3 — `WHERE` clauses inside the QPP
 // body filter per iteration before list promotion.
 // ---------------------------------------------------------------

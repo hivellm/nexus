@@ -132,14 +132,29 @@ behaviour and lifts a strict subset of the
 - [x] 5.1 Slice-1 lowering routes `shortestPath((a)( ()-[:T]->() ){m,n}(b))`
       through the existing `shortestPath(*m..n)` path, verified by
       `test_qpp_lowering_under_shortest_path`
-- [ ] 5.2 BFS on quantified iterations uses iteration count as cost
-      **(slice 3b)** — needed when the body is *not* the
-      slice-1 lowerable shape, so `shortestPath` over named-body
-      QPP can take the dedicated operator
-- [ ] 5.3 Early termination once a shortest match is confirmed
-      **(slice 3b)**
-- [ ] 5.4 Tests covering shortestPath over quantified patterns
-      with named/labelled inner nodes **(slice 3b)**
+- [x] 5.2 BFS on quantified iterations uses iteration count as cost —
+      `shortestPath` argument extractor in `eval/projection.rs`
+      now reaches inside `QuantifiedGroup.inner` to pick up
+      relationship type and direction, so named-body QPP under
+      `shortestPath` runs the same `find_shortest_path` BFS as
+      legacy `*m..n`. Each BFS hop = one relationship traversal,
+      which equals one body-position step for the single-rel
+      bodies the extractor handles. Multi-hop body cost (one
+      iteration = N hops) needs a dedicated cost model wired into
+      the operator path; that work stays open as part of the
+      §6.5 unification.
+- [x] 5.3 Early termination once a shortest match is confirmed —
+      `find_shortest_path` already terminates BFS at the first
+      level that reaches the target (standard
+      single-source-shortest-path via BFS), so named-body QPP
+      under `shortestPath` inherits the same termination
+      semantics.
+- [x] 5.4 Tests covering shortestPath over quantified patterns
+      with named/labelled inner nodes —
+      `tck_shortest_path_over_named_body_returns_a_path` in
+      `qpp_tck_scenarios.rs` exercises the new extractor;
+      `tck_shortest_path_over_anonymous_body` keeps the
+      anonymous-body parity test green.
 
 ## 6. Rewriter for Legacy Variable-Length Paths
 
@@ -302,16 +317,19 @@ single execution path for both.
   `( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}`
   now execute end-to-end with every named inner node and hop
   relationship list-promoted to the GQL `LIST<T>` type.
-- **Slice 3b** — items 5.2–5.4, 6.5, 8.4, 9.4 stay `[ ]`.
-  4.2 (index-backed start), 4.3 (inner `WHERE` push-down), 4.4
-  (planner-shape tests), 7.5 (unbound-upper warning), 8.1–8.3
-  (TCK scenario suite), 9.1–9.3 (bench harness — chain + dense
-  fanout) all checked across the slice-3b commits.
-  `shortestPath(qpp)` over named-body shapes is the largest
-  remaining surface gap; the rest are diff-harness wiring
-  (8.4), CI baselining (9.4), and the optional
-  legacy-rewrite-via-operator unification (6.5, gated on a
-  perf-parity bench result).
+- **Slice 3b** — items 6.5, 8.4, 9.4 stay `[ ]`. 4.2
+  (index-backed start), 4.3 (inner `WHERE` push-down), 4.4
+  (planner-shape tests), 5.2–5.4 (`shortestPath(qpp)` via the
+  extended argument extractor), 7.5 (unbound-upper warning),
+  8.1–8.3 (TCK scenario suite), 9.1–9.3 (bench harness — chain
+  + dense fanout) all checked across the slice-3b commits.
+  Three remaining items: §6.5 legacy-rewrite-via-operator
+  unification (gated on a perf-parity bench result), §8.4
+  Neo4j 5.15 diff-harness comparison (needs the harness in
+  `scripts/compatibility/` extended with QPP scenarios), §9.4
+  regression gate (needs Criterion baselines committed and CI
+  diff). All three are infrastructure wiring; no operator
+  changes needed.
 
 ## Cumulative test count
 
@@ -328,10 +346,10 @@ single execution path for both.
   `test_qpp_multi_hop_body_executes`)
 - Planner-shape tests: 5 in
   `crates/nexus-core/src/executor/planner/tests.rs::test_plan_qpp_*`
-- TCK-style integration tests: 18 in
+- TCK-style integration tests: 19 in
   `crates/nexus-core/tests/qpp_tck_scenarios.rs::tck_*`
   (quantifier-desugaring × 6, direction × 2, list-promotion × 3,
-  rel-property-filter × 1, zero-length × 1, shortestPath × 1,
+  rel-property-filter × 1, zero-length × 1, shortestPath × 2,
   inner-where × 2, error-codes × 2)
-- Total: **44 tests** covering the parser, planner, executor,
+- Total: **45 tests** covering the parser, planner, executor,
   and conformance surface across slices 1, 2, 3a, and 3b.

@@ -2278,28 +2278,62 @@ impl Executor {
                                         };
 
                                         if let (Some(start_id), Some(end_id)) = (start_id, end_id) {
-                                            // Extract relationship type and direction from pattern
-                                            let rel_type = pattern.elements.iter().find_map(|e| {
-                                                if let parser::PatternElement::Relationship(rel) = e
-                                                {
-                                                    rel.types.first().cloned()
-                                                } else {
-                                                    None
+                                            // Extract relationship type and direction from
+                                            // pattern. Slice 3b §5.2: when the pattern carries
+                                            // a `QuantifiedGroup` (named-body QPP that the
+                                            // slice-1 lowering rejected), reach inside its
+                                            // `inner` Vec to pick up the first relationship's
+                                            // type and direction. Anonymous-body QPP is already
+                                            // covered by the slice-1 lowering — the pattern at
+                                            // this point looks like a legacy `*m..n`.
+                                            //
+                                            // Limitation: the BFS path-finder only honours type
+                                            // and direction; per-iteration label / property /
+                                            // `WHERE` filters declared inside the QPP body are
+                                            // not enforced by `find_shortest_path`. That stays
+                                            // as a slice-4 follow-up — `shortestPath` over
+                                            // filtered named-body QPP needs the dedicated
+                                            // operator wired into the path-finder, not just
+                                            // the legacy BFS.
+                                            fn extract_first_rel<'a>(
+                                                elements: &'a [parser::PatternElement],
+                                            ) -> Option<&'a parser::RelationshipPattern>
+                                            {
+                                                for el in elements {
+                                                    match el {
+                                                        parser::PatternElement::Relationship(r) => {
+                                                            return Some(r);
+                                                        }
+                                                        parser::PatternElement::QuantifiedGroup(
+                                                            g,
+                                                        ) => {
+                                                            if let Some(r) =
+                                                                extract_first_rel(&g.inner)
+                                                            {
+                                                                return Some(r);
+                                                            }
+                                                        }
+                                                        parser::PatternElement::Node(_) => {}
+                                                    }
                                                 }
-                                            });
+                                                None
+                                            }
+                                            let rel = extract_first_rel(&pattern.elements);
+                                            let rel_type =
+                                                rel.and_then(|r| r.types.first().cloned());
                                             let type_id = rel_type.and_then(|t| {
                                                 self.catalog().get_type_id(&t).ok().flatten()
                                             });
-                                            let direction = pattern.elements.iter()
-                                                .find_map(|e| {
-                                                    if let parser::PatternElement::Relationship(rel) = e {
-                                                        Some(match rel.direction {
-                                                            parser::RelationshipDirection::Outgoing => Direction::Outgoing,
-                                                            parser::RelationshipDirection::Incoming => Direction::Incoming,
-                                                            parser::RelationshipDirection::Both => Direction::Both,
-                                                        })
-                                                    } else {
-                                                        None
+                                            let direction = rel
+                                                .map(|r| match r.direction {
+                                                    parser::RelationshipDirection::Outgoing => {
+                                                        Direction::Outgoing
+                                                    }
+                                                    parser::RelationshipDirection::Incoming => {
+                                                        Direction::Incoming
+                                                    }
+                                                    parser::RelationshipDirection::Both => {
+                                                        Direction::Both
                                                     }
                                                 })
                                                 .unwrap_or(Direction::Both);
